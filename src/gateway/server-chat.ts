@@ -443,15 +443,8 @@ export function createAgentEventHandler({
         ? persistGatewaySessionLifecycleEventForEvent({
             sessionKey,
             agentId: sessionAgentId,
-            event: {
-              ...evt,
-              ...(evt.contextClaimId ? { contextClaimId: evt.contextClaimId } : {}),
-              ...(clientRunId !== evt.runId ? { clientRunId } : {}),
-              ...(evt.lifecycleGeneration ? { lifecycleGeneration: evt.lifecycleGeneration } : {}),
-              ...(evt.mainSessionRestartRecovery === true
-                ? { mainSessionRestartRecovery: true as const }
-                : {}),
-            },
+            event: evt,
+            ...(clientRunId !== evt.runId ? { clientRunId } : {}),
           })
         : undefined;
     // Completion retires the registration even when no visible terminal is published.
@@ -787,13 +780,7 @@ export function createAgentEventHandler({
       }
     }
     if (recipients.size > 0) {
-      // Queued progress carries no session row; hydrate only after pacing and
-      // current subscription selection, using the captured event's owner.
-      const deliveredPayload =
-        event === "agent" && sessionKey
-          ? { ...payload, ...buildSessionEventSnapshot(sessionKey, undefined, opts?.agentId) }
-          : payload;
-      broadcastToConnIds(event, deliveredPayload, recipients, {
+      broadcastToConnIds(event, payload, recipients, {
         ...broadcastOpts,
         sessionSubscriptionVerified: true,
       });
@@ -1136,7 +1123,7 @@ export function createAgentEventHandler({
 
     const { chatLink, sessionAgentId, sessionKey } = resolveEventSession(evt);
     const runContext = getAgentRunContext(evt.runId);
-    const activeLifecycleGeneration = resolveActiveLifecycleGenerationForRun(evt.runId);
+    const generation = lifecyclePhase !== null && resolveActiveLifecycleGenerationForRun(evt.runId);
     const isControlUiVisible = evt.controlUiVisible ?? runContext?.isControlUiVisible ?? true;
     const projectSessionLifecycle =
       evt.projectSessionLifecycle ?? runContext?.projectSessionLifecycle ?? true;
@@ -1166,11 +1153,7 @@ export function createAgentEventHandler({
 
     const suppressRestartRecoveryLifecycle =
       lifecyclePhase !== null &&
-      (Boolean(
-        evt.lifecycleGeneration &&
-        activeLifecycleGeneration &&
-        evt.lifecycleGeneration !== activeLifecycleGeneration,
-      ) ||
+      (Boolean(evt.lifecycleGeneration && generation && evt.lifecycleGeneration !== generation) ||
         restartRecoveryState?.suppress === true);
     if (suppressRestartRecoveryLifecycle) {
       clearPendingTerminalLifecycleError(evt.runId, evt.lifecycleGeneration);
@@ -1191,6 +1174,9 @@ export function createAgentEventHandler({
     const spawnedBy = sessionKey ? resolveSpawnedBy(sessionKey) : null;
     const agentPayload = {
       ...eventForClients,
+      ...(!isControlUiVisible && {
+        sessionId: eventForClients.sessionId ?? runContext?.sessionId,
+      }),
       ...(sessionKey
         ? {
             sessionKey,
@@ -1376,7 +1362,11 @@ export function createAgentEventHandler({
         hasSessionMessageSubscribers &&
         !suppressHeartbeatToolEvents
       ) {
-        sendAgentPayload(sessionKey, agentPayload, {
+        const toolPayload = {
+          ...agentPayload,
+          ...buildSessionEventSnapshot(sessionKey, undefined, sessionAgentId),
+        };
+        sendAgentPayload(sessionKey, toolPayload, {
           agentId: sessionAgentId,
           controlUiVisible: false,
           dropIfSlow: true,
@@ -1393,15 +1383,10 @@ export function createAgentEventHandler({
           sessionSubscribers.delete(connId);
         }
         if (sessionSubscribers.size > 0) {
-          broadcastToConnIds(
-            "session.tool",
-            {
-              ...agentPayload,
-              ...buildSessionEventSnapshot(sessionKey, undefined, sessionAgentId),
-            },
-            sessionSubscribers,
-            { dropIfSlow: true, liveText: liveTextDelivery(chatRunState, clientRunId) },
-          );
+          broadcastToConnIds("session.tool", agentPayload, sessionSubscribers, {
+            dropIfSlow: true,
+            liveText: liveTextDelivery(chatRunState, clientRunId),
+          });
         }
       }
     } else {

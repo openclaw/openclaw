@@ -117,7 +117,6 @@ async function invoke(
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
     logGateway: { warn: vi.fn() },
   } as unknown as GatewayRequestContext;
   const handlerOptions: GatewayRequestHandlerOptions = {
@@ -175,6 +174,8 @@ it.each([
       expectGoal(respond, { status: "complete" });
     } else {
       expectFailure(respond, { code: "INVALID_REQUEST" });
+      expect(readGoal()).toEqual(initialGoal());
+      expect(resumeChat).not.toHaveBeenCalled();
     }
     expect(resolved).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();

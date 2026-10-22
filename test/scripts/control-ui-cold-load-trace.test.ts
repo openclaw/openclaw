@@ -17,6 +17,33 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const assetBaseUrl = "http://localhost/assets/";
+const frame = (functionName: string, url = "app.ts", lineNumber = 0, columnNumber = 0) => ({
+  functionName,
+  url,
+  lineNumber,
+  columnNumber,
+});
+const node = (id: number, callFrame: ReturnType<typeof frame>, children?: number[]) => ({
+  id,
+  callFrame,
+  ...(children ? { children } : {}),
+});
+const singleProfile = (name: string, url: string, delta = 1_000): ColdLoadCpuProfile => ({
+  nodes: [node(1, frame(name, url))],
+  samples: [1],
+  timeDeltas: [delta],
+});
+const mapProfile = (profile: ColdLoadCpuProfile, assetDirectory: string) =>
+  mapColdLoadCpuProfile(profile, { assetBaseUrl, assetDirectory });
+const sourceLocation = (url: RegExp, lineNumber = 0, columnNumber = 0) => ({
+  url: expect.stringMatching(url),
+  lineNumber,
+  columnNumber,
+});
+async function writeMap(directory: string, file: string, map: object) {
+  await writeFile(path.join(directory, `${file}.js.map`), JSON.stringify({ version: 3, ...map }));
+}
 
 function event(
   name: string,
@@ -30,14 +57,11 @@ function event(
 describe("cold-load trace accounting", () => {
   it("prepares numeric CDP envelopes, including unnamed end events", () => {
     expect(
-      prepareColdLoadTraceEvent({
-        name: "Layout",
-        ph: "B",
-        ts: 10,
-        pid: 7,
-        tid: 1,
-        args: { beginData: { stackTrace: [{ functionName: "measure" }] } },
-      }),
+      prepareColdLoadTraceEvent(
+        event("Layout", "B", 10, {
+          args: { beginData: { stackTrace: [{ functionName: "measure" }] } },
+        }),
+      ),
     ).toMatchObject({ name: "Layout", args: { beginData: { stackTrace: [{}] } } });
     expect(prepareColdLoadTraceEvent({ ph: "E", ts: 20, pid: 7, tid: 1 })).toMatchObject({
       ph: "E",
@@ -96,22 +120,15 @@ describe("cold-load trace accounting", () => {
 });
 
 describe("cold-load CPU accounting", () => {
-  const frame = (functionName: string, url = "app.ts", lineNumber = 0) => ({
-    functionName,
-    url,
-    lineNumber,
-    columnNumber: 0,
-  });
-
   it("weights leaf samples by time delta and counts nested Solid flush time once", () => {
     const solidUrl = "node_modules/@solidjs/signals/dist/prod.js";
     const profile: ColdLoadCpuProfile = {
       nodes: [
-        { id: 1, callFrame: frame("(root)"), children: [2, 5] },
-        { id: 2, callFrame: frame("flush", solidUrl), children: [3] },
-        { id: 3, callFrame: frame("renderRows"), children: [4] },
-        { id: 4, callFrame: frame("flush", solidUrl, 10) },
-        { id: 5, callFrame: frame("(idle)") },
+        node(1, frame("(root)"), [2, 5]),
+        node(2, frame("flush", solidUrl), [3]),
+        node(3, frame("renderRows"), [4]),
+        node(4, frame("flush", solidUrl, 10)),
+        node(5, frame("(idle)")),
       ],
       samples: [2, 3, 4, 5, 3],
       timeDeltas: [1_000, 2_000, 3_000, 4_000, 5_000],
@@ -136,34 +153,18 @@ describe("cold-load CPU accounting", () => {
     "maps generated call sites at %s",
     async (assetPath) => {
       const directory = tempDirs.make("openclaw-cold-load-map-");
-      await writeFile(
-        path.join(directory, "app.js.map"),
-        JSON.stringify({
-          version: 3,
-          file: "app.js",
-          sources: ["node_modules/@solidjs/signals/dist/prod.js"],
-          sourcesContent: ["function flush() {}"],
-          sourceRoot: "",
-          names: ["flush"],
-          mappings: "AAAAA",
-        }),
-      );
-      const profile: ColdLoadCpuProfile = {
-        nodes: [{ id: 1, callFrame: frame("a", `http://localhost${assetPath}`) }],
-        samples: [1],
-        timeDeltas: [2_000],
-      };
-
-      const mapped = await mapColdLoadCpuProfile(profile, {
-        assetBaseUrl: "http://localhost/assets/",
-        assetDirectory: directory,
+      await writeMap(directory, "app", {
+        sources: ["node_modules/@solidjs/signals/dist/prod.js"],
+        names: ["flush"],
+        mappings: "AAAAA",
       });
+      const profile = singleProfile("a", `http://localhost${assetPath}`, 2_000);
+
+      const mapped = await mapProfile(profile, directory);
       expect(mapped).toMatchObject({ mappedFrames: 1, unmappedFrames: 0 });
       expect(mapped.profile.nodes[0]?.callFrame).toMatchObject({
         functionName: "flush",
-        url: expect.stringMatching(/node_modules\/@solidjs\/signals\/dist\/prod\.js$/u),
-        lineNumber: 0,
-        columnNumber: 0,
+        ...sourceLocation(/node_modules\/@solidjs\/signals\/dist\/prod\.js$/u),
       });
       expect(summarizeCpuProfile(mapped.profile)).toMatchObject({
         solidFlushSelfMs: 2,
@@ -188,45 +189,24 @@ describe("cold-load CPU accounting", () => {
     await writeFile(path.join(directory, "app.js.map"), map);
     const generatedColumn = code.indexOf("+1");
     expect(generatedColumn).toBeGreaterThan(0);
-    const mapped = await mapColdLoadCpuProfile(
+    const mapped = await mapProfile(
       {
         nodes: [
-          {
-            id: 1,
-            callFrame: {
-              functionName: "t",
-              url: "http://localhost/assets/app.js",
-              lineNumber: 0,
-              columnNumber: generatedColumn,
-            },
-          },
-          {
-            id: 2,
-            callFrame: {
-              functionName: "t",
-              url: "http://localhost/assets/app.js",
-              lineNumber: 0,
-              columnNumber: 1,
-            },
-          },
-          {
-            id: 3,
-            callFrame: frame("runtime", "http://localhost/assets/app.js", 2),
-          },
+          node(1, frame("t", `${assetBaseUrl}app.js`, 0, generatedColumn)),
+          node(2, frame("t", `${assetBaseUrl}app.js`, 0, 1)),
+          node(3, frame("runtime", `${assetBaseUrl}app.js`, 2)),
         ],
       },
-      { assetBaseUrl: "http://localhost/assets/", assetDirectory: directory },
+      directory,
     );
-    expect(mapped.profile.nodes[0]?.callFrame).toMatchObject({
-      url: expect.stringMatching(/(?:^|\/)src\/timestamp\.ts$/u),
-      lineNumber: 1,
-      columnNumber: 9,
-    });
-    expect(mapped.profile.nodes[1]?.callFrame).toMatchObject({
-      url: expect.stringMatching(/(?:^|\/)src\/timestamp\.ts$/u),
-      lineNumber: 0,
-      columnNumber: 7,
-    });
+    for (const [index, line, column] of [
+      [0, 1, 9],
+      [1, 0, 7],
+    ] as const) {
+      expect(mapped.profile.nodes[index]?.callFrame).toMatchObject(
+        sourceLocation(/(?:^|\/)src\/timestamp\.ts$/u, line, column),
+      );
+    }
     expect(code.split("\n")[2]).toBe("function runtime() {}");
     expect(mapped).toMatchObject({ mappedFrames: 2, unmappedFrames: 1 });
     expect(mapped.profile.nodes[2]?.callFrame).toEqual(
@@ -238,11 +218,7 @@ describe("cold-load CPU accounting", () => {
     const directory = tempDirs.make("openclaw-cold-load-output-paths-");
     const source = path.join(directory, "source.ts");
     await writeFile(source, "export function sample(value: number) { return value + 1; }");
-    const profile: ColdLoadCpuProfile = {
-      nodes: [{ id: 1, callFrame: frame("sample", "http://localhost/assets/app.js") }],
-      samples: [1],
-      timeDeltas: [1_000],
-    };
+    const profile = singleProfile("sample", `${assetBaseUrl}app.js`);
     async function capture(assetDirectory: string) {
       await build({
         entryPoints: [source],
@@ -251,10 +227,7 @@ describe("cold-load CPU accounting", () => {
         minify: true,
         sourcemap: "external",
       });
-      const mapped = await mapColdLoadCpuProfile(profile, {
-        assetBaseUrl: "http://localhost/assets/",
-        assetDirectory,
-      });
+      const mapped = await mapProfile(profile, assetDirectory);
       expect(mapped.mappedFrames).toBe(1);
       return summarizeCpuProfile(mapped.profile, { includeTables: true }).tables!;
     }
@@ -270,10 +243,10 @@ describe("cold-load CPU accounting", () => {
     const inner = { ...frame("reconcile"), scriptId: "2" };
     const profile: ColdLoadCpuProfile = {
       nodes: [
-        { id: 1, callFrame: frame("(root)", ""), children: [2] },
-        { id: 2, callFrame: outer, children: [3] },
-        { id: 3, callFrame: inner, children: [4] },
-        { id: 4, callFrame: frame("render", "view.ts") },
+        node(1, frame("(root)", ""), [2]),
+        node(2, outer, [3]),
+        node(3, inner, [4]),
+        node(4, frame("render", "view.ts")),
       ],
       samples: [3, 4],
       timeDeltas: [2000, 3000],
@@ -319,25 +292,14 @@ describe("cold-load CPU accounting", () => {
   it.each(["missing map", "unmapped segment"])("retains a frame with %s", async (kind) => {
     const directory = tempDirs.make("openclaw-cold-load-unmapped-");
     if (kind === "unmapped segment") {
-      await writeFile(
-        path.join(directory, "runtime.js.map"),
-        JSON.stringify({
-          version: 3,
-          sources: ["app.ts"],
-          names: [],
-          mappings: "A,KAAA",
-        }),
-      );
+      await writeMap(directory, "runtime", {
+        sources: ["app.ts"],
+        names: [],
+        mappings: "A,KAAA",
+      });
     }
-    const profile: ColdLoadCpuProfile = {
-      nodes: [{ id: 1, callFrame: frame("runtime", "http://localhost/assets/runtime.js") }],
-      samples: [1],
-      timeDeltas: [1000],
-    };
-    const mapped = await mapColdLoadCpuProfile(profile, {
-      assetBaseUrl: "http://localhost/assets/",
-      assetDirectory: directory,
-    });
+    const profile = singleProfile("runtime", `${assetBaseUrl}runtime.js`);
+    const mapped = await mapProfile(profile, directory);
     expect(mapped).toMatchObject({ mappedFrames: 0, unmappedFrames: 1 });
     expect(mapped.profile.nodes[0]).toBe(profile.nodes[0]);
   });

@@ -5,13 +5,22 @@ import type {
   TranscriptsGetResult,
   TranscriptsListResult,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { createLoadingBoundary } from "@solidjs/signals";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  isPending,
+  latest,
+  onCleanup,
+  onSettled,
+} from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -32,53 +41,46 @@ type ArchiveReadResults = {
   "transcripts.export": TranscriptsExportResult;
 };
 type OperationState = { kind: "idle" | "loading" | "done" | "error"; message?: string };
-// Requests stay synchronous; the revision only publishes their presentation state.
-function createArchiveRead(run: (signal: AbortSignal) => Promise<void>) {
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  let abort: AbortController | null = null;
-  let error: unknown = null;
-  const publish = () => setRevision((value) => value + 1);
+// Requests stay synchronous; Solid observes the already-admitted completion.
+function createArchiveRead(run: (signal: AbortSignal, search?: string) => Promise<void>) {
+  const [receipt, setReceipt] = createSignal<Promise<void> | null>(null, { ownedWrite: true });
+  const read = createMemo(() => receipt());
+  // Attribute consumers need a local fallback too, without suspending the page chrome.
+  const loading = createLoadingBoundary(
+    () => isPending(read),
+    () => true,
+  );
+  const request = createPageRequest(() => {}, {
+    task: (search: string | undefined, { signal }) => run(signal, search),
+    onComplete: () => {},
+    onError: (cause) => {
+      throw cause;
+    },
+  });
   const cancel = () => {
-    abort?.abort();
-    abort = null;
-    error = null;
-    publish();
+    request.reset();
+    setReceipt(null);
   };
-  onCleanup(cancel);
+  onCleanup(request.cancel);
   return {
     get pending() {
-      revision();
-      return abort !== null;
+      return request.pending;
     },
-    get error() {
-      revision();
-      return error;
-    },
+    read,
+    loading,
     abort: cancel,
-    async run() {
-      cancel();
-      const current = new AbortController();
-      abort = current;
-      publish();
-      try {
-        await run(current.signal);
-      } catch (cause) {
-        if (abort === current && !current.signal.aborted) {
-          error = cause;
-        }
-      } finally {
-        if (abort === current) {
-          abort = null;
-          publish();
-        }
-      }
+    run(search?: string) {
+      const completion = request.run(search);
+      // Inactive tabs may not consume their read until later; the memo owns visible errors.
+      void completion.catch(() => {});
+      void setReceipt(completion);
+      return completion;
     },
   };
 }
 
 export function MeetingsPage(props: { routeSearch?: string }) {
-  const routeSearch = () => props.routeSearch ?? "";
-  let host!: HTMLElement;
+  const routeSearch = () => latest(() => props.routeSearch ?? "");
   const context = useApplication();
   const projection = projectGateway(context.gateway);
   const gateway = createGatewayConnectionLifecycle(context.gateway.snapshot);
@@ -109,14 +111,29 @@ export function MeetingsPage(props: { routeSearch?: string }) {
   );
   let exportAbort: AbortController | null = null;
   let focusSelection = false;
+  const focusTargets: Partial<Record<"search" | "reader-title" | "reader-error", HTMLElement>> = {};
+  const focusCurrentTarget = () => {
+    if (!active || !focusSelection) {
+      return;
+    }
+    const target = selection().selector
+      ? [focusTargets["reader-error"], focusTargets["reader-title"]].find(
+          (element) => element?.isConnected,
+        )
+      : focusTargets.search;
+    if (target?.isConnected) {
+      target.focus();
+      focusSelection = false;
+    }
+  };
 
-  const listTask = createArchiveRead(async (signal) => {
+  const listTask = createArchiveRead(async (signal, search = routeSearch()) => {
     const client = requestClient();
     if (!client) {
       return;
     }
-    const params = transcriptListParams(routeSearch());
-    const selector = selection().selector;
+    const params = transcriptListParams(search);
+    const selector = selection(search).selector;
     await readArchive({
       client,
       method: "transcripts.list",
@@ -131,9 +148,9 @@ export function MeetingsPage(props: { routeSearch?: string }) {
       },
     });
   });
-  const summaryTask = createArchiveRead(async (signal) => {
+  const summaryTask = createArchiveRead(async (signal, search = routeSearch()) => {
     const client = requestClient();
-    const selector = selection().selector;
+    const selector = selection(search).selector;
     if (!client || !selector) {
       return;
     }
@@ -143,15 +160,21 @@ export function MeetingsPage(props: { routeSearch?: string }) {
       params: { selector },
       signal,
       current: () => selection().selector === selector,
-      accept: (result) => {
+      accept: (result, current) => {
         setReaderDenial(null);
         setSummary(result);
+        onSettled(() => {
+          focusCurrentTarget();
+          if (current()) {
+            void generateMissingSummary(false, result);
+          }
+        });
       },
     });
   });
-  const readerTask = createArchiveRead(async (signal) => {
+  const readerTask = createArchiveRead(async (signal, search = routeSearch()) => {
     const client = requestClient();
-    const { selector, query } = selection();
+    const { selector, query } = selection(search);
     const cursor = readerCursor;
     if (!client || !selector) {
       return;
@@ -178,6 +201,7 @@ export function MeetingsPage(props: { routeSearch?: string }) {
             : [result],
         );
         loadedReaderCursor = cursor;
+        onSettled(focusCurrentTarget);
         if (
           document.visibilityState !== "hidden" &&
           result.nextCursor &&
@@ -203,8 +227,8 @@ export function MeetingsPage(props: { routeSearch?: string }) {
       : null;
   }
 
-  function selection() {
-    const query = new URLSearchParams(routeSearch());
+  function selection(search = routeSearch()) {
+    const query = new URLSearchParams(search);
     return {
       selector: query.get("selector") ?? "",
       query: (query.get("find") ?? "").slice(0, TRANSCRIPT_QUERY_LIMIT),
@@ -276,6 +300,7 @@ export function MeetingsPage(props: { routeSearch?: string }) {
         setSummary(null);
         setReaderPages([]);
         cancelExport();
+        onSettled(focusCurrentTarget);
       }
       throw error;
     }
@@ -471,92 +496,68 @@ export function MeetingsPage(props: { routeSearch?: string }) {
     }
   }
 
-  createEffect(summary, (page) => {
-    if (page) {
-      void untrack(() => generateMissingSummary(false, page));
-    }
-  });
-
   let previousSearch: string | undefined;
   let previousListParams: string | undefined;
   let connectionHello: unknown;
   let connectionAuth: unknown;
   createEffect(
     () => ({ snapshot: projection.read().snapshot, search: routeSearch() }),
-    ({ snapshot, search }) =>
-      untrack(() => {
-        const connectionChanged = gateway.transition(snapshot);
-        const authorizationChanged =
-          snapshot.hello !== connectionHello || snapshot.hello?.auth !== connectionAuth;
-        connectionHello = snapshot.hello;
-        connectionAuth = snapshot.hello?.auth;
-        if (connectionChanged || authorizationChanged) {
-          gateway.invalidate();
-          resetConnection();
-        }
-        const previous = new URLSearchParams(previousSearch);
-        const next = new URLSearchParams(search);
-        const selectorChanged = previous.get("selector") !== next.get("selector");
-        const queryChanged = previous.get("find") !== next.get("find");
-        const listParams = JSON.stringify(transcriptListParams(search));
-        const filtersChanged = previousListParams !== listParams;
-        if (selectorChanged) {
-          cancelSummaryGeneration();
-          setSummary(null);
-          lastReaderRefresh = 0;
-        }
-        if (filtersChanged) {
-          setList(null);
-        }
-        if (previousSearch !== search) {
-          setDrafts((current) => {
-            const nextDrafts = { ...current };
-            for (const key of [...TRANSCRIPT_FILTER_KEYS, "find"]) {
-              if (
-                previous.get(key) !== next.get(key) ||
-                previousSearch === undefined ||
-                (key === "find" && selectorChanged)
-              ) {
-                nextDrafts[key] = next.get(key) ?? "";
-              }
+    ({ snapshot, search }) => {
+      const connectionChanged = gateway.transition(snapshot);
+      const authorizationChanged =
+        snapshot.hello !== connectionHello || snapshot.hello?.auth !== connectionAuth;
+      connectionHello = snapshot.hello;
+      connectionAuth = snapshot.hello?.auth;
+      if (connectionChanged || authorizationChanged) {
+        gateway.invalidate();
+        resetConnection();
+      }
+      const previous = new URLSearchParams(previousSearch);
+      const next = new URLSearchParams(search);
+      const selectorChanged = previous.get("selector") !== next.get("selector");
+      const queryChanged = previous.get("find") !== next.get("find");
+      const listParams = JSON.stringify(transcriptListParams(search));
+      const filtersChanged = previousListParams !== listParams;
+      if (selectorChanged) {
+        cancelSummaryGeneration();
+        setSummary(null);
+        lastReaderRefresh = 0;
+      }
+      if (filtersChanged) {
+        setList(null);
+      }
+      if (previousSearch !== search) {
+        setDrafts((current) => {
+          const nextDrafts = { ...current };
+          for (const key of [...TRANSCRIPT_FILTER_KEYS, "find"]) {
+            if (
+              previous.get(key) !== next.get(key) ||
+              previousSearch === undefined ||
+              (key === "find" && selectorChanged)
+            ) {
+              nextDrafts[key] = next.get(key) ?? "";
             }
-            return nextDrafts;
-          });
-        }
-        if (selectorChanged || queryChanged) {
-          resetReader();
-          cancelExport();
-          focusSelection = previousSearch !== undefined;
-        }
-        if (connectionChanged || authorizationChanged || filtersChanged || selectorChanged) {
-          void listTask.run();
-        }
-        if (connectionChanged || authorizationChanged || selectorChanged) {
-          void summaryTask.run();
-        }
-        if (connectionChanged || authorizationChanged || selectorChanged || queryChanged) {
-          void readerTask.run();
-        }
-        previousSearch = search;
-        previousListParams = listParams;
-      }),
-  );
-  // Route and archive commits settle before focus moves into the rendered reader or search field.
-  createEffect(
-    () => [routeSearch(), selection().selector, summary(), readerPages(), readerDenial()] as const,
-    ([, selector]) => {
-      if (!focusSelection) {
-        return;
+          }
+          return nextDrafts;
+        });
       }
-      const target = selector
-        ? host.querySelector<HTMLElement>(
-            ".transcripts-reader h1, .transcripts-reader [role=alert]",
-          )
-        : host.querySelector<HTMLElement>('.transcripts-library input[name="query"]');
-      if (target) {
-        target.focus();
-        focusSelection = false;
+      if (selectorChanged || queryChanged) {
+        resetReader();
+        cancelExport();
+        focusSelection = previousSearch !== undefined;
       }
+      if (connectionChanged || authorizationChanged || filtersChanged || selectorChanged) {
+        void listTask.run(search);
+      }
+      if (connectionChanged || authorizationChanged || selectorChanged) {
+        void summaryTask.run(search);
+      }
+      if (connectionChanged || authorizationChanged || selectorChanged || queryChanged) {
+        void readerTask.run(search);
+      }
+      previousSearch = search;
+      previousListParams = listParams;
+      onSettled(focusCurrentTarget);
     },
   );
   const timer = globalThis.setInterval(() => refreshLive(), 3_000);
@@ -573,52 +574,69 @@ export function MeetingsPage(props: { routeSearch?: string }) {
 
   const activeReaderTask = () => (readerTab() === "summary" ? summaryTask : readerTask);
   return (
-    <openclaw-meetings-page ref={(element) => (host = element)}>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <TranscriptsView
-          basePath={context.basePath}
-          now={now()}
-          search={routeSearch()}
-          drafts={drafts()}
-          onDraft={(key, value) => setDrafts((current) => ({ ...current, [key]: value }))}
-          connected={projection.read().snapshot.phase === "connected"}
-          allowed={hasOperatorReadAccess(projection.read().snapshot.hello?.auth ?? null)}
-          list={requestClient() ? list() : null}
-          listLoading={!listDenial() && listTask.pending}
-          listError={listDenial() ?? listTask.error}
-          reader={{
-            summary: summary(),
-            pages: readerPages(),
-            loading: activeReaderTask().pending,
-            error: readerDenial() ?? activeReaderTask().error,
-          }}
-          readerTab={readerTab()}
-          summaryGeneration={summaryGeneration()}
-          onSummaryRetry={() => void generateMissingSummary(true)}
-          exportState={exportState()}
-          onNavigate={navigate}
-          onOpenCaptureSettings={() => {
-            const target = SETTINGS_SEARCH_TARGETS.meetingCapture;
-            context.navigate(target.routeId, { search: target.search, hash: target.hash });
-          }}
-          onRefresh={refresh}
-          onReaderRetry={() => {
-            if (!readerPages().length) {
-              resetReader();
+    <openclaw-meetings-page>
+      <TranscriptsView
+        onFocusTarget={(kind, element) => {
+          focusTargets[kind] = element;
+          focusCurrentTarget();
+          return () => {
+            if (focusTargets[kind] === element) {
+              delete focusTargets[kind];
             }
-            if (readerTab() === "summary") {
-              void summaryTask.run();
-              return;
-            }
-            if (!summary()) {
-              void summaryTask.run();
-            }
-            void readerTask.run();
-          }}
-          onReaderTab={(tab) => navigate({ tab: tab === "text" ? "transcript" : "summary" })}
-          onDownload={(format) => void download(format)}
-        />
-      </ShellLayoutBoundary>
+          };
+        }}
+        basePath={context.basePath}
+        now={now()}
+        search={routeSearch()}
+        drafts={drafts()}
+        onDraft={(key, value) => setDrafts((current) => ({ ...current, [key]: value }))}
+        connected={projection.read().snapshot.phase === "connected"}
+        allowed={hasOperatorReadAccess(projection.read().snapshot.hello?.auth ?? null)}
+        list={requestClient() ? list() : null}
+        listRead={listTask.read}
+        listLoading={!listDenial() && listTask.loading()}
+        listError={listDenial()}
+        reader={{
+          get summary() {
+            return summary();
+          },
+          get pages() {
+            return readerPages();
+          },
+          read: () => activeReaderTask().read(),
+          get loading() {
+            return activeReaderTask().loading();
+          },
+          get error() {
+            return readerDenial();
+          },
+        }}
+        readerTab={readerTab()}
+        summaryGeneration={summaryGeneration()}
+        onSummaryRetry={() => void generateMissingSummary(true)}
+        exportState={exportState()}
+        onNavigate={navigate}
+        onOpenCaptureSettings={() => {
+          const target = SETTINGS_SEARCH_TARGETS.meetingCapture;
+          context.navigate(target.routeId, { search: target.search, hash: target.hash });
+        }}
+        onRefresh={refresh}
+        onReaderRetry={() => {
+          if (!readerPages().length) {
+            resetReader();
+          }
+          if (readerTab() === "summary") {
+            void summaryTask.run();
+            return;
+          }
+          if (!summary()) {
+            void summaryTask.run();
+          }
+          void readerTask.run();
+        }}
+        onReaderTab={(tab) => navigate({ tab: tab === "text" ? "transcript" : "summary" })}
+        onDownload={(format) => void download(format)}
+      />
     </openclaw-meetings-page>
   );
 }

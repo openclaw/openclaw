@@ -1,5 +1,4 @@
 /**
- * OpenClaw-owned tool registration filters.
  *
  * Keeps optional tool gating separate from tool construction so config and execution contracts decide exposure.
  */

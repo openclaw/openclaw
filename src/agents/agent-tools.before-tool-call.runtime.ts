@@ -14,7 +14,6 @@ import {
   recordToolCallOutcome,
 } from "./tool-loop-detection.js";
 
-/** Runtime seam for before_tool_call diagnostics and loop detection. */
 export const beforeToolCallRuntime = {
   getArgumentChurnNoProgressStreak,
   markDiagnosticArgumentChurnObservation,

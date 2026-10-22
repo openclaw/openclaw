@@ -24,7 +24,6 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { createNativeModelOwnedRuntimeModel } from "../defaults.js";
-import { extractObservedOverflowTokenCount } from "../embedded-agent-helpers/context-overflow-observation.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarnessAttemptParams } from "../harness/types.js";
@@ -40,6 +39,29 @@ import { createRunWorkspaceMock } from "./run.workspace-ownership.test-support.j
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+
+const realFailoverClassify =
+  await vi.importActual<typeof import("../failover/classify.js")>("../failover/classify.js");
+const realAssistantMessageFailures = await vi.importActual<
+  typeof import("../embedded-agent-helpers/assistant-message-failures.js")
+>("../embedded-agent-helpers/assistant-message-failures.js");
+const realOverflowObservation = await vi.importActual<
+  typeof import("../embedded-agent-helpers/context-overflow-observation.js")
+>("../embedded-agent-helpers/context-overflow-observation.js");
+const realErrorText = await vi.importActual<
+  typeof import("../embedded-agent-helpers/error-text.js")
+>("../embedded-agent-helpers/error-text.js");
+const realContextOverflow = await vi.importActual<typeof import("../failover/context-overflow.js")>(
+  "../failover/context-overflow.js",
+);
+const realImageErrors = await vi.importActual<
+  typeof import("../embedded-agent-helpers/image-errors.js")
+>("../embedded-agent-helpers/image-errors.js");
+const realThinking = await vi.importActual<typeof import("../embedded-agent-helpers/thinking.js")>(
+  "../embedded-agent-helpers/thinking.js",
+);
+const { classifyFailoverReason } = realFailoverClassify;
+const { extractObservedOverflowTokenCount } = realOverflowObservation;
 
 type ProductionRunEmbeddedAgent = typeof import("./run.js").runEmbeddedAgent;
 export type TestRunEmbeddedAgent = (
@@ -285,10 +307,8 @@ const mockedLog: {
   isEnabled: vi.fn(() => false),
 };
 
-const mockedFormatBillingErrorMessage = vi.fn(() => "");
-export const mockedClassifyFailoverReason = vi.fn<(raw: string) => FailoverReason | null>(
-  () => null,
-);
+export const mockedClassifyFailoverReason =
+  vi.fn<(raw: string) => FailoverReason | null>(classifyFailoverReason);
 export const mockedClassifyAssistantFailoverReason = vi.fn(
   (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
     mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
@@ -311,7 +331,6 @@ export const mockedIsLikelyContextOverflowError = vi.fn(matchesCanonicalOverflow
 const mockedParseImageSizeError = vi.fn(() => null);
 const mockedParseImageDimensionError = vi.fn(() => null);
 export const mockedIsRateLimitAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
-const mockedIsTimeoutErrorMessage = vi.fn(() => false);
 const mockedPickFallbackThinkingLevel = vi.fn<(params?: unknown) => ThinkLevel | null>(() => null);
 const mockedEvaluateContextWindowGuard = vi.fn(() => ({
   shouldWarn: false,
@@ -520,14 +539,12 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedLog.isEnabled.mockReturnValue(false);
 
   mockedClassifyFailoverReason.mockReset();
-  mockedClassifyFailoverReason.mockReturnValue(null);
+  mockedClassifyFailoverReason.mockImplementation(classifyFailoverReason);
   mockedClassifyAssistantFailoverReason.mockReset();
   mockedClassifyAssistantFailoverReason.mockImplementation(
     (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
       mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
   );
-  mockedFormatBillingErrorMessage.mockReset();
-  mockedFormatBillingErrorMessage.mockReturnValue("");
   mockedFormatAssistantErrorText.mockReset();
   mockedFormatAssistantErrorText.mockReturnValue("");
   mockedIsAuthAssistantError.mockReset();
@@ -548,8 +565,6 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedParseImageDimensionError.mockReturnValue(null);
   mockedIsRateLimitAssistantError.mockReset();
   mockedIsRateLimitAssistantError.mockReturnValue(false);
-  mockedIsTimeoutErrorMessage.mockReset();
-  mockedIsTimeoutErrorMessage.mockReturnValue(false);
   mockedPickFallbackThinkingLevel.mockReset();
   mockedPickFallbackThinkingLevel.mockReturnValue(null);
   mockedEvaluateContextWindowGuard.mockReset();
@@ -629,7 +644,7 @@ export function resetSharedRunIntegrationHarnessMocks(): void {
   mockedBuildEmbeddedRunPayloads.mockReset();
   mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
   mockedClassifyFailoverReason.mockReset();
-  mockedClassifyFailoverReason.mockReturnValue(null);
+  mockedClassifyFailoverReason.mockImplementation(classifyFailoverReason);
   mockedClassifyAssistantFailoverReason.mockReset();
   mockedClassifyAssistantFailoverReason.mockImplementation(
     (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
@@ -838,26 +853,41 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../workspace-run.js", createRunWorkspaceMock);
 
-  vi.doMock("../embedded-agent-helpers.js", async () => ({
-    ...(await vi.importActual<typeof import("../embedded-agent-helpers.js")>(
-      "../embedded-agent-helpers.js",
-    )),
-    formatBillingErrorMessage: mockedFormatBillingErrorMessage,
+  // Capture real predicates/rendering once; only scenario-controlled exports are mocked.
+  vi.doMock("../failover/classify.js", () => ({
+    ...realFailoverClassify,
     classifyFailoverReason: mockedClassifyFailoverReason,
+    isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
+  }));
+  vi.doMock("../embedded-agent-helpers/assistant-message-failures.js", () => ({
+    ...realAssistantMessageFailures,
     classifyAssistantFailoverReason: mockedClassifyAssistantFailoverReason,
-    extractObservedOverflowTokenCount: mockedExtractObservedOverflowTokenCount,
-    formatAssistantErrorText: mockedFormatAssistantErrorText,
     isAuthAssistantError: mockedIsAuthAssistantError,
     isBillingAssistantError: mockedIsBillingAssistantError,
-    isCompactionFailureError: mockedIsCompactionFailureError,
-    isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
     isFailoverAssistantError: mockedIsFailoverAssistantError,
+    isRateLimitAssistantError: mockedIsRateLimitAssistantError,
+  }));
+  vi.doMock("../embedded-agent-helpers/context-overflow-observation.js", () => ({
+    ...realOverflowObservation,
+    extractObservedOverflowTokenCount: mockedExtractObservedOverflowTokenCount,
+    isCompactionFailureError: mockedIsCompactionFailureError,
+  }));
+  vi.doMock("../embedded-agent-helpers/error-text.js", () => ({
+    ...realErrorText,
+    formatAssistantErrorText: mockedFormatAssistantErrorText,
+  }));
+  vi.doMock("../failover/context-overflow.js", () => ({
+    ...realContextOverflow,
+    isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
+  }));
+  vi.doMock("../embedded-agent-helpers/image-errors.js", () => ({
+    ...realImageErrors,
     parseImageSizeError: mockedParseImageSizeError,
     parseImageDimensionError: mockedParseImageDimensionError,
-    isRateLimitAssistantError: mockedIsRateLimitAssistantError,
-    isTimeoutErrorMessage: mockedIsTimeoutErrorMessage,
+  }));
+  vi.doMock("../embedded-agent-helpers/thinking.js", () => ({
+    ...realThinking,
     pickFallbackThinkingLevel: mockedPickFallbackThinkingLevel,
-    sanitizeUserFacingText: vi.fn((text: unknown) => (typeof text === "string" ? text : "")),
   }));
 
   vi.doMock("./run/attempt.js", () => ({
@@ -975,9 +1005,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveFailoverStatus: mockedResolveFailoverStatus,
   }));
 
+  // mock-isolation: overflow fixtures pin lane selection without loading lane runtime state.
   vi.doMock("./lanes.js", () => ({
-    resolveSessionLane: vi.fn((key: string) => `session:${key}`),
-    resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
     resolveGlobalLane: vi.fn(() => "global-lane"),
   }));
 

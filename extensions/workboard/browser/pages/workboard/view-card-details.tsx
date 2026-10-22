@@ -200,7 +200,9 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
   const boardId = () => workboardCardBoardId(card());
   const board = () => state().boards.find((entry) => entry.id === boardId());
   const events = createMemo(() => (card().events ?? []).toReversed());
-  const dependencies = createMemo(() => getWorkboardDependencyState(card(), state().cards));
+  const dependencies = createMemo(() =>
+    getWorkboardDependencyState(card(), state().cards, !state().nextCursor),
+  );
   const technical = createMemo(() => technicalDetailsData(card(), action().linkedSessionKey));
   const tabs = () =>
     [

@@ -1,5 +1,6 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCanvasDocument } from "../canvas/documents.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
@@ -8,19 +9,23 @@ import { serveControlUiPublicSessionMedia } from "./control-ui-public-session-me
 import { createRequest, createResponse } from "./server-http.test-harness.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
-const { readMessage, active, resolveToken } = vi.hoisted(() => ({
+const { readMessage, readWidget, active, resolveToken, resolveWidgetToken } = vi.hoisted(() => ({
   readMessage: vi.fn(),
+  readWidget: vi.fn(),
   active: vi.fn(),
   resolveToken: vi.fn(),
+  resolveWidgetToken: vi.fn(),
 }));
 // mock-isolation: Public publication state is controlled while exercising real media bytes and admission.
 vi.mock("./control-ui-public-session-read.js", () => ({
   readPublicSessionMessage: readMessage,
+  readPublicSessionWidget: readWidget,
   isPublicSessionShareActive: active,
 }));
 // mock-isolation: Token cryptography is covered by its owner; this suite exercises the resolved publication boundary.
 vi.mock("./control-ui-public-session-token.js", () => ({
   resolvePublicSessionShareToken: resolveToken,
+  resolvePublicSessionWidgetToken: resolveWidgetToken,
 }));
 
 const png = Buffer.from(
@@ -80,10 +85,16 @@ async function request(
   return response;
 }
 
+function storedMedia(media: unknown[]) {
+  return { role: "user", __openclaw: { id: "entry-1", media } };
+}
+
 beforeEach(() => {
   resolveToken.mockReset().mockResolvedValue(locator);
+  resolveWidgetToken.mockReset().mockResolvedValue(null);
   active.mockReset().mockReturnValue(true);
   readMessage.mockReset().mockResolvedValue(message());
+  readWidget.mockReset().mockResolvedValue(true);
 });
 afterEach(() => {
   for (const gate of gates.splice(0)) {
@@ -92,6 +103,115 @@ afterEach(() => {
 });
 
 describe("public session media", () => {
+  it("serves saved script-only widgets with an opaque sandbox and conditional responses", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const html = "<!doctype html><p>Shared chart</p><script>document.title = 'Chart'</script>";
+      const document = await createCanvasDocument({ html, cspSandbox: "scripts" });
+      const gate = createControlUiPublicSessionRequestGate();
+      gates.push(gate);
+      resolveWidgetToken.mockResolvedValue({ locator, docId: document.id });
+      const query = "widget=v1.widget";
+      const response = await request({ query, gate });
+      expect(response.res.statusCode).toBe(200);
+      expect(response.getBody()).toBe(html);
+      expect(response.setHeader).toHaveBeenCalledWith("Content-Type", "text/html; charset=utf-8");
+      expect(response.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
+      expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+      expect(response.setHeader).toHaveBeenCalledWith("X-Robots-Tag", "noindex, nofollow");
+      expect(response.setHeader).toHaveBeenCalledWith("X-Content-Type-Options", "nosniff");
+      const policy = response.setHeader.mock.calls.find(
+        ([name]) => name === "Content-Security-Policy",
+      )?.[1];
+      // The opaque sandbox, closed network, and same-origin embedding are the public contract.
+      for (const directive of [
+        "default-src 'none'",
+        "connect-src 'none'",
+        "frame-src 'none'",
+        "sandbox allow-scripts",
+        "frame-ancestors 'self'",
+      ]) {
+        expect(String(policy).split("; ")).toContain(directive);
+      }
+      expect(String(policy)).not.toContain("allow-same-origin");
+      const etag = response.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
+      expect(etag).toEqual(expect.any(String));
+      const unchanged = await request({ query, gate, headers: { "if-none-match": etag } });
+      expect(unchanged.res.statusCode).toBe(304);
+      expect(unchanged.getBody()).toBe("");
+      active.mockReturnValue(false);
+      const revoked = await request({ query, gate, headers: { "if-none-match": etag } });
+      expect(revoked.res.statusCode).toBe(404);
+      expect(revoked.getBody()).toBe("This widget is unavailable.");
+    });
+  });
+
+  it("requires a publication receipt and script-only document even for an existing widget", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const document = await createCanvasDocument({ html: "<p>Private chart</p>" });
+      resolveWidgetToken.mockResolvedValue({ locator, docId: document.id });
+      const query = "widget=v1.widget";
+      expect((await request({ query })).res.statusCode).toBe(404);
+      await createCanvasDocument({
+        id: document.id,
+        html: "<p>Private chart</p>",
+        cspSandbox: "scripts",
+      });
+      readWidget.mockResolvedValue(false);
+      expect((await request({ query })).res.statusCode).toBe(404);
+      readWidget.mockResolvedValue(true);
+      resolveWidgetToken.mockResolvedValue({ locator, docId: "missing" });
+      expect((await request({ query })).res.statusCode).toBe(404);
+    });
+  });
+
+  it("uses only the document bound to a widget token and rejects attempts to select another", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const a = await createCanvasDocument({ html: "<p>A</p>", cspSandbox: "scripts" });
+      const b = await createCanvasDocument({ html: "<p>B</p>", cspSandbox: "scripts" });
+      resolveWidgetToken.mockResolvedValue({ locator, docId: a.id });
+      const response = await request({ query: "widget=v1.widget-a" });
+      expect(response.getBody()).toBe("<p>A</p>");
+      expect(readWidget).toHaveBeenCalledWith(config, locator, { docId: a.id, projection });
+      expect((await request({ query: `widget=v1.widget-a&widget=${b.id}` })).res.statusCode).toBe(
+        404,
+      );
+      expect((await request({ query: `token=v1.YWJj&widget=${b.id}` })).res.statusCode).toBe(404);
+    });
+  });
+
+  it("rechecks publication after reading a widget before sending its response", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const document = await createCanvasDocument({
+        html: "<p>Revoked</p>",
+        cspSandbox: "scripts",
+      });
+      resolveWidgetToken.mockResolvedValue({ locator, docId: document.id });
+      readWidget.mockImplementationOnce(async () => {
+        active.mockReturnValue(false);
+        return true;
+      });
+      const response = await request({ query: "widget=v1.widget" });
+      expect(response.res.statusCode).toBe(404);
+      expect(response.getBody()).toBe("This widget is unavailable.");
+      expect(response.setHeader).not.toHaveBeenCalledWith("ETag", expect.anything());
+    });
+  });
+
+  it.each([
+    "widget=chart&entry=entry-1&attachment=content-0",
+    "widget=chart&extra=1",
+    "widget=chart&widget=other",
+    "widget=chart&token=v1.ZGVm",
+    "widget=..",
+    "widget=%2Fchart",
+    `widget=${"x".repeat(129)}`,
+    "entry=entry-1&attachment=content-0&extra=1",
+  ])("rejects ambiguous or invalid public media query: %s", async (query) => {
+    expect((await request({ query: `token=v1.YWJj&${query}` })).res.statusCode).toBe(404);
+    expect(readWidget).not.toHaveBeenCalled();
+    expect(readMessage).not.toHaveBeenCalled();
+  });
+
   it("serves exact entry images with sniffed type, inline disposition, and private cache policy", async () => {
     readMessage.mockResolvedValue({ ...message(), role: "toolResult", toolCallId: "tool-1" });
     const response = await request();
@@ -106,36 +226,19 @@ describe("public session media", () => {
 
   it("reads user attachments through the managed inbound media owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const saved = await saveMediaBuffer(
-        png,
-        "image/png",
-        "inbound",
-        MAX_IMAGE_BYTES,
-        "upload.png",
-      );
+      const save = (directory: string, name: string) =>
+        saveMediaBuffer(png, "image/png", directory, MAX_IMAGE_BYTES, name);
+      const saved = await save("inbound", "upload.png");
       for (const source of [{ url: `media://inbound/${saved.id}` }, { path: saved.path }]) {
-        readMessage.mockResolvedValue({
-          role: "user",
-          __openclaw: {
-            id: "entry-1",
-            media: [{}, { ...source, fileName: "upload.png" }],
-          },
-        });
+        readMessage.mockResolvedValue(storedMedia([{}, { ...source, fileName: "upload.png" }]));
         const response = await request({ query: "token=v1.YWJj&entry=entry-1&attachment=media-1" });
         expect(response.res.statusCode).toBe(200);
         expect(response.end).toHaveBeenCalledWith(png);
       }
-      const outside = await saveMediaBuffer(
-        png,
-        "image/png",
-        "outgoing/originals",
-        MAX_IMAGE_BYTES,
-        "private.png",
+      const outside = await save("outgoing/originals", "private.png");
+      readMessage.mockResolvedValue(
+        storedMedia([{ path: outside.path, contentType: "image/png" }]),
       );
-      readMessage.mockResolvedValue({
-        role: "user",
-        __openclaw: { id: "entry-1", media: [{ path: outside.path, contentType: "image/png" }] },
-      });
       const rejected = await request({ query: "token=v1.YWJj&entry=entry-1&attachment=media-0" });
       expect(rejected.res.statusCode).toBe(404);
     });
@@ -155,17 +258,6 @@ describe("public session media", () => {
       expect(response.res.statusCode).toBe(404);
       expect(response.getBody()).toBe("This public session is unavailable.");
     }
-  });
-
-  it("rechecks revocation on a cached image, including conditional requests", async () => {
-    const gate = createControlUiPublicSessionRequestGate();
-    gates.push(gate);
-    const first = await request({ gate });
-    const etag = first.setHeader.mock.calls.find(([key]) => key === "ETag")?.[1];
-    active.mockReturnValue(false);
-    const response = await request({ gate, headers: { "if-none-match": etag } });
-    expect(response.res.statusCode).toBe(404);
-    expect(readMessage).toHaveBeenCalledTimes(1);
   });
 
   it("refuses unknown tokens and insecure ingress before reading transcript bytes", async () => {

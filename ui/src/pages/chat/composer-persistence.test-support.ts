@@ -18,7 +18,7 @@ import {
   loadChatComposerState,
   listStoredChatOutboxes,
   persistChatComposerState,
-  removeStoredChatComposerQueueItem,
+  updateStoredChatComposerQueueItems,
 } from "./composer-persistence.ts";
 
 type ComposerState = Parameters<typeof persistChatComposerState>[0] & {
@@ -102,7 +102,9 @@ export function fillOutboxes(prefix: string, count = 20) {
 }
 
 export function releaseOutbox({ state, item }: ReturnType<typeof fillOutboxes>[number]) {
-  expect(removeStoredChatComposerQueueItem(state, state.sessionKey, item.id, item)).toBe(true);
+  expect(
+    updateStoredChatComposerQueueItems(state, state.sessionKey, [{ expected: item, next: null }]),
+  ).toBe(true);
 }
 
 export function startPersistence(state: ComposerState) {

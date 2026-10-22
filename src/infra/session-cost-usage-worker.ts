@@ -1,16 +1,10 @@
-import {
-  collectErrorGraphCandidates,
-  toErrorObject,
-} from "@openclaw/normalization-core/error-coercion";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
-import {
-  openOpenClawAgentDatabaseReadOnly,
-  withOpenClawAgentDatabaseReadOnly,
-} from "../state/openclaw-agent-db-readonly.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
@@ -55,17 +49,15 @@ import {
   scanUsageCostRollupInWorker,
 } from "./session-cost-usage-worker-refresh.js";
 import {
+  createUsageCostReportSource,
   prepareUsageCostReportEntry,
-  readUsageCostReportEntry,
 } from "./session-cost-usage-worker-report.js";
-import {
-  UsageCostHostEffectError,
-  type UsageCostWorkerDatabase,
-  type UsageCostWorkerHostEffects,
-  type UsageCostWorkerHostReply,
-  type UsageCostWorkerInput,
-  type UsageCostWorkerReply,
-  type UsageCostWorkerResult,
+import type {
+  UsageCostWorkerDatabase,
+  UsageCostWorkerHostEffects,
+  UsageCostWorkerInput,
+  UsageCostWorkerReply,
+  UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
@@ -93,15 +85,10 @@ export async function executeUsageCostWorker(
   ): Promise<UsageCostWorkerHostEffects[Kind]["output"]> => {
     control.throwIfCancelled();
     const response = await channel.request({ kind, input: value }, transfer);
-    // SAFETY: The paired host constructs this reply on the operation's private channel.
-    const reply = response.input as UsageCostWorkerHostReply;
     response.consumed();
-    if (!reply.ok) {
-      throw new UsageCostHostEffectError(reply.origin, reply.message);
-    }
     control.throwIfCancelled();
     // SAFETY: Channel request IDs pair this value with the host dispatch for the requested kind.
-    return reply.value as UsageCostWorkerHostEffects[Kind]["output"];
+    return response.input as UsageCostWorkerHostEffects[Kind]["output"];
   };
   const target = (agentId: string, storePath: string) => {
     const binding = input.stores.find(
@@ -155,11 +142,13 @@ export async function executeUsageCostWorker(
     operation.kind === "refresh" && operation.sessionFiles
       ? await resolveUsageCostTranscriptFiles(operation.sessionFiles, access)
       : [];
+  const committedOnly = operation.kind === "sessions" && operation.committedOnly === true;
   const sessionPaths =
     operation.kind === "sessions"
       ? await resolveUsageCostTranscriptPaths(
           operation.sessions.map((session) => session.sessionFile),
           access,
+          { materializeArchives: !committedOnly },
         )
       : undefined;
   const selectedPaths = sessionPaths
@@ -356,53 +345,33 @@ export async function executeUsageCostWorker(
       const filesByPath = new Map(
         reportFiles.flatMap((file) => (file ? [[file.filePath, file] as const] : [])),
       );
-      const consumed = new Set<string>();
-      const invalidRows = new Map<string, SessionCostUsageRollupRow>();
-      const source = {
+      const report = createUsageCostReportSource({
+        rows: byPath,
+        entries,
+        files: filesByPath,
+        sessions: operation.kind === "sessions" ? operation.sessions : undefined,
         deferredPaths: cacheBudget.deferredPaths,
         deferredMetadata: cacheBudget.deferredMetadata,
-        readRow(filePath: string) {
-          consumed.add(filePath);
-          return byPath.get(filePath);
+        startMs: operation.startMs,
+        endMs: operation.endMs,
+        dayBucket: operation.dayBucket,
+        throwIfCancelled: control.throwIfCancelled,
+        replayBudget,
+        cacheBudget,
+        committedOnly,
+        scan: {
+          pricingFingerprint: operation.pricingFingerprint,
+          resolveCosts,
+          readGeneration,
+          readRows,
         },
-        readBody: (row: SessionCostUsageRollupRow) => entries.get(row.key)?.blob ?? null,
-        readEntry: (row: SessionCostUsageRollupRow) =>
-          readUsageCostReportEntry({
-            prepared: entries.get(row.key)!,
-            file: filesByPath.get(row.key),
-            startMs: operation.startMs,
-            endMs: operation.endMs,
-            dayBucket: operation.dayBucket,
-            throwIfCancelled: control.throwIfCancelled,
-            replayBudget,
-            cacheBudget,
-            scan: {
-              pricingFingerprint: operation.pricingFingerprint,
-              resolveCosts,
-              readGeneration,
-              readRows,
-            },
-          }),
-        onInvalidBody(key: string) {
-          const row = byPath.get(key);
-          if (row) {
-            invalidRows.set(key, row);
-          }
-        },
-        remainingRows: (function* () {
-          for (const row of rows) {
-            if (!consumed.has(row.key)) {
-              yield row;
-            }
-          }
-        })(),
-      };
+      });
       const result =
         operation.kind === "summary"
           ? {
               kind: "summary" as const,
               summary: await projectCostUsageSummary({
-                ...source,
+                ...report.source,
                 ...operation,
                 files: reportFiles.filter((file) => file !== undefined),
               }),
@@ -410,67 +379,67 @@ export async function executeUsageCostWorker(
           : {
               kind: "sessions" as const,
               ...(await projectSessionCostSummaries({
-                ...source,
+                ...report.source,
                 ...operation,
                 files: (sessionPaths ?? []).map((filePath) => filesByPath.get(filePath ?? "")),
               })),
               remainingReportBytes: Math.max(0, cacheBudget.remainingBytes),
             };
+      if (result.kind === "sessions") {
+        result.cacheStatus.partial = report.partialStatus();
+      }
       control.throwIfCancelled();
-      return { ...result, invalidRows: [...invalidRows.values()] };
+      return { ...result, invalidRows: [...report.invalidRows.values()] };
     };
     try {
-      const snapshot = await control.runNativeSection(() => {
-        const opened = openOpenClawAgentDatabaseReadOnly({ ...cacheDatabase, env });
-        if (!opened.found) {
-          return {
-            rows: [],
-            entries: new Map<string, ReturnType<typeof prepareUsageCostReportEntry>>(),
-          };
-        }
-        const { db } = opened.database;
-        try {
-          return runSqliteReadSnapshotSync(db, () => {
-            const bodies = new Map<string, Uint8Array | null>();
-            const rows = readSessionCostUsageRollupRowsInDatabase(db, selectedPaths, {
-              includeBody: true,
-              throwIfCancelled: control.throwIfCancelled,
-              budget: cacheBudget,
-            }).map(({ blob, ...row }) => {
-              bodies.set(row.key, blob);
-              return row;
-            });
-            let partitions: Map<string, UsageCostPartition[]> | undefined;
-            const entries = new Map(
-              rows.map((row) => [
-                row.key,
-                prepareUsageCostReportEntry({
-                  row,
-                  ...operation,
+      const snapshot = await control.runNativeSection(() =>
+        readDatabase(cacheDatabase, () =>
+          readCache(
+            (db) =>
+              runSqliteReadSnapshotSync(db, () => {
+                const bodies = new Map<string, Uint8Array | null>();
+                const rows = readSessionCostUsageRollupRowsInDatabase(db, selectedPaths, {
+                  includeBody: true,
                   throwIfCancelled: control.throwIfCancelled,
-                  body: (cachedRow) => bodies.get(cachedRow.key) ?? null,
-                  partitions: (filePath) => {
-                    partitions ??= readSessionCostUsagePartitionsInDatabase(
-                      db,
-                      rows
-                        .filter((cachedRow) => !cacheBudget.deferredPaths.has(cachedRow.key))
-                        .map((cachedRow) => cachedRow.key),
-                      operation.startMs,
-                      operation.endMs,
-                      control.throwIfCancelled,
-                      cacheBudget,
-                    );
-                    return partitions.get(filePath) ?? [];
-                  },
-                }),
-              ]),
-            );
-            return { rows, entries };
-          });
-        } finally {
-          opened.database.close();
-        }
-      });
+                  budget: cacheBudget,
+                }).map(({ blob, ...row }) => {
+                  bodies.set(row.key, blob);
+                  return row;
+                });
+                let partitions: Map<string, UsageCostPartition[]> | undefined;
+                const entries = new Map(
+                  rows.map((row) => [
+                    row.key,
+                    prepareUsageCostReportEntry({
+                      row,
+                      ...operation,
+                      throwIfCancelled: control.throwIfCancelled,
+                      body: (cachedRow) => bodies.get(cachedRow.key) ?? null,
+                      partitions: (filePath) => {
+                        partitions ??= readSessionCostUsagePartitionsInDatabase(
+                          db,
+                          rows
+                            .filter((cachedRow) => !cacheBudget.deferredPaths.has(cachedRow.key))
+                            .map((cachedRow) => cachedRow.key),
+                          operation.startMs,
+                          operation.endMs,
+                          control.throwIfCancelled,
+                          cacheBudget,
+                        );
+                        return partitions.get(filePath) ?? [];
+                      },
+                    }),
+                  ]),
+                );
+                return { rows, entries };
+              }),
+            {
+              rows: [],
+              entries: new Map<string, ReturnType<typeof prepareUsageCostReportEntry>>(),
+            },
+          ),
+        ),
+      );
       return await project(snapshot.rows, snapshot.entries);
     } catch (error) {
       if (!isTransientSqliteError(error)) {
@@ -711,19 +680,11 @@ export async function executeUsageCostWorker(
 export function usageCostWorkerFailure(
   error: unknown,
 ): Extract<UsageCostWorkerReply, { ok: false }> {
-  const hostFailure = collectErrorGraphCandidates(error, (entry) =>
-    entry instanceof Error
-      ? [entry.cause, ...(entry instanceof AggregateError ? entry.errors : [])]
-      : [],
-  ).find((entry): entry is UsageCostHostEffectError => entry instanceof UsageCostHostEffectError);
   return {
     ok: false,
     error: {
       message: toErrorObject(error, "Usage cost worker failed").message,
       error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
-      ...(hostFailure
-        ? { hostOrigin: hostFailure.origin, hostFailureOnly: error === hostFailure }
-        : {}),
     },
   };
 }

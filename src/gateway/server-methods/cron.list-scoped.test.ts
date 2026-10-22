@@ -1,6 +1,11 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCronTool } from "../../agents/tools/cron-tool.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as listRevision from "../../cron/list-snapshot-revision.js";
@@ -55,6 +60,7 @@ async function withCronStore(
   } = {},
 ) {
   await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    setRuntimeConfigSnapshot(options.config ?? {});
     const storePath = path.join(state.root, "jobs.json");
     await saveCronStore(storePath, { version: 1, jobs: options.jobs ?? createJobs(count) });
     const cron = createReadService({
@@ -107,6 +113,63 @@ async function listScoped(
 }
 
 describe("cron.list scoped SQLite snapshots", () => {
+  it("distinguishes an enabled-only tool inventory from a saved stopped watcher", async () => {
+    await withCronStore(2, async ({ context, storePath }) => {
+      const store = await loadCronStore(storePath);
+      const watcher = expectDefined(store.jobs[0], "saved watcher");
+      watcher.schedule = { kind: "stream", command: ["tail", "-F", "/synthetic/build.log"] };
+      watcher.state = {
+        streamStatus: "stopped",
+        streamSourceIdentity: "00000000-0000-4000-8000-000000000001",
+      };
+      const active = expectDefined(store.jobs[1], "unrelated enabled job");
+      active.enabled = true;
+      active.state.nextRunAtMs = 2_000_000_000_001;
+      await saveCronStore(storePath, store);
+      using _ = vi
+        .spyOn(gatewayModule, "callGatewayTool")
+        .mockImplementation(async <T>(method: string, _options: unknown, params: unknown) => {
+          if (!isRecord(params)) {
+            throw new Error("Tool inventory requests require object parameters");
+          }
+          const respond = await callCron(context, method, params);
+          expect(respond).toHaveBeenCalledExactlyOnceWith(true, expect.any(Object), undefined);
+          return respond.mock.calls[0]?.[1] as T;
+        });
+      const tool = createCronTool();
+      const listed = await tool.execute("active-inventory", { action: "list" });
+      expect(listed.details).toMatchObject({
+        jobs: [expect.objectContaining({ id: "job-0001" })],
+        total: 1,
+        hasMore: false,
+        includeDisabled: false,
+        inventoryHint: expect.stringContaining("Disabled automations are omitted"),
+      });
+      const saved = await tool.execute("saved-inventory", {
+        action: "list",
+        includeDisabled: true,
+      });
+      expect(saved.details).toMatchObject({
+        jobs: expect.arrayContaining([expect.objectContaining({ id: watcher.id, enabled: false })]),
+        total: 2,
+        includeDisabled: true,
+        inventoryHint: expect.stringContaining("get jobId"),
+      });
+      const exact = await tool.execute("inspect-stopped", { action: "get", jobId: watcher.id });
+      expect(exact.details).toMatchObject({
+        id: watcher.id,
+        enabled: false,
+        state: { streamStatus: "stopped" },
+      });
+      for (const result of [listed, saved, exact]) {
+        expect(
+          Value.Errors(expectDefined(tool.outputSchema, "tool output schema"), result.details),
+        ).toEqual([]);
+      }
+      expect(await loadCronStore(storePath)).toEqual(store);
+    });
+  });
+
   it("lists 146 jobs with delivery previews through the real session worker", async () => {
     const cfg: OpenClawConfig = {};
     const jobs = createJobs(146).map((job, index) =>

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -18,194 +18,171 @@ import { createReplyRestartRecoveryClaimController } from "./restart-recovery-cl
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const claim = (runId: string, sourceRunId = runId) => ({
+  restartRecoveryDeliveryRunId: runId,
+  restartRecoveryDeliverySourceRunId: sourceRunId,
+});
+type ClaimOptions = Parameters<typeof createReplyRestartRecoveryClaimController>[0];
 
-describe("restart recovery claim successors", () => {
-  it.each([
-    { outcome: "unsettled", status: undefined, transfers: true, losesOwnership: false },
-    { outcome: "interrupted", status: "interrupted", transfers: true, losesOwnership: false },
-    { outcome: "killed", status: "killed", transfers: false, losesOwnership: false },
-    { outcome: "failed", status: "failed", transfers: false, losesOwnership: false },
-    { outcome: "interrupted", status: "interrupted", transfers: false, losesOwnership: true },
-  ] as const)(
-    "handles an aborted $outcome Control UI claim (ownership lost: $losesOwnership)",
-    async ({ status, transfers, losesOwnership }) => {
-      // The canonical main-session path queues the replacement before adoption, without discovery.
-      const scope = {
-        storePath: path.join(
-          tempDirs.make("openclaw-reply-claim-successor-"),
-          "agents",
-          "main",
-          "sessions",
-          "sessions.json",
-        ),
-        sessionKey: "agent:main:main",
-      };
-      let entry: InternalSessionEntry = {
-        abortedLastRun: true,
-        ...(!losesOwnership
-          ? { restartRecoveryDeliveryRequestFingerprint: "request-fingerprint" }
-          : {}),
-        restartRecoveryDeliveryRunId: "interrupted-run",
-        restartRecoveryDeliverySourceRunId: "interrupted-run",
-        restartRecoverySourceIngress: "control-ui",
-        sessionId: "session",
-        status,
-        updatedAt: 1,
-      };
-      await replaceSessionEntry(scope, entry);
-      const before = loadSessionEntry(scope);
-      let didSetEntry = false;
-      let replacement: ReturnType<typeof updateSessionEntry> | undefined;
-      await using actor = createReplyRecoveryActorFixture({
+async function claimFixture(sessionKey: string, overrides: Partial<InternalSessionEntry> = {}) {
+  const scope = {
+    storePath: path.join(tempDirs.make("openclaw-claim-"), "agents/main/sessions/sessions.json"),
+    sessionKey,
+  };
+  const state: { entry: InternalSessionEntry } = {
+    entry: {
+      abortedLastRun: true,
+      ...claim("interrupted-run"),
+      restartRecoverySourceIngress: "control-ui",
+      sessionId: "session",
+      status: "interrupted",
+      updatedAt: 1,
+      ...overrides,
+    },
+  };
+  await replaceSessionEntry(scope, state.entry);
+  const actor = createReplyRecoveryActorFixture({
+    agentId: "main",
+    ...scope,
+    getSessionId: () => state.entry.sessionId,
+  });
+  const setEntry = vi.fn((next: InternalSessionEntry) => {
+    state.entry = next;
+  });
+  return {
+    ...actor,
+    scope,
+    state,
+    setEntry,
+    read: () => loadSessionEntry(scope),
+    controller: (options: Partial<ClaimOptions>) =>
+      createReplyRestartRecoveryClaimController({
         agentId: "main",
         ...scope,
-        getSessionId: () => entry.sessionId,
-      });
-      const controller = createReplyRestartRecoveryClaimController({
-        agentId: "main",
         acquireSessionActor: () => actor.acquireSessionActor(),
         admissionRunId: "queued-run",
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        getEntry: () => entry,
-        getSessionId: () => entry.sessionId,
+        getEntry: () => state.entry,
+        getSessionId: () => state.entry.sessionId,
         isRestartAbort: () => false,
-        resolveDeliveryContext: () => {
-          if (losesOwnership) {
-            replacement ??= updateSessionEntry(scope, () => ({
-              abortedLastRun: false,
-              restartRecoveryDeliveryRunId: "replacement-run",
-              restartRecoveryDeliverySourceRunId: "replacement-run",
-              updatedAt: 2,
-            }));
-          }
-          return undefined;
-        },
-        setEntry: (next) => {
-          didSetEntry = true;
-          entry = next;
-        },
-        ...scope,
+        resolveDeliveryContext: () => undefined,
+        setEntry,
+        ...options,
+      }),
+  };
+}
+
+it.each([
+  [undefined, true, false],
+  ["interrupted", true, false],
+  ["killed", false, false],
+  ["failed", false, false],
+  ["interrupted", false, true],
+] as const)(
+  "handles Control UI status %s (transfer: %s; ownership lost: %s)",
+  async (status, transfers, losesOwnership) => {
+    await using fixture = await claimFixture("agent:main:main", {
+      restartRecoveryDeliveryRequestFingerprint: losesOwnership ? undefined : "request-fingerprint",
+      status,
+    });
+    const before = fixture.read();
+    let replacement: ReturnType<typeof updateSessionEntry> | undefined;
+    const controller = fixture.controller({
+      resolveDeliveryContext: () => {
+        if (losesOwnership) {
+          replacement ??= updateSessionEntry(fixture.scope, () => ({
+            abortedLastRun: false,
+            ...claim("replacement-run"),
+            updatedAt: 2,
+          }));
+        }
+        return undefined;
+      },
+    });
+    const outcome = await controller.admitUserTurn().catch((error: unknown) => error);
+    await replacement;
+    if (losesOwnership) {
+      expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
+      expect(fixture.setEntry).not.toHaveBeenCalled();
+      expect(fixture.read()).toMatchObject(claim("replacement-run"));
+    } else if (!transfers) {
+      expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
+      expect(fixture.read()).toEqual(before);
+    } else {
+      expect(outcome).toBe("admitted");
+      expect(fixture.read()).toMatchObject({
+        abortedLastRun: false,
+        ...claim("queued-run"),
+        restartRecoverySourceIngress: "control-ui",
+        restartRecoveryTerminalRunIds: ["interrupted-run"],
       });
-      const outcome = await controller.admitUserTurn().catch((error: unknown) => error);
-      await replacement;
-      if (losesOwnership) {
-        expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
-        expect(didSetEntry).toBe(false);
-        expect(loadSessionEntry(scope)).toMatchObject({
-          restartRecoveryDeliveryRunId: "replacement-run",
-          restartRecoveryDeliverySourceRunId: "replacement-run",
-        });
-      } else if (!transfers) {
-        expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
-        expect(loadSessionEntry(scope)).toEqual(before);
-      } else {
-        expect(outcome).toBe("admitted");
-        expect(loadSessionEntry(scope)).toMatchObject({
-          abortedLastRun: false,
-          restartRecoveryDeliveryRunId: "queued-run",
-          restartRecoveryDeliverySourceRunId: "queued-run",
-          restartRecoverySourceIngress: "control-ui",
-          restartRecoveryTerminalRunIds: ["interrupted-run"],
-        });
-        expect(loadSessionEntry(scope)?.status).toBeUndefined();
-      }
-    },
+      expect(fixture.read()?.status).toBeUndefined();
+    }
+  },
+);
+
+it("tracks a channel claim after retiring an aborted Control UI predecessor", async () => {
+  setRuntimeConfigSnapshot({});
+  onTestFinished(clearRuntimeConfigSnapshot);
+  const sourceTurnId = "channel-turn";
+  await using fixture = await claimFixture(
+    "agent:main:telegram:group:chat",
+    claim("interrupted-control-ui-run"),
   );
-
-  it("tracks a channel claim after retiring an aborted Control UI predecessor", async () => {
-    const storePath = path.join(
-      tempDirs.make("openclaw-reply-claim-channel-successor-"),
-      "sessions.json",
-    );
-    const sessionKey = "agent:main:telegram:group:chat";
-    setRuntimeConfigSnapshot({});
-    onTestFinished(() => clearRuntimeConfigSnapshot());
-    const sessionId = "session";
-    const sourceTurnId = "channel-turn";
-    const deliveryContext = { channel: "telegram", to: "chat", accountId: "default" };
-    let entry: InternalSessionEntry = {
-      abortedLastRun: true,
-      restartRecoveryDeliveryRunId: "interrupted-control-ui-run",
-      restartRecoveryDeliverySourceRunId: "interrupted-control-ui-run",
-      restartRecoverySourceIngress: "control-ui",
-      sessionId,
-      status: "interrupted",
-      updatedAt: 1,
-    };
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
-    const recorder = createUserTurnTranscriptRecorder({
-      message: {
-        role: "user",
-        content: "continue from Telegram",
-        idempotencyKey: sourceTurnId,
-        timestamp: Date.now(),
-      },
-      target: {
-        agentId: "main",
-        sessionEntry: entry,
-        sessionId,
-        sessionKey,
-        storePath,
-      },
-      updateMode: "none",
-    });
-    await using actor = createReplyRecoveryActorFixture({
+  const recorder = createUserTurnTranscriptRecorder({
+    message: {
+      role: "user",
+      content: "continue from Telegram",
+      idempotencyKey: sourceTurnId,
+      timestamp: Date.now(),
+    },
+    target: {
       agentId: "main",
-      storePath,
-      sessionKey,
-      getSessionId: () => sessionId,
-    });
-    const controller = createReplyRestartRecoveryClaimController({
-      agentId: "main",
-      acquireSessionActor: () => actor.acquireSessionActor(),
-      admissionRunId: sourceTurnId,
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      getEntry: () => entry,
-      getSessionId: () => sessionId,
-      isRestartAbort: () => false,
-      resolveDeliveryContext: () => deliveryContext,
-      setEntry: (next) => {
-        entry = next;
-      },
-      sourceTurnId,
-      storePath,
-      sessionKey,
-    });
-
-    await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
-    const admittedRunId = loadSessionEntry({ storePath, sessionKey })?.restartRecoveryDeliveryRunId;
-    expect(admittedRunId).toEqual(expect.any(String));
-    expect(loadSessionEntry({ storePath, sessionKey })?.status).toBeUndefined();
-    await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
-    await controller.checkpointBeforeAgentReply({
-      state: "handled-reply",
-      pendingFinalDelivery: {
-        intentId: "channel-intent",
-        text: "channel reply",
-        deliveries: [{ id: "channel-delivery", state: "prepared" }],
-      },
-    });
-    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
-      pendingFinalDelivery: { intentId: "channel-intent", text: "channel reply" },
-      restartRecoveryBeforeAgentReplyState: "handled-reply",
-      restartRecoveryDeliveryRunId: admittedRunId,
-      restartRecoveryDeliverySourceRunId: sourceTurnId,
-      restartRecoverySourceIngress: "channel",
-    });
-
-    entry = (await updateSessionEntry({ storePath, sessionKey }, () => ({
-      abortedLastRun: true,
-    }))) as InternalSessionEntry;
-    await expect(controller.isArmed()).resolves.toBe(true);
-    await controller.clear();
-
-    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
-      pendingFinalDelivery: { intentId: "channel-intent", text: "channel reply" },
-      restartRecoveryBeforeAgentReplyState: "handled-reply",
-      restartRecoveryTerminalRunIds: ["interrupted-control-ui-run", sourceTurnId],
-    });
-    expect(
-      loadSessionEntry({ storePath, sessionKey })?.restartRecoveryDeliveryRunId,
-    ).toBeUndefined();
+      sessionEntry: fixture.state.entry,
+      sessionId: fixture.state.entry.sessionId,
+      ...fixture.scope,
+    },
+    updateMode: "none",
   });
+  const controller = fixture.controller({
+    admissionRunId: sourceTurnId,
+    resolveDeliveryContext: () => ({ channel: "telegram", to: "chat", accountId: "default" }),
+    sourceTurnId,
+  });
+
+  await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
+  const admittedRunId = fixture.read()?.restartRecoveryDeliveryRunId;
+  expect(admittedRunId).toEqual(expect.any(String));
+  expect(fixture.read()?.status).toBeUndefined();
+  await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
+  await controller.checkpointBeforeAgentReply({
+    state: "handled-reply",
+    pendingFinalDelivery: {
+      intentId: "channel-intent",
+      text: "channel reply",
+      deliveries: [{ id: "channel-delivery", state: "prepared" }],
+    },
+  });
+  const preserved = {
+    pendingFinalDelivery: { intentId: "channel-intent", text: "channel reply" },
+    restartRecoveryBeforeAgentReplyState: "handled-reply",
+  };
+  expect(fixture.read()).toMatchObject({
+    ...preserved,
+    restartRecoveryDeliveryRunId: admittedRunId,
+    restartRecoveryDeliverySourceRunId: sourceTurnId,
+    restartRecoverySourceIngress: "channel",
+  });
+
+  fixture.state.entry = (await updateSessionEntry(fixture.scope, () => ({
+    abortedLastRun: true,
+  }))) as InternalSessionEntry;
+  await expect(controller.isArmed()).resolves.toBe(true);
+  await controller.clear();
+
+  expect(fixture.read()).toMatchObject({
+    ...preserved,
+    restartRecoveryTerminalRunIds: ["interrupted-control-ui-run", sourceTurnId],
+  });
+  expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
 });

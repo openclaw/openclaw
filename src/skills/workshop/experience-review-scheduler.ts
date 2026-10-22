@@ -34,18 +34,14 @@ type ExperienceReviewAgentEndEvent = {
 };
 
 type ExperienceReviewAgentContext = {
-  agentId?: string;
   runId?: string;
   sessionKey?: string;
-  sessionId?: string;
   workspaceDir?: string;
   modelProviderId?: string;
   modelId?: string;
-  modelContextWindowTokens?: number;
   authProfileId?: string;
   modelIterations?: number;
   skillWorkshopAvailable?: boolean;
-  compacted?: boolean;
   foregroundPromptContext: EmbeddedForegroundPromptContext;
 };
 
@@ -71,18 +67,14 @@ export type ExperienceReviewCandidate = {
   turnAborted?: boolean;
 };
 
-type ExperienceReviewTimer = ReturnType<typeof setTimeout>;
-
 type ExperienceReviewSchedulerDeps = {
   isSystemActive: () => boolean | Promise<boolean>;
   runReview: (candidate: ExperienceReviewCandidate) => Promise<void>;
-  setTimer?: (callback: () => void, delayMs: number) => ExperienceReviewTimer;
-  clearTimer?: (timer: ExperienceReviewTimer) => void;
 };
 
 type PendingExperienceReview = {
   candidate: ExperienceReviewCandidate;
-  timer?: ExperienceReviewTimer;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
@@ -158,12 +150,10 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
     );
     cooldownUntil = now + rateLimitBackoffMs;
   };
-  const setTimer = deps.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
-  const clearTimer = deps.clearTimer ?? clearTimeout;
 
   const arm = (key: string, pending: PendingExperienceReview, delayMs: number) => {
     if (pending.timer) {
-      clearTimer(pending.timer);
+      clearTimeout(pending.timer);
     }
     const timerCallback = () => {
       if (pendingBySession.get(key) !== pending) {
@@ -209,7 +199,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
     };
     // This timer outlives the foreground turn that armed it. Create its async
     // resource outside the parent scope so review work admits on the current generation.
-    const timer = runInDetachedAsyncContext(() => setTimer(timerCallback, delayMs));
+    const timer = runInDetachedAsyncContext(() => setTimeout(timerCallback, delayMs));
     pending.timer = timer;
     timer.unref?.();
   };
@@ -217,7 +207,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
   const cancel = (key: string) => {
     const pending = pendingBySession.get(key);
     if (pending?.timer) {
-      clearTimer(pending.timer);
+      clearTimeout(pending.timer);
     }
     pendingBySession.delete(key);
     iterationsBySession.delete(key);
@@ -282,7 +272,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         const oldest = pendingBySession.entries().next().value;
         if (oldest) {
           if (oldest[1].timer) {
-            clearTimer(oldest[1].timer);
+            clearTimeout(oldest[1].timer);
           }
           pendingBySession.delete(oldest[0]);
         }

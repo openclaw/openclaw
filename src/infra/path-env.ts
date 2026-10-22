@@ -11,19 +11,6 @@ import { canAccessSync } from "./path-existence.js";
 import { isPathInside, safeStatSync } from "./path-guards.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 
-type EnsureOpenClawPathOpts = {
-  /** Executable whose directory should stay first for shebang-compatible child processes. */
-  execPath?: string;
-  /** Working directory used only when project-local bin fallback is explicitly enabled. */
-  cwd?: string;
-  /** Home directory used for package-manager and user-bin fallback candidates. */
-  homeDir?: string;
-  /** Platform override for tests and platform-specific candidate filtering. */
-  platform?: NodeJS.Platform;
-  /** Existing PATH value to merge with; defaults to process.env.PATH. */
-  pathEnv?: string;
-};
-
 function isKnownPathDir(existingPathParts: ReadonlySet<string>, dirPath: string): boolean {
   return existingPathParts.has(dirPath) || safeStatSync(dirPath)?.isDirectory() === true;
 }
@@ -109,14 +96,14 @@ function resolveMiseDataDir(params: { homeDir: string; platform: NodeJS.Platform
   return path.join(params.homeDir, ".local", "share", "mise");
 }
 
-function candidateBinDirs(
-  opts: EnsureOpenClawPathOpts,
-  existingPathParts: ReadonlySet<string>,
-): { prepend: string[]; append: string[] } {
-  const execPath = opts.execPath ?? process.execPath;
-  const cwd = opts.cwd ?? tryProcessCwd();
-  const homeDir = opts.homeDir ?? os.homedir();
-  const platform = opts.platform ?? process.platform;
+function candidateBinDirs(existingPathParts: ReadonlySet<string>): {
+  prepend: string[];
+  append: string[];
+} {
+  const execPath = process.execPath;
+  const cwd = tryProcessCwd();
+  const homeDir = os.homedir();
+  const platform = process.platform;
 
   const prepend: string[] = [];
   const append: string[] = [];
@@ -205,7 +192,7 @@ function candidateBinDirs(
  * Best-effort PATH bootstrap so skills that require the `openclaw` CLI can run
  * under launchd/minimal environments (and inside the macOS app bundle).
  */
-export function ensureOpenClawCliOnPath(opts: EnsureOpenClawPathOpts = {}) {
+export function ensureOpenClawCliOnPath() {
   if (isTruthyEnvValue(process.env.OPENCLAW_PATH_BOOTSTRAPPED)) {
     return;
   }
@@ -213,9 +200,9 @@ export function ensureOpenClawCliOnPath(opts: EnsureOpenClawPathOpts = {}) {
   // not keep reshuffling PATH.
   process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
 
-  const existing = opts.pathEnv ?? process.env.PATH ?? "";
+  const existing = process.env.PATH ?? "";
   const existingPathParts = new Set(normalizeStringEntries(existing.split(path.delimiter)));
-  const { prepend, append } = candidateBinDirs(opts, existingPathParts);
+  const { prepend, append } = candidateBinDirs(existingPathParts);
   if (prepend.length === 0 && append.length === 0) {
     return;
   }

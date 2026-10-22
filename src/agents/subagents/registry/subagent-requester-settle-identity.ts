@@ -1,27 +1,24 @@
 import { isDeepStrictEqual } from "node:util";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
   isSameSubagentRun,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
 
+/** One owed continuation keeps one identity: its reservation, idempotency key, and recovery receipt. */
 export function buildRequesterSettleWakeIdentity(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
   batchRunIds: readonly string[];
   rearmGeneration?: number;
-  attemptIndex?: number;
-  /**
-   * Private completion turns reuse one key across attempts: a retry must not republish
-   * private input under a new identity. Deliverable turns suffix each retry so a
-   * cached terminal failure cannot replay in place of a new delivery attempt.
-   * Pause notices also use fresh attempts, even when their completion stays private.
-   */
-  sharedAttemptKey?: boolean;
   pause?: boolean;
-}): { batchKey: string; runId: string } {
+  retainedWake?: Pick<RequesterSettleWakeState, "attemptCount" | "yieldedFinalDeliverable"> &
+    Partial<Pick<RequesterSettleWakeState, "status" | "nextAttemptAt">>;
+  hasPrivateCompletion?: boolean;
+}): { batchKey: string; runId: string; retainedRunId?: string } {
   const batchKey = [
     `requester-settle:${params.requesterAgentId ?? "unknown"}:${params.requesterSessionKey}:${params.batchRunIds.toSorted().join(",")}`,
     params.rearmGeneration === undefined ? undefined : `yield-${params.rearmGeneration}`,
@@ -29,17 +26,27 @@ export function buildRequesterSettleWakeIdentity(params: {
   ]
     .filter(Boolean)
     .join(":");
-  const attemptIndex = params.attemptIndex ?? 0;
-  return {
-    batchKey,
-    runId: buildAnnounceIdempotencyKey(
-      (params.sharedAttemptKey && !params.pause) || attemptIndex === 0
-        ? batchKey
-        : `${batchKey}:retry-${attemptIndex}`,
-    ),
-  };
+  const previousAttempt = Math.max(0, (params.retainedWake?.attemptCount ?? 0) - 1);
+  const nextAttempt =
+    params.retainedWake?.status === "pending" && params.retainedWake.nextAttemptAt !== undefined;
+  const separateAttempts =
+    params.pause ||
+    !params.hasPrivateCompletion ||
+    params.retainedWake?.yieldedFinalDeliverable === true;
+  const attemptRunId = (attempt: number) =>
+    buildAnnounceIdempotencyKey(
+      separateAttempts && attempt > 0 ? `${batchKey}:retry-${attempt}` : batchKey,
+    );
+  const runId = attemptRunId(
+    nextAttempt ? (params.retainedWake?.attemptCount ?? 0) : previousAttempt,
+  );
+  // A known nondelivery admits a fresh continuation; Stop still recognizes the last attempt.
+  const previousRunId = attemptRunId(previousAttempt);
+  const retainedRunId = nextAttempt && previousRunId !== runId ? previousRunId : undefined;
+  return { batchKey, runId, retainedRunId };
 }
 
+/** True when this run is the continuation turn that delivers the row's owed batch. */
 export function isRequesterSettleWakeForRun(params: {
   entry: SubagentRunRecord;
   runId: string;
@@ -61,45 +68,48 @@ export function isRequesterSettleWakeForRun(params: {
         const member = params.runsById.get(id);
         return (
           member?.requesterSettleWake !== undefined &&
+          member.requesterSessionKey === entry.requesterSessionKey &&
+          member.requesterAgentId === entry.requesterAgentId &&
+          member.requesterStorePath === entry.requesterStorePath &&
           member.requesterSettleWake.rearmGeneration === wake.rearmGeneration
         );
       });
   if (
     entry.requesterSessionKey !== requesterSessionKey ||
     (entry.requesterAgentId && entry.requesterAgentId !== requesterAgentId) ||
-    wake.attemptCount < 1 ||
     !isSameSubagentRun(params.runsById.get(entry.runId), entry) ||
     !batchRunIds?.includes(entry.runId)
   ) {
     return false;
   }
-  // Mirrors the frozen admission policy: a yielded private batch that was
-  // admitted as deliverable retries under fresh keys like any public batch.
-  const sharedAttemptKey =
-    wake.yieldedFinalDeliverable !== true &&
-    batchRunIds.some((runId) => {
-      const member = params.runsById.get(runId);
-      return (
-        member?.requesterSessionKey === requesterSessionKey &&
-        (!member.requesterAgentId || member.requesterAgentId === requesterAgentId) &&
-        member.requesterSettleWake !== undefined &&
-        member.requesterSettleWake.rearmGeneration === wake.rearmGeneration &&
-        member.completionTarget === "parent"
-      );
-    });
+  const identity = buildRequesterSettleWakeIdentity({
+    requesterSessionKey,
+    requesterAgentId,
+    batchRunIds,
+    rearmGeneration: wake.rearmGeneration,
+    pause: Boolean(pauseNotice),
+    retainedWake: wake,
+    hasPrivateCompletion: batchRunIds.some(
+      (runId) => params.runsById.get(runId)?.completionTarget === "parent",
+    ),
+  });
   // Pending backoff still belongs to the last admitted attempt, not its next retry.
+  return params.runId === (identity.retainedRunId ?? identity.runId);
+}
+
+/** Kill, suppression, and session retirement each end a row's completion obligation. */
+export function isSubagentObligationRetired(entry: SubagentRunRecord): boolean {
   return (
-    params.runId ===
-    buildRequesterSettleWakeIdentity({
-      requesterSessionKey,
-      requesterAgentId,
-      batchRunIds,
-      rearmGeneration: wake.rearmGeneration,
-      attemptIndex: wake.attemptCount - 1,
-      sharedAttemptKey,
-      pause: Boolean(pauseNotice),
-    }).runId
+    entry.killIntent !== undefined ||
+    entry.killReconciliation !== undefined ||
+    entry.suppressCompletionDelivery === true ||
+    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED
   );
+}
+
+/** A requester cohort counts only members that still owe their completion. */
+export function owesRequesterCompletion(entry: SubagentRunRecord): boolean {
+  return entry.expectsCompletionMessage === true && !isSubagentObligationRetired(entry);
 }
 
 /** Run, requester, and frozen delivery-policy bindings, distinct from wake progress. */
@@ -142,6 +152,7 @@ export function captureRequesterSettleWakeProgress(entry: SubagentRunRecord) {
       attemptCount: wake.attemptCount,
       replayCount: wake.replayCount ?? 0,
       nextAttemptAt: wake.nextAttemptAt,
+      privateInput: wake.privateInput,
       lastError: wake.lastError,
       batchRunIds: wake.batchRunIds?.toSorted(),
       rearmGeneration: wake.rearmGeneration,
@@ -255,13 +266,13 @@ export function resolveCurrentRequesterSettleBatch(
   return batch;
 }
 
-/** Retry preparation may refresh progress; retained delivery keeps its observed decision. */
+/** Rereads an observed batch; a member claimed by a live requester turn is not yet owed. */
 export function resolveCurrentRequesterSettleWakeBatch(params: {
   observed: readonly SubagentRunRecord[];
   currentRuns: readonly SubagentRunRecord[];
   rearmGeneration: number | undefined;
   pause: boolean;
-  requireUnchangedProgress: boolean;
+  isClaimedByLiveRequesterTurn: (entry: SubagentRunRecord) => boolean;
 }): SubagentRunRecord[] | undefined {
   const batch: SubagentRunRecord[] = [];
   for (const observed of params.observed) {
@@ -271,7 +282,7 @@ export function resolveCurrentRequesterSettleWakeBatch(params: {
     const wake = entry?.requesterSettleWake;
     if (
       !entry ||
-      (entry.expectsCompletionMessage === true && entry.requesterTurnRunId) ||
+      params.isClaimedByLiveRequesterTurn(entry) ||
       !sameRequesterSettleRunIdentity(entry, observed) ||
       (wake?.yieldedFinalDeliverable === true) !==
         (observed.requesterSettleWake?.yieldedFinalDeliverable === true) ||
@@ -279,12 +290,7 @@ export function resolveCurrentRequesterSettleWakeBatch(params: {
       wake.rearmGeneration !== params.rearmGeneration ||
       (params.pause
         ? entry.pauseReason !== "sessions_yield" || !wake.pauseNotice
-        : entry.pauseReason === "sessions_yield") ||
-      (params.requireUnchangedProgress &&
-        !isDeepStrictEqual(
-          captureRequesterSettleWakeProgress(entry),
-          captureRequesterSettleWakeProgress(observed),
-        ))
+        : entry.pauseReason === "sessions_yield")
     ) {
       return undefined;
     }

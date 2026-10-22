@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ConfigWriteOptions } from "../../config/io.types.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { invalidateGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
@@ -38,6 +38,7 @@ vi.mock("../../config/validation.js", async (importOriginal) => ({
 }));
 vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
+  loadGatewayConfigRedactionHints: () => undefined,
   loadGatewayRuntimeConfigSchema: () => ({
     schema: { type: "object" },
     uiHints: {},
@@ -73,6 +74,9 @@ vi.mock("../../infra/restart.js", async (importOriginal) => ({
 
 let storedConfig: OpenClawConfig;
 let storedHash: string;
+function expectDestination(config: OpenClawConfig, ok: boolean) {
+  expect(resolveWorkerPlacementDestination({ cfg: config, profileId: "cloud" }).ok).toBe(ok);
+}
 beforeEach(() => {
   storedConfig = {};
   storedHash = "base-hash";
@@ -114,112 +118,106 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("suggested cloud profile adoption", () => {
-  const suggested = {
-    id: "cloud",
-    profile: {
-      provider: "crabbox",
-      install: "bundle" as const,
-      suspendAfter: "45m",
-      settings: {
-        provider: "aws",
-        target: "linux",
-        class: "standard",
-        ttl: "8h",
-        idleTimeout: "45m",
-        warmImage: true,
+const suggested = {
+  id: "cloud",
+  profile: {
+    provider: "crabbox",
+    install: "bundle" as const,
+    suspendAfter: "45m",
+    settings: {
+      provider: "aws",
+      warmImage: true,
+    },
+  },
+};
+
+function adoptionHarness(getRuntimeConfig = () => storedConfig) {
+  return createConfigHandlerHarness({
+    method: "environments.adoptSuggestedProfile",
+    contextOverrides: {
+      getRuntimeConfig,
+      workerEnvironmentService: {
+        ...workerService(),
+        startTunnel: async () => {
+          throw new Error("Unexpected tunnel creation during profile adoption");
+        },
+        stopTunnel: async () => {},
+      },
+      workerPlacementDispatchService: {
+        dispatch: async () => {
+          throw new Error("Unexpected allocation during profile adoption");
+        },
       },
     },
-  };
-
-  function adoptionHarness(getRuntimeConfig = () => storedConfig) {
-    return createConfigHandlerHarness({
-      method: "environments.adoptSuggestedProfile",
-      contextOverrides: {
-        getRuntimeConfig,
-        workerEnvironmentService: {
-          ...workerService(),
-          startTunnel: async () => {
-            throw new Error("Unexpected tunnel creation during profile adoption");
-          },
-          stopTunnel: async () => {},
-        },
-        workerPlacementDispatchService: {
-          dispatch: async () => {
-            throw new Error("Unexpected allocation during profile adoption");
-          },
-        },
-      },
-    });
-  }
-
-  it.each([undefined, {}])(
-    "lists a suggestion without admitting a cloud destination (%j)",
-    async (profiles) => {
-      storedConfig = { cloudWorkers: { profiles } };
-      vi.mocked(resolveSuggestedWorkerProfile).mockResolvedValue(suggested);
-      const { options, respond } = createConfigHandlerHarness({
-        method: "environments.list",
-        params: { projection: "profiles" },
-        contextOverrides: { getRuntimeConfig: () => storedConfig },
-      });
-      await environmentsHandlers["environments.list"]!(options);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          environments: [],
-          suggestedProfile: { id: "cloud", providerId: "crabbox" },
-        },
-        undefined,
-      );
-      expect(resolveWorkerPlacementDestination({ cfg: storedConfig, profileId: "cloud" }).ok).toBe(
-        false,
-      );
-      expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([false, true])(
-    "omits suggestions with configured profiles or unavailable discovery (%s)",
-    async (configured) => {
-      if (configured) {
-        storedConfig = { cloudWorkers: { profiles: { custom: { provider: "static-ssh" } } } };
-      }
-      const { options, respond } = createConfigHandlerHarness({
-        method: "environments.list",
-        params: { projection: "profiles" },
-        contextOverrides: { getRuntimeConfig: () => storedConfig },
-      });
-      await environmentsHandlers["environments.list"]!(options);
-      expect(respond).toHaveBeenCalledWith(true, { environments: [] }, undefined);
-      if (configured) {
-        expect(resolveSuggestedWorkerProfile).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it("requires admin authority to adopt a profile", () => {
-    expect(
-      authorizeOperatorScopesForMethod("environments.adoptSuggestedProfile", ["operator.write"]),
-    ).toEqual({
-      allowed: false,
-      missingScope: "operator.admin",
-    });
   });
+}
 
-  it("saves the refreshed suggestion through config.patch before allowing its dispatch", async () => {
-    storedConfig = {
-      gateway: { projects: { defaultRepository: { url: "https://github.com/acme/app" } } },
-    };
-    const unrelated = structuredClone(storedConfig.gateway);
-    vi.mocked(resolveSuggestedWorkerProfile).mockResolvedValue(suggested);
-    expect(resolveWorkerPlacementDestination({ cfg: storedConfig, profileId: "cloud" }).ok).toBe(
-      false,
+const profileScenarios: {
+  profiles: NonNullable<OpenClawConfig["cloudWorkers"]>["profiles"];
+  suggested: boolean;
+}[] = [
+  { profiles: undefined, suggested: true },
+  { profiles: {}, suggested: true },
+  { profiles: undefined, suggested: false },
+  { profiles: { custom: { provider: "static-ssh" } }, suggested: false },
+];
+it.each(profileScenarios)(
+  "lists $profiles with suggestion=$suggested without admitting a destination",
+  async ({ profiles, suggested: available }) => {
+    storedConfig = { cloudWorkers: { profiles } };
+    vi.mocked(resolveSuggestedWorkerProfile).mockResolvedValue(available ? suggested : undefined);
+    const { options, respond } = createConfigHandlerHarness({
+      method: "environments.list",
+      params: { projection: "profiles" },
+      contextOverrides: { getRuntimeConfig: () => storedConfig },
+    });
+    await environmentsHandlers["environments.list"]!(options);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        environments: [],
+        ...(available ? { suggestedProfile: { id: "cloud", providerId: "crabbox" } } : {}),
+      },
+      undefined,
     );
-    const { options, respond } = adoptionHarness();
-    await adoptSuggestedWorkerProfile(options);
+    expectDestination(storedConfig, false);
+    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
+    if (profiles && "custom" in profiles) {
+      expect(resolveSuggestedWorkerProfile).not.toHaveBeenCalled();
+    }
+  },
+);
+
+it("requires admin authority to adopt a profile", () => {
+  expect(
+    authorizeOperatorScopesForMethod("environments.adoptSuggestedProfile", ["operator.write"]),
+  ).toEqual({
+    allowed: false,
+    missingScope: "operator.admin",
+  });
+});
+
+it.each([false, true])("adopts only a missing cloud profile (existing=%s)", async (exists) => {
+  const existing = { provider: "static-ssh", settings: { host: "example.invalid" } };
+  const gateway = { projects: { defaultRepository: { url: "https://github.com/acme/app" } } };
+  storedConfig = {
+    gateway,
+    ...(exists ? { cloudWorkers: { profiles: { cloud: existing } } } : {}),
+  };
+  const unrelated = structuredClone(gateway);
+  vi.mocked(resolveSuggestedWorkerProfile).mockResolvedValue(suggested);
+  if (!exists) {
+    expectDestination(storedConfig, false);
+  }
+  const { options, respond } = adoptionHarness();
+  await adoptSuggestedWorkerProfile(options);
+  expect(storedConfig.gateway).toEqual(unrelated);
+  if (exists) {
+    expect(resolveSuggestedWorkerProfile).not.toHaveBeenCalled();
+    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
+    expect(storedConfig.cloudWorkers?.profiles?.cloud).toBe(existing);
+  } else {
     expect(storedConfig.cloudWorkers?.profiles).toEqual({ cloud: suggested.profile });
-    expect(storedConfig.gateway).toEqual(unrelated);
     expect(resolveSuggestedWorkerProfile).toHaveBeenCalledWith({
       config: expect.any(Object),
       refresh: true,
@@ -228,123 +226,92 @@ describe("suggested cloud profile adoption", () => {
       ok: true,
       value: { profileId: "cloud" },
     });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { profile: { id: "cloud", providerId: "crabbox" } },
-      undefined,
-    );
-  });
+  }
+  expect(respond).toHaveBeenCalledWith(
+    true,
+    { profile: { id: "cloud", providerId: exists ? "static-ssh" : "crabbox" } },
+    undefined,
+  );
+});
 
-  it("returns an existing cloud profile untouched without discovery or another write", async () => {
-    const existing = { provider: "static-ssh", settings: { host: "example.invalid" } };
-    storedConfig = { cloudWorkers: { profiles: { cloud: existing } } };
-    const { options, respond } = adoptionHarness();
-    await adoptSuggestedWorkerProfile(options);
-    expect(resolveSuggestedWorkerProfile).not.toHaveBeenCalled();
-    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
-    expect(storedConfig.cloudWorkers?.profiles?.cloud).toBe(existing);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { profile: { id: "cloud", providerId: "static-ssh" } },
-      undefined,
-    );
-  });
+it("keeps a saved profile unavailable until the restart applies it", async () => {
+  storedConfig = { gateway: { reload: { mode: "off" } } };
+  let runtimeConfig = structuredClone(storedConfig);
+  vi.mocked(resolveSuggestedWorkerProfile).mockResolvedValue(suggested);
+  const { options, respond } = adoptionHarness(() => runtimeConfig);
 
-  it("keeps a saved profile unavailable until the restart applies it", async () => {
-    storedConfig = { gateway: { reload: { mode: "off" } } };
-    let runtimeConfig = structuredClone(storedConfig);
-    vi.mocked(resolveSuggestedWorkerProfile).mockResolvedValue(suggested);
-    const { options, respond } = adoptionHarness(() => runtimeConfig);
+  expectDestination(runtimeConfig, false);
+  await adoptSuggestedWorkerProfile(options);
+  expect(storedConfig.cloudWorkers?.profiles?.cloud).toEqual(suggested.profile);
+  expect(scheduleGatewayRestart).toHaveBeenCalledOnce();
+  expect(writeRestartSentinel).toHaveBeenCalledWith(
+    expect.objectContaining({ stats: expect.objectContaining({ requiresRestart: true }) }),
+  );
+  expectDestination(runtimeConfig, false);
+  const unavailable = [
+    false,
+    undefined,
+    expect.objectContaining({ code: "UNAVAILABLE", message: expect.stringContaining("restart") }),
+  ];
+  expect(respond.mock.calls).toEqual([unavailable]);
 
-    expect(resolveWorkerPlacementDestination({ cfg: runtimeConfig, profileId: "cloud" }).ok).toBe(
-      false,
-    );
-    await adoptSuggestedWorkerProfile(options);
-    expect(storedConfig.cloudWorkers?.profiles?.cloud).toEqual(suggested.profile);
-    expect(scheduleGatewayRestart).toHaveBeenCalledOnce();
-    expect(writeRestartSentinel).toHaveBeenCalledWith(
-      expect.objectContaining({ stats: expect.objectContaining({ requiresRestart: true }) }),
-    );
-    expect(resolveWorkerPlacementDestination({ cfg: runtimeConfig, profileId: "cloud" }).ok).toBe(
-      false,
-    );
-    const unavailable = [
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", message: expect.stringContaining("restart") }),
-    ];
-    expect(respond.mock.calls).toEqual([unavailable]);
+  respond.mockClear();
+  await adoptSuggestedWorkerProfile(options);
+  expect(respond.mock.calls).toEqual([unavailable]);
+  expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
 
-    respond.mockClear();
-    await adoptSuggestedWorkerProfile(options);
-    expect(respond.mock.calls).toEqual([unavailable]);
-    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
+  runtimeConfig = structuredClone(storedConfig);
+  respond.mockClear();
+  await adoptSuggestedWorkerProfile(options);
+  expect(respond.mock.calls).toEqual([
+    [true, { profile: { id: "cloud", providerId: "crabbox" } }, undefined],
+  ]);
+  expectDestination(runtimeConfig, true);
+  expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
+  expect(scheduleGatewayRestart).toHaveBeenCalledOnce();
+});
 
-    runtimeConfig = structuredClone(storedConfig);
-    respond.mockClear();
-    await adoptSuggestedWorkerProfile(options);
-    expect(respond.mock.calls).toEqual([
-      [true, { profile: { id: "cloud", providerId: "crabbox" } }, undefined],
-    ]);
-    expect(resolveWorkerPlacementDestination({ cfg: runtimeConfig, profileId: "cloud" }).ok).toBe(
-      true,
-    );
-    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
-    expect(scheduleGatewayRestart).toHaveBeenCalledOnce();
-  });
-
-  it("does not write when discovery no longer offers a cloud profile", async () => {
-    vi.mocked(resolveSuggestedWorkerProfile).mockResolvedValue(undefined);
-    const { options, respond } = adoptionHarness();
-    await adoptSuggestedWorkerProfile(options);
-    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: "No cloud worker profile is available to configure",
-      }),
-    );
-  });
-
-  it("preserves a competing config write after discovery", async () => {
+it.each(["unavailable", "conflict", "revoked"] as const)(
+  "refuses profile adoption after %s without overwriting config",
+  async (reason) => {
     vi.mocked(resolveSuggestedWorkerProfile).mockImplementation(async () => {
-      storedConfig = { cloudWorkers: { profiles: { custom: { provider: "static-ssh" } } } };
-      storedHash = "competing-write";
-      return suggested;
+      if (reason === "conflict") {
+        storedConfig = { cloudWorkers: { profiles: { custom: { provider: "static-ssh" } } } };
+        storedHash = "competing-write";
+      }
+      return reason === "unavailable" ? undefined : suggested;
     });
     const { options, respond } = adoptionHarness();
+    if (reason === "revoked") {
+      let current = true;
+      options.hasCurrentClientAuthority = () => current;
+      configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(
+        async ({ writeOptions }: { writeOptions: ConfigWriteOptions }) => {
+          current = false;
+          writeOptions.assertCurrent?.();
+          writeOptions.assertBeforePublish?.();
+          throw new Error("revoked request reached config publication");
+        },
+      );
+    }
     await adoptSuggestedWorkerProfile(options);
-    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
-    expect(storedConfig.cloudWorkers?.profiles).toEqual({ custom: { provider: "static-ssh" } });
+    expect(storedConfig.cloudWorkers?.profiles).toEqual(
+      reason === "conflict" ? { custom: { provider: "static-ssh" } } : undefined,
+    );
+    if (reason !== "revoked") {
+      expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
+    }
+    const error =
+      reason === "conflict"
+        ? { code: "INVALID_REQUEST" }
+        : reason === "revoked"
+          ? { message: "Error: Gateway requester authority changed" }
+          : { code: "UNAVAILABLE", message: "No cloud worker profile is available to configure" };
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-      undefined,
+      expect.objectContaining(error),
+      ...(reason === "conflict" ? [undefined] : []),
     );
-  });
-
-  it("rechecks request authority at the config publication boundary", async () => {
-    vi.mocked(resolveSuggestedWorkerProfile).mockResolvedValue(suggested);
-    const { options, respond } = adoptionHarness();
-    let current = true;
-    options.hasCurrentClientAuthority = () => current;
-    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(
-      async ({ writeOptions }: { writeOptions: ConfigWriteOptions }) => {
-        current = false;
-        writeOptions.assertCurrent?.();
-        writeOptions.assertBeforePublish?.();
-        throw new Error("revoked request reached config publication");
-      },
-    );
-    await adoptSuggestedWorkerProfile(options);
-    expect(storedConfig.cloudWorkers?.profiles).toBeUndefined();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: "Error: Gateway requester authority changed" }),
-    );
-  });
-});
+  },
+);

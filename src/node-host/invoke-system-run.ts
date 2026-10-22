@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NodePermissionDetails } from "../../packages/gateway-protocol/src/node-permissions.js";
@@ -91,12 +92,8 @@ import {
   buildEnvOverrideRejectionMessage,
   hardenApprovedExecutionPaths,
 } from "./invoke-system-run-plan.js";
-import type {
-  ExecEventPayload,
-  RunResult,
-  SkillBinsProvider,
-  SystemRunParams,
-} from "./invoke-types.js";
+import type { ExecEventPayload, RunResult, SystemRunParams } from "./invoke-types.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 
 const OUTPUT_EVENT_TAIL = 20_000;
 
@@ -222,7 +219,8 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
   const requestedSessionKey = normalizeOptionalString(opts.params.sessionKey);
   const sessionKey = requestedSessionKey ?? "node";
   const runId = normalizeOptionalString(opts.params.runId) ?? crypto.randomUUID();
-  const cwd = normalizeOptionalString(opts.params.cwd);
+  const cwd = readNonBlankString(opts.params.cwd);
+  // Node-host cwd preserves whitespace; see resolveExecWorkdir.
   const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
   const approvalSource = opts.params.approvalSource;
   if (
@@ -247,7 +245,7 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
       approvalPlan !== null &&
       argvArraysMatch(approvalPlan.argv, command.argv) &&
       approvalPlan.commandText === commandText &&
-      normalizeOptionalString(approvalPlan.cwd) === cwd &&
+      approvalPlan.cwd === cwd &&
       normalizeOptionalString(approvalPlan.agentId) === agentId &&
       normalizeOptionalString(approvalPlan.sessionKey) === requestedSessionKey;
     if (!planMatchesRequest) {
@@ -359,12 +357,11 @@ async function evaluateSystemRunPolicyPhase(
   }
   const evaluationPolicySnapshot = parsed.delayedApprovalPolicySnapshot ?? currentPolicySnapshot;
   const baseSecurity = effectivePolicy.security;
-  const baseAsk = effectivePolicy.ask;
   const fallbackRequest = parsed.approvalSource === "ask-fallback";
   const security = fallbackRequest
     ? minSecurity(baseSecurity, approvals.agent.askFallback)
     : baseSecurity;
-  const ask = fallbackRequest ? "off" : baseAsk;
+  const ask = fallbackRequest ? "off" : effectivePolicy.ask;
   const autoAllowSkills = approvals.agent.autoAllowSkills;
   const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
     global: cfg.tools?.exec,

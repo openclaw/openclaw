@@ -17,6 +17,7 @@ import {
 } from "./application-plan.js";
 import { digestClawBytes, digestClawValue } from "./digest.js";
 import { digestClawMcpServer } from "./mcp.js";
+import { planClawPortableAutomation } from "./portable-automation.js";
 import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { clawWorkspaceSourceFailure } from "./source-diagnostics.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
@@ -44,7 +45,6 @@ export type ClawAddPlanContext = {
   config?: OpenClawConfig;
   agentId?: string;
   workspace?: string;
-  resumableWorkspace?: string;
   existingAgentIds?: Iterable<string>;
   existingWorkspacePaths?: Iterable<string>;
   existingMcpServerNames?: Iterable<string>;
@@ -138,9 +138,7 @@ export async function buildClawAddPlan(params: {
   manifest: ClawManifest;
   clawMarkdownBody?: Buffer;
   packageBootstrap?: ClawWorkspaceSourceSnapshot;
-  includePackageBootstrap?: boolean;
   openClawProfile?: ClawOpenClawProfile;
-  reconstructLegacyDynamicToolProfilePlan?: boolean;
   source: ClawSourceIdentity;
   diagnostics?: ClawDiagnostic[];
   context?: ClawAddPlanContext;
@@ -188,9 +186,8 @@ export async function buildClawAddPlan(params: {
   const existingAgentIds = new Set(context.existingAgentIds ?? []);
   const agentBlocked = existingAgentIds.has(finalId);
   const openClawAgentSettings = params.openClawProfile?.agent ?? {};
-  const persistedOpenClawAgentSettings = params.reconstructLegacyDynamicToolProfilePlan
-    ? openClawAgentSettings
-    : materializeClawToolProfile(openClawAgentSettings);
+  const { heartbeat: _heartbeat, ...agentSettings } = openClawAgentSettings;
+  const persistedOpenClawAgentSettings = materializeClawToolProfile(agentSettings);
   const agentConfig: ClawAddPlan["agent"]["config"] = clawOwnedAgentConfig({
     ...params.manifest.agent,
     ...persistedOpenClawAgentSettings,
@@ -229,11 +226,7 @@ export async function buildClawAddPlan(params: {
   const workspaceExistsOnDisk = await lstat(workspace)
     .then(() => true)
     .catch(() => false);
-  const resumableWorkspace = context.resumableWorkspace
-    ? canonicalWorkspacePath(context.resumableWorkspace)
-    : undefined;
-  const workspaceBlocked =
-    configuredWorkspaceConflict || (workspaceExistsOnDisk && resumableWorkspace !== workspace);
+  const workspaceBlocked = configuredWorkspaceConflict || workspaceExistsOnDisk;
   const workspaceCollisionMessage = configuredWorkspaceConflict
     ? `Workspace ${JSON.stringify(workspace)} overlaps an existing agent workspace.`
     : `Workspace ${JSON.stringify(workspace)} already exists.`;
@@ -256,7 +249,7 @@ export async function buildClawAddPlan(params: {
     ...(workspaceBlocked ? { reason: workspaceCollisionMessage } : {}),
   });
 
-  if (params.packageBootstrap && params.includePackageBootstrap !== false) {
+  if (params.packageBootstrap) {
     actions.push({
       kind: "bootstrap",
       id: "BOOTSTRAP.md",
@@ -402,6 +395,9 @@ export async function buildClawAddPlan(params: {
         });
         pending.action.source = planSourcePath(pending.sourcePath, read.realPath);
         pending.action.digest = digestClawBytes(read.buffer);
+        if (pending.action.id === "HEARTBEAT.md") {
+          pending.content = read.buffer;
+        }
       } catch (error) {
         const { code, message } = clawWorkspaceSourceFailure(error, pending.sourcePath, "package");
         const diagnostic = blocker(code, pending.manifestPath, message);
@@ -587,6 +583,14 @@ export async function buildClawAddPlan(params: {
       }),
     );
   }
+
+  planClawPortableAutomation({
+    actions,
+    heartbeat: openClawAgentSettings.heartbeat,
+    content: pendingWorkspaceFiles.find((pending) => pending.action.id === "HEARTBEAT.md")?.content,
+    config: context.config ?? {},
+    agentId: finalId,
+  });
 
   // Strict v1 validation permits only deterministic main or isolated targets.
   for (const job of params.manifest.cronJobs) {

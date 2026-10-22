@@ -6,7 +6,7 @@ import { setToastInNavDrawer } from "../app/navigation-surface.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { showToast } from "./toast.ts";
-import "./toast-host.ts";
+import "./toast-host.tsx";
 
 async function settleHost(host: HTMLElementTagNameMap["openclaw-toast-host"]) {
   await host.updateComplete;
@@ -70,6 +70,25 @@ describe("shared toast", () => {
     expect(showToast({ message: "Follow-up session notice" })).toBe(true);
     await settleHost(appHost);
     expect(appHost.textContent).toContain("Follow-up session notice");
+  });
+
+  it("does not resurrect a modal toast when document content is removed", async () => {
+    const host = await mountHost();
+    const modal = document.createElement("openclaw-modal-dialog");
+    document.body.append(modal);
+    await modal.updateComplete;
+    const onDismiss = vi.fn();
+    showToast({ message: "Saved", onDismiss });
+    await settleHost(host);
+    expect(host.parentElement).toBe(modal.getOverlayContainer());
+
+    document.body.replaceChildren();
+    await vi.dynamicImportSettled();
+    flush();
+
+    expect(host.isConnected).toBe(false);
+    expect(document.body.childElementCount).toBe(0);
+    expect(onDismiss).toHaveBeenCalledExactlyOnceWith("disconnected");
   });
 
   it("presents toasts in the outer modal after a nested modal closes", async () => {

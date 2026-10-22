@@ -97,7 +97,10 @@ export async function resolveChatMetadataReadParams(
     try {
       assertVisible();
       const sessionId = session.entry?.sessionId;
-      const placement = await readSessionWorkerPlacementAsync({ context, sessionId });
+      const placement =
+        params.includeModels === false
+          ? undefined
+          : await readSessionWorkerPlacementAsync({ context, sessionId });
       const workerInference = placement
         ? readWorkerPlacementIdentity(placement, context.workerEnvironmentService)?.inference
         : undefined;

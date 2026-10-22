@@ -59,7 +59,6 @@ extension TalkModeRuntime {
 
     func start() async {
         let gen = lifecycleGeneration
-        guard self.dependencies.permissions.supported() else { return }
         let hasVoiceWakePermission = await self.dependencies.permissions.ensure(true)
         guard hasVoiceWakePermission else {
             logger.error("talk runtime not starting: permissions missing")

@@ -21,22 +21,21 @@ import { createAgentViewTestProps as createProps } from "./agents-view.test-help
 import { Agents } from "./view.tsx";
 
 describe("agent model catalog recovery", () => {
-  it("shows a model-catalog failure without a manual retry button", () => {
+  it("shows a model-catalog failure without a manual retry button", async () => {
+    const read = Promise.reject(new Error("model catalog unavailable"));
+    void read.catch(() => undefined);
     const { container } = mountSolid(
       Agents,
       createProps({
-        overview: {
-          ...createProps().overview,
-          modelCatalogStatus: {
-            error: "model catalog unavailable",
-            hasLoaded: true,
-            stale: true,
-            awaitingGateway: false,
-          },
-        },
+        overview: { ...createProps().overview, modelCatalogHasSnapshot: true },
+        readData: () => ({
+          ...createProps().readData(),
+          chatModelCatalogRead: read,
+        }),
       }),
     );
 
+    await waitForFast(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
     const alert = container.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("model catalog unavailable");
     expect(alert?.textContent).toContain(t("common.staleData"));
@@ -84,12 +83,10 @@ describe("agent model catalog recovery", () => {
       emitCatalogChanged(currentGateway);
       if (!lateFailure) {
         pending.reject(error);
-        await waitForFast(() =>
-          expect(page.read().overview.modelCatalogStatus).toMatchObject({
-            awaitingGateway: lifecycle,
-            error: lifecycle ? null : "Model catalog unavailable",
-            stale: true,
-          }),
+        await waitForFast(async () =>
+          expect(page.read().readData().chatModelCatalogRead).rejects.toThrow(
+            "Model catalog unavailable",
+          ),
         );
       }
       expect(page.read().overview.modelCatalog).toEqual(oldModels);
@@ -102,10 +99,7 @@ describe("agent model catalog recovery", () => {
         pending.reject(error);
       }
       await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(nextModels));
-      expect(page.read().overview.modelCatalogStatus).toMatchObject({
-        error: null,
-        awaitingGateway: false,
-      });
+      await expect(page.read().readData().chatModelCatalogRead).resolves.toBeUndefined();
       expect(request).toHaveBeenCalledTimes(3);
     },
   );

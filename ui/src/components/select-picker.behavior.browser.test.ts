@@ -142,12 +142,12 @@ describe("Picker", () => {
         searchable: "always",
       });
       p.container.style.cssText = "position:fixed;right:12px;top:calc(100vh - 50px);width:240px";
+      await page.elementLocator(p.trigger).click();
       expect(
         p.picker
           .querySelector<HTMLElement>(".picker-select__menu")!
           .style.getPropertyValue("position-anchor"),
       ).toBe(p.trigger.style.getPropertyValue("anchor-name"));
-      await page.elementLocator(p.trigger).click();
       const row = p.picker.querySelector<HTMLElement>('[role="option"][data-value=""]')!;
       const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
       const bounds = menu.getBoundingClientRect();
@@ -443,6 +443,24 @@ describe("Picker", () => {
     p.container.append(p.picker);
     await p.picker.updateComplete;
     expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("cancels an armed submenu hover timer when its owner unmounts", async () => {
+    const p = await mount({ variant: "submenu" });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      expect(vi.getTimerCount()).toBe(0);
+      p.trigger.parentElement!.dispatchEvent(
+        new PointerEvent("pointerenter", { pointerType: "mouse" }),
+      );
+      expect(vi.getTimerCount()).toBe(1);
+      expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
+      cleanupSolid();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      cleanupSolid();
+      vi.useRealTimers();
+    }
   });
 
   it("retains label styles, tooltips, and open effects", async () => {

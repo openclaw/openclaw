@@ -1,3 +1,4 @@
+import { readRemoteModelCatalogReceipt } from "../state/config-machine-state-row.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
@@ -27,6 +28,14 @@ export const PREVIOUS_REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v2";
 // Activation still checks source and age; downgrades keep their original slot.
 export const LEGACY_REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote";
 
+const snapshots = new WeakMap<
+  object,
+  Map<
+    OpenClawStateWorkerContext["databaseEngineSelection"],
+    { row: RemoteModelCatalogStoreRow | undefined }
+  >
+>();
+
 /** Synchronous boot snapshot capture and offline inspection only; refreshes use the worker. */
 export function readRemoteModelCatalog(
   options: OpenClawStateDatabaseOptions = {},
@@ -49,21 +58,36 @@ export async function readRemoteModelCatalogAsync(
   context: OpenClawStateWorkerContext,
 ): Promise<RemoteModelCatalogStoreRow | undefined> {
   const artifactPreservingReadOnly = isArtifactPreservingStateRead();
+  const receipt =
+    !artifactPreservingReadOnly &&
+    !context.artifactPreservingReads &&
+    !context.maintenanceScope &&
+    !context.existingSchemaPath
+      ? readRemoteModelCatalogReceipt(context.admission.databasePath)
+      : undefined;
+  const cached = receipt && snapshots.get(receipt)?.get(context.databaseEngineSelection);
+  if (cached) {
+    context.admission.assertCurrent();
+    return cached.row && { ...cached.row };
+  }
   const { runOpenClawStateWorkerOperation } =
     await import("../state/openclaw-state-worker-store.js");
-  context.admission.assertCurrent();
-  return runOpenClawStateWorkerOperation(
+  const row = await runOpenClawStateWorkerOperation(
     context,
-    async (scope) => {
-      const row = await scope.execute({
+    (scope) =>
+      scope.execute({
         type: "modelCatalog.remote.read",
         input: { artifactPreservingReadOnly },
-      });
-      context.admission.assertCurrent();
-      return row;
-    },
+      }),
     { existingOnly: true },
   );
+  if (receipt) {
+    // An overtaking write retires this captured receipt; the next read reloads.
+    const selected = snapshots.get(receipt) ?? new Map();
+    selected.set(context.databaseEngineSelection, { row: row && { ...row } });
+    snapshots.set(receipt, selected);
+  }
+  return row;
 }
 
 export type RemoteModelCatalogCheck = {

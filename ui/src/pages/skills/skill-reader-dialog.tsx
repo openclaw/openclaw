@@ -1,9 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createMemo, Errored, Loading, Show } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.ts";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SkillsProps } from "./view-types.ts";
 
@@ -61,88 +62,94 @@ export function SkillReaderDialog(props: {
 }
 
 export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: boolean }) {
-  const detail = createMemo(() => props.view.state.clawhubDetail);
-  const skillIconUrl = createMemo(() => {
+  const reference = createMemo(() => props.view.state.clawhubDetailRef);
+  const detail = createMemo(() => props.view.readClawHubDetail());
+  const skillIconUrl = () => {
     const icon = detail()?.skill?.icon;
     return icon ? props.view.state.clawhubIconUrls?.[icon] : undefined;
-  });
-  const profileImageUrl = createMemo(() => {
+  };
+  const profileImageUrl = () => {
     const image = detail()?.owner?.image;
     return skillIconUrl() || !image ? undefined : props.view.state.clawhubIconUrls?.[image];
-  });
-  const detailImageUrl = createMemo(() => skillIconUrl() ?? profileImageUrl());
+  };
+  const detailImageUrl = () => skillIconUrl() ?? profileImageUrl();
+  const pendingTitle = () => <div class="exec-approval-title">{reference()}</div>;
   return (
     <SkillReaderDialog
       label={
-        detail()?.skill?.displayName ??
-        props.view.state.clawhubDetailRef ??
+        // The shell remains openable while its async content is pending.
+        props.view.state.clawhubDetail?.skill?.displayName ??
+        reference() ??
         t("skillsPage.notFound")
       }
       onClose={() => props.view.onClawHubDetailClose()}
       title={
         <div class="clawhub-skill-detail__identity">
-          <Show when={detailImageUrl()}>
-            {(url) => (
-              <img
-                class={[
-                  "clawhub-skill-icon clawhub-skill-icon--detail",
-                  { "clawhub-skill-icon--profile": Boolean(profileImageUrl()) },
-                ]}
-                src={url()}
-                alt=""
-              />
-            )}
-          </Show>
-          <div class="exec-approval-title">
-            {detail()?.skill?.displayName ?? props.view.state.clawhubDetailRef}
-          </div>
+          <Errored fallback={pendingTitle}>
+            <Loading on={reference()} fallback={pendingTitle()}>
+              <Show when={detailImageUrl()}>
+                {(url) => (
+                  <img
+                    class={[
+                      "clawhub-skill-icon clawhub-skill-icon--detail",
+                      { "clawhub-skill-icon--profile": Boolean(profileImageUrl()) },
+                    ]}
+                    src={url()}
+                    alt=""
+                  />
+                )}
+              </Show>
+              <div class="exec-approval-title">{detail()?.skill?.displayName ?? reference()}</div>
+            </Loading>
+          </Errored>
         </div>
       }
       footer={
-        <Show when={!props.view.state.clawhubDetailLoading && !props.view.state.clawhubDetailError}>
-          <Show when={detail()?.skill}>
-            {(skill) => (
-              <openclaw-modal-actions class="exec-approval-actions skill-reader-dialog__actions">
-                <button
-                  class="btn primary"
-                  disabled={props.installLocked}
-                  onClick={() => {
-                    const ref = props.view.state.clawhubDetailRef;
-                    if (ref) {
-                      props.view.onClawHubInstall(ref);
-                    }
-                  }}
-                >
-                  {props.view.state.skillOperation?.kind === "clawhub" &&
-                  props.view.state.skillOperation.ref === (props.view.state.clawhubDetailRef ?? "")
-                    ? t("skillsPage.installing")
-                    : props.view.showInventory === false
-                      ? t("skillLibrary.import")
-                      : t("skillsPage.installNamed", { name: skill().displayName })}
-                </button>
-              </openclaw-modal-actions>
-            )}
-          </Show>
-        </Show>
+        <Errored fallback={() => null}>
+          <Loading on={reference()}>
+            <Show when={detail()?.skill}>
+              {(skill) => (
+                <openclaw-modal-actions class="exec-approval-actions skill-reader-dialog__actions">
+                  <button
+                    class="btn primary"
+                    disabled={props.installLocked}
+                    onClick={() => {
+                      const ref = reference();
+                      if (ref) {
+                        props.view.onClawHubInstall(ref);
+                      }
+                    }}
+                  >
+                    {props.view.state.skillOperation?.kind === "clawhub" &&
+                    props.view.state.skillOperation.ref === (reference() ?? "")
+                      ? t("skillsPage.installing")
+                      : props.view.showInventory === false
+                        ? t("skillLibrary.import")
+                        : t("skillsPage.installNamed", { name: skill().displayName })}
+                  </button>
+                </openclaw-modal-actions>
+              )}
+            </Show>
+          </Loading>
+        </Errored>
       }
     >
       <div class="skill-reader-dialog__body clawhub-skill-detail__body">
-        <Show
-          when={!props.view.state.clawhubDetailLoading}
-          fallback={
-            <div class="muted" role="status">
-              {t("common.loading")}
+        <Errored
+          fallback={(error) => (
+            <div class="callout danger skill-reader-dialog__error" role="alert">
+              <span aria-hidden="true">
+                <Icon name="alertTriangle" />
+              </span>
+              <span>{formatUiError(error())}</span>
             </div>
-          }
+          )}
         >
-          <Show
-            when={!props.view.state.clawhubDetailError}
+          <Loading
+            on={reference()}
             fallback={
-              <div class="callout danger skill-reader-dialog__error" role="alert">
-                <span aria-hidden="true">
-                  <Icon name="alertTriangle" />
-                </span>
-                <span>{props.view.state.clawhubDetailError}</span>
+              <div class="muted" role="status">
+                {t("common.loading")}
               </div>
             }
           >
@@ -168,7 +175,7 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
                       </Show>
                       {detail()?.owner?.displayName && detail()?.latestVersion ? " · " : undefined}
                       <Show when={detail()?.latestVersion}>
-                        {(version) => t("skillsPage.latest", { version: version().version })}
+                        {(version) => <>{t("skillsPage.latest", { version: version().version })}</>}
                       </Show>
                     </div>
                   </Show>{" "}
@@ -191,8 +198,8 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
                 </>
               )}
             </Show>
-          </Show>
-        </Show>
+          </Loading>
+        </Errored>
       </div>
     </SkillReaderDialog>
   );

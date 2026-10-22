@@ -101,9 +101,8 @@ function fakeManagedDesktop(
 function hostService(
   getConfig: () => DesktopHostConfig,
   options: Omit<Parameters<typeof createHostDesktopService>[0], "getConfig" | "registry"> = {},
-  lingerMs?: number,
 ) {
-  const registry = createDesktopSessionRegistry({ lingerMs });
+  const registry = createDesktopSessionRegistry();
   cleanups.push(() => registry.stopAll());
   const service = createHostDesktopService({
     getConfig,
@@ -116,9 +115,9 @@ function hostService(
 function managedService(
   managedDesktop: ManagedLinuxDesktop,
   getConfig = (): DesktopHostConfig => ({ enabled: true, managed: true }),
-  lingerMs?: number,
 ) {
-  return hostService(getConfig, { platform: "linux", managedDesktop }, lingerMs);
+  vi.spyOn(managedLinux, "createManagedLinuxDesktop").mockReturnValue(managedDesktop);
+  return hostService(getConfig, { platform: "linux" });
 }
 
 describe("gateway host desktop source", () => {
@@ -136,13 +135,13 @@ describe("gateway host desktop source", () => {
       port,
       passwordFile: "/nonexistent/desktop-password",
     });
-    const probeRfb = vi.fn(rfbProbe.probeRfbServer);
-    await expect(inspectHostDesktop({ config, probeRfb })).resolves.toMatchObject({
+    const probeRfb = vi.spyOn(rfbProbe, "probeRfbServer");
+    await expect(inspectHostDesktop({ config })).resolves.toMatchObject({
       status: { enabled: false, state: "disabled" },
     });
     expect(probeRfb).not.toHaveBeenCalled();
     const readFile = vi.spyOn(fs, "readFile");
-    const inspection = await inspectHostDesktopSetup({ config, probeRfb, platform: "darwin" });
+    const inspection = await inspectHostDesktopSetup({ config, platform: "darwin" });
     if (state === "ready") {
       expect(inspection).toEqual({ state });
     } else {
@@ -155,11 +154,11 @@ describe("gateway host desktop source", () => {
   it("discovers managed setup without starting it and preserves attached-server precedence", async () => {
     const createManaged = vi.spyOn(managedLinux, "createManagedLinuxDesktop");
     const probeRfb = vi
-      .fn<typeof rfbProbe.probeRfbServer>()
+      .spyOn(rfbProbe, "probeRfbServer")
       .mockResolvedValue({ kind: "unreachable" });
     const config = { enabled: false, managed: true };
     const inspect = (platform: NodeJS.Platform = "linux", port?: number) =>
-      inspectHostDesktopSetup({ config: { ...config, port }, platform, probeRfb });
+      inspectHostDesktopSetup({ config: { ...config, port }, platform });
     await expect(inspect()).resolves.toEqual({ state: "managed" });
     await expect(inspect("linux", 5901)).resolves.toMatchObject({ state: "needs-server" });
     await expect(inspect("darwin")).resolves.toMatchObject({
@@ -206,6 +205,11 @@ describe("gateway host desktop source", () => {
       }
 
       const managed = fakeManagedDesktop();
+      if (!explicitPort) {
+        vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue(
+          mode === "managed" ? { kind: "unreachable" } : { kind: "rfb", securityTypes: [2] },
+        );
+      }
       const source = createHostDesktopSource({
         config: {
           enabled: true,
@@ -215,10 +219,6 @@ describe("gateway host desktop source", () => {
         },
         platform: "linux",
         ...(managedMode ? { managedDesktop: managed.managed } : {}),
-        probeRfb: explicitPort
-          ? undefined
-          : async (): Promise<rfbProbe.RfbProbeResult> =>
-              mode === "managed" ? { kind: "unreachable" } : { kind: "rfb", securityTypes: [2] },
       });
       if (mode === "managed") {
         await expect(source.acquire()).resolves.toMatchObject({
@@ -332,7 +332,7 @@ describe("gateway host desktop source", () => {
     vi.useFakeTimers();
     unreachable();
     const managed = fakeManagedDesktop();
-    const { service, registry } = managedService(managed.managed, undefined, 10);
+    const { service, registry } = managedService(managed.managed);
     const computer = await service.acquireComputer({ onStop });
     await service.observe({ control: false });
     const observers = Array.from({ length: 8 }, () =>
@@ -346,11 +346,11 @@ describe("gateway host desktop source", () => {
     for (const observer of observers) {
       observer?.release();
     }
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(120_000);
     expect(managed.stop).not.toHaveBeenCalled();
     expect(computer.isCurrent()).toBe(true);
     computer.release();
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(120_000);
     expect(managed.stop).toHaveBeenCalled();
     expect(computer.isCurrent()).toBe(false);
   });
@@ -462,12 +462,12 @@ describe("gateway host desktop source", () => {
   );
 
   it("reports managed mode as Linux-only on other platforms", async () => {
+    unreachable();
     const managed = fakeManagedDesktop();
     const options = {
       config: { enabled: true, managed: true },
       platform: "darwin" as const,
       managedDesktop: managed.managed,
-      probeRfb: async () => ({ kind: "unreachable" as const }),
     };
     const source = createHostDesktopSource(options);
     await expect(source.acquire()).rejects.toThrow(
@@ -482,6 +482,7 @@ describe("gateway host desktop source", () => {
   it.each([false, true])(
     "reports only known managed lifecycle state (runtime=%s)",
     async (running) => {
+      unreachable();
       const managed = running
         ? fakeManagedDesktop({ state: "running", display: 99, port: 46_001 })
         : undefined;
@@ -490,7 +491,6 @@ describe("gateway host desktop source", () => {
           config: { enabled: true, managed: true },
           platform: "linux",
           managedDesktop: managed?.managed,
-          probeRfb: async () => ({ kind: "unreachable" }),
         }),
       ).resolves.toEqual({
         status: {

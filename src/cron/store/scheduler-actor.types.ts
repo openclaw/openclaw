@@ -14,6 +14,7 @@ export type CronScheduleMaintenanceOptions = {
 
 export type CronSchedulerConfig = {
   cronEnabled: boolean;
+  preparingAgentIds?: string[];
   cronConfig?: CronConfig;
   defaultAgentId?: string;
   configuredChannels?: string[];

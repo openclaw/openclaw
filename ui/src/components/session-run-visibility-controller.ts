@@ -2,7 +2,7 @@ import { onCleanup } from "solid-js";
 
 type VisibilityGroup = {
   observer: IntersectionObserver;
-  rows: Map<Element, Set<Element>>;
+  rows: Map<Element, Map<Element, (offscreen: boolean) => void>>;
 };
 
 const groups = new WeakMap<Element, VisibilityGroup>();
@@ -10,13 +10,13 @@ const groups = new WeakMap<Element, VisibilityGroup>();
 function visibilityGroup(root: Element): VisibilityGroup {
   let group = groups.get(root);
   if (!group) {
-    const rows = new Map<Element, Set<Element>>();
+    const rows = new Map<Element, Map<Element, (offscreen: boolean) => void>>();
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          for (const indicator of rows.get(entry.target) ?? []) {
+          for (const notify of rows.get(entry.target)?.values() ?? []) {
             // Edge contact already intersects at threshold zero; entering further may not notify.
-            indicator.classList.toggle("session-run-indicator--offscreen", !entry.isIntersecting);
+            notify(!entry.isIntersecting);
           }
         }
       },
@@ -28,7 +28,9 @@ function visibilityGroup(root: Element): VisibilityGroup {
   return group;
 }
 
-export function createSessionRunVisibility(): (element: Element) => void {
+export function createSessionRunVisibility(
+  onOffscreenChange: (offscreen: boolean) => void,
+): (element: Element) => void {
   let current: Element | undefined;
   let observation: { root: Element; row: Element; group: VisibilityGroup } | undefined;
   let pending = false;
@@ -79,15 +81,14 @@ export function createSessionRunVisibility(): (element: Element) => void {
       if (observation?.root !== root || observation.row !== row) {
         release();
         const group = visibilityGroup(root);
-        const indicators = group.rows.get(row) ?? new Set<Element>();
-        indicators.add(element);
+        const indicators = group.rows.get(row) ?? new Map<Element, (offscreen: boolean) => void>();
+        indicators.set(element, onOffscreenChange);
         group.rows.set(row, indicators);
         observation = { root, row, group };
+        // A new indicator needs native delivery even when this row is already observed.
+        group.observer.unobserve(row);
+        group.observer.observe(row);
       }
-      // A queued-state class binding can replace the paused class without moving the row.
-      // Reobserve so only native visibility delivery restores it after the completed render.
-      observation.group.observer.unobserve(row);
-      observation.group.observer.observe(row);
     });
   };
 }

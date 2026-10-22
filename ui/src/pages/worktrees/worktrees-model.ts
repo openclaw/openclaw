@@ -10,6 +10,7 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import type { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
 import { gcManagedWorktrees } from "../../lib/worktrees/gc-worktrees.ts";
@@ -25,19 +26,34 @@ export class WorktreesModel {
   createBaseRef = "";
   createBranches: string[] = [];
   gateway!: ReturnType<typeof useGatewayPage>;
-  private listRequest: AbortController | null = null;
-  private branchesRequest: AbortController | null = null;
-  private readonly listeners = new Set<() => void>();
+  private readonly listRequest = createPageRequest(() => this.update({}), {
+    task: (scope: GatewayConnectionScope, { signal }) =>
+      scope.client.request<WorktreesListResult>("worktrees.list", {}, { signal }),
+    onComplete: (result) => {
+      this.records = result.worktrees.toSorted((a, b) => b.lastActiveAt - a.lastActiveAt);
+    },
+    onError: (error) => {
+      this.error = formatUiError(error);
+    },
+  });
+  private readonly branchesRequest = createPageRequest(() => this.update({}), {
+    task: ({ scope, repoRoot }: { scope: GatewayConnectionScope; repoRoot: string }, { signal }) =>
+      scope.client.request<WorktreesBranchesResult>("worktrees.branches", { repoRoot }, { signal }),
+    onComplete: (result) => {
+      this.createBranches = result.branches.map((branch) => branch.name);
+    },
+    onError: () => {
+      this.createBranches = [];
+    },
+  });
 
-  constructor(private readonly getContext: () => ApplicationContext) {}
+  constructor(
+    private readonly getContext: () => ApplicationContext,
+    private readonly publish: () => void,
+  ) {}
 
   get context() {
     return this.getContext();
-  }
-
-  subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
   }
 
   update(
@@ -56,20 +72,18 @@ export class WorktreesModel {
     >,
   ) {
     Object.assign(this, values);
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.publish();
   }
 
   invalidateRequests() {
-    this.listRequest?.abort();
-    this.branchesRequest?.abort();
-    this.listRequest = this.branchesRequest = null;
+    // Gateway binding retires both reads before a replacement scope can publish.
+    this.listRequest.cancel();
+    this.branchesRequest.cancel();
     this.update({ operation: null });
   }
 
   get loading() {
-    return this.operation === "gc" || this.listRequest !== null;
+    return this.operation === "gc" || this.listRequest.pending;
   }
 
   get operationPending() {
@@ -82,35 +96,13 @@ export class WorktreesModel {
 
   async load(options: { preserveError?: boolean } = {}) {
     const scope = this.gateway.capture();
-    if (!scope || this.operation !== null || this.listRequest) {
+    if (!scope || this.operation !== null || this.listRequest.pending) {
       return;
     }
-    const request = new AbortController();
-    this.listRequest = request;
-    this.update(options.preserveError ? {} : { error: null });
-    try {
-      const result = await scope.client.request<WorktreesListResult>(
-        "worktrees.list",
-        {},
-        {
-          signal: request.signal,
-        },
-      );
-      if (this.gateway.isCurrent(scope) && this.listRequest === request) {
-        this.update({
-          records: result.worktrees.toSorted((a, b) => b.lastActiveAt - a.lastActiveAt),
-        });
-      }
-    } catch (error) {
-      if (this.gateway.isCurrent(scope) && this.listRequest === request) {
-        this.update({ error: formatUiError(error) });
-      }
-    } finally {
-      if (this.listRequest === request) {
-        this.listRequest = null;
-        this.update({});
-      }
+    if (!options.preserveError) {
+      this.error = null;
     }
+    await this.listRequest.run(scope);
   }
 
   private async runOperation(scope: GatewayConnectionScope, action: () => Promise<unknown>) {
@@ -214,36 +206,14 @@ export class WorktreesModel {
   }
 
   async loadCreateBranches() {
-    this.branchesRequest?.abort();
-    this.branchesRequest = null;
+    this.branchesRequest.cancel();
     const scope = this.gateway.capture();
     const repoRoot = this.createRepoRoot.trim();
     if (!scope || !repoRoot || !this.operatorAccess.canWrite) {
       this.update({ createBranches: [] });
       return;
     }
-    const request = new AbortController();
-    this.branchesRequest = request;
-    try {
-      const result = await scope.client.request<WorktreesBranchesResult>(
-        "worktrees.branches",
-        { repoRoot },
-        {
-          signal: request.signal,
-        },
-      );
-      if (this.gateway.isCurrent(scope) && this.branchesRequest === request) {
-        this.update({ createBranches: result.branches.map((branch) => branch.name) });
-      }
-    } catch {
-      if (this.gateway.isCurrent(scope) && this.branchesRequest === request) {
-        this.update({ createBranches: [] });
-      }
-    } finally {
-      if (this.branchesRequest === request) {
-        this.branchesRequest = null;
-      }
-    }
+    await this.branchesRequest.run({ scope, repoRoot });
   }
 
   async createWorktree() {

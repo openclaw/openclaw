@@ -55,7 +55,6 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
     },
     theme: context.theme ?? {
       branding: resolveThemeBranding(undefined),
-      serverSelection: null,
       subscribe,
     },
     overlays: context.overlays ?? { snapshot: {}, subscribe },
@@ -90,7 +89,6 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   Object.assign(context.webPush, { snapshot: context.webPush.snapshot ?? {} });
   Object.assign(context.theme, {
     branding: context.theme.branding ?? resolveThemeBranding(undefined),
-    serverSelection: context.theme.serverSelection ?? null,
     settings: context.theme.settings ?? loadSettings(),
   });
   Object.assign(context.gateway, {

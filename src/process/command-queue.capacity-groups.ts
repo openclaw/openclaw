@@ -42,9 +42,8 @@ const DRAINING_GROUPS = resolveGlobalSingleton(
  *
  * Known wait edges at this base: outer `cron` -> `cron-nested`
  * (`server-cron.ts` passes lane "cron"; `agents/lanes.ts` remaps inner work),
- * `main` -> `system-agent` -> `session:<key>` -> `system-agent-inference`
- * (delegated expert inference), and `session:<key>` -> global lane
- * (embedded-agent-runner run + compaction).
+ * `main` -> `system-agent` -> `system-agent-inference` (delegated expert
+ * inference), and setup probes -> their embedded-agent global lane.
  */
 const GROUP_INELIGIBLE_LANES: ReadonlySet<string> = new Set<string>([
   CommandLane.Cron,
@@ -55,7 +54,7 @@ const GROUP_INELIGIBLE_LANES: ReadonlySet<string> = new Set<string>([
 ]);
 
 const GROUP_INELIGIBLE_PREFIXES = [
-  "session:",
+  "session:probe-",
   "nested:",
   SUBAGENT_LANE_PREFIX,
   "context-engine-turn-maintenance:",

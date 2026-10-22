@@ -1,9 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { projectSubagentStatus } from "../../ui/src/pages/chat/chat-subagent-wait.ts";
-import {
-  addSubagentRunForTests,
-  resetSubagentRegistryForTests,
-} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import * as subagents from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -17,15 +15,19 @@ it("recovers the current child-wait clock from persisted lifecycle without trans
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env, root }) => {
     const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg, cfg);
-    await resetSubagentRegistryForTests({ persist: false });
+    await subagents.resetSubagentRegistryForTests({ persist: false });
     const reader = createResidentSessionRowReader();
     const parentKey = "agent:main:dashboard:wait-parent";
     const childKey = "agent:main:dashboard:wait-child";
     const parentSessionId = "wait-parent-session";
     const childRunId = "wait-child-run";
+    const childTarget = { sessionKey: childKey, sessionId: "wait-child-session", agentId: "main" };
     const startedAt = Date.now();
+    const at = (seconds: number) => startedAt + seconds * 1_000;
+    const initialRun = "initial-parent-run",
+      nextRun = "announcement-parent-run";
     let childClaim: string | undefined;
-    const lifecycle = (runId: string, phase: "start" | "end", at: number, yielded = false) =>
+    const lifecycle = (runId: string, phase: "start" | "end", timestamp: number, yielded = false) =>
       persistGatewaySessionLifecycleEvent({
         sessionKey: parentKey,
         agentId: "main",
@@ -33,34 +35,26 @@ it("recovers the current child-wait clock from persisted lifecycle without trans
           sessionId: parentSessionId,
           runId,
           lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          ts: at,
+          ts: timestamp,
           data: {
             phase,
-            ...(phase === "start" ? { startedAt: at } : { endedAt: at }),
+            ...(phase === "start" ? { startedAt: timestamp } : { endedAt: timestamp }),
             ...(yielded ? { yielded: true, livenessState: "paused", stopReason: "end_turn" } : {}),
           },
         },
       });
     const readWait = async () => {
-      const parent = await reader.row(parentKey);
-      const child = await reader.row(childKey);
-      expect(parent?.hasActiveSubagentRun).toBe(true);
-      expect(child?.startedAt).toBe(startedAt);
-      if (!parent || !child) {
-        throw new Error("Expected persisted parent and child rows");
-      }
-      return {
-        parent,
-        projection: projectSubagentStatus(
-          {
-            selectedSession: parent,
-            subagentSessions: [child],
-            subagentSessionsHydrated: true,
-            messages: [],
-          },
-          false,
-        ),
+      const parent = expectDefined(await reader.row(parentKey), "persisted parent row");
+      const child = expectDefined(await reader.row(childKey), "persisted child row");
+      expect(parent).toMatchObject({ hasActiveSubagentRun: true });
+      expect(child).toMatchObject({ startedAt });
+      const roster = {
+        selectedSession: parent,
+        subagentSessions: [child],
+        subagentSessionsHydrated: true,
+        messages: [],
       };
+      return { parent, ...projectSubagentStatus(roster, false) };
     };
     try {
       await replaceSessionEntry(
@@ -71,7 +65,7 @@ it("recovers the current child-wait clock from persisted lifecycle without trans
         { agentId: "main", sessionKey: childKey, env },
         { sessionId: "wait-child-session", updatedAt: startedAt, spawnedBy: parentKey },
       );
-      await addSubagentRunForTests({
+      await subagents.addSubagentRunForTests({
         runId: childRunId,
         childSessionKey: childKey,
         requesterSessionKey: parentKey,
@@ -79,41 +73,35 @@ it("recovers the current child-wait clock from persisted lifecycle without trans
         startedAt,
         cleanup: "keep",
       });
-      childClaim = claimAgentRunContext(
-        childRunId,
-        { sessionKey: childKey, sessionId: "wait-child-session", agentId: "main" },
-        { trackOwner: true, ownsContext: true },
-      );
-      // Merely owning an active child does not fabricate an unclocked parent wait.
-      expect((await readWait()).projection.wait).toBeNull();
-      await lifecycle("initial-parent-run", "start", startedAt);
-      await lifecycle("initial-parent-run", "end", startedAt + 2_000, true);
-      const yielded = await readWait();
-      expect(yielded.parent.endedAt).toBe(startedAt + 2_000);
-      expect(yielded.projection.wait?.startedAt).toBe(startedAt + 2_000);
+      childClaim = claimAgentRunContext(childRunId, childTarget, {
+        trackOwner: true,
+        ownsContext: true,
+      });
+      expect((await readWait()).wait).toBeNull();
+      await lifecycle(initialRun, "start", startedAt);
+      await lifecycle(initialRun, "end", at(2), true);
+      expect(await readWait()).toMatchObject({
+        parent: { endedAt: at(2) },
+        wait: { startedAt: at(2) },
+      });
 
-      await lifecycle("announcement-parent-run", "start", startedAt + 3_000);
+      await lifecycle(nextRun, "start", at(3));
       expect((await reader.row(parentKey))?.endedAt).toBeUndefined();
-      // The runtime explicitly permits a normal final when earlier children remain pending.
-      await lifecycle("announcement-parent-run", "end", startedAt + 4_000);
+      await lifecycle(nextRun, "end", at(4));
       await reader.dispose();
       await closeOpenClawAgentDatabasesAsync(root);
       const resumed = await readWait();
       expect(resumed.parent).toMatchObject({
-        lastRunId: "announcement-parent-run",
-        startedAt: startedAt + 3_000,
-        endedAt: startedAt + 4_000,
+        lastRunId: nextRun,
+        startedAt: at(3),
+        endedAt: at(4),
       });
-      expect(resumed.projection.wait).toEqual({
-        startedAt: startedAt + 4_000,
-        runningCount: 0,
-        sessionCount: 1,
-      });
-      expect(resumed.projection.placedWait).toBeUndefined();
+      expect(resumed.wait).toEqual({ startedAt: at(4), runningCount: 0, sessionCount: 1 });
+      expect(resumed.placedWait).toBeUndefined();
     } finally {
       releaseAgentRunContext(childRunId, childClaim);
       await reader.dispose();
-      await resetSubagentRegistryForTests({ persist: false });
+      await subagents.resetSubagentRegistryForTests({ persist: false });
     }
   });
 });

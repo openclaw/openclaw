@@ -1,19 +1,22 @@
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SkillsLibraryListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
+  sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   gatewayHelloForMethods,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   ChatComposerCapabilityHost,
   ChatComposerCapabilityDialogs,
@@ -51,7 +54,7 @@ function capabilityHarness(
   request: ReturnType<typeof vi.fn>,
   snapshot: ConfigSnapshot = { appliedConfigHash: "config-a", runtimeConfig: {} },
 ) {
-  const host = new ChatComposerCapabilityHost(vi.fn());
+  const host = new ChatComposerCapabilityHost();
   const context = createContext(snapshot);
   const state = createState();
   state.client = { request } as unknown as GatewayBrowserClient;
@@ -76,6 +79,26 @@ function toolsHarness(request: Parameters<typeof capabilityHarness>[0], snapshot
 
 function changeConfig(context: ApplicationContext, appliedConfigHash: string) {
   context.runtimeConfig.state.configSnapshot = { appliedConfigHash, runtimeConfig: {} };
+}
+
+function mountDialogs(
+  host: ChatComposerCapabilityHost,
+  context: ApplicationContext,
+  state: ChatPageHost,
+  session?: GatewaySessionRow,
+) {
+  const container = document.body.appendChild(document.createElement("div"));
+  onTestFinished(() => container.remove());
+  mountSolid(
+    () => {
+      const capabilities = projectOwner(host, (owner) => owner);
+      return createComponent(ChatComposerCapabilityDialogs, {
+        read: () => capabilities.read().dialogView(context, state, session),
+      });
+    },
+    { container },
+  );
+  return container;
 }
 
 function replacedToolsHarness() {
@@ -155,51 +178,14 @@ function createAddServerHarness(
   const sessions = createTestSessionCapability(gateway);
   Object.assign(sessions.state, {
     agentId: "main",
-    result: {
-      ts: 1,
-      path: "",
-      count: 1,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [session],
-    },
+    result: sessionsResult([session]),
   });
   sessions.refresh = refresh;
   sessions.patch = patch;
   state.sessions = sessions;
-  const container = document.createElement("div");
+  const host = new ChatComposerCapabilityHost();
+  const container = mountDialogs(host, context, state, session);
   const query = (selector: string) => container.querySelector(selector);
-  document.body.append(container);
-  onTestFinished(() => {
-    container.remove();
-    sessions.dispose();
-  });
-  const settled = deferred();
-  let submitted = false;
-  const [revision, setRevision] = createSignal(0);
-  let paint = () => {};
-  const host = new ChatComposerCapabilityHost(() => {
-    paint();
-    if (
-      submitted &&
-      !container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled
-    ) {
-      settled.resolve();
-    }
-  });
-  mountSolid(
-    () =>
-      createComponent(ChatComposerCapabilityDialogs, {
-        read: () => host.dialogView(context, state, session),
-        get revision() {
-          return { value: revision() };
-        },
-      }),
-    { container },
-  );
-  paint = () => {
-    setRevision((value) => value + 1);
-    flush();
-  };
   host.props(context, state, session, "main").onAddServer?.();
   return {
     container,
@@ -216,6 +202,7 @@ function createAddServerHarness(
         target: "docs-mcp",
       },
     ) {
+      await waitForSolid(() => expect(query("form")).not.toBeNull());
       const form = query("form");
       container
         .querySelector<HTMLInputElement>(`input.settings-segmented__input[value="${scope}"]`)!
@@ -225,9 +212,8 @@ function createAddServerHarness(
       container.querySelector<HTMLSelectElement>('[name="mcp-transport"]')!.value =
         server.transport;
       container.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = server.target;
-      submitted = true;
       query("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-      await settled.promise;
+      await waitForSolid(() => expect(host.dialogView(context, state, session).busy).toBe(false));
     },
   };
 }
@@ -267,21 +253,15 @@ describe("ChatComposerCapabilityHost", () => {
     expect(harness.form()).toBeNull();
   });
 
-  it("does not patch the session when the global add fails", async () => {
-    const harness = createAddServerHarness({ globalError: "duplicate" });
-    await harness.submit();
-
-    expect(harness.alert()?.trim()).toBe("duplicate");
-    expect(harness.patch).not.toHaveBeenCalled();
-    expect(harness.refresh).not.toHaveBeenCalled();
-  });
-
-  it("classifies a thrown global write as a config-stage failure", async () => {
-    const harness = createAddServerHarness({ throwGlobal: true });
-    await harness.submit("everywhere");
-
-    expect(harness.alert()?.trim()).toBe("config failed");
+  it.each([
+    [{ globalError: "duplicate" }, "session", "duplicate"],
+    [{ throwGlobal: true }, "everywhere", "config failed"],
+  ] as const)("stops after a failed global add: %j", async (options, scope, error) => {
+    const harness = createAddServerHarness(options);
+    await harness.submit(scope);
+    expect(harness.alert()?.trim()).toBe(error);
     expect(harness.events).toEqual(["global"]);
+    expect([harness.patch.mock.calls, harness.refresh.mock.calls]).toEqual([[], []]);
   });
 
   it("reports a session-stage failure after retaining the global add", async () => {
@@ -337,19 +317,11 @@ describe("ChatComposerCapabilityHost", () => {
   });
 
   it("keeps Everywhere selectable while a missing session row blocks session submit", async () => {
-    const host = new ChatComposerCapabilityHost(vi.fn());
+    const host = new ChatComposerCapabilityHost();
     const context = createContext({ runtimeConfig: {} });
     const state = createState();
     host.props(context, state, undefined, "main").onAddServer?.();
-    const container = document.createElement("div");
-    mountSolid(
-      () =>
-        createComponent(ChatComposerCapabilityDialogs, {
-          read: () => host.dialogView(context, state, undefined),
-          revision: {},
-        }),
-      { container },
-    );
+    const container = mountDialogs(host, context, state);
     await Promise.resolve();
 
     const scope = container.querySelector<HTMLInputElement>(
@@ -409,36 +381,31 @@ describe("ChatComposerCapabilityHost", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the newest tools after connector configuration changes away and back", async () => {
-    const { first, second, third, request, props } = replacedToolsHarness();
-    expect(request).toHaveBeenCalledTimes(3);
-
-    third.resolve(toolsResult("newest-a"));
-    await vi.waitFor(() => expect(props().toolsEffectiveResult?.profile).toBe("newest-a"));
-    first.resolve(toolsResult("stale-a"));
-    await first.promise;
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(props().toolsEffectiveResult?.profile).toBe("newest-a");
-    second.resolve(toolsResult("stale-b"));
-  });
-
-  it("keeps a replacement tools request loading when its same-key predecessor finishes", async () => {
-    const { first, second, third, request, props } = replacedToolsHarness();
-    first.resolve(toolsResult("stale-a"));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(props().toolsEffectiveResult).toBeNull();
-    expect(props().toolsEffectiveLoading).toBe(true);
-
-    third.resolve(toolsResult("newest-a"));
-    await vi.waitFor(() => expect(props().toolsEffectiveResult?.profile).toBe("newest-a"));
-    second.resolve(toolsResult("stale-b"));
-  });
+  it.each(["before", "after"] as const)(
+    "ignores a same-key predecessor finishing %s its replacement",
+    async (order) => {
+      const { first, second, third, request, props } = replacedToolsHarness();
+      expect(request).toHaveBeenCalledTimes(3);
+      if (order === "before") {
+        first.resolve(toolsResult("stale-a"));
+        await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(props()).toMatchObject({ toolsEffectiveResult: null, toolsEffectiveLoading: true });
+      }
+      third.resolve(toolsResult("newest-a"));
+      await vi.waitFor(() => expect(props().toolsEffectiveResult?.profile).toBe("newest-a"));
+      if (order === "after") {
+        first.resolve(toolsResult("stale-a"));
+        await first.promise;
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(props().toolsEffectiveResult?.profile).toBe("newest-a");
+      }
+      second.resolve(toolsResult("stale-b"));
+    },
+  );
 
   it("retires effective tools and requests across a same-client reconnect", async () => {
     const first = deferred<unknown>();
@@ -506,7 +473,7 @@ describe("ChatComposerCapabilityHost", () => {
     state.connectionEpoch = 2;
     const reconnected = props();
     expect(reconnected.skills).toBeNull();
-    expect(reconnected.skillsLoading).toBe(false);
+    expect(reconnected.skillsRead).toBeNull();
     reconnected.onLoadSkills?.();
     expect(statusRequest).toHaveBeenCalledTimes(2);
     expect(request.mock.calls).toEqual([
@@ -520,7 +487,7 @@ describe("ChatComposerCapabilityHost", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(props().skills).toBeNull();
-    expect(props().skillsLoading).toBe(true);
+    expect(props().skillsRead).toBeTruthy();
 
     current.resolve({ skills: [skill("current")] });
     await vi.waitFor(() => expect(props().skills?.map(({ name }) => name)).toEqual(["current"]));

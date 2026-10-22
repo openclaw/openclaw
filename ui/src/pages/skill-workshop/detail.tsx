@@ -3,6 +3,7 @@ import { createMemo, For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { SettingsEmpty, SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { visitTextDiff } from "../../lib/chat/tool-call-diff.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { undoMutationFor } from "./api.ts";
@@ -511,33 +512,10 @@ function diffLines(before: string, after: string): DiffLine[] | null {
   if ((midA.length + 1) * (midB.length + 1) > MAX_DIFF_CELLS) {
     return null;
   }
-  const table = Array.from({ length: midA.length + 1 }, () =>
-    Array.from({ length: midB.length + 1 }, () => 0),
-  );
-  for (let i = midA.length - 1; i >= 0; i -= 1) {
-    for (let j = midB.length - 1; j >= 0; j -= 1) {
-      table[i]![j] =
-        midA[i] === midB[j]
-          ? table[i + 1]![j + 1]! + 1
-          : Math.max(table[i + 1]![j]!, table[i]![j + 1]!);
-    }
-  }
   const lines: DiffLine[] = a.slice(0, start).map((text) => ({ kind: "same", text }));
-  let i = 0;
-  let j = 0;
-  while (i < midA.length || j < midB.length) {
-    if (i < midA.length && j < midB.length && midA[i] === midB[j]) {
-      lines.push({ kind: "same", text: midA[i]! });
-      i += 1;
-      j += 1;
-    } else if (i < midA.length && (j >= midB.length || table[i + 1]![j]! >= table[i]![j + 1]!)) {
-      lines.push({ kind: "remove", text: midA[i]! });
-      i += 1;
-    } else {
-      lines.push({ kind: "add", text: midB[j]! });
-      j += 1;
-    }
-  }
+  visitTextDiff(midA, midB, (kind, text) => {
+    lines.push({ kind: kind === "ctx" ? "same" : kind === "del" ? "remove" : "add", text });
+  });
   for (const text of a.slice(endA)) {
     lines.push({ kind: "same", text });
   }

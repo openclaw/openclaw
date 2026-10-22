@@ -20,7 +20,10 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import {
@@ -405,6 +408,7 @@ export async function commitPreparedSessionWorkspace(params: {
   assertCurrent: SessionSourceAssertion;
   assertEntry: (entry: SessionEntry) => void;
   projectId?: string;
+  priorWorkspace?: SessionEntry["priorWorkspace"];
   clearPendingIntent?: boolean;
   onCommitted?: () => void;
   missingSessionMessage: string;
@@ -425,6 +429,7 @@ export async function commitPreparedSessionWorkspace(params: {
           sessionRoot: prepared.sessionRoot,
           spawnedCwd: prepared.spawnedCwd,
           ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
+          ...(params.priorWorkspace ? { priorWorkspace: params.priorWorkspace } : {}),
           ...(params.clearPendingIntent
             ? { pendingProjectGitUrl: undefined, pendingWorktree: undefined }
             : {}),
@@ -445,6 +450,25 @@ export async function commitPreparedSessionWorkspace(params: {
     }
     return entry;
   } catch (error) {
+    if (prepared.worktree) {
+      // A lost acknowledgement or post-commit error must not remove the accepted checkout.
+      // If this read cannot establish ownership, preserve the allocation for recovery.
+      const { withSessionEntryReadOnlyInWorker } =
+        await import("../config/sessions/session-entry-read-runtime.js");
+      const bound = await withSessionEntryReadOnlyInWorker(
+        params.target,
+        () => {},
+        async (read) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          return read.value?.worktree?.id === prepared.worktree?.id;
+        },
+      );
+      if (bound) {
+        throw error;
+      }
+    }
     await prepared.rollback?.();
     throw error;
   }
@@ -461,10 +485,18 @@ export async function ensureSessionWorkspaceForPlacement(params: {
   canPrepare: () => boolean;
 }): Promise<SessionEntry> {
   const { target, entry } = params;
-  return await runExclusiveSessionLifecycleMutation("placement-dispatch", {
-    scope: target.storePath,
-    identities: [target.canonicalKey, entry.sessionId, ...target.storeKeys],
+  return await runSessionMutation({
+    diagnosticLabel: "placement-dispatch",
+    target: captureSessionTarget({
+      storeScope: target.storePath,
+      sessionKey: target.canonicalKey,
+      aliases: target.storeKeys,
+      agentId: target.agentId,
+      incarnation: entry.sessionId,
+    }),
+    policy: "allow-live",
     signal: params.signal,
+    assertCurrent: params.assertCurrent,
     run: async () => {
       params.assertCurrent();
       if (!params.canPrepare()) {

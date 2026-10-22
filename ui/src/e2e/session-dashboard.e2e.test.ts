@@ -9,6 +9,7 @@ import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -38,6 +39,7 @@ import {
 const suite = createControlUiE2eSuite({
   name: "Control UI session dashboard stitch",
   startServerBeforeBrowser: true,
+  trackBrowserContexts: true,
 });
 
 async function showDashboard(page: Page): Promise<void> {
@@ -60,11 +62,14 @@ async function createProofContext(name: string) {
     await mkdir(proofDir, { recursive: true });
   }
   const viewport = { height: 900, width: 1280 };
-  const context = await suite.browser.newContext({
+  const context = await suite.newBrowserContext({
     viewport,
     ...(proofDir ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
   });
+  // Preserve the raw context's existing action timeout.
+  context.setDefaultTimeout(30_000);
   const page = await context.newPage();
+  await installControlUiE2eRendererStallProbe(page);
   return {
     page,
     recordProof,
@@ -75,7 +80,7 @@ async function createProofContext(name: string) {
     },
     close: async (saveVideo = false) => {
       const video = page.video();
-      await context.close();
+      await suite.closeBrowserContext(context);
       if (saveVideo && proofDir && video) {
         await video.saveAs(path.join(proofDir, `${name}.webm`));
       }
@@ -359,13 +364,32 @@ suite.define(() => {
     await page.keyboard.press("Enter");
     await expect.poll(() => preview.locator(".oc-menu:popover-open").count()).toBe(1);
     await page.keyboard.press("Escape");
+    const conversation = page.locator(".sidebar-region__primary", { has: preview });
     for (const width of [796, 794, 390, 1440]) {
       await page.setViewportSize({ width, height: 900 });
+      await expect.poll(() => conversation.count()).toBe(1);
+      if (width !== 1440) {
+        // Mobile panels share the screen with the retained conversation.
+        await expect.poll(() => conversation.isVisible()).toBe(true);
+        await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
+        await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(true);
+        continue;
+      }
+      await expect.poll(() => conversation.isVisible()).toBe(true);
       await expectElement(preview, (element) => {
         const box = element.getBoundingClientRect();
         const actions = element.querySelector("[data-widget-actions]")!.getBoundingClientRect();
+        const pinBounds = element.querySelector("[data-pin-widget]")!.getBoundingClientRect();
         const thread = element.closest(".chat-thread")!;
-        const edge = thread.getBoundingClientRect().left + thread.clientLeft + thread.clientWidth;
+        const threadBox = thread.getBoundingClientRect();
+        if (
+          [box, actions, pinBounds, threadBox].some(
+            ({ width: rectWidth, height }) => rectWidth <= 0 || height <= 0,
+          )
+        ) {
+          return false;
+        }
+        const edge = threadBox.left + thread.clientLeft + thread.clientWidth;
         return edge - box.right >= 40
           ? actions.left >= box.right && actions.right <= edge && actions.top === box.top
           : actions.right <= box.right && actions.bottom === box.top;

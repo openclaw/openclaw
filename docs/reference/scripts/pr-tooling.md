@@ -31,6 +31,121 @@ intact until the command finishes. This setting applies at both dependency
 materialization handoffs; in-place wrappers keep their checkout's dependency
 context, and wrapper selection stays unchanged.
 
+## Keep the admitted workflow across commands
+
+The first locked operation for a PR retains its authenticated workflow source in
+`refs/openclaw/pr-workflow-bindings/<pr>`. Later operations use that source and
+its dependency manifest, even when main advances. The binding belongs to the
+canonical repository and PR; a caller cannot select an arbitrary revision or
+replace it with an environment variable. Malformed, foreign, or changed bindings
+fail closed. Developer-wrapper opt-in does not change landing authority.
+
+Security Review publisher sources have a separate owner: the protected-main tip
+captured by merge admission. For inherited-failure admin admission, the publisher
+must be a successful Security Review run on that main history, and its workflow
+and every declared checkout source must match that tip's Git blobs. The verified
+workflow supplies the checkout inventory; the bound wrapper's older files do not.
+Initial admission reads those owner blobs from GitHub at the captured main SHA,
+so it does not require a newly observed main to be materialized locally yet. The
+final local-only source check still follows main materialization.
+An older run remains eligible only while all publisher sources still match main.
+Foreign, malformed, or outdated sources refuse admission. This does not refresh
+or replace the retained workflow binding, select caller-provided source code, or
+waive exact-head security enforcement and current review authority.
+
+Workflow selection crosses supervision through a private held descriptor. This
+is separate from the descriptor that owns temporary wrapper cleanup. Reentry
+must verify the complete source inventory and manifest against the selected
+commit before using it. Keep the retained installation available until the PR
+operation completes; a workflow binding does not freeze installed package bytes.
+
+When `refs/remotes/origin/main` is absent, only the clean, HEAD-verified canonical
+wrapper can bootstrap. After acquiring the PR operation lock and checking
+temporary storage and GitHub authentication, it fetches canonical main into an
+operation-owned qualification ref. This extra acquisition does not update the
+shared tracking ref or `FETCH_HEAD`. A retained binding must belong to that main
+history, and the running wrapper must match the selected source exactly. A
+symbolic or unreadable tracking ref is not a cold-start fallback.
+
+Successful qualification removes only its captured ref value. Failed or
+interrupted qualification can retain its ref and operation lock; preserve the
+reported evidence and use native exact-owner recovery after all children join.
+If source comparison fails, use a qualified checkout of the reported source;
+do not erase the binding or substitute newer workflow code. Existing-worktree
+and completion-only commands do not provision a worktree for this acquisition.
+`prepare-push --resume-crabbox-run` requires the existing authenticated tracking
+anchor and refuses cold acquisition before any fetch.
+
+Only verified native merge completion retires the exact workflow binding.
+Failures and pending completion preserve it. Repeating completion reconciles
+the merge outcome without repeating publication, comments, or cleanup.
+
+## Recover a retained dependency projection
+
+When a retained anchor's pinned package directory disappears, changing
+`OPENCLAW_PR_TOOLING_ROOT` alone does not replace that pin. The current trusted
+wrapper can recover the complete projection without changing frozen wrapper code:
+
+```bash
+scripts/pr tooling-recover <PR> <plan.json> --plan-sha256 <sha256> --confirmed-quiescent
+```
+
+This Linux operation requires a healthy current wrapper installation. It acquires
+the ordinary supervised PR operation lock before reading the recovery plan. The
+target is a different retained anchor, never the executing wrapper. Developer
+wrapper opt-in cannot admit it. It neither installs packages nor refreshes a donor.
+
+Before dispatch, the native owner must exclude every consumer of the target
+anchor and donor installation, and qualify directory `RENAME_EXCHANGE` on the
+target device with GNU `mv --exchange --no-copy -T`. Hold that exclusion through
+outcome reconciliation. `--confirmed-quiescent` records this operator obligation;
+a plan file is not custody authority. The PR mutex alone does not exclude another
+consumer's dependency reads. The original creator PID/FD cleanup contract remains
+unchanged; recovery does not acquire deletion authority for the anchor.
+
+The SHA-256 binds exact UTF-8 JSON plan bytes. Version 1 contains:
+
+- `version: 1`, numeric `pr`, and the full frozen Git commit `revision`.
+- `runtime: { node, platform, arch }`, matching the qualified execution runtime.
+- `anchor: { path, identity, parentIdentity, projection }`.
+- `donor: { path, identity, parentIdentity, modulesSha256, installLockSha256, packages }`.
+
+An identity records decimal strings for `dev`, `ino`, `uid`, `gid`, and `mode`
+from `lstat`. `projection` maps relative names, including `""` for its root, to
+these identities; package symlinks also record their exact `target` string.
+Only physical scope directories and selective package symlinks are eligible.
+Package contents, workspace aliases, and unexpected entries refuse recovery.
+`packages` maps every package selected by the frozen materializer to its qualified
+physical donor path. The metadata hashes bind `node_modules/.modules.yaml` and
+`node_modules/.pnpm/lock.yaml` respectively.
+
+Qualify the donor as a clean, full checkout of the same repository at the frozen
+revision, with its own physical pnpm installation. Use its pinned package manager
+and frozen lockfile. Before sealing the plan, verify install completion, required
+peers, and native/loader imports for the matching runtime; metadata hashes alone
+do not establish those facts. Preserve the install through every remaining anchor consumer.
+Recovery verifies the checkout, runtime, install metadata, package versions, and
+the selected packages' transitive pnpm link closure. It verifies the complete
+frozen wrapper inventory against Git before executing the target materializer.
+
+The frozen helper builds an empty sibling projection under the same anchor,
+therefore reading the original manifests. Older parents' incomplete selective
+sets can be completed. The owner validates the complete replacement and original
+preimage, then issues one atomic directory exchange. It reads back **both** inode
+identities, independently of the command's exit code. The original projection
+remains at the sibling path; frozen source, package contents, donor aliases, and
+unrelated anchor entries remain unchanged.
+
+Retain the command's JSON-line stdout in the existing operation evidence. It names
+the sibling and original identities before exchange, then reports `exchanged`,
+`unchanged`, or `unknown`. Only `complete`, after full projection readback and the
+unchanged frozen validator, permits the native owner to continue normal admission.
+Any failure or lost response requires identity reconciliation before resume.
+Never retry an uncertain exchange, swap back, or delete either path based on exit
+status alone. Reusing a successfully exchanged plan refuses its stale preimage.
+The command never removes a projection; the native owner releases retained paths
+only after their consumers and recovery obligations finish.
+
 Provisioning failures print a redacted error graph to stderr. Preserve that output:
 the wrapper does not create a failure receipt. Lease heartbeat responsiveness
 errors include the verification, renewal, or acknowledgement phase, the failure

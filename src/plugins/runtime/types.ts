@@ -6,6 +6,7 @@ import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { LlmCompleteUsage, PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type { NativeSubagentRuntime } from "./types-native-subagent.js";
 import type {
   RuntimeSessionFactsResult,
   RuntimeSessionFactsSelection,
@@ -15,8 +16,6 @@ import type {
 export type { RuntimeLogger };
 
 type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
-
-// ── Subagent runtime types ──────────────────────────────────────────
 
 type SubagentRunParams = {
   /** Revalidate command authority at the host's run admission boundary. */
@@ -197,6 +196,8 @@ export type PluginRuntime = PluginRuntimeCore & {
     >;
   };
   subagent: {
+    /** Native collector children; only callable during requester-bound reply_dispatch. */
+    native?: NativeSubagentRuntime;
     /** Fresh, tool-free background inference under the existing subagent model policy. */
     complete: (params: SubagentCompleteParams) => Promise<{ text: string }>;
     /** Ephemeral session-context inference on the session's model, with tool execution denied. */

@@ -1,30 +1,45 @@
-import { createEffect, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import type {
   ControlUiSettingsContext,
-  ControlUiSettingsPlacement,
+  ControlUiSettingsView,
   ControlUiSettingsSnapshot,
 } from "../../../src/plugin-sdk/control-ui-settings.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createControlUiSettingsComponents } from "./control-ui-settings-components.solid.tsx";
 
-function authority(snapshot: ControlUiSettingsSnapshot): string {
-  return JSON.stringify([
-    snapshot.agentId,
-    snapshot.engine,
-    snapshot.connected,
-    snapshot.advertisedMethods,
-    snapshot.connectionEpoch,
-    snapshot.routeIntent,
-  ]);
+/**
+ * Facts that end a mounted view. Connection state and the transport epoch reach the
+ * view through update(), so a same-client reconnect keeps its presentation and drafts.
+ */
+function viewLifetime(application: ApplicationContext, snapshot: ControlUiSettingsSnapshot) {
+  const gateway = application.gateway.snapshot;
+  return {
+    client: gateway.client,
+    key: JSON.stringify([
+      gatewayPresentationScope(application.gateway).key,
+      // A transport drop retains hello; a connect rejection clears it.
+      gateway.hello ? hasOperatorReadAccess(gateway.hello.auth ?? null) : null,
+      snapshot.agentId,
+      snapshot.engine.kind,
+      snapshot.engine.id,
+      snapshot.advertisedMethods,
+      snapshot.routeIntent,
+    ]),
+  };
+}
+
+function sameLifetime(a: ReturnType<typeof viewLifetime>, b: ReturnType<typeof viewLifetime>) {
+  return a.client === b.client && a.key === b.key;
 }
 
 export function ControlUiSettingsPresentation(props: {
   application: ApplicationContext;
-  placement: ControlUiSettingsPlacement;
+  placement: ControlUiSettingsView["placement"];
   readSnapshot: () => ControlUiSettingsSnapshot;
   subscribe: (listener: () => void) => () => void;
   navigate: ControlUiSettingsContext["navigate"];
@@ -35,7 +50,7 @@ export function ControlUiSettingsPresentation(props: {
   let owner:
     | {
         abort: AbortController;
-        identity: string;
+        identity: ReturnType<typeof viewLifetime>;
         update?: (snapshot: ControlUiSettingsSnapshot) => void;
         dispose?: () => void;
       }
@@ -61,8 +76,8 @@ export function ControlUiSettingsPresentation(props: {
       return;
     }
     const snapshot = props.readSnapshot();
-    const identity = authority(snapshot);
-    if (owner?.identity === identity) {
+    const identity = viewLifetime(props.application, snapshot);
+    if (owner && sameLifetime(owner.identity, identity)) {
       try {
         owner.update?.(snapshot);
       } catch (error) {
@@ -76,7 +91,11 @@ export function ControlUiSettingsPresentation(props: {
     owner = next;
     const current = () => {
       lifetime.throwIfAborted();
-      if (!active || owner !== next || authority(props.readSnapshot()) !== identity) {
+      if (
+        !active ||
+        owner !== next ||
+        !sameLifetime(identity, viewLifetime(props.application, props.readSnapshot()))
+      ) {
         throw new Error("This Settings presentation has ended.");
       }
     };
@@ -92,6 +111,7 @@ export function ControlUiSettingsPresentation(props: {
           async request<T>(method: string, params?: unknown) {
             current();
             const gateway = props.application.gateway.snapshot;
+            const epoch = props.readSnapshot().connectionEpoch;
             if (
               !gateway.client ||
               gateway.phase !== "connected" ||
@@ -101,6 +121,10 @@ export function ControlUiSettingsPresentation(props: {
             }
             const result = await gateway.client.request<T>(method, params);
             current();
+            // The view survives reconnects; replies from an earlier transport epoch do not.
+            if (props.readSnapshot().connectionEpoch !== epoch) {
+              throw new Error("The Gateway connection changed before this request completed.");
+            }
             return result;
           },
           navigate(destination) {
@@ -147,9 +171,7 @@ export function ControlUiSettingsPresentation(props: {
         }
       });
   };
-  // The imperative plugin view receives live host props; transport owners also
-  // notify synchronously so a batched disconnect/reconnect retires old authority.
-  createEffect(props.readSnapshot, sync);
+  // Owner notifications retire authority synchronously and publish committed presentation facts.
   onSettled(() => {
     const stop = props.subscribe(sync);
     sync();

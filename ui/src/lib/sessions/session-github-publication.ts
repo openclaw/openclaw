@@ -8,24 +8,26 @@ import {
   reconcileSessionChanged,
   reconcileSessionHistory,
 } from "./reconcile.ts";
-import type {
-  GitHubPublicationBinding,
-  SessionCapability,
-  SessionConnectionOwner,
-  SessionGateway,
-} from "./session-capability.ts";
+import type { createSessionDeletions } from "./session-deletions.ts";
 import {
   isUiGlobalSessionKey,
   resolveUiConversationIdentity,
   scopedSessionArtifactKey,
 } from "./session-key.ts";
+import type {
+  GitHubPublicationBinding,
+  SessionConnectionOwner,
+  SessionGateway,
+} from "./session-types.ts";
 
 const MAX_RETAINED_PUBLICATIONS = 32;
 
 type Host = {
   connection: SessionConnectionOwner;
   snapshot: () => SessionGateway["snapshot"];
-  deletionState: (row: GatewaySessionRow) => ReturnType<SessionCapability["deletionState"]>;
+  deletionState: (
+    row: GatewaySessionRow,
+  ) => ReturnType<ReturnType<typeof createSessionDeletions>["deletionState"]>;
 };
 
 function invocationRow(row: GatewaySessionRow): GatewaySessionRow {
@@ -109,7 +111,6 @@ export function createSessionGitHubPublication(host: Host) {
   return {
     attach(
       row: GatewaySessionRow,
-      changed: () => void,
       Owner: typeof GitHubPublicationOwner,
     ): GitHubPublicationBinding | null {
       const connection = host.connection.capture();
@@ -166,7 +167,7 @@ export function createSessionGitHubPublication(host: Host) {
         entries.set(key, entry);
       }
       const operation = entry;
-      return Object.assign(operation.publication.bind(changed), {
+      return Object.assign(operation.publication.bind(), {
         matches: (next: GatewaySessionRow) =>
           operation.current() &&
           !host.deletionState(next) &&

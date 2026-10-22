@@ -1,7 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
+import { createReplyTurnParticipants } from "../../sessions/session-controller.tool-authority.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { captureRequesterOrigin } from "../requester-origin.js";
 import { SANDBOX_DEFAULT_TOOL_ALLOW, type SandboxToolPolicy } from "../sandbox/types.js";
 import type { AnyAgentTool } from "./common.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
@@ -149,7 +150,13 @@ describe("sessions_create", () => {
   });
 
   it("uses only a verified selected participant's live operator authority", async () => {
-    const { authority: selected } = issueAuthority(undefined, "selected-requester");
+    const { authority: selected, revoke } = issueAuthority(undefined, "selected-requester");
+    const requesterOrigin = captureRequesterOrigin({
+      sessionKey: "agent:main:main",
+      operatorProfileId: selected.profileId,
+      messageProvider: "webchat",
+      senderId: "selected-sender",
+    });
     const participants = createReplyTurnParticipants({
       operatorAuthority: issueAuthority().authority,
     });
@@ -163,17 +170,30 @@ describe("sessions_create", () => {
             personalToolParticipants: participants,
           },
           async () => {
-            await expect(tool.execute("ambiguous", {})).rejects.toThrow(
-              "Several people have steered this turn",
-            );
+            await tool.execute("incumbent", {});
+            await expect(
+              tool.execute("missing-origin", { user: selected.profileId }),
+            ).rejects.toThrow("Selected user's requester identity is unavailable");
+            expect(gateway.request).toHaveBeenCalledOnce();
+            participants.accept({ operatorAuthority: selected, requesterOrigin });
             await tool.execute("selected", { user: selected.profileId });
+            revoke();
+            await expect(
+              tool.execute("revoked-selected", { user: selected.profileId }),
+            ).rejects.toThrow(/access changed|creation source revoked/);
           },
         );
-        expect(gateway.request).toHaveBeenCalledOnce();
-        expect(gateway.request.mock.calls[0]?.[0].sessionCreation.actor.id).toBe(
-          selected.profileId,
-        );
-        expect(gateway.request.mock.calls[0]?.[0].params).not.toHaveProperty("user");
+        expect(gateway.request).toHaveBeenCalledTimes(2);
+        expect(gateway.request.mock.calls[1]?.[0].sessionCreation.actor).toEqual({
+          type: "human",
+          source: "profile",
+          id: selected.profileId,
+        });
+        expect(gateway.request.mock.calls[1]?.[0].agentToolCaller.requesterOrigin).toEqual({
+          ...requesterOrigin,
+          delegatedCreatorProfileId: null,
+        });
+        expect(gateway.request.mock.calls[1]?.[0].params).not.toHaveProperty("user");
       });
     } finally {
       participants.close();

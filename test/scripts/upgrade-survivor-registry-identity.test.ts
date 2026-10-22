@@ -6,9 +6,10 @@ import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, expect, it, onTestFinished } from "vitest";
 import { writePluginInstallIndexForE2E } from "../../scripts/e2e/lib/plugin-index-sqlite.mjs";
-import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
+import { writeJson } from "./upgrade-survivor-io.test-support.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -32,7 +33,7 @@ function tarball(
 ) {
   const staging = join(root, `${filename}-source`);
   mkdirSync(join(staging, "package"), { recursive: true });
-  writeFileSync(join(staging, "package/package.json"), JSON.stringify({ name, version }));
+  writeJson(join(staging, "package/package.json"), { name, version });
   writeFileSync(join(staging, "package/build.txt"), bytes);
   execFileSync("tar", ["-czf", filename, "-C", staging, "package"], { cwd: outputDir });
   return join(outputDir, filename);
@@ -42,6 +43,28 @@ async function expectArchive(url: string, archive: string) {
   const response = await fetch(url);
   expect(response.status).toBe(200);
   expect(Buffer.from(await response.arrayBuffer())).toEqual(readFileSync(archive));
+}
+
+async function registryPackage(url: string, name: string, version: string, archive: string) {
+  const response = await fetch(`${url}/${encodeURIComponent(name).replace("%40", "@")}`);
+  const metadata = await response.json();
+  expect(metadata).toMatchObject({
+    "dist-tags": { latest: version },
+    versions: { [version]: { dist: { integrity: integrity(archive) } } },
+  });
+  await expectArchive(metadata.versions[version].dist.tarball, archive);
+  return metadata.versions;
+}
+
+function installRecord(name: string, version: string, archive: string, installPath?: string) {
+  return {
+    source: "npm",
+    spec: `${name}@latest`,
+    resolvedName: name,
+    resolvedVersion: version,
+    integrity: integrity(archive),
+    ...(installPath ? { installPath } : {}),
+  };
 }
 
 it.for([
@@ -75,21 +98,18 @@ it.for([
     );
     const core = tarball(root, "core.tgz", "openclaw", version, "candidate core");
     const manifest = join(artifact, "prepublish-plugin-registry.json");
-    writeFileSync(
-      manifest,
-      JSON.stringify({
-        schema: "openclaw.prepublish-plugin-registry/v1",
-        schemaVersion: 1,
-        sourceSha: SOURCE_SHA,
-        candidateVersion: version,
-        packages: packages.map(({ name, candidate }) => ({
-          name,
-          version,
-          tarball: basename(candidate),
-          sha256: digest(candidate, "sha256"),
-        })),
-      }),
-    );
+    writeJson(manifest, {
+      schema: "openclaw.prepublish-plugin-registry/v1",
+      schemaVersion: 1,
+      sourceSha: SOURCE_SHA,
+      candidateVersion: version,
+      packages: packages.map(({ name, candidate }) => ({
+        name,
+        version,
+        tarball: basename(candidate),
+        sha256: digest(candidate, "sha256"),
+      })),
+    });
     const npm = join(bin, "npm");
     writeFileSync(
       npm,
@@ -156,26 +176,14 @@ read -r done
 `,
     );
     const child = spawn(resolveWorkflowBash(), [shell], { env, stdio: ["pipe", "pipe", "pipe"] });
-    const stages = {
-      baseline: createDeferred<string>(),
-      candidate: createDeferred<string>(),
-    };
     const lines = createInterface({ input: child.stdout });
-    lines.on("line", (line) => {
-      for (const stage of ["baseline", "candidate"] as const) {
-        const prefix = `registry-stage ${stage} `;
-        if (line.startsWith(prefix)) {
-          stages[stage].resolve(line.slice(prefix.length));
-        }
-      }
-    });
+    const iterator = lines[Symbol.asyncIterator]();
     let output = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-    });
+    for (const stream of [child.stdout, child.stderr]) {
+      stream.on("data", (chunk: Buffer) => {
+        output += chunk.toString();
+      });
+    }
     const closed = new Promise<number | null>((resolveExit, reject) => {
       child.once("error", reject);
       child.once("close", (code) => resolveExit(code));
@@ -189,14 +197,23 @@ read -r done
     onTestFinished(stop);
     const waitForStage = async (stage: "baseline" | "candidate") => {
       try {
-        return await withinTest(
-          awaitGateBeforeSettlement(
-            stages[stage].promise,
-            closed,
-            `Registry ${stage} startup failed:\n${output}`,
-          ),
-          signal,
-        );
+        const prefix = `registry-stage ${stage} `;
+        while (true) {
+          const line = await withinTest(
+            awaitGateBeforeSettlement(
+              iterator.next(),
+              closed,
+              "Registry exited before stage receipt",
+            ),
+            signal,
+          );
+          if (line.done) {
+            throw new Error("Registry stdout closed before stage receipt");
+          }
+          if (line.value.startsWith(prefix)) {
+            return line.value.slice(prefix.length);
+          }
+        }
       } catch (cause) {
         throw new Error(`Registry ${stage} startup failed:\n${output}`, { cause });
       }
@@ -207,28 +224,14 @@ read -r done
         const companion = packages[0];
         assert(companion, "Missing published companion fixture");
         const { name, published } = companion;
-        const metadata = await fetch(
-          `${baselineUrl}/${encodeURIComponent(name).replace("%40", "@")}`,
-        );
-        const baselineMetadata = await metadata.json();
-        expect(baselineMetadata).toMatchObject({
-          "dist-tags": { latest: BASELINE },
-          versions: { [BASELINE]: { dist: { integrity: integrity(published) } } },
-        });
-        await expectArchive(baselineMetadata.versions[BASELINE].dist.tarball, published);
+        await registryPackage(baselineUrl, name, BASELINE, published);
       }
       writePluginInstallIndexForE2E(
         {
           installRecords: Object.fromEntries(
             packages.map(({ id, name, published }) => [
               id,
-              {
-                source: "npm",
-                spec: `${name}@latest`,
-                resolvedName: name,
-                resolvedVersion: BASELINE,
-                integrity: integrity(published),
-              },
+              installRecord(name, BASELINE, published),
             ]),
           ),
         },
@@ -239,34 +242,20 @@ read -r done
       const publishedPaths = readFileSync(join(root, "published-paths"), "utf8").trim().split("\n");
       for (const { id, name, published, candidate } of packages) {
         const selected = version === BASELINE ? published : candidate;
-        const updatedMetadata = await fetch(
-          `${candidateUrl}/${encodeURIComponent(name).replace("%40", "@")}`,
-        );
-        const registryMetadata = await updatedMetadata.json();
-        expect(registryMetadata).toMatchObject({
-          "dist-tags": { latest: version },
-          versions: { [version]: { name, version, dist: { integrity: integrity(selected) } } },
-        });
-        await expectArchive(registryMetadata.versions[version].dist.tarball, selected);
+        const versions = await registryPackage(candidateUrl, name, version, selected);
+        expect(versions[version]).toMatchObject({ name, version });
         if (scenario === "legacy-operator-state" && version !== BASELINE) {
-          await expectArchive(registryMetadata.versions[BASELINE].dist.tarball, published);
+          await expectArchive(versions[BASELINE].dist.tarball, published);
         }
 
         const installPath = join(state, `npm/projects/fixture/node_modules/${name}`);
         mkdirSync(installPath, { recursive: true });
-        writeFileSync(join(installPath, "package.json"), JSON.stringify({ name, version }));
+        writeJson(join(installPath, "package.json"), { name, version });
         const writeRecord = (archive: string) =>
           writePluginInstallIndexForE2E(
             {
               installRecords: {
-                [id]: {
-                  source: "npm",
-                  spec: `${name}@latest`,
-                  resolvedName: name,
-                  resolvedVersion: version,
-                  installPath,
-                  integrity: integrity(archive),
-                },
+                [id]: installRecord(name, version, archive, installPath),
               },
             },
             { stateDir: state },

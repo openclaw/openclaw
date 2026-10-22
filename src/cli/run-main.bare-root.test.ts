@@ -485,7 +485,7 @@ describe("runCli exit behavior", () => {
       path: configPath,
       sourceConfig,
     });
-    readLocalOnboardingStateMock.mockReturnValueOnce({
+    readLocalOnboardingStateMock.mockResolvedValueOnce({
       version: 1,
       status: "completed",
       runId: "completed-onboarding",

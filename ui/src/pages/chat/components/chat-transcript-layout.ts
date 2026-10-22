@@ -4,6 +4,7 @@ import type { ApplicationContext } from "../../../app/context.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
+import type { TranscriptMessageElements } from "./chat-transcript-message-elements.ts";
 import type { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 
 export type TranscriptContent = GuardedTranscriptItem | JSX.Element;
@@ -14,6 +15,7 @@ export type TranscriptRow<T = unknown> =
 
 export type TranscriptLayoutProps = {
   applicationContext?: ApplicationContext;
+  messageElements: TranscriptMessageElements;
   rows: readonly TranscriptRow[];
   getContent: (index: number) => TranscriptContent;
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;

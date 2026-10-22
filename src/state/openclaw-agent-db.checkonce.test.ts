@@ -26,7 +26,10 @@ import {
   openOpenClawAgentDatabase as openAgent,
 } from "./openclaw-agent-db.js";
 import { readOpenClawDatabaseQuarantineFailure as quarantineFailure } from "./openclaw-quarantine-store.js";
-import { openOpenClawStateDatabase as openState } from "./openclaw-state-db.js";
+import {
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  openOpenClawStateDatabase as openState,
+} from "./openclaw-state-db.js";
 import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const metadataSchema = `CREATE TABLE schema_meta (
@@ -71,6 +74,16 @@ it.each(["transaction", "implicit snapshot"] as const)(
           writer.exec("CREATE TABLE metadata_migration (id INTEGER); PRAGMA user_version=2");
           persistMetadata(writer, "main", 2);
         });
+        {
+          using observed = observeReads();
+          expect(readMetadata(reader)).toEqual({
+            agentId: "main",
+            role: "agent",
+            schemaVersion: 1,
+          });
+          // Only the explicit schema cursor proves its catalog before the sibling DDL.
+          expect(observed.queries).toHaveLength(snapshot === "transaction" ? 4 : 0);
+        }
         expectCachedMetadata(reader, 1);
         expect(reader.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
           schema_version: 1,
@@ -122,10 +135,20 @@ it("reuses live agent admission and its seal after writer idle retirement", asyn
     const shared = openState({ env });
     using registry = openNodeSqliteDatabase(shared.path, { readOnly: true });
     admitSqliteSchema(registry);
+    const exec = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "exec");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const first = openAgent(options);
       const firstNative = first.db;
+      expect(
+        exec.mock.calls.filter(
+          ([sql], index) =>
+            exec.mock.contexts[index] === firstNative && /PRAGMA busy_timeout/iu.test(sql),
+        ),
+      ).toEqual([]);
+      expect(firstNative.prepare("PRAGMA busy_timeout").get()).toEqual({
+        timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      });
       using quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(env), {
         readOnly: true,
       });
@@ -145,8 +168,18 @@ it("reuses live agent admission and its seal after writer idle retirement", asyn
       const reopened = openAgent(options);
       expect(reopened.db === firstNative).toBe(false);
       expect(reopened.db.isOpen).toBe(true);
+      expect(reopened.db.prepare("PRAGMA busy_timeout").get()).toEqual({
+        timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      });
+      expect(
+        exec.mock.calls.filter(
+          ([sql], index) =>
+            exec.mock.contexts[index] === reopened.db && /PRAGMA busy_timeout/iu.test(sql),
+        ),
+      ).toEqual([]);
       expect(validationStatements(observation.queries)).toEqual([]);
     } finally {
+      exec.mockRestore();
       vi.useRealTimers();
     }
   });

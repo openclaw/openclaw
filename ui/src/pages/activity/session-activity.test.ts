@@ -40,7 +40,7 @@ it("orders refreshed membership by the activity timestamps actually displayed", 
     provenance,
     2,
   );
-  expect(read.result.sessions.map((row) => [row.key, row.lastActivityAt])).toEqual([
+  expect(read.sessions.map((row) => [row.key, row.lastActivityAt])).toEqual([
     [current.key, 30],
     [other.key, 20],
   ]);

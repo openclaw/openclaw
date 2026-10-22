@@ -61,6 +61,58 @@ function writeJson(dir: string, file: string, value: unknown) {
   fs.writeFileSync(path.join(dir, file), JSON.stringify(value));
 }
 
+function writePackage(
+  dir: string,
+  id: string,
+  manifest: Record<string, unknown>,
+  entries: Record<string, string> = { "index.cjs": "module.exports = { register() {} };\n" },
+) {
+  fs.mkdirSync(dir, { recursive: true });
+  writeJson(dir, "package.json", {
+    name: id,
+    version: manifest.version ?? "1.0.0",
+    openclaw: {
+      extensions: Object.keys(entries).map((entry) => `./${entry}`),
+    },
+  });
+  writeJson(dir, "openclaw.plugin.json", { id, configSchema: { type: "object" }, ...manifest });
+  for (const [file, body] of Object.entries(entries)) {
+    fs.writeFileSync(path.join(dir, file), body);
+  }
+}
+
+type PreparedInstall = Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
+
+function installSnapshot({ snapshot, writeOptions }: PreparedInstall, source = false) {
+  return {
+    config: source ? snapshot.sourceConfig : snapshot.config,
+    baseHash: snapshot.hash ?? undefined,
+    writeOptions: source ? selectInstallMutationWriteOptions(writeOptions) : writeOptions,
+  };
+}
+
+async function withInstallState(run: (stateDir: string, configPath: string) => Promise<void>) {
+  const stateDir = makePluginLoaderTempDir();
+  return withEnvAsync(stateEnv(stateDir), async () => {
+    useNoBundledPlugins();
+    await writeConfigFile({});
+    await run(stateDir, path.join(stateDir, "openclaw.json"));
+  });
+}
+
+async function withInstallLease(
+  run: (prepared: PreparedInstall, stateDir: string, configPath: string) => Promise<void>,
+) {
+  await withInstallState((stateDir, configPath) =>
+    withPluginLifecycleLease({}, async () => {
+      const prepared = await readConfigFileSnapshotForWrite();
+      // Warm the empty operation inventory before installer publication.
+      loadPluginMetadataSnapshot({ allowCurrent: false, config: prepared.snapshot.config });
+      await run(prepared, stateDir, configPath);
+    }),
+  );
+}
+
 describe("plugin runtime inspection", () => {
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
@@ -84,12 +136,11 @@ describe("plugin runtime inspection", () => {
     });
     const fixture = createInspectionFixture({ pauseDisposal: true });
     const { connections, disposalStarted: started, finishDisposal: finish } = fixture.state;
-    let command: ReturnType<typeof handlePluginsCommand> | undefined;
+    let command: Promise<void> | undefined;
     try {
       await withEnvAsync(stateEnv(stateDir), async () => {
         useNoBundledPlugins();
         const config = {
-          commands: { text: true, plugins: true },
           agents: {
             defaults: { systemAgent: { agentId: "main" } },
             entries: { main: { workspace: stateDir } },
@@ -107,30 +158,30 @@ describe("plugin runtime inspection", () => {
         const epoch = capturePluginRegistryLifecycleEpoch(active);
         const signal = capturePluginRegistryLifecycleSignal(active, epoch);
         expect(epoch).toBeDefined();
-        expect(signal?.aborted).toBe(false);
         const activeConnection = connections[0];
         const readActive = () => activeConnection?.database.prepare("SELECT 42 AS value").get();
-        expect(readActive()).toEqual({ value: 42 });
+        const expectActive = () => {
+          expect(readActive()).toEqual({ value: 42 });
+          expect(getActivePluginRegistry()).toBe(active);
+          expect(capturePluginRegistryLifecycleEpoch(active)).toBe(epoch);
+          expect(signal?.aborted).toBe(false);
+        };
+        expectActive();
         let replied = false;
         process.exitCode = 7;
         command = withPluginRuntimeRegistryScope(active, () =>
-          runPluginsDoctorCommand({ json: true }).then(() => null),
-        ).then((result) => {
+          runPluginsDoctorCommand({ json: true }),
+        ).then(() => {
           replied = true;
-          return result;
         });
         await Promise.race([started.promise, command]);
         expect(connections).toHaveLength(2);
         const inspection = connections[1];
-        expect(inspection?.disposals).toBe(1);
-        expect(inspection?.database.isOpen).toBe(true);
+        expect(inspection).toMatchObject({ disposals: 1, database: { isOpen: true } });
         expect(replied).toBe(false);
         expect(output).toEqual([]);
         expect(process.exitCode).toBe(7);
-        expect(readActive()).toEqual({ value: 42 });
-        expect(getActivePluginRegistry()).toBe(active);
-        expect(capturePluginRegistryLifecycleEpoch(active)).toBe(epoch);
-        expect(signal?.aborted).toBe(false);
+        expectActive();
         finish.resolve();
         await command;
         expect(output).toHaveLength(1);
@@ -141,14 +192,10 @@ describe("plugin runtime inspection", () => {
           diagnostics: [],
           configurationWarnings: [],
         });
-        expect(inspection?.database.isOpen).toBe(false);
-        expect(inspection?.disposals).toBe(1);
+        expect(inspection).toMatchObject({ disposals: 1, database: { isOpen: false } });
         expect(activeConnection?.disposals).toBe(0);
         expect(connections.map((connection) => connection.cleanups)).toEqual([0, 0]);
-        expect(readActive()).toEqual({ value: 42 });
-        expect(getActivePluginRegistry()).toBe(active);
-        expect(capturePluginRegistryLifecycleEpoch(active)).toBe(epoch);
-        expect(signal?.aborted).toBe(false);
+        expectActive();
       });
     } finally {
       finish.resolve();
@@ -216,7 +263,6 @@ describe("plugin runtime inspection", () => {
               runtime: true,
               json: true,
             });
-            expect(getActivePluginRegistry()).toBe(active);
             expect(output).toHaveLength(1);
             const parsed = JSON.parse(output[0] ?? "");
             expect(parsed[0]).toMatchObject({
@@ -224,9 +270,8 @@ describe("plugin runtime inspection", () => {
             });
           }
           expect(getActivePluginRegistry()).toBe(active);
-          expect(fixture.connection().disposals).toBe(1);
+          expect(fixture.connection()).toMatchObject({ disposals: 1, cleanups: 0 });
           expect(fixture.connection().database.isOpen).toBe(false);
-          expect(fixture.connection().cleanups).toBe(0);
           expect(fixture.state.factoryCalls).toBe(0);
         });
       } finally {
@@ -301,232 +346,154 @@ describe("plugin runtime inspection", () => {
     { source: "npm", kind: undefined, mode: "ready", slots: ["contextEngine"] },
     { source: "npm", kind: "memory", mode: "disabled", slots: [] },
   ] as const)("persists first-install slots for $source ($kind, $mode)", async (testCase) => {
-    const stateDir = makePluginLoaderTempDir();
-    const configPath = path.join(stateDir, "openclaw.json");
-    await withEnvAsync(stateEnv(stateDir), async () => {
-      useNoBundledPlugins();
-      await writeConfigFile({});
-      await withPluginLifecycleLease({}, async () => {
-        const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-        // Warm the same empty operation inventory that precedes installer publication.
-        loadPluginMetadataSnapshot({ allowCurrent: false, config: snapshot.config });
-        const pluginId = "first-slot-candidate";
-        const pluginDir =
-          testCase.source === "npm"
-            ? path.join(stateDir, "npm", "projects", pluginId, "node_modules", pluginId)
-            : path.join(stateDir, "extensions", pluginId);
-        fs.mkdirSync(pluginDir, { recursive: true });
-        writeJson(pluginDir, "package.json", {
-          name: pluginId,
-          version: "1.0.0",
-          openclaw: { extensions: ["./index.cjs"] },
-        });
-        writeJson(pluginDir, "openclaw.plugin.json", {
-          id: pluginId,
-          kind: testCase.kind,
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
-        });
-        fs.writeFileSync(
-          path.join(pluginDir, "index.cjs"),
-          `module.exports = { id: ${JSON.stringify(pluginId)}, kind: ${JSON.stringify(testCase.kind ?? "context-engine")}, register() { require("node:fs").writeFileSync(${JSON.stringify(path.join(pluginDir, "registered"))}, "registered"); } };\n`,
-        );
+    await withInstallLease(async (prepared, stateDir, configPath) => {
+      const pluginId = "first-slot-candidate";
+      const pluginDir =
+        testCase.source === "npm"
+          ? path.join(stateDir, "npm", "projects", pluginId, "node_modules", pluginId)
+          : path.join(stateDir, "extensions", pluginId);
+      writePackage(
+        pluginDir,
+        pluginId,
+        { kind: testCase.kind },
+        {
+          "index.cjs": `module.exports = { id: ${JSON.stringify(pluginId)}, kind: ${JSON.stringify(testCase.kind ?? "context-engine")}, register() { require("node:fs").writeFileSync(${JSON.stringify(path.join(pluginDir, "registered"))}, "registered"); } };\n`,
+        },
+      );
 
-        const next = await persistPluginInstall({
-          snapshot: {
-            config: snapshot.config,
-            baseHash: snapshot.hash ?? undefined,
-            writeOptions,
-          },
-          pluginId,
-          install: { source: testCase.source, installPath: pluginDir, version: "1.0.0" },
-          enable: testCase.mode !== "disabled",
-        });
-        expect(fs.existsSync(path.join(pluginDir, "registered"))).toBe(false);
+      const next = await persistPluginInstall({
+        snapshot: installSnapshot(prepared),
+        pluginId,
+        install: { source: testCase.source, installPath: pluginDir, version: "1.0.0" },
+        enable: testCase.mode !== "disabled",
+      });
+      expect(fs.existsSync(path.join(pluginDir, "registered"))).toBe(false);
 
-        const expectedSlots = testCase.slots.length
-          ? Object.fromEntries(testCase.slots.map((slot) => [slot, pluginId]))
-          : undefined;
-        expect(next.plugins?.slots).toEqual(expectedSlots);
-        const persisted = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        expect(persisted.plugins?.slots).toEqual(expectedSlots);
-        expect(persisted.plugins?.load?.paths).toBeUndefined();
-        expect(
-          (await readPersistedInstalledPluginIndexInstallRecordsAsync())?.[pluginId],
-        ).toMatchObject({
-          source: testCase.source,
-          installPath: pluginDir,
-        });
+      const expectedSlots = testCase.slots.length
+        ? Object.fromEntries(testCase.slots.map((slot) => [slot, pluginId]))
+        : undefined;
+      expect(next.plugins?.slots).toEqual(expectedSlots);
+      const persisted = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      expect(persisted.plugins?.slots).toEqual(expectedSlots);
+      expect(persisted.plugins?.load?.paths).toBeUndefined();
+      expect(
+        (await readPersistedInstalledPluginIndexInstallRecordsAsync())?.[pluginId],
+      ).toMatchObject({
+        source: testCase.source,
+        installPath: pluginDir,
       });
     });
   });
 
-  it.each([true])(
-    "uses replaced package metadata while preserving its old snapshot (requires config: %s)",
-    async (requiresConfig) => {
-      const stateDir = makePluginLoaderTempDir();
-      const configPath = path.join(stateDir, "openclaw.json");
+  it("uses replaced package metadata while preserving its old snapshot when config is required", async () => {
+    await withInstallState(async (stateDir, configPath) => {
       const pluginId = "same-path-candidate";
       const pluginDir = path.join(stateDir, "extensions", pluginId);
       const writeVersion = (version: "1.0.0" | "2.0.0") => {
-        fs.mkdirSync(pluginDir, { recursive: true });
-        writeJson(pluginDir, "package.json", {
-          name: pluginId,
-          version,
-          openclaw: { extensions: ["./index.cjs"] },
-        });
-        writeJson(pluginDir, "openclaw.plugin.json", {
-          id: pluginId,
+        writePackage(pluginDir, pluginId, {
           version,
           kind: version === "1.0.0" ? "context-engine" : ["context-engine", "memory"],
           configSchema:
-            version === "2.0.0" && requiresConfig
+            version === "2.0.0"
               ? { type: "object", properties: { token: { type: "string" } }, required: ["token"] }
               : { type: "object" },
         });
-        fs.writeFileSync(
-          path.join(pluginDir, "index.cjs"),
-          "module.exports = { register() {} };\n",
-        );
       };
-      const persistVersion = (
-        version: string,
-        { snapshot, writeOptions }: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>,
-      ) =>
+      const persistVersion = (version: string, prepared: PreparedInstall) =>
         persistPluginInstall({
-          snapshot: {
-            config: snapshot.sourceConfig,
-            baseHash: snapshot.hash ?? undefined,
-            writeOptions: selectInstallMutationWriteOptions(writeOptions),
-          },
+          snapshot: installSnapshot(prepared, true),
           pluginId,
           install: { source: "path", installPath: pluginDir, version },
         });
 
-      await withEnvAsync(stateEnv(stateDir), async () => {
-        useNoBundledPlugins();
-        await writeConfigFile({});
-        writeVersion("1.0.0");
-        await withPluginLifecycleLease({}, async () => {
-          await persistVersion("1.0.0", await readConfigFileSnapshotForWrite());
-        });
-        const before = await withPluginLifecycleLease({}, async () => {
-          const prepared = await readConfigFileSnapshotForWrite();
-          const retainedSnapshot = loadPluginMetadataSnapshot({
-            allowCurrent: false,
-            config: prepared.snapshot.sourceConfig,
-          });
-          expect(prepared.snapshot.sourceConfig.plugins?.slots?.contextEngine).toBe(pluginId);
-
-          // The installer replaces this path after the operation has inspected v1.
-          writeVersion("2.0.0");
-          await persistVersion("2.0.0", prepared);
-          return retainedSnapshot;
-        });
-        const persisted = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        expect(persisted.plugins.entries[pluginId].enabled).toBe(!requiresConfig);
-        if (requiresConfig) {
-          expect(persisted.plugins.slots?.memory).toBeUndefined();
-        } else {
-          expect(persisted.plugins.slots).toEqual({ contextEngine: pluginId, memory: pluginId });
-        }
-        const index = await readPersistedInstalledPluginIndex();
-        expect(index?.installRecords[pluginId]).toMatchObject({
-          installPath: pluginDir,
-          version: "2.0.0",
-        });
-        expect(index?.plugins.find((plugin) => plugin.pluginId === pluginId)).toMatchObject({
-          packageVersion: "2.0.0",
-          enabled: !requiresConfig,
-          startup: { memory: true },
-        });
-        expect(before.byPluginId.get(pluginId)).toMatchObject({
-          version: "1.0.0",
-          kind: "context-engine",
-        });
-        expect(before.byPluginId.get(pluginId)?.configSchema).toEqual({ type: "object" });
+      writeVersion("1.0.0");
+      await withPluginLifecycleLease({}, async () => {
+        await persistVersion("1.0.0", await readConfigFileSnapshotForWrite());
       });
-    },
-  );
+      const before = await withPluginLifecycleLease({}, async () => {
+        const prepared = await readConfigFileSnapshotForWrite();
+        const retainedSnapshot = loadPluginMetadataSnapshot({
+          allowCurrent: false,
+          config: prepared.snapshot.sourceConfig,
+        });
+        expect(prepared.snapshot.sourceConfig.plugins?.slots?.contextEngine).toBe(pluginId);
+
+        // The installer replaces this path after the operation has inspected v1.
+        writeVersion("2.0.0");
+        await persistVersion("2.0.0", prepared);
+        return retainedSnapshot;
+      });
+      const persisted = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      expect(persisted.plugins.entries[pluginId].enabled).toBe(false);
+      expect(persisted.plugins.slots?.memory).toBeUndefined();
+      const index = await readPersistedInstalledPluginIndex();
+      expect(index?.installRecords[pluginId]).toMatchObject({
+        installPath: pluginDir,
+        version: "2.0.0",
+      });
+      expect(index?.plugins.find((plugin) => plugin.pluginId === pluginId)).toMatchObject({
+        packageVersion: "2.0.0",
+        enabled: false,
+        startup: { memory: true },
+      });
+      expect(before.byPluginId.get(pluginId)).toMatchObject({
+        version: "1.0.0",
+        kind: "context-engine",
+      });
+      expect(before.byPluginId.get(pluginId)?.configSchema).toEqual({ type: "object" });
+    });
+  });
 
   it.each(["during-import", "between-entries"] as const)(
     "rechecks install authority when it closes %s",
     async (closedAt) => {
-      const stateDir = makePluginLoaderTempDir();
-      const configPath = path.join(stateDir, "openclaw.json");
-      await withEnvAsync(stateEnv(stateDir), async () => {
-        useNoBundledPlugins();
-        await writeConfigFile({});
-        await withPluginLifecycleLease({}, async () => {
-          const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-          const previousConfig = fs.readFileSync(configPath, "utf8");
-          loadPluginMetadataSnapshot({ allowCurrent: false, config: snapshot.config });
-          const pluginId = "slot-authority-candidate";
-          const pluginDir = path.join(
-            stateDir,
-            "npm",
-            "projects",
-            pluginId,
-            "node_modules",
-            pluginId,
-          );
-          fs.mkdirSync(pluginDir, { recursive: true });
-          writeJson(pluginDir, "package.json", {
-            name: pluginId,
-            version: "1.0.0",
-            openclaw: { extensions: ["./first.cjs", "./second.cjs"] },
-          });
-          writeJson(pluginDir, "openclaw.plugin.json", {
-            id: pluginId,
-            configSchema: { type: "object" },
-          });
-          for (const [entry, kind] of [
+      await withInstallLease(async (prepared, stateDir, configPath) => {
+        const previousConfig = fs.readFileSync(configPath, "utf8");
+        const pluginId = "slot-authority-candidate";
+        const pluginDir = path.join(stateDir, "npm/projects", pluginId, "node_modules", pluginId);
+        const entries = Object.fromEntries(
+          [
             ["first", "memory"],
             ["second", "context-engine"],
-          ]) {
-            fs.writeFileSync(
-              path.join(pluginDir, `${entry}.cjs`),
-              `require("node:fs").writeFileSync(${JSON.stringify(path.join(stateDir, `${entry}.txt`))}, "imported");
+          ].map(([entry, kind]) => [
+            `${entry}.cjs`,
+            `require("node:fs").writeFileSync(${JSON.stringify(path.join(stateDir, `${entry}.txt`))}, "imported");
 module.exports = { id: ${JSON.stringify(`${pluginId}/${entry}`)}, kind: ${JSON.stringify(kind)}, register() {} };
 `,
-            );
-          }
-          let authorityActive = true;
+          ]),
+        );
+        writePackage(pluginDir, pluginId, {}, entries);
+        let authorityActive = true;
 
-          await expect(
-            persistPluginInstall({
-              snapshot: {
-                config: snapshot.config,
-                baseHash: snapshot.hash ?? undefined,
-                writeOptions,
-              },
-              pluginId,
-              install: { source: "npm", installPath: pluginDir, version: "1.0.0" },
-              beforePersistentApply() {
-                if (
-                  !authorityActive ||
-                  (closedAt === "between-entries" &&
-                    fs.existsSync(path.join(stateDir, "first.txt")))
-                ) {
-                  throw new Error("install authority closed");
-                }
-                if (closedAt === "during-import") {
-                  queueMicrotask(() => {
-                    authorityActive = false;
-                  });
-                }
-              },
-            }),
-          ).rejects.toThrow("install authority closed");
+        await expect(
+          persistPluginInstall({
+            snapshot: installSnapshot(prepared),
+            pluginId,
+            install: { source: "npm", installPath: pluginDir, version: "1.0.0" },
+            beforePersistentApply() {
+              if (
+                !authorityActive ||
+                (closedAt === "between-entries" && fs.existsSync(path.join(stateDir, "first.txt")))
+              ) {
+                throw new Error("install authority closed");
+              }
+              if (closedAt === "during-import") {
+                queueMicrotask(() => {
+                  authorityActive = false;
+                });
+              }
+            },
+          }),
+        ).rejects.toThrow("install authority closed");
 
-          expect(fs.existsSync(path.join(stateDir, "first.txt"))).toBe(
-            closedAt === "between-entries",
-          );
-          expect(fs.existsSync(path.join(stateDir, "second.txt"))).toBe(false);
-          expect(fs.readFileSync(configPath, "utf8")).toBe(previousConfig);
-          expect(
-            (await readPersistedInstalledPluginIndexInstallRecordsAsync())?.[pluginId],
-          ).toBeUndefined();
-        });
+        expect(fs.existsSync(path.join(stateDir, "first.txt"))).toBe(
+          closedAt === "between-entries",
+        );
+        expect(fs.existsSync(path.join(stateDir, "second.txt"))).toBe(false);
+        expect(fs.readFileSync(configPath, "utf8")).toBe(previousConfig);
+        expect(
+          (await readPersistedInstalledPluginIndexInstallRecordsAsync())?.[pluginId],
+        ).toBeUndefined();
       });
     },
   );
@@ -542,12 +509,7 @@ if (api.registrationMode === "tool-discovery") {
 }`,
     });
     const stateDir = makePluginLoaderTempDir();
-    const config = {
-      plugins: {
-        load: { paths: [plugin.file] },
-        allow: [plugin.id],
-      },
-    };
+    const config = { plugins: { load: { paths: [plugin.file] }, allow: [plugin.id] } };
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       useNoBundledPlugins();
@@ -633,13 +595,11 @@ it("preserves the diagnostics projection failure after best-effort instance clea
     const { id, event, config, disposed } = createDiagnosticsFixture(state, true);
     const before = process.listenerCount(event);
     const projectionError = new Error("fixture projection rejected");
-    const failure = await withPluginDiagnosticsReport(
-      { config, env: state.env, onlyPluginIds: [id] },
-      () => {
+    await expect(
+      withPluginDiagnosticsReport({ config, env: state.env, onlyPluginIds: [id] }, () => {
         throw projectionError;
-      },
-    ).catch((error: unknown) => error);
-    expect(failure).toBe(projectionError);
+      }),
+    ).rejects.toBe(projectionError);
     expect(process.listenerCount(event)).toBe(before);
     expect(fs.readFileSync(disposed, "utf8")).toBe("disposed\n");
   });

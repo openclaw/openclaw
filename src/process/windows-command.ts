@@ -1,4 +1,3 @@
-// Windows command helpers resolve executable and shell invocation details.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -71,7 +70,7 @@ function resolveWindowsCommandFromCwdOrPath(params: {
       { includeExtensionless: false },
     );
   }
-  const cwd = params.cwd?.trim() || process.cwd();
+  const cwd = params.cwd && params.cwd.trim() ? params.cwd : process.cwd();
   const pathValue =
     resolveEnvironmentValue(params.env, "PATH") ??
     resolveEnvironmentValue(process.env, "PATH") ??

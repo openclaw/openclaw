@@ -57,11 +57,9 @@ export function createProviderReplaySessionState(sessionManager: SessionManager)
       async appendCustomEntryAsync(customType: string, data: unknown) {
         assertCurrent();
         const append = () => sessionManager.appendCustomEntryAsync(customType, data);
-        const id = await withSessionManagerWriteAssertion(sessionManager, assertCurrent, () =>
+        return await withSessionManagerWriteAssertion(sessionManager, assertCurrent, () =>
           target ? withSessionTranscriptWriteAssertion(target, assertCurrent, append) : append(),
         );
-        assertCurrent();
-        return id;
       },
     },
   };

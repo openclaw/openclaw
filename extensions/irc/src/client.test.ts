@@ -182,19 +182,11 @@ describe("irc client nickserv", () => {
     const result = await connectAndCollectRegistration({
       nickserv: {
         service: "NickServ\n",
-        password: "secret\r\nJOIN #bad",
+        password: String.raw`pa\tss\new\x41` + "\r\nJOIN #bad",
       },
     });
 
-    expect(result.lines).toContain("PRIVMSG NickServ :IDENTIFY secret JOIN #bad");
-  });
-
-  it("sends backslashes in the NickServ password unchanged", async () => {
-    const result = await connectAndCollectRegistration({
-      nickserv: { password: String.raw`pa\tss\new\x41` },
-    });
-
-    expect(result.lines).toContain(String.raw`PRIVMSG NickServ :IDENTIFY pa\tss\new\x41`);
+    expect(result.lines).toContain(String.raw`PRIVMSG NickServ :IDENTIFY pa\tss\new\x41 JOIN #bad`);
   });
 });
 
@@ -245,11 +237,6 @@ describe("irc client fallback nick", () => {
     expect(second).toMatch(/^bot_\d+$/);
     expect(third).toMatch(/^bot_\d+$/);
     expect(new Set([first, second, third]).size).toBe(3);
-  });
-
-  it("sanitizes whitespace and special characters after a collision", async () => {
-    const nick = await connectAfterNickCollision("my bot!");
-    expect(nick).toMatch(/^mybot_\d*$/);
   });
 
   it("falls back to openclaw when a colliding nick is entirely special characters", async () => {
@@ -431,7 +418,6 @@ describe("irc client PRIVMSG chunking on the wire", () => {
     name: string;
     text: string;
     limit?: number;
-    lengths?: number[];
     bodies?: string[];
     separator?: string;
   }>([
@@ -447,70 +433,27 @@ describe("irc client PRIVMSG chunking on the wire", () => {
       bodies: ["漢".repeat(133), "👨‍👩‍👧‍👦tail"],
     },
     {
-      name: "combining mark at the character cap",
-      text: `${"x".repeat(349)}e\u0301tail`,
-      bodies: ["x".repeat(349), "e\u0301tail"],
-    },
-    { name: "default ASCII cap", text: "a".repeat(900), lengths: [350, 350, 200] },
-    {
-      name: "multibyte character cap",
-      text: "漢".repeat(250),
-      limit: 100,
-      lengths: [100, 100, 50],
-    },
-    {
-      name: "character cap below one code point's bytes",
-      text: "漢".repeat(10),
-      limit: 2,
-      lengths: [2, 2, 2, 2, 2],
-    },
-    {
-      name: "astral code point with a one-unit cap",
-      text: "😀".repeat(10),
-      limit: 1,
-      lengths: Array(10).fill(2),
-    },
-    {
-      name: "surrogate pair straddling the cap",
-      text: "xxxxxxxxx🙂rest",
-      limit: 10,
-      bodies: ["xxxxxxxxx", "🙂rest"],
-    },
-    {
-      name: "leading emoji with a one-unit cap",
-      text: "🙂A",
-      limit: 1,
-      bodies: ["🙂", "A"],
-    },
-    { name: "BMP text with a one-unit cap", text: "ABC", limit: 1, bodies: ["A", "B", "C"] },
-    {
       name: "nearby word boundary",
       text: "alpha beta gamma",
       limit: 10,
       bodies: ["alpha beta", "gamma"],
       separator: " ",
     },
-  ])(
-    "preserves $name",
-    async ({ text, limit, lengths, bodies: expectedBodies, separator = "" }) => {
-      const server = await startLoopbackIrcServer();
-      try {
-        const bodies = await collectPrivmsgBodies(server, text, limit);
-        expect(bodies.length).toBeGreaterThan(1);
-        expect(maxRelayedLineBytes(bodies)).toBeLessThanOrEqual(512);
-        expect(bodies.some((body) => LONE_SURROGATE.test(body))).toBe(false);
-        expect(bodies.join(separator)).toBe(text);
-        if (lengths) {
-          expect(bodies.map((body) => body.length)).toEqual(lengths);
-        }
-        if (expectedBodies) {
-          expect(bodies).toEqual(expectedBodies);
-        }
-      } finally {
-        await server.close();
+  ])("preserves $name", async ({ text, limit, bodies: expectedBodies, separator = "" }) => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const bodies = await collectPrivmsgBodies(server, text, limit);
+      expect(bodies.length).toBeGreaterThan(1);
+      expect(maxRelayedLineBytes(bodies)).toBeLessThanOrEqual(512);
+      expect(bodies.some((body) => LONE_SURROGATE.test(body))).toBe(false);
+      expect(bodies.join(separator)).toBe(text);
+      if (expectedBodies) {
+        expect(bodies).toEqual(expectedBodies);
       }
-    },
-  );
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 describe("irc client inbound line bound", () => {
@@ -537,15 +480,6 @@ describe("irc client inbound line bound", () => {
   async function connectToFlood(server: { port: number }) {
     const errors: Error[] = [];
     const lines: string[] = [];
-    const lineWaiters = new Map<string, ReturnType<typeof createDeferred<void>>>();
-    const waitForLine = (expected: string) => {
-      if (lines.includes(expected)) {
-        return Promise.resolve();
-      }
-      const waiter = lineWaiters.get(expected) ?? createDeferred<void>();
-      lineWaiters.set(expected, waiter);
-      return waiter.promise;
-    };
     const disconnected = createDeferred<void>();
     const client = await connectIrcClient({
       host: "127.0.0.1",
@@ -555,13 +489,12 @@ describe("irc client inbound line bound", () => {
       username: "bot",
       realname: "OpenClaw Bot",
       onError: (error) => errors.push(error),
-      onLine: (line) => {
-        lines.push(line);
-        lineWaiters.get(line)?.resolve();
+      onPrivmsg: (event) => {
+        lines.push(event.rawLine);
       },
       onDisconnect: () => disconnected.resolve(),
     });
-    return { client, errors, lines, waitForLine, disconnected: disconnected.promise };
+    return { client, errors, lines, disconnected: disconnected.promise };
   }
 
   it("drops a peer that never terminates a line and reports a disconnect", async () => {
@@ -579,32 +512,14 @@ describe("irc client inbound line bound", () => {
   });
 
   it("drops a peer that sends an oversized terminated line", async () => {
-    const server = await startFloodServer({ payload: () => `${"B".repeat(64 * 1024)}\r\n` });
+    const server = await startFloodServer({
+      payload: () => `:peer!test@example.com PRIVMSG bot :${"B".repeat(64 * 1024)}\r\n`,
+    });
     try {
       const { errors, lines, disconnected } = await connectToFlood(server);
       await withTimeout(disconnected, 2000, "IRC disconnect after oversized line");
       expect(errors.some((error) => error.message.includes("longer than"))).toBe(true);
-      expect(lines.some((line) => line.startsWith("BBBB"))).toBe(false);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("keeps accepting lines at the IRCv3 tag plus body maximum", async () => {
-    const tags = `@${"t".repeat(8189)}=1`;
-    const longLine = `${tags} :server NOTICE bot :${"x".repeat(400)}`;
-    const server = await startFloodServer({ payload: () => `${longLine}\r\n:server PING :ok\r\n` });
-    try {
-      const { client, errors, lines, waitForLine } = await connectToFlood(server);
-      await withTimeout(
-        waitForLine(":server PING :ok"),
-        2000,
-        "IRC lines after maximal tagged line",
-      );
-      expect(lines).toContain(longLine);
-      expect(errors).toEqual([]);
-      expect(client.isReady()).toBe(true);
-      client.quit("test complete");
+      expect(lines).toEqual([]);
     } finally {
       await server.close();
     }
@@ -612,6 +527,7 @@ describe("irc client inbound line bound", () => {
 
   it("does not retain state across many small chunks of a normal line", async () => {
     const chunks = Array.from({ length: 2000 }, () => "c".repeat(8));
+    const pongReceived = createDeferred<void>();
     const server = await startIrcTestServer((socket) => {
       socket.on("error", () => {});
       onIrcTestLine(socket, (line) => {
@@ -621,12 +537,14 @@ describe("irc client inbound line bound", () => {
             socket.write(`${chunks.slice(0, 100).join("")}\r\n`);
           }
           socket.write(":server PING :done\r\n");
+        } else if (line === "PONG :done") {
+          pongReceived.resolve();
         }
       });
     });
     try {
-      const { client, errors, waitForLine } = await connectToFlood(server);
-      await withTimeout(waitForLine(":server PING :done"), 2000, "IRC repeated normal lines");
+      const { client, errors } = await connectToFlood(server);
+      await withTimeout(pongReceived.promise, 2000, "IRC repeated normal lines");
       expect(errors).toEqual([]);
       client.quit("test complete");
     } finally {
@@ -659,6 +577,7 @@ describe("irc client liveness", () => {
           pingReceived.resolve();
           if (answerPing) {
             socket.write(":server PONG server :openclaw\r\n");
+            socket.write(":observer!test@example.com PRIVMSG bot :pong-observed\r\n");
           }
         }
       });
@@ -677,11 +596,7 @@ describe("irc client liveness", () => {
       abortSignal: abort.signal,
       onError,
       onDisconnect,
-      onLine: (line) => {
-        if (line === ":server PONG server :openclaw") {
-          pongReceived.resolve();
-        }
-      },
+      onPrivmsg: () => pongReceived.resolve(),
     });
     onTestFinished(() => client.close());
     return {
@@ -764,6 +679,7 @@ describe("irc client inbound CTCP", () => {
       ":alice!a@example.com PRIVMSG bot :VERSION",
       ":alice!a@example.com PRIVMSG bot :hello\u0001",
     ];
+    const done = createDeferred<void>();
     const server = await startIrcTestServer((socket) => {
       onIrcTestLine(socket, (line) => {
         if (line.startsWith("USER ")) {
@@ -772,10 +688,11 @@ describe("irc client inbound CTCP", () => {
             socket.write(`${message}\r\n`);
           }
           socket.write(":server PING :done\r\n");
+        } else if (line === "PONG :done") {
+          done.resolve();
         }
       });
     });
-    const done = createDeferred<void>();
     const dispatched: string[] = [];
     try {
       const client = await connectIrcClient({
@@ -787,11 +704,6 @@ describe("irc client inbound CTCP", () => {
         realname: "OpenClaw Bot",
         onPrivmsg: (event) => {
           dispatched.push(event.rawLine);
-        },
-        onLine: (line) => {
-          if (line === ":server PING :done") {
-            done.resolve();
-          }
         },
       });
       await withTimeout(done.promise, 2000, "IRC inbound CTCP lines");

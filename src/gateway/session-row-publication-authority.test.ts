@@ -143,6 +143,7 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
               read.state.rowContext,
             );
             const presentations = vi.spyOn(projection, "present");
+            const runViews = vi.spyOn(read.state.rowContext.subagentRuns, "atTime");
             const message = {
               role: "assistant",
               content: [{ type: "text", text: '"🦞"\n\\\ud800'.repeat(256) }],
@@ -220,6 +221,8 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
             expect(presentations).toHaveBeenCalledTimes(
               restriction === "child and swarm links" ? 2 : 1,
             );
+            expect(runViews).toHaveBeenCalledTimes(restriction === "child and swarm links" ? 2 : 1);
+            runViews.mockRestore();
             presentations.mockRestore();
           },
         );

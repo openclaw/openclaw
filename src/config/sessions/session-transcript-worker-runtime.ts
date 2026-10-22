@@ -75,7 +75,7 @@ export function runSessionBranchSummaryWorkerRequest(
 }
 
 export function isSessionHistoryWorkerCold(lane: SessionHistoryWorkerLane = historyLane): boolean {
-  return lane.pending === 0 && lane.nativeSequence <= lane.retiredSequence;
+  return lane.pending === 0 && !lane.native;
 }
 
 /** Reuse normal reader custody; repeated warmups never refresh the idle deadline. */
@@ -91,7 +91,7 @@ export async function prewarmSessionHistoryWorker(
       historyPrewarms.set(resource, prewarms);
     }
     const existing = prewarms.get(lane);
-    if (existing && (existing.pending || resource.nativeSequences.has(lane))) {
+    if (existing && (existing.pending || resource.nativeLanes.has(lane))) {
       return await existing.promise;
     }
     const prewarm: { promise: Promise<void>; pending: boolean } = {
@@ -174,7 +174,7 @@ export function retainSessionHistoryWorkerDatabase(
               // A writer ahead of this read can renew the receipt during admission.
               const validation = captureOpenClawAgentDatabaseReadValidation(
                 database,
-                owned.nativeSequences.has(requestLane) ? "retained" : "admission",
+                owned.nativeLanes.has(requestLane) ? "retained" : "admission",
               );
               return runWithSqliteDatabaseAdmissionTurn(
                 [database.path],
@@ -192,7 +192,8 @@ export function retainSessionHistoryWorkerDatabase(
                             sessionId: projection.sessionId,
                           })
                         : undefined;
-                      owned.nativeSequences.set(requestLane, ++requestLane.nativeSequence);
+                      requestLane.native = true;
+                      owned.nativeLanes.add(requestLane);
                       return {
                         ...input,
                         database,
@@ -329,7 +330,7 @@ export async function runProcessHeldHistoryTask(
     const value = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(
       await historyLane.pool.run(
         () => {
-          historyLane.nativeSequence++;
+          historyLane.native = true;
           return { kind: "cli-process-history", request };
         },
         {

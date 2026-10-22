@@ -97,7 +97,7 @@ export function readSessionCostUsageRollupRowsInDatabase(
         (budget
           ? eb
               .case()
-              .when(eb.fn<number>("length", [eb.cast("value_json", "blob")]), "<=", 64 * 1024)
+              .when(eb.fn<number>("octet_length", ["value_json"]), "<=", 64 * 1024)
               .then(eb.ref("value_json"))
               .else(null)
               .end()
@@ -119,7 +119,7 @@ export function readSessionCostUsageRollupRowsInDatabase(
           : eb.val(null)
         ).as("blob"),
         eb.fn<number>("coalesce", [eb.fn<number>("length", ["blob"]), eb.val(0)]).as("body_bytes"),
-        eb.fn<number>("length", [eb.cast("value_json", "blob")]).as("header_bytes"),
+        eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
       ])
       .where("scope", "=", ROLLUP_SCOPE);
     for (const row of iterateSqliteQuerySync(db, keys ? query.where("key", "in", keys) : query)) {
@@ -189,7 +189,7 @@ export function readSessionCostUsageRollupRowsInDatabase(
   return result;
 }
 
-export function writeSessionCostUsageRollupInDatabase(
+export function writeSessionCostUsageRollupsInDatabase(
   db: EngineConnection,
   params: {
     rollupId: string;
@@ -199,31 +199,31 @@ export function writeSessionCostUsageRollupInDatabase(
     partitions?: UsageCostPartition[];
     removedDates?: string[];
     replacePartitions?: boolean;
-  },
+  }[],
 ): boolean {
   return withSqliteDatabaseWriteScope(db, [ROLLUP_SCOPE], () => {
     const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-    if (params.partitions || params.removedDates || params.replacePartitions) {
+    if (params.some((row) => row.partitions || row.removedDates || row.replacePartitions)) {
       deleteSessionCostUsagePartitionsInDatabase(db, params);
     }
-    const rows = [
+    const rows = params.flatMap((row) => [
       {
         scope: ROLLUP_SCOPE,
-        key: params.rollupId,
-        value_json: cacheJsonText(params.valueJson),
-        blob: params.blob,
+        key: row.rollupId,
+        value_json: cacheJsonText(row.valueJson),
+        blob: row.blob,
         expires_at: null,
-        updated_at: params.updatedAt,
+        updated_at: row.updatedAt,
       },
-      ...(params.partitions ?? []).map((partition) => ({
+      ...(row.partitions ?? []).map((partition) => ({
         scope: USAGE_COST_PARTITION_SCOPE,
-        key: usageCostPartitionKey(params.rollupId, partition.date),
+        key: usageCostPartitionKey(row.rollupId, partition.date),
         value_json: partition.valueJson,
         blob: partition.blob,
         expires_at: null,
-        updated_at: params.updatedAt,
+        updated_at: row.updatedAt,
       })),
-    ];
+    ]);
     for (const batch of chunkItems(rows, 100)) {
       executeSqliteQuerySync(
         db,

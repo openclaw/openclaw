@@ -1,17 +1,130 @@
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import { acquireBoardProviderForSession, mcpAppWidgetNameForViewId } from "./provider.ts";
+import type { BoardSnapshot, BoardWidget } from "./types.ts";
+
+export function boardWidget(name: string, overrides: Partial<BoardWidget> = {}): BoardWidget {
+  return {
+    name,
+    tabId: "main",
+    contentKind: "html",
+    sizeW: 6,
+    sizeH: 4,
+    position: 0,
+    grantState: "none",
+    revision: 1,
+    ...overrides,
+  };
+}
+
+export function boardSnapshot(
+  sessionKey: string,
+  revision = 1,
+  overrides: Partial<BoardSnapshot> = {},
+): BoardSnapshot {
+  return { sessionKey, revision, tabs: [], widgets: [], ...overrides };
+}
+
+export const mainTab = { tabId: "main", title: "Main", position: 0, chatDock: "right" as const };
+
+export function boardClient(request: GatewayRequestHandler) {
+  let listener: ((event: GatewayEventFrame) => void) | undefined;
+  return {
+    request: request as never,
+    addEventListener(next: (event: GatewayEventFrame) => void) {
+      listener = next;
+      return () => {};
+    },
+    emit(event: string, payload: unknown) {
+      listener?.({ type: "event", event, payload });
+    },
+  };
+}
+
+export const capabilities = {
+  canMutate: true,
+  canGrant: true,
+  canPinWidgets: true,
+  canPinMcpApps: true,
+};
+export const noCapabilities = {
+  canMutate: false,
+  canGrant: false,
+  canPinWidgets: false,
+  canPinMcpApps: false,
+};
+
+export function acquireLease(
+  session: Parameters<typeof acquireBoardProviderForSession>[0],
+  client: Parameters<typeof acquireBoardProviderForSession>[1],
+  { canMutate = true, canGrant = true, canPinWidgets = true, canPinMcpApps = true } = {},
+  scope?: object,
+) {
+  return acquireBoardProviderForSession(
+    session,
+    client,
+    true,
+    canPinWidgets,
+    canPinMcpApps,
+    canMutate,
+    canGrant,
+    scope,
+  );
+}
 
 export function registerBoardProviderLeaseCases(): void {
+  it("retains same-owner reconnect data but isolates replacement identity from retiring board leases", async () => {
+    const session = { sessionKey: "agent:main:presentation-owner" };
+    const initial = { ...session, revision: 1, tabs: [], widgets: [] };
+    const refreshed = createDeferred<typeof initial>();
+    const request = createGatewayRequestMock()
+      .mockResolvedValueOnce(initial)
+      .mockReturnValue(refreshed.promise);
+    const client = createTestGatewayClient(request);
+    const firstScope = {};
+    const first = acquireLease(session, client, {}, firstScope);
+    const retiring = acquireLease(session, client, {}, firstScope);
+    let replacement: ReturnType<typeof acquireBoardProviderForSession> | undefined;
+    try {
+      await vi.waitFor(() => expect(first.provider.snapshot$.value.revision).toBe(1));
+      expect(retiring.provider.snapshot$).toBe(first.provider.snapshot$);
+      first.update(client, false, capabilities);
+      expect(first.provider.snapshot$.value.revision).toBe(1);
+      expect(first.provider.canMutate).toBe(false);
+      await expect(first.provider.applyOps([])).rejects.toThrow("mutation unavailable");
+      first.update(client, true, capabilities);
+      expect(first.provider.snapshot$.value.revision).toBe(1);
+
+      replacement = acquireLease(session, client, {}, {});
+      expect(replacement.provider.hasLoadedSnapshot).toBe(false);
+      expect(replacement.provider.snapshot$.value.revision).toBe(0);
+      expect(first.provider.canMutate).toBe(false);
+      expect(retiring.provider.canGrant).toBe(false);
+      await expect(retiring.provider.applyOps([])).rejects.toThrow("mutation unavailable");
+      retiring.update(client, true, capabilities);
+      refreshed.resolve({ ...initial, revision: 2 });
+      await vi.waitFor(() => expect(replacement!.provider.snapshot$.value.revision).toBe(2));
+      expect(retiring.provider.snapshot$.value.revision).toBe(1);
+      first.release();
+      retiring.release();
+      expect(replacement.provider.canMutate).toBe(true);
+      expect(request).not.toHaveBeenCalledWith("board.update", expect.anything());
+    } finally {
+      first.release();
+      retiring.release();
+      replacement?.release();
+    }
+  });
+
   it("keeps retired gateway clients from rolling back shared board leases", async () => {
     const sessionKey = "agent:main:monotonic-board-lease";
-    const capabilities = {
-      canPinWidgets: true,
-      canPinMcpApps: true,
-      canMutate: true,
-      canGrant: true,
-    };
     const createClient = (revision: number) => {
       const snapshot = { sessionKey, revision, tabs: [], widgets: [] };
       const requests = vi.fn(async () => snapshot);
@@ -94,12 +207,8 @@ export function registerBoardProviderLeaseCases(): void {
         request: vi.fn(async () => snapshot) as never,
         addEventListener: vi.fn(() => removeListener),
       };
-      const acquireChat = () =>
-        acquireBoardProviderForSession({ sessionKey }, client, true, true, true, true, true);
-      const acquireDashboard = () =>
-        acquireBoardProviderForSession({ sessionKey }, client, true, false, false, false, false);
-      const first = acquireDashboard();
-      const second = acquireChat();
+      const first = acquireLease({ sessionKey }, client, noCapabilities);
+      const second = acquireLease({ sessionKey }, client);
       const chat = second;
       const dashboard = first;
 
@@ -109,18 +218,8 @@ export function registerBoardProviderLeaseCases(): void {
         expect(chat.provider).not.toBe(dashboard.provider);
         expect(chat.provider.snapshot$).toBe(dashboard.provider.snapshot$);
         expect(chat.provider.events).toBe(dashboard.provider.events);
-        expect(chat.provider).toMatchObject({
-          canPinWidgets: true,
-          canPinMcpApps: true,
-          canMutate: true,
-          canGrant: true,
-        });
-        expect(dashboard.provider).toMatchObject({
-          canPinWidgets: false,
-          canPinMcpApps: false,
-          canMutate: false,
-          canGrant: false,
-        });
+        expect(chat.provider).toMatchObject(capabilities);
+        expect(dashboard.provider).toMatchObject(noCapabilities);
         expect(client.request).toHaveBeenCalledOnce();
         expect(client.addEventListener).toHaveBeenCalledOnce();
 
@@ -160,52 +259,20 @@ export function registerBoardProviderLeaseCases(): void {
 
   it("enforces write and approval scopes separately for concurrent board leases", async () => {
     const sessionKey = "agent:main:independent-board-scopes";
-    const snapshot = {
-      sessionKey,
-      revision: 1,
-      tabs: [
-        {
-          tabId: "main",
-          title: t("chat.board.defaultTab"),
-          position: 0,
-          chatDock: "right" as const,
-        },
-      ],
-      widgets: [
-        {
-          name: "pending-widget",
-          tabId: "main",
-          contentKind: "html" as const,
-          sizeW: 6,
-          sizeH: 4,
-          position: 0,
-          grantState: "pending" as const,
-          revision: 1,
-        },
-      ],
-    };
+    const snapshot = boardSnapshot(sessionKey, 1, {
+      tabs: [{ ...mainTab, title: t("chat.board.defaultTab") }],
+      widgets: [boardWidget("pending-widget", { grantState: "pending" })],
+    });
     const client = {
       request: vi.fn(async () => snapshot) as never,
       addEventListener: vi.fn(() => () => {}),
     };
-    const writer = acquireBoardProviderForSession(
-      { sessionKey },
-      client,
-      true,
-      true,
-      true,
-      true,
-      false,
-    );
-    const approver = acquireBoardProviderForSession(
-      { sessionKey },
-      client,
-      true,
-      false,
-      false,
-      false,
-      true,
-    );
+    const writer = acquireLease({ sessionKey }, client, { canGrant: false });
+    const approver = acquireLease({ sessionKey }, client, {
+      canPinWidgets: false,
+      canPinMcpApps: false,
+      canMutate: false,
+    });
 
     try {
       await vi.waitFor(() => expect(writer.provider.snapshot$.value).toEqual(snapshot));

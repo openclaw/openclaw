@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asNonNegativeFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { resolvePositiveTimeoutSeconds } from "openclaw/plugin-sdk/provider-web-fetch";
+import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { resolveReadOnlyEnvSecretRef } from "openclaw/plugin-sdk/secret-ref-readonly";
 import {
@@ -23,22 +25,8 @@ type FirecrawlFetchConfig = {
   timeoutSeconds?: number;
 };
 
-type FirecrawlSearchConfig = Pick<FirecrawlFetchConfig, "apiKey" | "baseUrl">;
-type PluginEntryConfig =
-  | {
-      webSearch?: FirecrawlSearchConfig;
-      webFetch?: FirecrawlFetchConfig;
-    }
-  | undefined;
-
-function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSearchConfig | undefined {
-  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
-  return asOptionalRecord(pluginConfig?.webSearch);
-}
-
 function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig | undefined {
-  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
-  return asOptionalRecord(pluginConfig?.webFetch);
+  return asOptionalRecord(resolvePluginConfigObject(cfg, "firecrawl")?.webFetch);
 }
 
 function resolveConfiguredSecret(value: unknown, path: string, cfg?: OpenClawConfig) {
@@ -52,11 +40,11 @@ function resolveConfiguredSecret(value: unknown, path: string, cfg?: OpenClawCon
 }
 
 export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined {
-  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
-  const search = resolveFirecrawlSearchConfig(cfg);
+  const fetch = resolveFirecrawlFetchConfig(cfg);
+  const search = resolveProviderWebSearchPluginConfig(cfg, "firecrawl");
   const configuredCandidates: Array<{ value: unknown; path: string }> = [
     {
-      value: pluginConfig?.webFetch?.apiKey,
+      value: fetch?.apiKey,
       path: "plugins.entries.firecrawl.config.webFetch.apiKey",
     },
     {
@@ -81,7 +69,7 @@ export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined
 }
 
 export function resolveFirecrawlBaseUrl(cfg?: OpenClawConfig): string {
-  const search = resolveFirecrawlSearchConfig(cfg);
+  const search = resolveProviderWebSearchPluginConfig(cfg, "firecrawl");
   const fetch = resolveFirecrawlFetchConfig(cfg);
   const configured =
     normalizeOptionalString(search?.baseUrl) ||

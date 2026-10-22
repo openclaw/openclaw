@@ -33,6 +33,7 @@ import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { areSessionCatalogsSettled, type SessionDataInputs } from "./session-data-catalog.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import { resolveSidebarSessionSubtitle } from "./session-row-subtitle.ts";
+import { SidebarProjectionMemo, sameSidebarPresentation } from "./sidebar-projection-cache.ts";
 import { summarizeTeamSessionSlots } from "./solid/session-presentation.tsx";
 
 const SIDEBAR_CREATED_ORDER_CAP = 1_000;
@@ -54,7 +55,8 @@ type SidebarProjectionInput = {
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
   emptyGroupsMode: SidebarEmptyGroupsMode;
-  ownerFiltered: boolean;
+  /** "owner" selects exactly one owner; "involvingMe" can span several. */
+  ownerFilter: "owner" | "involvingMe" | null;
   visibleSessionLimits: ReadonlyMap<string, number>;
   sortMode: SidebarSessionSortMode;
   statusFilter: SidebarSessionStatusFilter;
@@ -113,10 +115,8 @@ type SidebarPresentationHost = Pick<
   otherAgentsHaveUnread(): boolean;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
   isSessionChildrenFullyShown(key: string): boolean;
-  querySelectorAll: HTMLElement["querySelectorAll"];
 };
 type SidebarPresentationReaders = {
-  snapshot: boolean;
   sections(): SidebarVisibleSections["sections"];
   tree(): SidebarRecentSession[];
   catalogs(): SidebarSessionCatalog[];
@@ -124,31 +124,43 @@ type SidebarPresentationReaders = {
   ownerOptions(): readonly SessionOwnerOption[];
 };
 
-/** Attention, agent-declared status, and the queued explanation are messages
- * the operator must act on; they replace a held subtitle immediately. */
-function isOperatorCriticalSubtitle(session: SidebarRecentSession): boolean {
-  return Boolean(
-    sessionAttentionSubtitle(session.attention) ||
-    session.agentStatusNote ||
-    (session.hasActiveRun && session.status === "queued"),
+function sameVisibleRows(a: readonly SidebarRecentSession[], b: readonly SidebarRecentSession[]) {
+  return (
+    a.length === b.length &&
+    a.every((row, index) => sameSidebarPresentation(row, b[index], "children"))
   );
 }
 
 export class SidebarSessionProjection {
-  constructor(private readonly now: () => number = () => Date.now()) {}
-
   // Record frame admission only; owner.updated can precede child DOM bindings.
-  private publishedSessionPresentation = "";
+  private publishedSessionPresentation: readonly unknown[] | undefined;
+  private readonly helloPresentation = new SidebarProjectionMemo<unknown>();
+  private readonly pluginPresentation = new SidebarProjectionMemo<string>();
+  private readonly rosterPresentation = new SidebarProjectionMemo<unknown>();
+  private readonly catalogPresentation = new SidebarProjectionMemo<unknown>();
+  private readonly sectionPresentation = new SidebarProjectionMemo<unknown>();
+  private readonly rowPresentation = new SidebarProjectionMemo<readonly SidebarRecentSession[]>();
+  private readonly homePresentation = new SidebarProjectionMemo<readonly SidebarRecentSession[]>();
+  private mountedCatalogRevision = 0;
   private admittedPresencePresentation = "";
+  private readonly mountedCatalogRows = new Set<{ key: string }>();
+
+  mountCatalogRow(key: string): () => void {
+    const row = { key };
+    this.mountedCatalogRows.add(row);
+    this.mountedCatalogRevision += 1;
+    return () => {
+      this.mountedCatalogRows.delete(row);
+      this.mountedCatalogRevision += 1;
+    };
+  }
 
   shouldPublishSessionData(
     host: SidebarPresentationHost,
     readers: SidebarPresentationReaders,
   ): boolean {
-    if (readers.snapshot) {
-      return true;
-    }
     const data = host.sessionData;
+    const context = host.sessionDataContext;
     const sessionsVisible = host.navigationView === "sessions" && !host.contextualSidebar;
     const chip = host.activeChipAgent();
     const replacement =
@@ -162,11 +174,22 @@ export class SidebarSessionProjection {
         ? rosterActivityStore(host.sessionDataContext).snapshot
         : null;
     const catalogs = host.sessionCatalogRowsVisible ? readers.catalogs() : null;
-    const catalogRowsByKey = catalogSessionRowsByKey(catalogs?.length ? readers.catalogRows() : []);
-    const presentation = JSON.stringify([
+    const tree = sessionsVisible ? readers.tree() : [];
+    const homes = [...new Set([host.expandedAgentId(), ...(roster?.agentIds ?? [])])].flatMap(
+      (id) => {
+        const row = host.mainSessionRow(id);
+        return row ? [host.projectHomeSession(row, id)] : [];
+      },
+    );
+    const presentation = [
       host.navigationView,
       host.connected,
-      host.sessionDataContext?.gateway.snapshot.hello,
+      this.helloPresentation.readRevision(
+        () => [context?.gateway.snapshot.hello, context?.gateway.snapshot.pluginCapabilities],
+        // Capability refreshes replace hello's fields while retaining its handshake identity.
+        () => context?.gateway.snapshot.hello && { ...context.gateway.snapshot.hello },
+        sameSidebarPresentation,
+      ),
       host.sessionDataContext?.agents.state.agentsList,
       host.sidebarAgentsMode === "chip" ? chip.identity : null,
       host.sidebarAgentsMode === "chip" && host.otherAgentsHaveUnread(),
@@ -177,7 +200,11 @@ export class SidebarSessionProjection {
           ])
         : null,
       host.sessionDataContext?.plugins.registryStatus,
-      host.pluginNavigation().map(({ key, value }) => [key, value]),
+      this.pluginPresentation.readRevision(
+        () => [context?.plugins, context?.plugins.revision],
+        // Plugins may mutate registered values before invalidate(); retain that public boundary.
+        () => JSON.stringify(host.pluginNavigation().map(({ key, value }) => [key, value])),
+      ),
       Boolean(replacement),
       replacement ? host.sessionDataContext?.sessions.state.result?.sessions : null,
       host.sessionDataContext?.sessions.groupsStatus(),
@@ -185,12 +212,17 @@ export class SidebarSessionProjection {
       host.sessionDataContext?.sessions.eventSubscriptionError,
       host.sessionDataContext?.sessions.state.groupSettings,
       rosterSnapshot && [
-        rosterSnapshot.cards.map(({ id, name, avatar, textAvatar }) => [
-          id,
-          name,
-          avatar,
-          textAvatar,
-        ]),
+        this.rosterPresentation.readRevision(
+          () => [rosterSnapshot.cards],
+          () =>
+            rosterSnapshot.cards.map(({ id, name, avatar, textAvatar }) => [
+              id,
+              name,
+              avatar,
+              textAvatar,
+            ]),
+          sameSidebarPresentation,
+        ),
         rosterSnapshot.loading,
         rosterSnapshot.error,
         rosterSnapshot.subscriptionError,
@@ -202,59 +234,74 @@ export class SidebarSessionProjection {
       data.sessionsResult?.hasMore,
       data.sessionMutationError,
       data.sessionCatalogRefreshStatus,
-      [...data.loadingMoreSessionCatalogIds],
-      [...data.childSessionErrorsByParent],
-      catalogs
-        ? [
-            catalogs.map(({ hosts, ...visible }) => [
-              visible,
-              catalogErrorMessages({ ...visible, hosts }),
-              hosts.some(({ nextCursor }) => Boolean(nextCursor)),
-            ]),
-            catalogs.map((catalog) =>
-              catalogSessionActivity(
-                catalog.visibleHosts.flatMap((catalogHost) => catalogHost.sessions),
-                catalogRowsByKey,
-                (row) => host.sessionDataContext?.sessions.isRunVisuallyActive(row) ?? false,
-              ),
-            ),
-            Array.from(
-              host.querySelectorAll<HTMLElement>("[data-catalog-session-key][data-session-key]"),
-              (element) => {
-                const row = catalogRowsByKey.get(element.dataset.sessionKey ?? "");
-                return row ? navigation.toSidebarSession(row) : null;
-              },
-            ),
+      data.loadingMoreSessionCatalogIds,
+      data.childSessionErrorsByParent,
+      catalogs &&
+        this.catalogPresentation.readRevision(
+          () => [
+            catalogs,
+            data.sessionsResult,
+            data.sessionResultsByAgent,
+            navigation,
+            context?.sessions.revision,
+            this.mountedCatalogRevision,
             areSessionCatalogsSettled(data),
-            [...data.visibleSessionLimits],
-          ]
-        : null,
-      [data.ownerCounts.counts && [...data.ownerCounts.counts], data.ownerCounts.error],
+            data.visibleSessionLimits,
+          ],
+          () => {
+            const catalogRowsByKey = catalogSessionRowsByKey(
+              catalogs.length ? readers.catalogRows() : [],
+            );
+            return [
+              catalogs.map(({ hosts, ...visible }) => [
+                visible,
+                catalogErrorMessages({ ...visible, hosts }),
+                hosts.some(({ nextCursor }) => Boolean(nextCursor)),
+              ]),
+              catalogs.map((catalog) =>
+                catalogSessionActivity(
+                  catalog.visibleHosts.flatMap((catalogHost) => catalogHost.sessions),
+                  catalogRowsByKey,
+                  (row) => context?.sessions.isRunVisuallyActive(row) ?? false,
+                ),
+              ),
+              Array.from(this.mountedCatalogRows, ({ key }) => {
+                const row = catalogRowsByKey.get(key);
+                return row ? navigation.toSidebarSession(row) : null;
+              }),
+              areSessionCatalogsSettled(data),
+              data.visibleSessionLimits,
+            ];
+          },
+          sameSidebarPresentation,
+        ),
+      data.ownerCounts.counts,
+      data.ownerCounts.error,
       this.admittedPresencePresentation,
-      sessionsVisible
-        ? [
-            readers.tree().map(({ children: _children, ...row }) => row),
-            sections.map(({ rows: sectionRows, ...header }) => [
-              header,
-              summarizeTeamSessionSlots(sectionRows, true),
-              sectionRows.reduce((count, row) => count + (row.workspaceConflictCount ?? 0), 0),
-            ]),
-          ]
-        : null,
-      [...new Set([host.expandedAgentId(), ...(roster?.agentIds ?? [])])].map((id) => {
-        const row = host.mainSessionRow(id);
-        if (!row) {
-          return null;
-        }
-        const { children: _children, ...home } = host.projectHomeSession(row, id);
-        return home;
-      }),
-    ]);
-    if (presentation === this.publishedSessionPresentation) {
-      return false;
-    }
+      this.rowPresentation.readRevision(
+        () => tree,
+        () => tree,
+        sameVisibleRows,
+      ),
+      this.sectionPresentation.readRevision(
+        () => sections,
+        () =>
+          sections.map(({ rows, ...header }) => [
+            header,
+            summarizeTeamSessionSlots(rows, true),
+            rows.reduce((count, row) => count + (row.workspaceConflictCount ?? 0), 0),
+          ]),
+        sameSidebarPresentation,
+      ),
+      this.homePresentation.readRevision(
+        () => homes,
+        () => homes,
+        sameVisibleRows,
+      ),
+    ];
+    const changed = !sameSidebarPresentation(presentation, this.publishedSessionPresentation);
     this.publishedSessionPresentation = presentation;
-    return true;
+    return changed;
   }
 
   samePresence(
@@ -511,8 +558,10 @@ export class SidebarSessionProjection {
 
     const { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds } = input;
     const hideEmptyGroups =
-      input.emptyGroupsMode === "always" ||
-      (input.emptyGroupsMode === "filtering" && input.ownerFiltered);
+      input.listLoaded &&
+      (input.emptyGroupsMode === "always" ||
+        (input.emptyGroupsMode === "filtering" &&
+          (input.ownerFilter !== null || input.statusFilter !== "all")));
     const sections =
       input.sections ??
       groupSidebarSessionRows(input.rows, {
@@ -539,11 +588,19 @@ export class SidebarSessionProjection {
     // preference is deliberately inert here; it re-applies once a peer returns.
     // Flat mode ("none") holds every native row, so its "Other" label would
     // lie; it stays headerless even beside catalog sections.
+    // With one owner selected, Person grouping yields that owner's section;
+    // its header repeats the owner filter, so its rows render inline.
+    const soloOwnerSectionId =
+      input.grouping === "person" && input.ownerFilter === "owner"
+        ? sections.find((section) => section.id.startsWith("person:"))?.id
+        : undefined;
     const ungroupedHasPeerHeader =
       input.grouping !== "none" &&
       sections.some(
         (section) =>
-          section.id !== "ungrouped" && (section.id !== "work" || section.rows.length > 0),
+          section.id !== "ungrouped" &&
+          section.id !== soloOwnerSectionId &&
+          (section.id !== "work" || section.rows.length > 0),
       );
     const visibleRows: SidebarRecentSession[] = [];
     const limitedSections: SidebarVisibleSections["sections"] = [];
@@ -552,7 +609,9 @@ export class SidebarSessionProjection {
       // checks must not mistake a page-filtered section for an empty one.
       const totalRowCount = section.rows.length;
       const renderHeader =
-        !section.id.startsWith("agent:") && (section.id !== "ungrouped" || ungroupedHasPeerHeader);
+        !section.id.startsWith("agent:") &&
+        section.id !== soloOwnerSectionId &&
+        (section.id !== "ungrouped" || ungroupedHasPeerHeader);
       const collapsed =
         (renderHeader || section.id.startsWith("agent:")) &&
         input.collapsedSections.has(section.id);
@@ -663,12 +722,18 @@ export class SidebarSessionProjection {
       return;
     }
     const held = this.heldSubtitles.get(session.key);
-    const now = this.now();
+    const now = Date.now();
     const replacing = held !== undefined && held.value.subtitle !== value.subtitle;
+    // Attention, agent-declared status, and the queued explanation require
+    // action; they replace a held subtitle immediately.
     if (
       replacing &&
       now - held.shownAt < SIDEBAR_SUBTITLE_MIN_DISPLAY_MS &&
-      !isOperatorCriticalSubtitle(session)
+      !(
+        sessionAttentionSubtitle(session.attention) ||
+        session.agentStatusNote ||
+        (session.hasActiveRun && session.status === "queued")
+      )
     ) {
       this.subtitleDeadline = Math.min(
         this.subtitleDeadline,

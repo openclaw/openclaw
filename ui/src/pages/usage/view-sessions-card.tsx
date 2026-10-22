@@ -1,12 +1,13 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { For, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
+import { AgentRowChip } from "../../components/agent-row-chip.tsx";
+import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { SettingsSection, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
 import { formatAnalysisCost, formatUsageTokens } from "./metrics.ts";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
-import { SessionBarRow } from "./view-session-row.tsx";
 
 const SESSION_SORT_OPTIONS = [
   { value: "cost", labelKey: "usage.metrics.cost" },
@@ -77,7 +78,6 @@ export function SessionsCard(props: {
           <SettingsSegmented
             mode="buttons"
             variant="accent"
-            ariaPressed={false}
             class="small"
             value={props.usage.display.sessionsTab}
             onChange={(tab) => props.usage.callbacks.display.onChange({ sessionsTab: tab })}
@@ -215,13 +215,13 @@ function SessionRows(props: {
   return (
     <For each={props.sessions} keyed={(session) => session.key}>
       {(session) => {
-        const label = createMemo(() => {
+        const label = () => {
           const raw = session().label || session().key;
           // Agent session keys often include a token query param; remove it for readability.
           return raw.startsWith("agent:") && raw.includes("?token=")
             ? raw.slice(0, raw.indexOf("?token="))
             : raw;
-        });
+        };
         const meta = createMemo(() => {
           i18nRevision();
           return buildSessionMeta(session());
@@ -233,16 +233,71 @@ function SessionRows(props: {
             ? formatUsageTokens(usage?.totalTokens ?? 0, usage?.usageReport)
             : formatAnalysisCost(usage?.totalCost ?? 0, usage?.usageReport);
         });
+        const copyIdentity = createMemo(() => ({ label: label() }), {
+          equals: (previous, next) => previous.label === next.label,
+        });
+        const onSelect = (event: MouseEvent) =>
+          props.onSelect(session().key, event.shiftKey, orderedKeys());
         return (
-          <SessionBarRow
-            sessionKey={session().key}
-            displayLabel={label()}
-            meta={meta()}
-            agentId={session().agentId}
-            valueLabel={valueLabel()}
-            isSelected={props.selectedSessions.includes(session().key)}
-            onSelect={(event) => props.onSelect(session().key, event.shiftKey, orderedKeys())}
-          />
+          <div
+            class={[
+              "session-bar-row",
+              { selected: props.selectedSessions.includes(session().key) },
+            ]}
+            onClick={(event: MouseEvent) => {
+              if (event.target instanceof Element && event.target.closest("button")) {
+                return;
+              }
+              onSelect(event);
+            }}
+            title={session().key}
+          >
+            <button
+              type="button"
+              class="session-bar-selection"
+              aria-label={label()}
+              aria-pressed={props.selectedSessions.includes(session().key) ? "true" : "false"}
+              onClick={(event) => onSelect(event)}
+            >
+              <span class="session-bar-label">
+                <span class="session-bar-title">{label()}</span>
+                {session().agentId ? <AgentRowChip agentId={session().agentId} /> : undefined}
+                {meta().length > 0 ? (
+                  <>
+                    {" "}
+                    <span class="session-bar-meta">{meta().join(" · ")}</span>{" "}
+                  </>
+                ) : undefined}
+              </span>
+            </button>
+            <div class="session-bar-actions">
+              <Show when={copyIdentity()} keyed>
+                {(_identity) => {
+                  let labelElement!: HTMLSpanElement;
+                  return (
+                    <>
+                      {" "}
+                      <button
+                        type="button"
+                        class="btn btn--sm btn--ghost"
+                        onClick={(event: MouseEvent) => {
+                          event.stopPropagation();
+                          void handleCopyButton(event, label(), t("usage.sessions.copy"), {
+                            label: labelElement,
+                          });
+                        }}
+                      >
+                        <span ref={(element) => (labelElement = element)} data-copy-label>
+                          {t("usage.sessions.copy")}
+                        </span>
+                      </button>{" "}
+                    </>
+                  );
+                }}
+              </Show>
+              <div class="session-bar-value">{valueLabel()}</div>
+            </div>
+          </div>
         );
       }}
     </For>

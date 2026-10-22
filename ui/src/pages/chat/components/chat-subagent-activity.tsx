@@ -1,19 +1,24 @@
 import { For, Show } from "solid-js";
 import { currentThemeBranding } from "../../../app/theme-branding.ts";
-import "../../../components/elapsed-time.tsx";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { ThemeBrandIcon } from "../../../components/theme-brand-icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-subagent-activity.css";
+import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type SubagentActivityProps = {
   rows: readonly ChatSubagentActivity[];
   onOpenSubagent?: (key: string) => void;
   onOpenSession?: (key: string) => void;
   compact?: boolean;
-  /** Renders only the first rows while live activity still tracks all of them. */
+  presented?: boolean;
+  /** Limits rendering and narration subscriptions to the displayed rows. */
   limit?: number;
   turnStartedAt?: number;
 };
@@ -78,16 +83,24 @@ function SubagentActivityRow(props: SubagentActivityProps & { row: ChatSubagentA
           <Icon name="bot" />
         </span>
       </Show>
-      <span class="chat-subagent-activity__name">{props.row.label}</span>
+      <span
+        ref={createTextOverflow(() => props.row.label)}
+        class="chat-subagent-activity__name"
+        title={props.row.label}
+      >
+        {props.row.label}
+      </span>
+      <Show when={!props.compact}>
+        <span class="chat-subagent-activity__separator" aria-hidden="true">
+          ·
+        </span>
+      </Show>
       <span class="chat-subagent-activity__status">{props.row.activity || status()}</span>
       <Show when={props.compact}>
         <span class="chat-subagent-activity__elapsed-compact" aria-hidden="true">
           <Show when={props.row.status !== "queued" && props.row.session.startedAt}>
             {(startedAt) => (
-              <openclaw-elapsed-time
-                prop:startMs={startedAt()}
-                prop:endMs={props.row.session.endedAt ?? null}
-              />
+              <ElapsedTime startMs={startedAt()} endMs={props.row.session.endedAt ?? null} />
             )}
           </Show>
         </span>
@@ -112,13 +125,22 @@ function SubagentActivityRow(props: SubagentActivityProps & { row: ChatSubagentA
       <Show
         when={open()}
         fallback={
-          <div class="chat-subagent-activity__row" title={description()}>
+          <div
+            class={[
+              "chat-subagent-activity__row",
+              { "chat-subagent-activity__row--preview": Boolean(props.row.activity) },
+            ]}
+            title={description()}
+          >
             {content()}
           </div>
         }
       >
         <button
-          class="chat-subagent-activity__row"
+          class={[
+            "chat-subagent-activity__row",
+            { "chat-subagent-activity__row--preview": Boolean(props.row.activity) },
+          ]}
           type="button"
           title={description()}
           aria-label={description()}
@@ -150,7 +172,7 @@ export function SubagentActivity(props: SubagentActivityProps) {
             aria-live="off"
           >
             <span class="sr-only">{t("chat.turnElapsed")}: </span>
-            <openclaw-elapsed-time prop:startMs={props.turnStartedAt} />
+            <ElapsedTime startMs={props.turnStartedAt} />
           </span>
         </Show>
       </div>

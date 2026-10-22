@@ -273,6 +273,7 @@ export async function fetchGitHubApi(
   callerSignal?: AbortSignal,
   graphql?: { query: string; variables: Record<string, string> },
   apiBaseUrl = GITHUB_API_BASE_URL,
+  redirect: "follow" | "manual" = "follow",
 ): Promise<Response> {
   callerSignal?.throwIfAborted();
   identity?.signal?.throwIfAborted();
@@ -361,7 +362,7 @@ export async function fetchGitHubApi(
       await discardResponse(response);
       throw retained;
     }
-    if (!isGitHubApiRedirect(response.status)) {
+    if (!isGitHubApiRedirect(response.status) || redirect === "manual") {
       responseRequestScopes.set(response, { credentialScope, fetchImpl, resource });
       return response;
     }

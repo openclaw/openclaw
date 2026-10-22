@@ -92,9 +92,6 @@ export async function readDoctorGatewayOwnerLease(
   if (!reply) {
     return undefined;
   }
-  if (!reply.ok || reply.type !== "gatewayOwnerLease.read") {
-    throw new Error("Unexpected Doctor Gateway owner lease read result");
-  }
   // The recorded process may have exited while the reader and its private snapshot settled.
   return reply.lease
     ? {

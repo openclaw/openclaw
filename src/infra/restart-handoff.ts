@@ -389,20 +389,14 @@ export function readGatewayRestartHandoffSync(
 export function consumeGatewayRestartHandoffSync(opts: {
   env?: NodeJS.ProcessEnv;
   expectedPid: number;
-  now?: number;
 }): GatewayRestartHandoffConsumeResult {
   const expectedPid = asPositiveSafeInteger(opts.expectedPid) ?? null;
   if (expectedPid === null) {
     throw new Error("expectedPid must be a positive safe integer");
   }
-  const fixedNow =
-    typeof opts.now === "number" && Number.isFinite(opts.now) && opts.now >= 0
-      ? Math.floor(opts.now)
-      : undefined;
-
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const now = fixedNow ?? Date.now();
+      const now = Date.now();
       const stateDb = getNodeSqliteKysely<GatewayRestartHandoffDatabase>(db);
       const row = selectGatewayRestartHandoffRowSync(db);
       if (!row) {

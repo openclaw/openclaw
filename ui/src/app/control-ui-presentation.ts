@@ -1,4 +1,5 @@
 import { controlUiAccentInk } from "./accent-contrast.ts";
+import { controlUiDocumentHead } from "./control-ui-document-head.ts";
 
 const ACCENT_CSS_VARIABLES = [
   "--ring",
@@ -21,14 +22,14 @@ let userAccentOverride: string | undefined;
 const systemChromeRevisions = new WeakMap<HTMLElement, string>();
 
 // Project the independently rendered shell into the static document's chrome and head metadata.
-export function syncControlUiSystemChrome(paletteChanged = false): void {
+export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: boolean): void {
   if (typeof document === "undefined") {
     return;
   }
   const root = document.documentElement;
-  const chatShell = document.querySelector(".shell--chat") !== null;
-  if (root.classList.contains("control-ui-chat-shell") !== chatShell) {
-    root.classList.toggle("control-ui-chat-shell", chatShell);
+  const hasChatShell = chatShell ?? root.classList.contains("control-ui-chat-shell");
+  if (root.classList.contains("control-ui-chat-shell") !== hasChatShell) {
+    root.classList.toggle("control-ui-chat-shell", hasChatShell);
   }
   const narrow = globalThis.matchMedia?.(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
@@ -38,7 +39,7 @@ export function syncControlUiSystemChrome(paletteChanged = false): void {
       root.dataset.theme,
       root.dataset.themeMode,
       root.getAttribute("style"),
-      narrow && chatShell,
+      narrow && hasChatShell,
     ]);
   if (!paletteChanged && systemChromeRevisions.get(root) === revision()) {
     return;
@@ -46,14 +47,14 @@ export function syncControlUiSystemChrome(paletteChanged = false): void {
   const computedStyle = getComputedStyle(root);
   const pageBackground = computedStyle.getPropertyValue("--bg").trim();
   const background =
-    narrow && chatShell
+    narrow && hasChatShell
       ? computedStyle.getPropertyValue("--bg-content").trim() || pageBackground
       : pageBackground;
   if (!background) {
     return;
   }
   root.style.setProperty("--control-ui-system-chrome-background", background);
-  for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+  for (const meta of controlUiDocumentHead().themeColors) {
     meta.content = background;
     meta.removeAttribute("media");
   }

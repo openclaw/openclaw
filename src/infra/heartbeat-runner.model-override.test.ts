@@ -3,6 +3,7 @@ import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey } from "../config/sessions.js";
 import type { HeartbeatConfig } from "./heartbeat-config.js";
+import { bindHeartbeatReply } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
@@ -28,6 +29,7 @@ async function replyOptions(
   } = {},
 ) {
   return withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+    bindHeartbeatReply(replySpy);
     const agentId = params.perAgent ? "ops" : "main";
     const cfg: OpenClawConfig = {
       agents: {
@@ -64,7 +66,6 @@ async function replyOptions(
       agentId,
       sessionKey,
       ...params.wake,
-      deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0 },
     });
     expect(replySpy, JSON.stringify(result)).toHaveBeenCalledOnce();
     const [ctx, options, passedConfig] = replySpy.mock.calls[0]!;

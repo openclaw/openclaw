@@ -1,8 +1,17 @@
 // Slack tests cover errors plugin behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formatSlackError } from "./errors.js";
 
 describe("formatSlackError", () => {
+  it.each([
+    { code: "synthetic_error", expected: "code: synthetic_error", serializations: 0 },
+    { code: undefined, expected: "{}", serializations: 1 },
+  ])("serializes only when diagnostics need a fallback ($expected)", (testCase) => {
+    const toJSON = vi.fn(() => ({}));
+    expect(formatSlackError({ code: testCase.code, toJSON })).toBe(testCase.expected);
+    expect(toJSON).toHaveBeenCalledTimes(testCase.serializations);
+  });
+
   it("formats missing and unserializable values with fallback text", () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;

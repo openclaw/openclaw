@@ -1,4 +1,4 @@
-import { createEffect, createMemo, onCleanup, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -23,7 +23,7 @@ type AgentSelectProps = {
   disabled: boolean;
   variant: "default" | "compact";
   onSelect: (value: string) => void;
-  onCreateAgent: (() => void) | null;
+  focusTargetsRef?: (readTargets: () => readonly HTMLElement[]) => void;
 };
 export type AgentSelectElement = SolidBridgeElement<AgentSelectProps>;
 defineSolidBridge<AgentSelectProps>(
@@ -40,7 +40,7 @@ defineSolidBridge<AgentSelectProps>(
     const label = () => triggerOption()?.label ?? (props.placeholder || t("agents.noAgents"));
     const accessibleLabel = () => [label(), selected()?.badge].filter(Boolean).join(", ");
     const loader = createIdentityAvatars();
-    onCleanup(loader.connect());
+    onSettled(() => loader.connect());
     const avatarSource = projectOwner(loader, (owner) => owner);
     const avatars = createMemo(() => {
       const current = triggerOption();
@@ -91,8 +91,8 @@ defineSolidBridge<AgentSelectProps>(
         </Show>
       );
     }
-    const items = createMemo<readonly MenuItem[]>(() => [
-      ...props.options.map((option) => ({
+    const items = createMemo<readonly MenuItem[]>(() =>
+      props.options.map((option) => ({
         id: `option:${option.value}`,
         label: [option.label, option.description, option.badge].filter(Boolean).join(", "),
         class: "agent-select__option",
@@ -130,44 +130,17 @@ defineSolidBridge<AgentSelectProps>(
             option.value === props.value && !props.disabled && !option.disabled ? "" : undefined,
         },
       })),
-      ...(props.onCreateAgent
-        ? [
-            {
-              id: "create-agent",
-              label: t("custodian.newAgent"),
-              class: "agent-select__option",
-              disabled: props.disabled,
-              icon: (
-                <span class="agent-select__footer-icon" aria-hidden="true">
-                  <Icon name="users" />
-                </span>
-              ),
-              content: (
-                <>
-                  <Show when={props.options.length > 0}>
-                    <span class="agent-select__separator" role="separator" />
-                  </Show>
-                  <span class="agent-select__option-label">{t("custodian.newAgent")}</span>
-                </>
-              ),
-              attributes: { "data-create-agent": "" },
-            },
-          ]
-        : []),
-    ]);
-    createEffect(
-      () => props.disabled,
-      (disabled) => {
-        if (disabled) {
-          menu?.close();
-        }
-      },
     );
     return (
       <Menu
         id={id}
         ref={(handle) => {
           menu = handle;
+          props.focusTargetsRef?.(() => {
+            const elements = handle.itemElements();
+            const trigger = handle.overlay.trigger;
+            return trigger ? [trigger, ...elements] : elements;
+          });
         }}
         class={props.variant === "compact" ? "agent-select agent-select--compact" : "agent-select"}
         panelClass="agent-select__menu"
@@ -177,13 +150,15 @@ defineSolidBridge<AgentSelectProps>(
             ? `${props.accessibleLabel}: ${accessibleLabel()}`
             : accessibleLabel()
         }
-        disabled={props.disabled || (props.options.length === 0 && !props.onCreateAgent)}
+        disabled={props.disabled || props.options.length === 0}
         items={items()}
         placement="bottom-start"
         onAfterShow={() => {
           const surface = menu?.overlay.surface;
-          const option = surface?.querySelector<HTMLElement>(":focus");
-          if (surface && option) {
+          const root = surface?.getRootNode();
+          const option =
+            root instanceof ShadowRoot ? root.activeElement : surface?.ownerDocument.activeElement;
+          if (surface && option instanceof HTMLElement && surface.contains(option)) {
             revealInScrollRegion(surface, option);
           }
         }}
@@ -203,15 +178,9 @@ defineSolidBridge<AgentSelectProps>(
           if (props.disabled) {
             return;
           }
-          if (item.id === "create-agent") {
-            props.onCreateAgent?.();
-          } else {
-            const picked = props.options.find(
-              (candidate) => `option:${candidate.value}` === item.id,
-            );
-            if (picked && picked.value !== props.value) {
-              props.onSelect(picked.value);
-            }
+          const picked = props.options.find((candidate) => `option:${candidate.value}` === item.id);
+          if (picked && picked.value !== props.value) {
+            props.onSelect(picked.value);
           }
         }}
       >
@@ -232,7 +201,7 @@ defineSolidBridge<AgentSelectProps>(
       disabled: { default: false, attribute: false },
       variant: { default: "default", attribute: false },
       onSelect: { default: () => {}, attribute: false },
-      onCreateAgent: { default: null, attribute: false },
+      focusTargetsRef: { default: undefined, attribute: false },
     },
   },
 );

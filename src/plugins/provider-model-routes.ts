@@ -113,6 +113,7 @@ function projectConfiguredModelRoute(model: ModelDefinitionConfig): ProviderMode
 /** Captures one provider artifact and config view for repeated row resolution. */
 export function createProviderModelRoutesResolver(params: {
   provider: string;
+  capability?: string;
   config?: OpenClawConfig;
   env?: Readonly<Record<string, string | undefined>>;
   requestTransportOverrides?: ProviderRouteOverridePresence;
@@ -192,6 +193,7 @@ export function createProviderModelRoutesResolver(params: {
     return (
       resolveModelRoutes({
         provider,
+        ...(params.capability ? { capability: params.capability } : {}),
         ...(modelId ? { modelId } : {}),
         requestTransportOverrides,
         ...(configuredModel ? { configuredModel: configuredModel.route } : {}),
@@ -207,6 +209,7 @@ export function createProviderModelRoutesResolver(params: {
 /** Resolves one model route through its bundled provider public artifact. */
 export function resolveProviderModelRoutes(params: {
   provider: string;
+  capability?: string;
   modelId?: string;
   api?: ModelApi | null;
   baseUrl?: unknown;

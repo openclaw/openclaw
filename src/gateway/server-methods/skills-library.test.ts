@@ -362,6 +362,52 @@ describe("skill library retained support files", () => {
 });
 
 describe("session skill library projection and activation", () => {
+  it.each(["pins", "plugin ownership"])(
+    "does not disclose a selected revision after %s changes during its file read",
+    async (change) => {
+      const { alice, actor, cfg, call } = retainedFilesHarness();
+      setRuntimeConfigSnapshot(cfg);
+      const saved = await saveSkillLibrary(actor(alice.id), {
+        slug: "selected-revision",
+        content,
+        expectedRevision: null,
+      });
+      const key = "agent:main:selected-revision";
+      const scope = { agentId: "main", sessionKey: key };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "selected-revision",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: alice.id },
+        skillLibrarySelections: await seedSkillLibrarySelection(actor(alice.id)),
+      });
+      const readManifest = libraryBundle.readSkillLibraryManifestTree;
+      using manifest = vi
+        .spyOn(libraryBundle, "readSkillLibraryManifestTree")
+        .mockImplementation(async (...args) => {
+          const files = await readManifest(...args);
+          await patchSessionEntryCore(scope, () =>
+            change === "pins"
+              ? { skillLibrarySelections: [] }
+              : { pluginOwnerId: "replacement-plugin" },
+          );
+          return files;
+        });
+      const response = await call("skills.library.read", {
+        sessionKey: key,
+        skillId: saved.entry.skillId,
+        revision: saved.entry.revision,
+      });
+      expect(manifest).toHaveBeenCalledOnce();
+      expect(loadSessionEntry(scope)).toMatchObject(
+        change === "pins"
+          ? { skillLibrarySelections: [] }
+          : { pluginOwnerId: "replacement-plugin" },
+      );
+      expect(response[0]).toBe(false);
+      expect(response[1]).toBeUndefined();
+    },
+  );
+
   it.each(["success", "missing session", "invalid selection"])(
     "releases activation authorization after %s",
     async (outcome) => {

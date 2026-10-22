@@ -16,6 +16,149 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat waiting on subagents" });
 
 suite.define(() => {
+  it("streams inline narration without opening children and uses the available title width", async () => {
+    const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactParent
+      ? createControlUiE2eArtifactDir("subagent-inline-preview", artifactParent)
+      : undefined;
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1000, height: 900 } },
+      async ({ page }) => {
+        const now = Date.now();
+        await page.clock.setFixedTime(now);
+        await page.addInitScript(
+          ({ key }) => {
+            localStorage.setItem(key, JSON.stringify({ themeMode: "dark", navCollapsed: true }));
+          },
+          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
+        );
+        const parent = {
+          key: "agent:main:dependency-update",
+          sessionId: "dependency-update",
+          kind: "direct",
+          label: "Update dependencies",
+          status: "running",
+          hasActiveRun: true,
+          activeRunIds: ["parent-run"],
+          hasActiveSubagentRun: true,
+          startedAt: now - 60_000,
+        } satisfies GatewaySessionRow;
+        const titles = [
+          "Update Apple Android and Ruby dependencies",
+          "Update Rust and Go dependencies",
+          "Update standalone npm and CI dependency pins",
+          "Migrate upgraded TypeScript native API imports",
+        ];
+        const children = titles.map(
+          (label, index) =>
+            ({
+              key: "agent:main:subagent:dependency-" + index,
+              sessionId: "dependency-" + index,
+              kind: "direct",
+              classification: "subagent",
+              label,
+              status: "running",
+              hasActiveRun: true,
+              activeRunIds: ["child-run-" + index],
+              parentSessionKey: parent.key,
+              spawnedBy: parent.key,
+              createdAt: now - 50_000 + index,
+              startedAt: now - 50_000 + index,
+            }) satisfies GatewaySessionRow,
+        );
+        const gateway = await installMockGateway(page, {
+          sessionKey: parent.key,
+          sessions: [{ ...parent, childSessions: children.map((child) => child.key) }, ...children],
+          historyMessages: [
+            {
+              role: "user",
+              content: "Update the dependencies and verify compatibility.",
+              timestamp: now - 60_000,
+            },
+            {
+              role: "assistant",
+              content: "I am checking each dependency group in parallel.",
+              timestamp: now - 55_000,
+              __openclaw: { id: "delegation", seq: 2, runId: "parent-run" },
+            },
+          ],
+          inFlightRun: { runId: "parent-run", startedAt: parent.startedAt },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
+        const pane = page.locator(".chat-pane-cache__pane--active");
+        const activity = pane.locator(".chat-subagent-activity").first();
+        const rows = activity.locator(".chat-subagent-activity__row");
+        await expect.poll(() => rows.count()).toBe(4);
+        const capture = async (name: string) => {
+          if (!artifactDir) {
+            return;
+          }
+          const frame = await takeControlUiScreenshotFrame(page, pane, [activity], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(artifactDir, name), frame.png);
+        };
+        await capture("initial-wide.png");
+        const untruncatedTitles = () =>
+          rows
+            .locator(".chat-subagent-activity__name")
+            .evaluateAll((names) =>
+              names.every((name) => name.scrollWidth <= name.clientWidth + 1),
+            );
+        expect(await untruncatedTitles()).toBe(true);
+        await gateway.waitForRequest("sessions.messages.subscribe", {
+          match: { key: children[0]!.key, mode: "narration" },
+        });
+        const emit = (text: string, runId = "child-run-0") =>
+          gateway.emitGatewayEvent("session.narration", {
+            sessionKey: children[0]!.key,
+            agentId: "main",
+            runId,
+            text,
+          });
+        await emit("Checking manifests. Verifying the Android dependency graph.");
+        await rows
+          .first()
+          .getByText("Verifying the Android dependency graph.", { exact: true })
+          .waitFor();
+        await emit("This is from an obsolete run.", "old-run");
+        expect(await rows.first().textContent()).not.toContain("obsolete");
+        await emit("Checking CocoaPods and Gradle compatibility.");
+        await rows
+          .first()
+          .getByText("Checking CocoaPods and Gradle compatibility.", { exact: true })
+          .waitFor();
+        expect(await untruncatedTitles()).toBe(true);
+        await capture("live-wide.png");
+        await page.setViewportSize({ width: 390, height: 900 });
+        await page.locator(".shell--mobile-nav").waitFor();
+        const oneLine = () =>
+          rows.evaluateAll((elements) =>
+            elements.every((row) => {
+              const name = row.querySelector(".chat-subagent-activity__name");
+              const status = row.querySelector(".chat-subagent-activity__status");
+              if (!name || !status) {
+                return false;
+              }
+              return (
+                Math.abs(name.getBoundingClientRect().top - status.getBoundingClientRect().top) <
+                  2 &&
+                row.scrollWidth <= row.clientWidth + 1 &&
+                row.getBoundingClientRect().right <= window.innerWidth
+              );
+            }),
+          );
+        await expect.poll(oneLine).toBe(true);
+        await capture("live-narrow.png");
+        for (const child of children) {
+          expect(await gateway.getRequests("chat.history", { sessionKey: child.key })).toHaveLength(
+            0,
+          );
+        }
+      },
+    );
+  });
+
   it("keeps child activity without a duplicate composer line and restores the parent's working indicator", async () => {
     const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactParent
@@ -225,31 +368,30 @@ suite.define(() => {
         expect(
           await indicator.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
-        // With no room beside the conversation the panel takes its place, and focus
-        // goes with it, also when this is the first side panel the page loads.
+        // Mobile opens the panel in its dock while keeping the conversation
+        // and the count that opened it available.
         await activePane.locator(".sidebar-region--narrow").waitFor();
         await runningCount.click();
         await panelRow.waitFor();
-        expect(await indicator.isVisible()).toBe(false);
-        await expect.poll(panelTabHasFocus).toBe(true);
+        expect(await indicator.isVisible()).toBe(true);
+        expect(await activePane.locator(".chat-mobile-host").getAttribute("data-mode")).toBe(
+          "dock",
+        );
+        await expect.poll(countHasFocus).toBe(true);
         // A subagent opened there keeps its own header, with the way back to the list.
-        await panelRow.getByRole("button", { name: "Backend implementation", exact: true }).click();
+        await panelRow.locator(".chat-subagents-mobile__open").click();
         const backToList = panel.getByRole("button", { name: "Back to Subagents", exact: true });
         await backToList.click();
         await panelRow.waitFor();
-        // Panels restores focus to its trigger; closing the last tab returns to
-        // the count that opened the panel.
+        // Closing the mobile dock returns to its opener while retaining the tab.
+        // Closing the last tab after reopening returns to that same count.
         await selectChatLayoutAction(activePane, "Minimize side panel");
         await indicator.waitFor();
-        await expect
-          .poll(() =>
-            activePane
-              .getByRole("button", { name: "Panels", exact: true })
-              .evaluate((element) => element.matches(":focus")),
-          )
-          .toBe(true);
+        await panel.waitFor({ state: "hidden" });
+        await expect.poll(countHasFocus).toBe(true);
         await runningCount.click();
-        await expect.poll(panelTabHasFocus).toBe(true);
+        await panelRow.waitFor();
+        await expect.poll(countHasFocus).toBe(true);
         await closePanel();
         await indicator.waitFor();
         await expect.poll(countHasFocus).toBe(true);
@@ -260,11 +402,13 @@ suite.define(() => {
         await panelRow.waitFor();
         expect(await indicator.isVisible()).toBe(true);
         expect(await panelTabHasFocus()).toBe(false);
-        // The same open panel replaces the conversation while the pane is narrow,
-        // and sits beside it again afterwards: nothing about that is saved.
+        // The mobile dock preserves its last closed choice across desktop use.
+        // Reopening it keeps the retained child list and desktop side panel.
         await page.setViewportSize({ width: 390, height: 900 });
         await page.locator(".shell--mobile-nav").waitFor();
-        await indicator.waitFor({ state: "hidden" });
+        await indicator.waitFor();
+        await activePane.locator(".chat-mobile-host").waitFor({ state: "hidden" });
+        await runningCount.click();
         await panelRow.waitFor();
         await page.setViewportSize({ width: 1280, height: 900 });
         await indicator.waitFor();
@@ -402,7 +546,7 @@ suite.define(() => {
         const selectedTitle = page.locator(
           ".chat-pane-cache__pane--active .chat-pane__session-title-text",
         );
-        const detailTitle = panel.locator(".chat-subagent-detail__title");
+        const detailTitle = panel.locator(".subagents-desktop__child-name");
         await activityRow.getByRole("button").click();
         await expect.poll(() => detailTitle.textContent()).toBe("Backend implementation");
         expect(await selectedTitle.textContent()).toBe("Build the implementation");
@@ -502,8 +646,8 @@ suite.define(() => {
           block
             .locator(".chat-working-indicator:not(.chat-working-indicator--subagents)")
             .locator("openclaw-elapsed-time")
-            .evaluate((element) => Reflect.get(element, "startMs"));
-        await expect.poll(requestClock).toBe(history[0]!.timestamp);
+            .textContent();
+        await expect.poll(async () => (await requestClock())?.trim()).toBe("1m 13s");
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         expect(await workingTokens()).toBe("4.1k output tokens");
         const answerText = "The backend is complete. I am reviewing the result.";
@@ -544,7 +688,7 @@ suite.define(() => {
         // runs' tokens count on its line.
         await block.getByText(answerText, { exact: true }).waitFor();
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
-        expect(await requestClock()).toBe(history[0]!.timestamp);
+        expect((await requestClock())?.trim()).toBe("1m 13s");
         await reportUsage("parent-resumed-run", 256, 3);
         await expect.poll(workingTokens).toBe("4.4k output tokens");
 

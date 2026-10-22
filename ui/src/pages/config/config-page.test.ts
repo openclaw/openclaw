@@ -17,6 +17,7 @@ import {
   resetServerUiPrefsSync,
 } from "../../app/server-prefs.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import type { WebPushSnapshot } from "../../app/web-push.ts";
 import {
   installDialogPolyfill,
   nextFrame,
@@ -26,12 +27,12 @@ import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as realtimeTalk from "../chat/talk/session.ts";
-import { extractQuickSettingsSecurity } from "./config-page-state.ts";
 import {
   mountConfigPage,
   mountConfigPageState,
   publishConfigSource,
 } from "./config-page.test-support.ts";
+import { extractQuickSettingsSecurity } from "./security.tsx";
 
 const switchActiveRealtimeTalkCameras =
   vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();
@@ -150,6 +151,63 @@ it("refreshes notification presentation from in-place owner publications", () =>
   Object.assign(context.webPush.snapshot, { loading: true });
   publishConfigSource(context.webPush);
   expect(state.configProps().webPush?.loading).toBe(true);
+});
+
+it("renders Web Push registration publications and dispatches Unsubscribe without reloading", () => {
+  const snapshot: WebPushSnapshot = {
+    supported: true,
+    canManage: true,
+    canReadPreferences: true,
+    permission: "default",
+    subscription: "unknown",
+    loading: false,
+  };
+  const run = vi.fn();
+  const webPush = { snapshot, run };
+  const context = configContext({
+    webPush,
+    runtimeConfig: { state: { connected: true } },
+  });
+  const { container } = mountConfigPage(context, { pageId: "notifications" });
+  expect(container.textContent).toContain("Checking");
+  expect(container.textContent).toContain("Not requested");
+
+  snapshot.loading = true;
+  publishConfigSource(webPush);
+  const enable = container.querySelector<HTMLButtonElement>("button.btn.primary")!;
+  expect(enable.textContent).toContain("Subscribing");
+  expect(enable.disabled).toBe(true);
+
+  const user = {
+    categories: {
+      approvalRequested: true,
+      agentFinished: true,
+      agentQuestion: true,
+      humanMentioned: true,
+      scheduledTaskFailed: true,
+    },
+    detailLevel: "private" as const,
+    quietHours: { enabled: false, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
+    agentIds: [],
+  };
+  const device = { enabled: true, label: "Settings test browser" };
+  snapshot.permission = "granted";
+  snapshot.subscription = "registered";
+  snapshot.loading = false;
+  snapshot.preferences = { durableIdentity: true, user, device, effective: { ...user, ...device } };
+  publishConfigSource(webPush);
+  expect(container.textContent).toContain("Granted");
+  expect(container.textContent).toContain("Subscribed");
+  expect(container.textContent).not.toContain("Checking");
+  expect(
+    container.querySelector<HTMLInputElement>('input[aria-label="Notification label"]')?.value,
+  ).toBe("Settings test browser");
+  const unsubscribe = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+    (button) => button.textContent?.trim() === "Unsubscribe",
+  )!;
+  expect(unsubscribe.disabled).toBe(false);
+  unsubscribe.click();
+  expect(run).toHaveBeenCalledExactlyOnceWith({ kind: "disable" });
 });
 
 it.each([
@@ -311,9 +369,8 @@ it.each([
   vi.stubGlobal("navigator", { mediaDevices: devices });
   const page = mountConfigPageState(configContext(), { pageId: "appearance" });
   const props = page.state.configProps;
-  await waitForSolid(() => {
-    expect(props()).toMatchObject({ microphone: { loading: false }, camera: { loading: false } });
-  });
+  await Promise.all([props().microphone?.discovery, props().camera?.discovery]);
+  flush();
   enumerateDevices.mockReset().mockResolvedValue([]);
   const startsWithPermission = scenario === "permission failure";
   // devicechange refreshes both pickers; only this scenario's picker is delayed.
@@ -333,6 +390,7 @@ it.each([
     devices.dispatchEvent(new Event("devicechange"));
   }
   refresh();
+  flush();
   const initialCalls = startsWithPermission ? 1 : 2;
   expect(enumerateDevices).toHaveBeenCalledTimes(initialCalls);
   expect(getUserMedia).not.toHaveBeenCalled();
@@ -361,7 +419,8 @@ it.each([
     await Promise.resolve();
     flush();
   } else {
-    await waitForSolid(() => expect(props()[kind]?.loading).toBe(false));
+    await props()[kind]?.discovery;
+    flush();
   }
   const permits = ["reentry with gesture", "passive failure"].includes(scenario);
   expect(getUserMedia).toHaveBeenCalledTimes(permits ? 1 : 0);
@@ -373,9 +432,41 @@ it.each([
   }
   if (scenario === "permission failure") {
     expect(enumerateDevices).toHaveBeenCalledOnce();
-    expect(props()[kind]?.error).toBeTruthy();
+    await expect(props()[kind]?.discovery).resolves.toBeTruthy();
   }
 });
+it("keeps media permission gestures live while discovery status is pending", async () => {
+  const initial = deferred<MediaDeviceInfo[]>();
+  const enumerateDevices = vi.fn().mockReturnValueOnce(initial.promise).mockResolvedValue([]);
+  const stop = vi.fn();
+  const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
+  const mediaDevices = Object.assign(new EventTarget(), { enumerateDevices, getUserMedia });
+  vi.stubGlobal("navigator", { mediaDevices });
+  const { container } = mountConfigPage(configContext(), { pageId: "appearance" });
+  const select = container.querySelector<HTMLSelectElement>("[data-settings-microphone]")!;
+  expect(select).not.toBeNull();
+  expect(select.disabled).toBe(false);
+  expect(select.closest(".settings-row")?.textContent).not.toContain("No additional microphones");
+  select.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+  initial.resolve([]);
+  await waitForSolid(() => expect(getUserMedia).toHaveBeenCalledWith({ audio: true }));
+  expect(stop).toHaveBeenCalledOnce();
+  await waitForSolid(() =>
+    expect(select.closest(".settings-row")?.textContent).toContain("No additional microphones"),
+  );
+  enumerateDevices.mockRejectedValueOnce(new DOMException("Device unavailable", "NotFoundError"));
+  mediaDevices.dispatchEvent(new Event("devicechange"));
+  await waitForSolid(() =>
+    expect(select.closest(".settings-row")?.querySelector('[role="alert"]')).not.toBeNull(),
+  );
+  expect(container.querySelector("[data-settings-microphone]")).toBe(select);
+  mediaDevices.dispatchEvent(new Event("devicechange"));
+  await waitForSolid(() =>
+    expect(select.closest(".settings-row")?.querySelector('[role="alert"]')).toBeNull(),
+  );
+  expect(container.querySelector("[data-settings-microphone]")).toBe(select);
+});
+
 it("persists only confirmed camera selections and ignores superseded failures", async () => {
   const first = deferred();
   switchActiveRealtimeTalkCameras
@@ -487,6 +578,110 @@ it("refreshes update status once when the page becomes active", async () => {
   view.update({ pageId: "advanced" });
   view.update({ pageId: "updates" });
   await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledTimes(2));
+});
+
+it("presents initial and manual update status reads without hiding policy controls", async () => {
+  const initial = deferred<boolean>();
+  const manual = deferred<boolean>();
+  const refreshUpdateStatus = vi
+    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
+    .mockReturnValueOnce(initial.promise)
+    .mockReturnValueOnce(manual.promise);
+  const context = configContext({
+    gateway: connectedGateway(["update.status"]),
+    overlays: {
+      refreshUpdateStatus,
+      snapshot: {
+        updateStatusBanner: { source: "read", tone: "warn", text: "Recorded update status" },
+      },
+    },
+  });
+  const { container } = mountConfigPage(context, { pageId: "updates" });
+  const status = () => container.querySelector(".settings-status")?.textContent;
+  await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  expect(container.querySelectorAll('input[role="switch"]')).toHaveLength(2);
+  expect(refreshUpdateStatus).toHaveBeenCalledOnce();
+
+  initial.resolve(true);
+  await waitForSolid(() => expect(status()).toContain("Recorded update status"));
+  const check = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Check status",
+  )!;
+  check.click();
+  await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  expect(check.disabled).toBe(true);
+  manual.resolve(false);
+  await waitForSolid(() => {
+    expect(status()).toContain("Recorded update status");
+    expect(check.disabled).toBe(false);
+  });
+  expect(container.querySelector(".updates-status-check-failed")).toBeNull();
+  expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+});
+
+it("retires an update status receipt when the page leaves and re-enters", async () => {
+  const first = deferred<boolean>();
+  const second = deferred<boolean>();
+  const refreshUpdateStatus = vi
+    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
+    .mockReturnValueOnce(first.promise)
+    .mockReturnValueOnce(second.promise);
+  const context = configContext({
+    gateway: connectedGateway(["update.status"]),
+    overlays: {
+      refreshUpdateStatus,
+      snapshot: { updateStatusBanner: { tone: "warn", text: "Current update status" } },
+    },
+  });
+  const view = mountConfigPage(context, { pageId: "updates" });
+  const status = () => view.container.querySelector(".settings-status")?.textContent;
+  await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  view.update({ pageId: "advanced" });
+  view.update({ pageId: "updates" });
+  expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+  first.resolve(false);
+  await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  second.resolve(true);
+  await waitForSolid(() => expect(status()).toContain("Current update status"));
+});
+
+it("retries a rejected update status read without hiding policy controls", async () => {
+  const failed = deferred<boolean>();
+  const retried = deferred<boolean>();
+  const refreshUpdateStatus = vi
+    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
+    .mockReturnValueOnce(failed.promise)
+    .mockReturnValueOnce(retried.promise);
+  const context = configContext({
+    gateway: connectedGateway(["update.status"]),
+    overlays: {
+      refreshUpdateStatus,
+      snapshot: { updateStatusBanner: { tone: "warn", text: "Current update status" } },
+    },
+  });
+  const { container } = mountConfigPage(context, { pageId: "updates" });
+  await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledOnce());
+  failed.reject(new Error("Synthetic status read failed"));
+  await waitForSolid(() =>
+    expect(container.querySelector(".updates-status-check-failed")?.textContent).toContain(
+      "Synthetic status read failed",
+    ),
+  );
+  expect(container.querySelectorAll('input[role="switch"]')).toHaveLength(2);
+  container.querySelector<HTMLButtonElement>(".updates-status-check-failed button")!.click();
+  await waitForSolid(() => {
+    expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".settings-status")?.textContent).toContain(
+      "Checking for updates…",
+    );
+  });
+  retried.resolve(true);
+  await waitForSolid(() => {
+    expect(container.querySelector(".settings-status")?.textContent).toContain(
+      "Current update status",
+    );
+    expect(container.querySelector(".updates-status-check-failed")).toBeNull();
+  });
 });
 
 it("stages policy changes through patchForm and confirms Update now before overlays", async () => {

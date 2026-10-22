@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -21,12 +21,13 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 const sessionKey = "agent:main:foreign";
 const methods = ["sessions.list", "sessions.describe"] as const;
 type ReadMethod = (typeof methods)[number];
+type ReadResult = Awaited<ReturnType<typeof dispatchGatewayMethodInProcessRaw>>;
 
 async function withSyntheticReader(
   run: (fixture: {
     readerId: string;
     ownerEmail: string;
-    dispatch: (method: ReadMethod) => ReturnType<typeof dispatchGatewayMethodInProcessRaw>;
+    dispatch: (method: ReadMethod) => Promise<ReadResult>;
     blockCatalog: () => { entered: Promise<void>; readEntered: Promise<void>; release: () => void };
   }) => Promise<void>,
   visibility: "shared" | "draft" = "shared",
@@ -129,9 +130,9 @@ async function withSyntheticReader(
       });
     } finally {
       catalogGate?.resolve();
+      // Dispatch reports handler errors through its response; join owned work before disposal.
+      await Promise.allSettled(executions);
       try {
-        // Dispatch reports handler errors through its response; join the owned work before disposal.
-        await Promise.allSettled(executions);
         await projection.ensureMaterialized();
       } finally {
         restoreReadiness?.();
@@ -141,11 +142,7 @@ async function withSyntheticReader(
   });
 }
 
-function expectVisible(
-  method: ReadMethod,
-  result: Awaited<ReturnType<typeof dispatchGatewayMethodInProcessRaw>>,
-  sharingRole: "viewer" | "owner",
-) {
+function expectVisible(method: ReadMethod, result: ReadResult, sharingRole: "viewer" | "owner") {
   expect(result).toMatchObject({
     ok: true,
     payload:
@@ -155,73 +152,63 @@ function expectVisible(
   });
 }
 
-describe("synthetic plugin session reads", () => {
-  it.each(methods)(
-    "preserves a non-admin operator's foreign-session grant on %s",
-    async (method) => {
-      await withSyntheticReader(async ({ dispatch }) => {
-        expectVisible(method, await dispatch(method), "viewer");
-        const native = vi.spyOn(openOpenClawStateDatabase().db, "prepare");
-        const reads = [
-          "executeSqliteQuerySync",
-          "executeSqliteQueryTakeFirstSync",
-          "iterateSqliteQuerySync",
-        ] as const;
-        const spies = reads.map((name) => vi.spyOn(sqliteQueries, name));
-        try {
-          expectVisible(method, await dispatch(method), "viewer");
-          expect(native).not.toHaveBeenCalled();
-          for (const spy of spies) {
-            expect(spy).not.toHaveBeenCalled();
-          }
-        } finally {
-          native.mockRestore();
-          spies.forEach((spy) => spy.mockRestore());
-        }
-      });
-    },
-  );
+it.each(methods)("preserves a non-admin operator's foreign-session grant on %s", (method) =>
+  withSyntheticReader(async ({ dispatch }) => {
+    expectVisible(method, await dispatch(method), "viewer");
+    const spies = [
+      vi.spyOn(openOpenClawStateDatabase().db, "prepare"),
+      vi.spyOn(sqliteQueries, "executeSqliteQuerySync"),
+      vi.spyOn(sqliteQueries, "executeSqliteQueryTakeFirstSync"),
+      vi.spyOn(sqliteQueries, "iterateSqliteQuerySync"),
+    ];
+    try {
+      expectVisible(method, await dispatch(method), "viewer");
+      expect(spies.map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0, 0]);
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+    }
+  }),
+);
 
-  it.each(methods)("recognizes merged-profile ownership on %s", async (method) => {
-    await withSyntheticReader(async ({ readerId, ownerEmail, dispatch }) => {
-      setUserProfileRole(readerId, "blocked");
-      linkEmail(ownerEmail, readerId);
-      expectVisible(method, await dispatch(method), "owner");
-    }, "draft");
-  });
+it.each(methods)("recognizes merged-profile ownership on %s", (method) =>
+  withSyntheticReader(async ({ readerId, ownerEmail, dispatch }) => {
+    setUserProfileRole(readerId, "blocked");
+    linkEmail(ownerEmail, readerId);
+    expectVisible(method, await dispatch(method), "owner");
+  }, "draft"),
+);
 
-  it.each(methods)("honors role revocation during projection readiness on %s", async (method) => {
-    await withSyntheticReader(async ({ readerId, dispatch, blockCatalog }) => {
-      const gate = blockCatalog();
-      const pending =
-        method === "sessions.list" ? Promise.allSettled([dispatch(method)]) : undefined;
-      try {
-        await gate.entered;
-        if (pending) {
-          await gate.readEntered;
-        }
-        setUserProfileRole(readerId, "blocked");
-        if (pending) {
-          gate.release();
-          expect(await pending).toEqual([
-            {
-              status: "rejected",
-              reason: expect.objectContaining({
-                message: "Your operator role changed; reconnect before continuing.",
-              }),
-            },
-          ]);
-          expect(await dispatch(method)).toMatchObject({ ok: true, payload: { sessions: [] } });
-        } else {
-          expect(await dispatch(method)).toMatchObject({
-            ok: false,
-            error: { message: `Session "${sessionKey}" was not found.` },
-          });
-        }
-      } finally {
-        gate.release();
-        await pending;
+it.each(methods)("honors role revocation during projection readiness on %s", (method) =>
+  withSyntheticReader(async ({ readerId, dispatch, blockCatalog }) => {
+    const gate = blockCatalog();
+    const pending =
+      method === "sessions.list"
+        ? dispatch(method).then(
+            () => undefined,
+            (error: unknown) => error,
+          )
+        : undefined;
+    try {
+      await gate.entered;
+      if (pending) {
+        await gate.readEntered;
       }
-    });
-  });
-});
+      setUserProfileRole(readerId, "blocked");
+      if (pending) {
+        gate.release();
+        expect(await pending).toMatchObject({
+          message: "Your operator role changed; reconnect before continuing.",
+        });
+        expect(await dispatch(method)).toMatchObject({ ok: true, payload: { sessions: [] } });
+      } else {
+        expect(await dispatch(method)).toMatchObject({
+          ok: false,
+          error: { message: `Session "${sessionKey}" was not found.` },
+        });
+      }
+    } finally {
+      gate.release();
+      await pending;
+    }
+  }),
+);

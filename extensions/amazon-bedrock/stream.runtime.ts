@@ -389,7 +389,6 @@ function formatBedrockError(error: unknown): string {
   return message;
 }
 
-/** Stream a Bedrock Converse request from the generic OpenClaw stream options. */
 export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", SimpleStreamOptions> = (
   model,
   context,
@@ -775,7 +774,7 @@ function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolea
     return true;
   }
   const id = model.id.toLowerCase();
-  const name = model.name?.toLowerCase() ?? "";
+  const name = model.name.toLowerCase();
   return (
     id.includes("anthropic.claude") ||
     id.includes("anthropic/claude") ||

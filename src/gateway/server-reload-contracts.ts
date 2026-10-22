@@ -59,19 +59,7 @@ export type GatewayRestartTransactionResult = {
 };
 
 export type GatewayRestartRequestOptions = {
-  retainDebtAcrossConfigChanges?: boolean;
   prepareRuntimeConfig?: () => Promise<OpenClawConfig>;
-  debtConfig?: OpenClawConfig;
-};
-
-export type AcceptedRestartTarget = {
-  runtimeConfig: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-  prepareRuntimeConfig: () => Promise<OpenClawConfig>;
-};
-
-export type AcceptedRestartTargetOwnership = {
-  reject: () => void;
 };
 
 class GatewayHotReloadCancelledError extends Error {

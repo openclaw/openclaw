@@ -98,17 +98,22 @@ describe("handleChannelAvatarHttpRequest", () => {
     vi.unstubAllEnvs();
   });
 
+  let sessionVisible = true;
+
   beforeEach(() => {
     authorityCurrent = true;
-    mocks.authorize
-      .mockReset()
-      .mockImplementation(({ res }: { res: ServerResponse }) =>
-        bindHttpResponseAuthority(
-          { authMethod: "token", operatorScopes: ["operator.admin", "operator.read"] },
-          res,
-          () => authorityCurrent,
-        ),
-      );
+    sessionVisible = true;
+    mocks.authorize.mockReset().mockImplementation(({ res }: { res: ServerResponse }) =>
+      bindHttpResponseAuthority(
+        {
+          authMethod: "token",
+          operatorScopes: ["operator.admin", "operator.read"],
+          canReadSession: () => sessionVisible,
+        },
+        res,
+        () => authorityCurrent,
+      ),
+    );
     mocks.loadEntry.mockReset().mockResolvedValue({ entry: avatarEntry() });
     mocks.resolveReference.mockReset().mockResolvedValue({
       id: "channel-avatar.png",
@@ -224,6 +229,23 @@ describe("handleChannelAvatarHttpRequest", () => {
       expect((await fetch(stale)).status).toBe(404);
     }
     expect(mocks.readMedia).toHaveBeenCalledTimes(reads);
+  });
+
+  it("refuses a session the profile cannot see without loading its avatar", async () => {
+    sessionVisible = false;
+    const url = new URL(avatarRoute("agent:main:hidden"));
+    url.searchParams.set("v", channelAvatarRevision(AVATAR_REFERENCE));
+    const response = await fetch(url);
+    expect(response.status).toBe(403);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: { message: "session access required", type: "forbidden" },
+    });
+    expect(mocks.resolveReference).not.toHaveBeenCalled();
+    expect(mocks.readMedia).not.toHaveBeenCalled();
+    sessionVisible = true;
+    expect((await fetch(url)).status).toBe(200);
   });
 
   it("rejects revoked authority while channel avatar bytes are loading", async () => {

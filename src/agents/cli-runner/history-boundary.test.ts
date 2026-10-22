@@ -3,10 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   getCliHistoryWriter,
   runWithCliHistoryWriter,
@@ -14,10 +11,8 @@ import {
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
-  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import { appendTranscriptEventSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import {
   getOwnedSessionTranscriptWriterFence,
@@ -26,16 +21,14 @@ import {
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
-import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { persistCliSessionBindingResult } from "../cli-session-store.js";
 import { claimAgentSessionWriter } from "../embedded-agent-runner/run/session-bootstrap.js";
-import { CURRENT_SESSION_VERSION, SessionManager } from "../sessions/session-manager.js";
 import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
 import {
   prepareCliHistoryBoundary,
   prepareCliHistoryCompactionBoundary,
 } from "./history-boundary.js";
-import { buildCliSessionHistoryPrompt, loadCliSessionPromptContext } from "./session-history.js";
+import { createHistoryBoundaryFixture, history } from "./history-boundary.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const sessionDirs = useSessionStoreTempDirs(
@@ -50,96 +43,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function fixture(withHeader = true) {
-  setRuntimeConfigSnapshot({});
-  const dir = sessionDirs.make();
-  const target = {
-    agentId: "main",
-    sessionId: "history",
-    sessionKey: "agent:main:history",
-    storePath: path.join(dir, "openclaw-agent.sqlite"),
-  };
-  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-  if (withHeader) {
-    appendTranscriptEventSync(target, {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: target.sessionId,
-      cwd: dir,
-      timestamp: new Date(0).toISOString(),
-    });
-  }
-  const manager = () => SessionManager.open(target, dir);
-  let runNumber = 0;
-  const withRun = async <T>(
-    runId: string,
-    action: (params: PreparedCliRunContext["params"]) => Promise<T>,
-    overrides: Partial<PreparedCliRunContext["params"]> = {},
-  ) => {
-    const admission = prepareSystemAgentRunAdmission({}, runId, "main", "history-test");
-    try {
-      return await action({
-        admittedRunContext: await admission.admit("embedded"),
-        runId,
-        agentId: target.agentId,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionFile: target.sessionKey,
-        sessionTarget: target,
-        storePath: target.storePath,
-        provider: "test-cli",
-        model: "test-model",
-        prompt: "current ask",
-        workspaceDir: dir,
-        timeoutMs: 1000,
-        ...overrides,
-      });
-    } finally {
-      admission.close();
-    }
-  };
-  const run = async <T>(
-    epoch: string | undefined,
-    action: (allowed: boolean, params: PreparedCliRunContext["params"]) => Promise<T>,
-    overrides: Partial<PreparedCliRunContext["params"]> = {},
-    credential?: AuthProfileCredential,
-  ) => {
-    const runId = "boundary-run-" + ++runNumber;
-    await patchSessionEntryCore(target, (entry) => ({ ...entry, activeWriterRunId: runId }));
-    return await withRun(
-      runId,
-      async (params) => {
-        const writer = await prepareCliHistoryBoundary(params, {
-          credential:
-            credential ??
-            (epoch ? { type: "token", provider: "test-cli", token: epoch } : undefined),
-        });
-        return await runWithCliHistoryWriter(writer, () => action(Boolean(writer), params));
-      },
-      overrides,
-    );
-  };
-  const seed = async () =>
-    await run("epoch-a", async (allowed) => {
-      expect(allowed).toBe(true);
-      manager().appendMessage({ role: "user", content: "A private canary", timestamp: 1 });
-    });
-  return { target, manager, run, seed, withRun };
-}
-
-async function history(allowed: boolean, params: PreparedCliRunContext["params"]) {
-  return buildCliSessionHistoryPrompt({
-    messages: (
-      await loadCliSessionPromptContext({
-        ...params,
-        allowRawTranscriptReseed: true,
-        rawTranscriptReseedReason: allowed ? "missing-transcript" : "auth-unknown",
-      })
-    ).reseedMessages,
-    prompt: "current ask",
-    maxHistoryChars: 8192,
-  });
-}
+const fixture = (withHeader?: boolean) => createHistoryBoundaryFixture(sessionDirs, withHeader);
 
 async function settleNativeBinding(
   params: PreparedCliRunContext["params"],
@@ -561,6 +465,34 @@ describe("CLI transcript account boundary", () => {
       });
     });
     expect(JSON.stringify(f.manager().getEntries())).toContain("recovered CLI answer");
+  });
+
+  it("rejects CLI assistant persistence after its terminal writer claim is revoked", async () => {
+    const f = await fixture();
+    await f.withRun("terminal-cli-writer", async (params) => {
+      const claim = await claimAgentSessionWriter(params);
+      if (!claim) {
+        throw new Error("Missing terminal CLI writer claim");
+      }
+      const before = f.manager().getEntries();
+
+      await expect(claim.revoke()).resolves.toBe(true);
+      const result = await persistCliAssistantTranscript({
+        runParams: {
+          ...params,
+          expectedLifecycleRevision: claim.expectedLifecycleRevision,
+          expectedWriterRunId: claim.expectedWriterRunId,
+          persistAssistantTranscript: true,
+        },
+        text: "late terminal CLI answer",
+        modelId: "test-model",
+        stopReason: "stop",
+      });
+
+      expect(result).toMatchObject({ owned: true });
+      expect(result.terminalAnchor).toBeUndefined();
+      expect(f.manager().getEntries()).toEqual(before);
+    });
   });
 
   it("rechecks a revived foreign writer after metadata planning yields", async () => {

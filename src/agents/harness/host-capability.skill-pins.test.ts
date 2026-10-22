@@ -22,6 +22,30 @@ const config: OpenClawConfig = {
   plugins: { enabled: false },
   tools: { fs: { workspaceOnly: true } },
 };
+const toolOptions = {
+  config,
+  runtimeToolAllowlist: ["read"],
+  toolConstructionPlan: {
+    includeBaseCodingTools: true,
+    includeShellTools: false,
+    includeChannelTools: false,
+    includeOpenClawTools: false,
+    includePluginTools: false,
+  },
+};
+
+async function expectResource(
+  tools: Awaited<ReturnType<LibraryHost["build"]>>,
+  resourcePath: string,
+  id: string,
+) {
+  const read = tools.find((tool) => tool.name === "read");
+  expect(read).toBeDefined();
+  const result = await read!.execute(id, { path: resourcePath });
+  expect(result.content).toEqual([
+    expect.objectContaining({ type: "text", text: expect.stringContaining(resourceContent) }),
+  ]);
+}
 
 type LibraryHost = {
   host: Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>;
@@ -84,17 +108,9 @@ async function withLibraryHost(run: (fixture: LibraryHost) => Promise<void>) {
         ),
         build: () =>
           host.hostCapabilities.createToolSurfaceAsync!({
+            ...toolOptions,
             workspaceDir,
             cwd: workspaceDir,
-            config,
-            runtimeToolAllowlist: ["read"],
-            toolConstructionPlan: {
-              includeBaseCodingTools: true,
-              includeShellTools: false,
-              includeChannelTools: false,
-              includeOpenClawTools: false,
-              includePluginTools: false,
-            },
           }),
       });
     } finally {
@@ -111,12 +127,7 @@ it("reads cold and warm pinned resources through awaited host construction witho
     try {
       sql.calibrate();
       for (let pass = 0; pass < 2; pass++) {
-        const read = (await build()).find((tool) => tool.name === "read");
-        expect(read).toBeDefined();
-        const result = await read!.execute(`library-${pass}`, { path: resourcePath });
-        expect(result.content).toEqual([
-          expect.objectContaining({ type: "text", text: expect.stringContaining(resourceContent) }),
-        ]);
+        await expectResource(await build(), resourcePath, `library-${pass}`);
       }
       sql.expectIdle();
     } finally {
@@ -127,22 +138,11 @@ it("reads cold and warm pinned resources through awaited host construction witho
 
 it("keeps pinned resources available to the deprecated synchronous host", async () => {
   await withLibraryHost(async ({ host, resourcePath }) => {
-    const read = host.hostCapabilities.createToolSurface!({
-      config,
-      runtimeToolAllowlist: ["read"],
-      toolConstructionPlan: {
-        includeBaseCodingTools: true,
-        includeShellTools: false,
-        includeChannelTools: false,
-        includeOpenClawTools: false,
-        includePluginTools: false,
-      },
-    }).find((tool) => tool.name === "read");
-    expect(read).toBeDefined();
-    const result = await read!.execute("legacy-library", { path: resourcePath });
-    expect(result.content).toEqual([
-      expect.objectContaining({ type: "text", text: expect.stringContaining(resourceContent) }),
-    ]);
+    await expectResource(
+      host.hostCapabilities.createToolSurface!(toolOptions),
+      resourcePath,
+      "legacy-library",
+    );
   });
 });
 
@@ -165,11 +165,7 @@ it("retains prepared resources after other selections evict their shared cache e
     requireNodeSqlite();
     const sql = observeMainThreadSql();
     try {
-      const read = (await build()).find((tool) => tool.name === "read");
-      const result = await read!.execute("evicted-library", { path: resourcePath });
-      expect(result.content).toEqual([
-        expect.objectContaining({ type: "text", text: expect.stringContaining(resourceContent) }),
-      ]);
+      await expectResource(await build(), resourcePath, "evicted-library");
       sql.expectIdle();
     } finally {
       sql.restore();
@@ -210,14 +206,7 @@ it.each(["host close", "abort", "snapshot edit"] as const)(
         }
         resume.resolve();
         if (change === "snapshot edit") {
-          const read = (await pending).find((tool) => tool.name === "read");
-          const result = await read!.execute("captured-library", { path: resourcePath });
-          expect(result.content).toEqual([
-            expect.objectContaining({
-              type: "text",
-              text: expect.stringContaining(resourceContent),
-            }),
-          ]);
+          await expectResource(await pending, resourcePath, "captured-library");
         } else {
           await expect(pending).rejects.toThrow();
         }

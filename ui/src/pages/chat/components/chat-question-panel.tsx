@@ -1,9 +1,11 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, Show, untrack } from "solid-js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import {
   initializeQuestionDrafts,
@@ -18,6 +20,8 @@ import type {
   QuestionPanelViewModel,
 } from "./chat-question-types.ts";
 
+registerEnglishCatalog(registerChatSessionEnglish);
+
 type PanelBridgeProps = { props?: QuestionPanelProps };
 export type ChatQuestionPanel = SolidBridgeElement<PanelBridgeProps>;
 
@@ -28,9 +32,8 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
   const [currentQuestionIndex, setCurrentQuestionIndex] = createSignal(0);
   const [uncontrolledCollapsed, setUncontrolledCollapsed] = createSignal(initialModel.collapsed);
   const [draftRevision, setDraftRevision] = createSignal(0);
-  const [pendingKind, setPendingKind] = createSignal<"submit" | "skip" | null>(null);
+  const [pendingKind, setPendingKind] = createOptimistic<"submit" | "skip" | null>(null);
   let resolving = false;
-  let live = true;
   let panel: HTMLElement | undefined;
   let answerControl: HTMLInputElement | HTMLTextAreaElement | undefined;
   let hostsInput: HTMLInputElement | undefined;
@@ -47,7 +50,8 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
     draftRevision();
     return model().drafts.get(question()?.questionId ?? "");
   };
-  const disabled = () => model().disabled || model().submitting || pendingKind() !== null;
+  const disabled = () =>
+    pendingKind() !== null || model().disabled || (model().submitting ?? false);
   const answerValues = (value: QuestionPanelViewModel, item: QuestionPanelQuestion) =>
     questionDraftValues(value.drafts.get(item.questionId), item);
   const canAdvance = () => {
@@ -58,16 +62,11 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
   const focusTarget = createMemo(() => [collapsed(), currentQuestionIndex()] as const, {
     equals: (previous, next) => previous[0] === next[0] && previous[1] === next[1],
   });
-  let initialFocus = true;
   // Question navigation moves browser focus to the newly presented panel.
-  createEffect(focusTarget, ([isCollapsed]) => {
-    if (!isCollapsed && (!initialFocus || initialModel.autoFocus !== false)) {
-      panel?.focus({ preventScroll: true });
-    }
-    initialFocus = false;
-  });
-  onCleanup(() => {
-    live = false;
+  createPendingFocus(focusTarget, {
+    requested: ([isCollapsed], previous) =>
+      !isCollapsed && (previous !== undefined || initialModel.autoFocus !== false),
+    focus: () => panel?.focus({ preventScroll: true }),
   });
   const setCollapsed = (value: boolean) => {
     if (props.panel.onCollapsedChange) {
@@ -104,6 +103,13 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
       freeText: value,
     });
   };
+  const presentResolution = action(function* (
+    kind: "submit" | "skip",
+    result: void | Promise<void>,
+  ) {
+    setPendingKind(kind);
+    yield result;
+  });
   const resolve = async (kind: "submit" | "skip") => {
     const value = model();
     if (value.disabled || value.submitting || resolving) {
@@ -130,16 +136,15 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
       run = onSkip;
     }
     resolving = true;
-    setPendingKind(kind);
     try {
-      await run();
+      const result = run();
+      // The caller publishes its authoritative state before the presentation action joins.
+      await Promise.resolve();
+      await presentResolution(kind, result);
     } catch {
       /* The caller owns the error shown in model.error. */
     } finally {
       resolving = false;
-      if (live) {
-        setPendingKind(null);
-      }
     }
   };
   const advanceOrSubmit = (item: QuestionPanelQuestion) => {
@@ -263,7 +268,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
         </button>
       </div>
     );
-  const Action = (action: {
+  const Action = (buttonProps: {
     name: "back" | "skip" | "advance";
     label: string;
     onClick: () => void;
@@ -272,14 +277,14 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
     <button
       class={[
         "btn btn--sm",
-        `chat-question-panel__${action.name}`,
-        { primary: action.name === "advance" },
+        `chat-question-panel__${buttonProps.name}`,
+        { primary: buttonProps.name === "advance" },
       ]}
       type="button"
-      disabled={disabled() || action.unavailable}
-      onClick={() => action.onClick()}
+      disabled={disabled() || buttonProps.unavailable}
+      onClick={() => buttonProps.onClick()}
     >
-      {action.label}
+      {buttonProps.label}
     </button>
   );
   const progress = () => `${currentQuestionIndex() + 1}/${model().questions.length}`;
@@ -462,6 +467,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                 </div>
               )}
               <QuestionFreeText
+                getTranscriptElement={props.panel.getTranscriptElement}
                 question={item()}
                 value={draft()?.freeText ?? ""}
                 selected={Boolean(
@@ -481,8 +487,8 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                   agentId={model().agentId}
                   selected={draft()?.selected ?? new Set()}
                   disabled={disabled()}
-                  onResource-selection={(event: CustomEvent<{ values: string[] }>) =>
-                    updateDraft(item(), { selected: new Set(event.detail.values), freeText: "" })
+                  onSelection={(values) =>
+                    updateDraft(item(), { selected: new Set(values), freeText: "" })
                   }
                 />
               )}

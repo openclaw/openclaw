@@ -8,7 +8,7 @@ import {
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import { assertSqliteJsonlReadBudget } from "../../infra/sqlite-jsonl-budget.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { TranscriptEntryAnchor, TranscriptTurnBoundary } from "./transcript-entry-anchor.js";
 import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
@@ -155,7 +155,7 @@ export function readClosedTranscriptTurnInDatabase(
     return { kind: "session-rebound" };
   }
   const target = params.boundary.admission;
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     connection,
     () => {
       const db = getSessionKysely(connection);

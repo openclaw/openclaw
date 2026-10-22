@@ -1,61 +1,44 @@
-import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../vitest/vitest.timeouts.js";
+import { copyWorkerRunFixture, writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 it("retains verified artifacts after the runner's module loader stops", async () => {
   const root = tempDirs.make("vitest-worker-loader-shutdown-");
-  const ownerPath = "scripts/lib/vitest-worker-run.mts";
-  const closure = collectRuntimeImportClosure(repoRoot, [ownerPath], {
-    includeDynamicImports: true,
-  });
-  for (const file of new Set([...closure, "package.json", "tsconfig.json"])) {
-    const destination = path.join(root, file);
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.copyFileSync(path.join(repoRoot, file), destination);
-  }
-  fs.symlinkSync(
-    fs.realpathSync(path.join(repoRoot, "node_modules")),
-    path.join(root, "node_modules"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
+  const ownerUrl = copyWorkerRunFixture(root);
   const artifactsUrl = pathToFileURL(
     path.join(root, "scripts/lib/vitest-worker-artifacts.mts"),
   ).href;
   const cacheUrl = pathToFileURL(path.join(root, "scripts/lib/vitest-worker-cache.mts")).href;
-  const input = path.join(root, "fixture-input.ts");
+  const input = writeFixture(root, "fixture-input.ts", "export {};\n");
   const output = 'export const value = "compiled fixture";\n';
-  fs.writeFileSync(input, "export {};\n");
   // The real owner still launches and joins a native compiler child and verifies its files.
-  fs.writeFileSync(
-    path.join(root, "scripts/lib/vitest-worker-compiler.mts"),
+  writeFixture(
+    root,
+    "scripts/lib/vitest-worker-compiler.mts",
     `import fs from 'node:fs';
 import path from 'node:path';
 import { hashVitestWorkerArtifact as hash } from ${JSON.stringify(artifactsUrl)};
 const directory = process.argv[2];
 fs.mkdirSync(path.join(directory, 'dist'));
-const code = ${JSON.stringify(output)};
-const info = '{}\\n';
-fs.writeFileSync(path.join(directory, 'dist/probe.js'), code);
-fs.writeFileSync(path.join(directory, 'dist/build-info.json'), info);
+const files = { 'probe.js': ${JSON.stringify(output)}, 'build-info.json': '{}\\n' };
+for (const [name, bytes] of Object.entries(files)) fs.writeFileSync(path.join(directory, 'dist', name), bytes);
 const inputs = { [${JSON.stringify(input)}]: hash(fs.readFileSync(${JSON.stringify(input)})) };
-const outputs = { 'probe.js': hash(code), 'build-info.json': hash(info) };
+const outputs = Object.fromEntries(Object.entries(files).map(([name, bytes]) => [name, hash(bytes)]));
 fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
   identity: hash(JSON.stringify([inputs, outputs])), inputs, outputs, durationMs: 1,
   cacheSignature: hash('fixture compiler generation'),
 }));
 `,
   );
-  const borrower = path.join(root, "borrower.mjs");
-  fs.writeFileSync(
-    borrower,
+  const borrower = writeFixture(
+    root,
+    "borrower.mjs",
     `import assert from 'node:assert/strict';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -69,11 +52,12 @@ try {
 }
 `,
   );
-  const probe = path.join(root, "probe.mjs");
-  fs.writeFileSync(
-    probe,
+  const probe = writeFixture(
+    root,
+    "probe.mjs",
     `import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { registerHooks } from 'node:module';
@@ -86,19 +70,13 @@ const hooks = registerHooks({
     return nextLoad(url, context);
   },
 });
-const { createVitestWorkerRun } = await import(${JSON.stringify(pathToFileURL(path.join(root, ownerPath)).href)});
+const { createVitestWorkerRun } = await import(${JSON.stringify(ownerUrl)});
 const owner = createVitestWorkerRun();
 try {
   const child = spawn(process.execPath, [${JSON.stringify(borrower)}, owner.descriptor.directory], {
     cwd: ${JSON.stringify(root)}, stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
   });
-  const completion = new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
-      if (code === 0 && signal === null) resolve();
-      else reject(new Error('borrower failed: ' + code + '/' + signal));
-    });
-  });
+  const completion = once(child, 'close').then(result => assert.deepEqual(result, [0, null]));
   await owner.borrow(child, completion);
   stopped = true;
   await owner.dispose();

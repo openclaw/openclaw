@@ -152,15 +152,12 @@ function publicationHarness(responses?: {
   });
   const attach = (session = row("publication")) => {
     let changed = createDeferred();
-    const binding = sessions.githubPublication.attach(
-      session,
-      () => {
-        const previous = changed;
-        changed = createDeferred();
-        previous.resolve();
-      },
-      GitHubPublicationOwner,
-    )!;
+    const binding = sessions.githubPublication.attach(session, GitHubPublicationOwner)!;
+    binding.subscribe(() => {
+      const previous = changed;
+      changed = createDeferred();
+      previous.resolve();
+    });
     publicationChanges.set(binding, () => changed.promise);
     binding.sync({
       canPublishShared: true,

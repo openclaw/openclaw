@@ -51,8 +51,16 @@ function readReplayedTaskId(
   return /^<task-notification>\s*<task-id>([^<]+)<\/task-id>/u.exec(text)?.[1];
 }
 
+/**
+ * Host-internal, like the forwarded auth credential and not part of the plugin SDK: a host
+ * whose history owner can change while the run lasts (a native login) passes a check for
+ * where saved turn context leaves after startup, the prompt send and the prompt hook answer.
+ */
+export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
+  assertPrivateInputCurrent?: () => void;
+};
 type ClaudeCliTurn = {
-  context: CliBackendExecuteContext;
+  context: ClaudeCliExecuteContext;
   controller: AbortController;
   userInput: ReturnType<typeof createClaudeCliUserInputAuthorizer>;
   events: PassThrough;
@@ -64,6 +72,7 @@ type ClaudeCliTurn = {
   /** Hook reruns carry no input UUID and may rewrite text; retain their native input owner. */
   promptInputUuid: string;
   sawTerminalResult: boolean;
+  interrupted: boolean;
   foregroundTaskIds: Set<string>;
   foregroundBashToolUseIds: Set<string>;
   pendingBackgroundTaskIds: Set<string>;
@@ -99,7 +108,12 @@ const sessions = new WeakMap<CliBackendLiveSessionHandle, ClaudeCliSession>();
 
 function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
   const turn = session.currentTurn;
-  if (!turn || turn.controller.signal.aborted || turn.context.abortSignal?.aborted) {
+  if (
+    !turn ||
+    turn.interrupted ||
+    turn.controller.signal.aborted ||
+    turn.context.abortSignal?.aborted
+  ) {
     return undefined;
   }
   // A warm child can emit prior-input callbacks while the next admitted input is queued.
@@ -112,6 +126,24 @@ function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
   } catch {
     return undefined;
   }
+}
+
+function privateInputHolds(turn: ClaudeCliTurn): boolean {
+  try {
+    turn.context.assertPrivateInputCurrent?.();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function carriesTurnContext(request: Record<string, unknown>, response: unknown): boolean {
+  return (
+    request.callback_id === "UserPromptSubmit" &&
+    isRecord(response) &&
+    isRecord(response.hookSpecificOutput) &&
+    response.hookSpecificOutput.additionalContext !== undefined
+  );
 }
 
 async function authorizeTool(
@@ -350,6 +382,31 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
   if (!turn) {
     return;
   }
+  if (turn.interrupted) {
+    if (message.type === "result") {
+      // Native interrupt can report an empty error result instead of a success.
+      // Only its known abort terminals belong to this requested turn interruption.
+      const aborted =
+        message.terminal_reason === "aborted_tools" ||
+        message.terminal_reason === "aborted_streaming";
+      turn.sawTerminalResult = true;
+      const result = aborted
+        ? {
+            ...message,
+            subtype: "success",
+            is_error: false,
+            result: "",
+            errors: undefined,
+            terminal_reason: undefined,
+          }
+        : { ...message, result: "" };
+      if (!turn.events.write(result)) {
+        await once(turn.events, "drain", { signal: turn.controller.signal });
+      }
+      completeTurn(session, turn);
+    }
+    return;
+  }
   if (message.type === "command_lifecycle") {
     if (message.state === "started" && message.command_uuid === turn.inputUuid) {
       turn.inputStarted = true;
@@ -542,7 +599,7 @@ function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliS
 }
 
 export async function* executeClaudeCli(
-  context: CliBackendExecuteContext,
+  context: ClaudeCliExecuteContext,
   secretInput?: ClaudeCliSecretInput,
 ): AsyncIterable<Record<string, unknown>> {
   context.assertCurrent?.();
@@ -575,6 +632,7 @@ export async function* executeClaudeCli(
     promptSubmitted: false,
     promptInputUuid: inputUuid,
     sawTerminalResult: false,
+    interrupted: false,
     foregroundTaskIds: new Set(),
     foregroundBashToolUseIds: new Set(),
     pendingBackgroundTaskIds: new Set(),
@@ -621,7 +679,10 @@ export async function* executeClaudeCli(
             // The transport invokes this synchronously at its final write, after all awaits.
             return () => {
               if (admittedTurn && activeTurn(session) === admittedTurn && !signal.aborted) {
-                return response;
+                // Saved turn context leaves here, so it takes the private-input check too.
+                return carriesTurnContext(request, response) && !privateInputHolds(admittedTurn)
+                  ? {}
+                  : response;
               }
               const message = "The OpenClaw run is no longer active.";
               if (request.subtype === "can_use_tool") {
@@ -653,9 +714,23 @@ export async function* executeClaudeCli(
         await transport.initialize();
       }
       context.assertCurrent?.();
+      context.assertPrivateInputCurrent?.();
       if (session.closed || session.currentTurn !== turn) {
         throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");
       }
+      context.registerTurnInterrupt?.({
+        async interrupt() {
+          context.assertCurrent?.();
+          if (session.currentTurn !== turn && turn.sawTerminalResult) {
+            return;
+          }
+          if (session.closed || session.currentTurn !== turn || turn.controller.signal.aborted) {
+            throw new Error("The Claude CLI turn is no longer active.");
+          }
+          turn.interrupted = true;
+          await transport.interrupt();
+        },
+      });
       await transport.send(createUserInput(context, context.prompt, turn.inputUuid));
       context.registerMessageInjection?.({
         isAvailable: () =>

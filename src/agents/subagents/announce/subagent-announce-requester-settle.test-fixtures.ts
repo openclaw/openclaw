@@ -133,7 +133,7 @@ export function createRequesterSettleCases() {
     ...["accepted", "in_flight"].map((status) =>
       settleCase(`retains an ${status} settle handoff until terminal evidence`, undefined, {
         status,
-        expected: { delivered: false, reason: "requester_turn_pending", disposition: "retryable" },
+        expected: { delivered: false, disposition: "session_queued" },
       }),
     ),
     settleCase(

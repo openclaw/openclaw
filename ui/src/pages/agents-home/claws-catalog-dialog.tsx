@@ -2,14 +2,14 @@ import {
   readClawHubRiskAcknowledgementRequiredError,
   readClawReviewRequiredError,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
 import "../../components/file-preview-modal-registration.ts";
-import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
+import { registerClawsEnglish } from "../../i18n/locales/en-claws.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { loadPluginCatalog } from "../../lib/plugins/index.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -22,11 +22,11 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { preparePaneSessionHandoff } from "../chat/chat-pane-shared.ts";
 import {
-  applyOfficialClawAdd,
-  readOfficialClawAddReviewPlan,
-  readOfficialClawDetail,
-  readOfficialClawPreview,
-  searchOfficialClaws,
+  applyClawAdd,
+  readClawAddReviewPlan,
+  readClawDetail,
+  readClawPreview,
+  searchClaws,
   type ClawCatalogDetail,
   type ClawCatalogEntry,
   type ClawCatalogSource,
@@ -35,13 +35,12 @@ import {
 import type { ClawsCatalogViewProps } from "./claws-catalog-view-props.ts";
 import { ClawsCatalogView } from "./claws-catalog-view.tsx";
 
-registerEnglishCatalog(registerAgentsHomeEnglish);
+registerEnglishCatalog(registerClawsEnglish);
 
 type ClawsDialogProps = {
   onClose?: () => void;
   onAdded?: () => void;
   onSelectEntry?: (entry: ClawCatalogEntry) => void;
-  initialEntry?: ClawCatalogEntry | null;
   initialPackageName?: string;
   pageMode?: boolean;
 };
@@ -53,8 +52,6 @@ class ClawsCatalogModel {
   error: string | null = null;
   selected: ClawCatalogEntry | null = null;
   detail: ClawCatalogDetail | null = null;
-  detailLoading = false;
-  detailError: string | null = null;
   preview: {
     kind: "instruction" | "skill";
     name: string;
@@ -75,37 +72,28 @@ class ClawsCatalogModel {
   constructor(
     readonly context: ApplicationContext,
     readonly props: ClawsDialogProps,
+    readonly presentDetailRequest: (request: Promise<ClawCatalogDetail | null> | undefined) => void,
   ) {}
 
   private searchRevision = 0;
   private previewRevision = 0;
   private detailRevision = 0;
-  private routedPackageName = "";
+  private cancelDetailRead = () => {};
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   onIdentityChange() {
     this.entries = [];
-    this.closePreview();
-    this.selected = null;
-    this.detail = null;
-    this.detailLoading = false;
-    this.detailError = null;
+    this.resetSelection();
     this.applying = false;
-    this.addError = null;
-    this.installedPluginPackages = new Set();
-    this.consentWarning = null;
-    this.reviewPlan = null;
-    this.riskAcknowledged = false;
-    this.addedAgentId = null;
   }
 
   invalidateRequests(change: GatewayPageChange) {
+    this.cancelDetailRead();
     this.searchRevision += 1;
     this.closePreview();
     this.detailRevision += 1;
     this.entries = [];
     this.error = change.snapshot.phase === "connected" ? null : t("clawsCatalog.unavailable");
     this.loading = false;
-    this.detailLoading = false;
     this.installedPluginPackages = new Set();
     this.applying = false;
     this.consentWarning = null;
@@ -114,51 +102,11 @@ class ClawsCatalogModel {
   }
 
   ensureInitialData() {
-    if (this.props.initialEntry) {
-      if (
-        this.selected?.packageName !== this.props.initialEntry.packageName ||
-        this.selected?.latestVersion !== this.props.initialEntry.latestVersion
-      ) {
-        this.select(this.props.initialEntry);
-      }
-    } else {
-      void this.loadCatalog();
-    }
-  }
-
-  syncInitialSelection(
-    initialEntry: ClawCatalogEntry | null,
-    initialPackageName: string,
-    pageMode: boolean,
-  ) {
-    if (pageMode && initialPackageName !== this.routedPackageName) {
-      this.routedPackageName = initialPackageName;
-      this.detailRevision += 1;
-      this.searchRevision += 1;
-      this.onIdentityChange();
-      if (initialEntry?.packageName === initialPackageName) {
-        this.select(initialEntry);
-      } else {
-        void this.loadCatalog();
-      }
-      return;
-    }
-    if (
-      initialEntry &&
-      (this.selected?.packageName !== initialEntry.packageName ||
-        this.selected?.latestVersion !== initialEntry.latestVersion)
-    ) {
-      this.select(initialEntry);
-    }
-    if (pageMode && initialPackageName && !this.selected) {
-      const entry = this.entries.find((candidate) => candidate.packageName === initialPackageName);
-      if (entry) {
-        this.select(entry);
-      }
-    }
+    void this.loadCatalog();
   }
 
   dispose() {
+    this.cancelDetailRead();
     this.disposed = true;
     if (this.searchTimer) {
       clearTimeout(this.searchTimer);
@@ -167,9 +115,6 @@ class ClawsCatalogModel {
   }
 
   private async loadCatalog() {
-    if (this.props.initialEntry) {
-      return;
-    }
     const scope = this.gateway.capture();
     if (!scope) {
       return;
@@ -179,26 +124,21 @@ class ClawsCatalogModel {
     this.loading = true;
     this.error = null;
     try {
-      const entries = await searchOfficialClaws(
+      const entries = await searchClaws(
         scope.client,
         this.props.initialPackageName || this.query,
         this.props.initialPackageName ? 100 : undefined,
       );
       if (this.gateway.isCurrent(scope) && revision === this.searchRevision) {
         this.entries = entries;
-        if (
-          this.props.initialPackageName &&
-          !entries.some((entry) => entry.packageName === this.props.initialPackageName)
-        ) {
-          this.error = t("clawsCatalog.empty");
-          return;
-        }
         if (this.props.initialPackageName) {
           const entry = entries.find(
             (candidate) => candidate.packageName === this.props.initialPackageName,
           );
           if (entry) {
             this.select(entry);
+          } else {
+            this.error = t("clawsCatalog.empty");
           }
         }
       }
@@ -233,39 +173,41 @@ class ClawsCatalogModel {
     return packageName && version ? { packageName, version } : null;
   }
 
-  private async loadDetail() {
+  private loadDetail() {
+    this.cancelDetailRead();
     const selected = this.selected;
     const scope = this.gateway.capture();
     if (!selected || !selected.latestVersion || !scope) {
-      this.detailError = t("clawsCatalog.noVersion");
+      this.presentDetailRequest(Promise.reject(new Error(t("clawsCatalog.noVersion"))));
       return;
     }
     const revision = ++this.detailRevision;
     this.detail = null;
     this.installedPluginPackages = new Set();
-    this.detailError = null;
     this.addError = null;
-    this.detailLoading = true;
-    try {
-      const detail = await readOfficialClawDetail(scope.client, {
-        packageName: selected.packageName,
-        version: selected.latestVersion,
-      });
-      if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
-        this.detail = detail;
-        if (detail.contents.integrations.some((item) => item.kind === "plugin")) {
-          void this.loadInstalledPlugins(revision);
-        }
-      }
-    } catch (error) {
-      if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
-        this.detailError = formatUiError(error);
-      }
-    } finally {
-      if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
-        this.detailLoading = false;
-      }
-    }
+    const source = { packageName: selected.packageName, version: selected.latestVersion };
+    this.presentDetailRequest(
+      new Promise((resolve, reject) => {
+        // Disconnect stops a pending skeleton without clearing a settled receipt or error.
+        this.cancelDetailRead = () => resolve(this.detail);
+        void readClawDetail(scope.client, source).then(
+          (detail) => {
+            if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
+              this.detail = detail;
+              if (detail.contents.integrations.some((item) => item.kind === "plugin")) {
+                void this.loadInstalledPlugins(revision);
+              }
+              resolve(detail);
+            }
+          },
+          (error: unknown) => {
+            if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
+              reject(new UserFacingError(formatUiError(error), { cause: error }));
+            }
+          },
+        );
+      }),
+    );
   }
 
   private async loadInstalledPlugins(revision: number) {
@@ -290,23 +232,27 @@ class ClawsCatalogModel {
     }
   }
 
-  private select(entry: ClawCatalogEntry) {
-    if (!this.props.pageMode && !this.props.initialEntry && this.props.onSelectEntry) {
-      this.props.onSelectEntry(entry);
-      return;
-    }
-    this.selected = entry;
+  private resetSelection(selected: ClawCatalogEntry | null = null) {
+    this.cancelDetailRead();
     this.closePreview();
+    this.selected = selected;
     this.detail = null;
-    this.detailLoading = true;
-    this.detailError = null;
+    this.presentDetailRequest(undefined);
     this.installedPluginPackages = new Set();
     this.addError = null;
     this.consentWarning = null;
     this.reviewPlan = null;
     this.riskAcknowledged = false;
     this.addedAgentId = null;
-    void this.loadDetail();
+  }
+
+  private select(entry: ClawCatalogEntry) {
+    if (!this.props.pageMode && this.props.onSelectEntry) {
+      this.props.onSelectEntry(entry);
+      return;
+    }
+    this.resetSelection(entry);
+    this.loadDetail();
   }
 
   private close() {
@@ -317,22 +263,12 @@ class ClawsCatalogModel {
     if (this.applying) {
       return;
     }
-    if (this.props.initialEntry || this.props.pageMode) {
+    if (this.props.pageMode) {
       this.close();
       return;
     }
     this.detailRevision += 1;
-    this.closePreview();
-    this.selected = null;
-    this.detail = null;
-    this.detailLoading = false;
-    this.detailError = null;
-    this.installedPluginPackages = new Set();
-    this.addError = null;
-    this.consentWarning = null;
-    this.reviewPlan = null;
-    this.riskAcknowledged = false;
-    this.addedAgentId = null;
+    this.resetSelection();
   }
 
   private openAgentChat(agentId: string, agentName: string, context: ApplicationContext) {
@@ -430,7 +366,7 @@ class ClawsCatalogModel {
     try {
       let result;
       try {
-        result = await applyOfficialClawAdd(scope.client, source, {
+        result = await applyClawAdd(scope.client, source, {
           acknowledgeClawHubRisk: this.riskAcknowledged,
           ...(reviewPlan ? { reviewPlan } : {}),
         });
@@ -445,7 +381,7 @@ class ClawsCatalogModel {
         if (reviewPlan || !readClawReviewRequiredError(error)) {
           throw error;
         }
-        const plan = await readOfficialClawAddReviewPlan(scope.client, source);
+        const plan = await readClawAddReviewPlan(scope.client, source);
         if (
           !plan.pluginReviews.some((item) => item.ownerAction === "install") &&
           plan.skillReviews.length === 0
@@ -515,7 +451,7 @@ class ClawsCatalogModel {
       return;
     }
     try {
-      const result = await readOfficialClawPreview(scope.client, source, { kind, name });
+      const result = await readClawPreview(scope.client, source, { kind, name });
       if (this.gateway.isCurrent(scope) && revision === this.previewRevision && this.preview) {
         this.preview = { ...this.preview, content: result.content, loading: false };
       }
@@ -526,7 +462,7 @@ class ClawsCatalogModel {
     }
   }
 
-  view(): ClawsCatalogViewProps {
+  view(): Omit<ClawsCatalogViewProps, "readDetail" | "detailRequest"> {
     return {
       entries: this.entries,
       basePath: this.context.basePath,
@@ -536,8 +472,6 @@ class ClawsCatalogModel {
       selected: this.selected,
       pageMode: this.props.pageMode ?? false,
       detail: this.detail,
-      detailLoading: this.detailLoading,
-      detailError: this.detailError,
       installedPluginPackages: this.installedPluginPackages,
       addError: this.addError,
       applying: this.applying,
@@ -551,7 +485,7 @@ class ClawsCatalogModel {
       onBack: () => this.back(),
       onClose: () => this.close(),
       onRetryCatalog: () => void this.loadCatalog(),
-      onRetryDetail: () => void this.loadDetail(),
+      onRetryDetail: () => this.loadDetail(),
       onConfirm: () => {
         this.riskAcknowledged = false;
         void this.add();
@@ -582,37 +516,31 @@ class ClawsCatalogModel {
 
 export function ClawsCatalogDialog(props: ClawsDialogProps) {
   const context = useApplication();
+  const [detailRequest, setDetailRequest] = createSignal<Promise<ClawCatalogDetail | null>>();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const model = new Proxy(new ClawsCatalogModel(context, props), {
-    set(target, key, value) {
-      if (Object.is(Reflect.get(target, key), value)) {
+  const model = new Proxy(
+    new ClawsCatalogModel(context, props, (request) => {
+      void setDetailRequest(request);
+    }),
+    {
+      set(target, key, value) {
+        if (Object.is(Reflect.get(target, key), value)) {
+          return true;
+        }
+        Reflect.set(target, key, value);
+        setRevision((current) => current + 1);
         return true;
-      }
-      Reflect.set(target, key, value);
-      setRevision((current) => current + 1);
-      return true;
+      },
     },
-  });
+  );
   model.gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: () => model.onIdentityChange(),
     invalidateRequests: (change) => model.invalidateRequests(change),
     ensureInitialData: () => model.ensureInitialData(),
   });
-  // Current route snapshots admit catalog detail requests; request revisions retire late results.
-  createEffect(
-    () => ({
-      initialEntry: props.initialEntry ?? null,
-      initialPackageName: props.initialPackageName ?? "",
-      pageMode: props.pageMode ?? false,
-      revision: revision(),
-    }),
-    (value) =>
-      untrack(() =>
-        model.syncInitialSelection(value.initialEntry, value.initialPackageName, value.pageMode),
-      ),
-  );
   onCleanup(() => model.dispose());
+  const detail = createMemo(() => detailRequest() ?? null);
   const view = createMemo(() => {
     revision();
     return model.view();
@@ -640,7 +568,7 @@ export function ClawsCatalogDialog(props: ClawsDialogProps) {
   };
   return (
     <openclaw-claws-catalog-dialog>
-      <ClawsCatalogView {...view()} />
+      <ClawsCatalogView {...view()} readDetail={detail} detailRequest={detailRequest()} />
       <Show when={preview()}>
         {(current) => (
           <openclaw-file-preview-modal

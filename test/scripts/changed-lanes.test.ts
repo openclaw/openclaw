@@ -34,8 +34,8 @@ import {
   createNpmLockGuardCommand,
   delegationFailedBeforeRunning,
 } from "../../scripts/check-changed.mts";
-import { resolveOxfmtInvocation } from "../../scripts/format-docs.mts";
 import { findTypecheckInertPaths } from "../../scripts/lib/typecheck-inert.mts";
+import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
@@ -240,10 +240,9 @@ function createRootTestLintFixture() {
   };
 }
 
-// Executes the exact "format changed files" plan command with the repo-pinned oxfmt,
-// reconstructing `pnpm format:check <plan args>`. Guards the runtime verdict, not just
-// plan construction: a misformatted added file must fail, deleted paths must not.
-function runChangedFormatLaneWithRepoOxfmt(cwd: string, changedPaths: string[]) {
+// Run the real package script with the plan arguments, without pnpm reconciling
+// the borrowed install. Formatter selection and CI parity stay production-owned.
+function runChangedFormatLane(cwd: string, changedPaths: string[]) {
   const plan = createChangedCheckPlan(detectChangedLanes(changedPaths));
   const command = expectDefined(
     plan.commands.find(({ name }) => name === "format changed files"),
@@ -254,21 +253,26 @@ function runChangedFormatLaneWithRepoOxfmt(cwd: string, changedPaths: string[]) 
     scripts: Record<string, string>;
   };
   const script = expectDefined(packageJson.scripts["format:check"], "format:check package script");
-  const [bin, ...args] = script.split(" ");
-  expect(bin).toBe("oxfmt");
-  const invocation = resolveOxfmtInvocation([...args, ...command.args.slice(1)], { repoRoot });
+  writeRepoFile(cwd, "package.json", prettyJson({ scripts: { "format:check": script } }));
+  const invocation = resolveNpmRunner({
+    execPath: testNodeExecPath,
+    env: createNestedGitEnv(),
+    npmArgs: ["run", "--silent", "format:check", "--", ...command.args.slice(1)],
+  });
   return spawnSync(invocation.command, invocation.args, {
     cwd,
     encoding: "utf8",
+    env: invocation.env ?? createNestedGitEnv(),
     shell: invocation.shell,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
 }
 
 // Keep the real gate and managed children; check owners share one synthetic recorder.
+// A direct config-doc input avoids unrelated schema import discovery in this ordering fixture.
 function runChangedCheckWithRecordedCommands(
   failingCommand: string | null,
-  paths = ["src/gateway/server-runtime-state.ts"],
+  paths = ["docs/.generated/config-baseline.counts.json", "src/gateway/server-runtime-state.ts"],
   cwd = repoRoot,
 ) {
   const dir = tempDirs.make("openclaw-changed-check-order-");
@@ -740,18 +744,25 @@ describe("scripts/changed-lanes", () => {
 
   it("fails the changed format check on a misformatted added file and passes once formatted", () => {
     const dir = tempDirs.make("openclaw-changed-format-added-");
+    for (const entry of ["scripts", "node_modules"]) {
+      symlinkSync(path.join(repoRoot, entry), path.join(dir, entry), "junction");
+    }
+    writeRepoFile(
+      dir,
+      ".oxfmtrc.jsonc",
+      readFileSync(path.join(repoRoot, ".oxfmtrc.jsonc"), "utf8"),
+    );
     writeRepoFile(dir, "src/added.test.ts", "export const added={value:1};\n");
 
-    const dirty = runChangedFormatLaneWithRepoOxfmt(dir, ["src/added.test.ts"]);
-    expect(dirty.status).not.toBe(0);
+    const dirty = runChangedFormatLane(dir, ["src/added.test.ts"]);
+    expect(dirty.error, dirty.stderr).toBeUndefined();
+    expect(dirty.status, dirty.stdout + dirty.stderr).toBe(1);
     expect(`${dirty.stdout}${dirty.stderr}`).toContain("added.test.ts");
 
     writeRepoFile(dir, "src/added.test.ts", "export const added = { value: 1 };\n");
-    const formatted = runChangedFormatLaneWithRepoOxfmt(dir, [
-      "src/added.test.ts",
-      "src/deleted.ts",
-    ]);
-    expect(formatted.status).toBe(0);
+    const formatted = runChangedFormatLane(dir, ["src/added.test.ts", "src/deleted.ts"]);
+    expect(formatted.error, formatted.stderr).toBeUndefined();
+    expect(formatted.status, formatted.stdout + formatted.stderr).toBe(0);
   });
 
   it.each([

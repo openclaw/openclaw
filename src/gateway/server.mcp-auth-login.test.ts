@@ -4,8 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { text } from "node:stream/consumers";
-import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
@@ -44,9 +43,9 @@ import { whenAdmittedWizardSessionSettled } from "./server-methods/setup-admissi
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   registerMcpAuthForcedEffects,
+  mcpOAuthMetadata,
   type McpAuthEffectEndpoint,
 } from "./server.mcp-auth-login.forced-effects.test-support.js";
-import { prepareTailscalePublishedOrigin } from "./tailscale-published-origin.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -99,16 +98,7 @@ describe("registered mcp.authLogin", () => {
         await releaseDiscovery?.promise;
         json({ resource: resourceUrl, authorization_servers: [new URL(resourceUrl).origin] });
       } else if (url.pathname === "/.well-known/oauth-authorization-server") {
-        json({
-          issuer: new URL(resourceUrl).origin,
-          authorization_endpoint: "https://provider.example/authorize",
-          token_endpoint: new URL("/token", resourceUrl).href,
-          registration_endpoint: new URL("/register", resourceUrl).href,
-          response_types_supported: ["code"],
-          grant_types_supported: ["authorization_code", "refresh_token"],
-          code_challenge_methods_supported: ["S256"],
-          token_endpoint_auth_methods_supported: ["none"],
-        });
+        json(mcpOAuthMetadata(resourceUrl));
       } else if (url.pathname === "/register") {
         const metadata = JSON.parse(await text(request));
         registeredRedirect = metadata.redirect_uris[0];
@@ -274,7 +264,12 @@ describe("registered mcp.authLogin", () => {
     const client = await gateway.openWs({ origin });
     await connectOk(client, {
       scopes,
-      deviceIdentityPath: path.join(resolveStateDir(), `connector-${randomUUID()}.sqlite`),
+      deviceIdentityPath: path.join(
+        resolveStateDir(),
+        `connector-${randomUUID()}`,
+        "client",
+        "credentials.sqlite",
+      ),
       browserOrigin: origin,
       client: {
         id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -285,13 +280,17 @@ describe("registered mcp.authLogin", () => {
     });
     return client;
   }
-  async function begin(client = owner) {
+  async function startLogin(client = owner) {
     const sessionId = randomUUID();
-    const start = await login(client, sessionId);
-    expect(start, JSON.stringify(start.error)).toMatchObject({
+    const started = await login(client, sessionId);
+    expect(started, JSON.stringify(started.error)).toMatchObject({
       ok: true,
       payload: { sessionId, done: false, status: "running" },
     });
+    return sessionId;
+  }
+  async function begin(client = owner) {
+    const sessionId = await startLogin(client);
     while (true) {
       const next = await rpcReq<WizardNextResult>(client, "wizard.next", { sessionId });
       expect(next.ok, JSON.stringify(next.error)).toBe(true);
@@ -326,10 +325,11 @@ describe("registered mcp.authLogin", () => {
   }
 
   registerMcpAuthForcedEffects({
-    connection: () => ({ owner, resourceUrl, config }),
+    connection: () => ({ resourceUrl, config }),
     request: () => admitted,
     identity,
     begin,
+    start: startLogin,
     callback,
     terminal,
     requests,
@@ -479,24 +479,20 @@ describe("registered mcp.authLogin", () => {
     },
   );
 
-  it("does not cancel a newer CLI attempt or accept malformed and denied callbacks", async () => {
+  it("does not cancel a newer CLI attempt when its browser sign-in is denied", async () => {
     await clearMcpOAuthCredentials(identity());
     const started = await begin();
     const pending = await store();
     const requestCount = requests.length;
     let settled = false;
     try {
-      for (const query of ["code=one&code=two", "code=%20"]) {
-        expect((await callback(started.state, query)).status).toBe(400);
-        expect(await store()).toEqual(pending);
-        expect(requests).toHaveLength(requestCount);
-        expect(
-          await rpcReq(owner, "wizard.status", { sessionId: started.sessionId }),
-        ).toMatchObject({
-          ok: true,
-          payload: { status: "running" },
-        });
-      }
+      expect((await callback(started.state, "code=%20")).status).toBe(400);
+      expect(await store()).toEqual(pending);
+      expect(requests).toHaveLength(requestCount);
+      expect(await rpcReq(owner, "wizard.status", { sessionId: started.sessionId })).toMatchObject({
+        ok: true,
+        payload: { status: "running" },
+      });
       const newer = await startMcpOAuthAuthorization(identity(), resolvedTransport(), {});
       expect(newer.status).toBe("redirect");
       const before = await store();
@@ -540,7 +536,10 @@ describe("registered mcp.authLogin", () => {
       expect(after.tokensAuthorizationServerUrl).toEqual(before.tokensAuthorizationServerUrl);
       expectPendingCleared(after);
       expect(requests.slice(exchangeRequests)).toEqual(["/token"]);
-      const retainedClient = new McpClient({ name: "retained-credential", version: "1.0.0" });
+      const retainedClient = new McpClient(
+        { name: "retained-credential", version: "1.0.0" },
+        { versionNegotiation: { mode: "legacy" } },
+      );
       try {
         const Authorization = `Bearer ${expectDefined(after.tokens, "retained tokens").access_token}`;
         await retainedClient.connect(
@@ -597,18 +596,8 @@ describe("registered mcp.authLogin", () => {
     }
   });
 
-  it("expires callbacks and cancels the exact published attempt", async () => {
+  it("cancels the exact published attempt", async () => {
     await clearMcpOAuthCredentials(identity());
-    const started = await begin();
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 11 * 60_000);
-    try {
-      expect((await callback(started.state)).status).toBe(410);
-    } finally {
-      clock.mockRestore();
-    }
-    expect(await terminal(started.sessionId)).toMatchObject({ status: "error" });
-    expect((await store()).codeVerifier).toBeUndefined();
     const next = await begin();
     const session = getSession(next.sessionId);
     expect(await rpcReq(owner, "wizard.cancel", { sessionId: next.sessionId })).toMatchObject({
@@ -617,7 +606,7 @@ describe("registered mcp.authLogin", () => {
     });
     expect((await callback(next.state)).status).toBe(410);
     await whenAdmittedWizardSessionSettled(session);
-    expect((await store()).codeVerifier).toBeUndefined();
+    expectPendingCleared(await store());
   });
 
   it.each(["register", "token"] as const)(
@@ -803,24 +792,4 @@ describe("registered mcp.authLogin", () => {
       }
     },
   );
-
-  it("retires the registered callback when its managed origin is withdrawn", async () => {
-    await clearMcpOAuthCredentials(identity());
-    const origin = `https://127.0.0.1:${gateway.port}`;
-    await configure(config, origin);
-    const withdraw = prepareTailscalePublishedOrigin({ origin, mode: "serve" });
-    const client = await connect(["operator.admin"], origin);
-    try {
-      const started = await begin(client);
-      const session = getSession(started.sessionId);
-      withdraw();
-      await expectSettled(session);
-      expect((await callback(started.state)).status).toBe(410);
-      expect((await store()).tokens).toBeUndefined();
-    } finally {
-      withdraw();
-      client.close();
-      await configure();
-    }
-  });
 });

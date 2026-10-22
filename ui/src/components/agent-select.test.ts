@@ -53,7 +53,6 @@ async function createAgentSelect(
   const element = document.createElement(AGENT_SELECT_TEST_TAG);
   element.options = options;
   element.value = "alpha";
-  element.onCreateAgent = vi.fn();
   Object.assign(element, overrides);
   document.body.append(element);
   await element.updateComplete;
@@ -193,7 +192,7 @@ it("fetches local avatars with the bearer credential when token auth is active",
     });
     expect(avatar?.classList).toContain("is-pending");
     avatar?.querySelector("img")?.dispatchEvent(new Event("load"));
-    expect(avatar?.classList).not.toContain("is-pending");
+    await waitForSolid(() => expect(avatar?.classList).not.toContain("is-pending"));
     element.accessibleLabel = "Choose an agent";
     await element.updateComplete;
     expect(avatar?.classList).not.toContain("is-pending");

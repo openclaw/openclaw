@@ -3,6 +3,10 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import type * as ProviderRuntime from "../../plugins/provider-runtime.js";
+import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
@@ -13,8 +17,10 @@ import {
   createSettledExecution,
   createTurn,
 } from "./followup-delivery.test-helpers.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import { scheduleFollowupDrain } from "./queue/drain.js";
+import { enqueueFollowupRun } from "./queue/enqueue.js";
 import type { FollowupRun } from "./queue/types.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createMockReplyOperation } from "./test-helpers.js";
 
 const deliveryState = vi.hoisted(() => ({
@@ -191,9 +197,14 @@ describe("resolveFollowupDeliveryDecision", () => {
     },
   );
 
-  it.each(["required", "optional", "result-required"] as const)(
-    "discards queued earlier answers after a %s silent final",
-    async (expectation) => {
+  it.each([
+    { expectation: "required", providerStarted: true },
+    { expectation: "optional", providerStarted: true },
+    { expectation: "result-required", providerStarted: true },
+    { expectation: "result-required", providerStarted: false },
+  ] as const)(
+    "discards queued earlier answers after a $expectation silent final (providerStarted: $providerStarted)",
+    async ({ expectation, providerStarted }) => {
       const { replyOperation, failMock } = createMockReplyOperation();
       const turn = createTurn({ operation: replyOperation });
       turn.queued.run.terminalReplyExpectation = expectation;
@@ -201,6 +212,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       const execution = createSettledExecution();
       execution.outcome.result.meta = {
         durationMs: 0,
+        providerStarted,
         finalAssistantRawText: "NO_REPLY",
         yielded: true,
         yieldAcknowledgment: "An unsent confirmation",
@@ -212,7 +224,9 @@ describe("resolveFollowupDeliveryDecision", () => {
         accounting: createAccounting([{ text: "Earlier answer" }]),
       });
       expect(decision).toMatchObject({ kind: "suppress", reason: "silent" });
-      expect(failMock).toHaveBeenCalledTimes(expectation === "result-required" ? 1 : 0);
+      expect(failMock).toHaveBeenCalledTimes(
+        expectation === "result-required" && providerStarted ? 1 : 0,
+      );
     },
   );
 
@@ -790,6 +804,82 @@ describe("deliverFollowupDecision", () => {
       expect(laterDispatcher).not.toHaveBeenCalled();
     } finally {
       deliveryState.followupRoute = undefined;
+    }
+  });
+
+  it("drains a source-delivery retry from its explicit store after the original turn completes", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "agent:main:explicit-store-source-retry";
+    const storePath = "/synthetic/source-retry/sessions.json";
+    const operation = createReplyOperation({
+      sessionKey,
+      sessionId: "source-retry-session",
+      resetTriggered: false,
+      target: captureSessionTarget({ storeScope: storePath, sessionKey, agentId: "main" }),
+    });
+    const owner = getSessionControllerEntryForOperation(operation);
+    const turn = createTurn({
+      operation,
+      config: { messages: { queue: { mode: "followup" } } },
+      session: {
+        kind: "session",
+        key: sessionKey,
+        storePath,
+        current: () => undefined,
+        publish() {},
+      },
+    });
+    turn.queued.run = {
+      ...turn.queued.run,
+      agentId: "main",
+      sessionId: "source-retry-session",
+      sessionKey,
+      sourceReplyDeliveryMode: "message_tool_only",
+    };
+    let retry: FollowupRun | undefined;
+    deliveryState.enqueue.mockImplementationOnce(
+      (...args: Parameters<typeof enqueueFollowupRun>) => {
+        retry = args[1];
+        return enqueueFollowupRun(...args);
+      },
+    );
+    const dispatched: string[] = [];
+    const dispatch = vi.fn(async (run: FollowupRun) => {
+      dispatched.push(run.prompt);
+    });
+    try {
+      const decision = await resolveFollowupDeliveryDecision({
+        turn,
+        execution: createSettledExecution("The source answer is ready."),
+        accounting: createAccounting(),
+      });
+      expect(decision.kind).toBe("retry-source-delivery");
+      await expect(
+        deliverFollowupDecision({
+          decision,
+          turn,
+          defaults: createDefaults(vi.fn()),
+          runId: turn.runId,
+          runFollowup: dispatch,
+        }),
+      ).resolves.toEqual({ kind: "source-retry" });
+      scheduleFollowupDrain(sessionKey, dispatch, owner);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(dispatched).toEqual([]);
+      operation.complete();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(dispatched).toHaveLength(1);
+      expect(dispatched[0]).toContain("The source answer is ready.");
+      expect(dispatch).toHaveBeenCalledOnce();
+    } finally {
+      operation.complete();
+      if (retry?.controllerInput) {
+        retireSessionControllerInput(retry.controllerInput);
+        await retry.controllerInput.settlement.promise;
+        await retry.controllerInput.claim?.settlement.promise;
+      }
+      deliveryState.enqueue.mockReset();
+      vi.useRealTimers();
     }
   });
 

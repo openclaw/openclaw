@@ -32,12 +32,14 @@ suite.define(() => {
       });
       await page.clock.install();
       await page.goto(suite.server.baseUrl + "new");
+      const modelTrigger = page.locator("[data-chat-model-select]");
+      await modelTrigger.click();
       await page.locator('[data-chat-model-option="fixture/model-1999"]').waitFor({
         state: "attached",
       });
+      await modelTrigger.click();
       const input = page.locator(".new-session-page__message");
       await input.fill("Warmup ");
-      await input.focus();
       await page.evaluate(
         () =>
           new Promise<void>((resolve) => {
@@ -45,9 +47,7 @@ suite.define(() => {
           }),
       );
       const sessionKey = "agent:main:dashboard:typing-0";
-      const sidebarRow = page
-        .locator('aside.sidebar [data-session-key="' + sessionKey + '"]')
-        .first();
+      const sidebarRow = page.locator(`aside.sidebar [data-session-key="${sessionKey}"]`).first();
       await expect.poll(() => sidebarRow.textContent()).toContain("Research session 0");
       await pauseVirtualClock(page);
       const observation = await page.evaluateHandle(() => {
@@ -62,51 +62,42 @@ suite.define(() => {
           this: string,
           ...args: Parameters<string["toLocaleLowerCase"]>
         ) {
-          if (/^Model \d+$/.test(this)) {
-            catalogLabelReads += 1;
-          }
+          catalogLabelReads += /^Model \d+$/.test(this) ? 1 : 0;
           return Reflect.apply(original, this, args);
         };
-        return {
-          finish() {
-            // oxlint-disable-next-line no-extend-native -- Restore the page-local instrumentation.
-            String.prototype.toLocaleLowerCase = original;
-            return {
-              catalogLabelReads,
-              sameTextarea: textarea === document.querySelector(".new-session-page__message"),
-              sameModelOption:
-                modelOption ===
-                document.querySelector('[data-chat-model-option="fixture/model-1999"]'),
-            };
-          },
+        return () => {
+          // oxlint-disable-next-line no-extend-native -- Restore the page-local instrumentation.
+          String.prototype.toLocaleLowerCase = original;
+          return {
+            catalogLabelReads,
+            sameTextarea: textarea === document.querySelector(".new-session-page__message"),
+            sameModelOption:
+              modelOption ===
+              document.querySelector('[data-chat-model-option="fixture/model-1999"]'),
+          };
         };
       });
       const row = await gateway.getSessionRow(sessionKey);
-      const requestsBefore = await gateway.getRequests();
-      for (const key of "abcdefghij") {
+      const updateRow = async (label: string) => {
         const now = await page.evaluate(() => Date.now());
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
           sessionKey,
           reason: "patch",
           ancestorSessions: [],
-          session: {
-            ...row,
-            label: "Background update " + key,
-            displayName: "Background update " + key,
-            updatedAt: now,
-            snapshotAt: now,
-          },
+          session: { ...row, label, displayName: label, updatedAt: now, snapshotAt: now },
         });
+      };
+      const requestsBefore = await gateway.getRequests();
+      for (const key of "abcdefghij") {
+        await updateRow("Background update " + key);
         await input.press(key);
         await page.clock.runFor(32);
       }
-      // Cross the entire event-collection window so a wrongly queued read
-      // cannot pass just because this runner typed faster than the debounce.
-      // The paused clock keeps independent 60-second fallbacks outside it.
+      // Cross the event-collection window, but not the independent 60-second fallback.
       await page.clock.fastForward(5_001);
       expect(await input.inputValue()).toBe("Warmup abcdefghij");
-      expect(await observation.evaluate((value) => value.finish())).toEqual({
+      expect(await observation.evaluate((finish) => finish())).toEqual({
         catalogLabelReads: 0,
         sameTextarea: true,
         sameModelOption: true,
@@ -116,26 +107,10 @@ suite.define(() => {
       await observation.dispose();
       // Reveal catches up from the current owner, not a retained mutable roster.
       await input.fill("");
-      await expect
-        .poll(() => page.locator(".agent-chat__recent-name").first().textContent())
-        .toBe("Background update j");
-      const visibleUpdatedAt = await page.evaluate(() => Date.now());
-      await gateway.emitGatewayEvent("sessions.changed", {
-        agentId: "main",
-        sessionKey,
-        reason: "patch",
-        ancestorSessions: [],
-        session: {
-          ...row,
-          label: "Visible recent update",
-          displayName: "Visible recent update",
-          updatedAt: visibleUpdatedAt,
-          snapshotAt: visibleUpdatedAt,
-        },
-      });
-      await expect
-        .poll(() => page.locator(".agent-chat__recent-name").first().textContent())
-        .toBe("Visible recent update");
+      const recent = page.locator(".agent-chat__recent-name").first();
+      await expect.poll(() => recent.textContent()).toBe("Background update j");
+      await updateRow("Visible recent update");
+      await expect.poll(() => recent.textContent()).toBe("Visible recent update");
     });
   });
 });

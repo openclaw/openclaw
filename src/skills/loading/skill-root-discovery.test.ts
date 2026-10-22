@@ -20,15 +20,8 @@ async function createTempWorkspaceDir() {
   return workspaceDir;
 }
 
-function collectMatching<T>(items: readonly T[], predicate: (item: T) => boolean): T[] {
-  const matches: T[] = [];
-  for (const item of items) {
-    if (predicate(item)) {
-      matches.push(item);
-    }
-  }
-  return matches;
-}
+const skill = (dir: string, name: string, description = name, body?: string) =>
+  writeSkill({ dir, name, description, body });
 
 function loadTestWorkspaceSkills(
   workspaceDir: string,
@@ -40,6 +33,16 @@ function loadTestWorkspaceSkills(
     pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
     ...opts,
   });
+}
+
+function names(
+  workspaceDir: string,
+  extraDirs: string[] = [],
+  limits: NonNullable<import("../../config/types.openclaw.js").OpenClawConfig["skills"]> = {},
+) {
+  return loadTestWorkspaceSkills(workspaceDir, {
+    config: { skills: { load: { extraDirs }, ...limits } },
+  }).map((entry) => entry.skill.name);
 }
 
 beforeAll(async () => {
@@ -54,24 +57,20 @@ describe("discoverSkillCandidates", () => {
   it("rejects an undiscoverable replacement without removing the installed skill", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const sourceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: sourceDir,
-      name: "installed-skill",
-      description: "Keep the discoverable installation",
-    });
+    await skill(sourceDir, "installed-skill", "Keep the discoverable installation");
     expect(
       await installSkillFromSource({ workspaceDir, spec: sourceDir, slug: "installed-skill" }),
-    ).toMatchObject({ ok: true });
+    ).toMatchObject({ slug: "installed-skill" });
     await fs.writeFile(path.join(sourceDir, "SKILL.md"), "---\nname: installed-skill\n---\n");
 
-    expect(
-      await installSkillFromSource({
+    await expect(
+      installSkillFromSource({
         workspaceDir,
         spec: sourceDir,
         slug: "installed-skill",
         force: true,
       }),
-    ).toMatchObject({ ok: false, error: expect.stringContaining("description is required") });
+    ).rejects.toThrow("description is required");
     expect(loadTestWorkspaceSkills(workspaceDir).map((entry) => entry.skill.description)).toEqual([
       "Keep the discoverable installation",
     ]);
@@ -79,29 +78,13 @@ describe("discoverSkillCandidates", () => {
 
   it("loads earlier grouped skills before later direct siblings hit the source cap", async () => {
     const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "00-group", "grouped"),
-      name: "grouped-skill",
-      description: "Grouped skill before direct siblings",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "01-direct"),
-      name: "direct-skill",
-      description: "Direct sibling after grouped skill",
-    });
-
-    const names = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        skills: {
-          limits: {
-            maxCandidatesPerRoot: 10,
-            maxSkillsLoadedPerSource: 1,
-          },
-        },
-      },
-    }).map((entry) => entry.skill.name);
-
-    expect(names).toEqual(["grouped-skill"]);
+    await skill(path.join(workspaceDir, "skills", "00-group", "grouped"), "grouped-skill");
+    await skill(path.join(workspaceDir, "skills", "01-direct"), "direct-skill");
+    expect(
+      names(workspaceDir, [], {
+        limits: { maxCandidatesPerRoot: 10, maxSkillsLoadedPerSource: 1 },
+      }),
+    ).toEqual(["grouped-skill"]);
   });
 
   it("keeps later grouped siblings discoverable when an earlier group is noisy", async () => {
@@ -117,112 +100,49 @@ describe("discoverSkillCandidates", () => {
       }
     }
     await createNoisyTree(path.join(workspaceDir, "skills", "00-noisy"), 6);
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "01-later", "later-skill"),
-      name: "later-skill",
-      description: "Grouped sibling after a noisy tree",
-    });
-
-    const names = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        skills: {
-          limits: {
-            maxCandidatesPerRoot: 2,
-            maxSkillsLoadedPerSource: 10,
-          },
-        },
-      },
-    }).map((entry) => entry.skill.name);
-
-    expect(names).toContain("later-skill");
+    await skill(path.join(workspaceDir, "skills", "01-later", "later-skill"), "later-skill");
+    expect(
+      names(workspaceDir, [], {
+        limits: { maxCandidatesPerRoot: 2, maxSkillsLoadedPerSource: 10 },
+      }),
+    ).toContain("later-skill");
   });
 
   it("keeps a configured direct skill root even when it has nested skill fixtures", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const skillDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: skillDir,
-      name: "direct-root",
-      description: "Configured direct skill root",
-    });
-    await writeSkill({
-      dir: path.join(skillDir, "skills", "examples", "fixture"),
-      name: "fixture-skill",
-      description: "Nested fixture skill should not replace the root",
-    });
-
-    const names = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        skills: {
-          load: { extraDirs: [skillDir] },
-        },
-      },
-    }).map((entry) => entry.skill.name);
-
-    expect(names).toContain("direct-root");
-    expect(names).not.toContain("fixture-skill");
+    await skill(skillDir, "direct-root", "Configured direct skill root");
+    await skill(path.join(skillDir, "skills", "examples", "fixture"), "fixture-skill");
+    const loaded = names(workspaceDir, [skillDir]);
+    expect(loaded).toContain("direct-root");
+    expect(loaded).not.toContain("fixture-skill");
   });
 
   it("keeps nested skills when top-level candidate cap is filled by direct skills", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const skillRootDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(skillRootDir, "00-valid"),
-      name: "valid-root-skill",
-      description: "Direct child skill under configured root",
+    await skill(path.join(skillRootDir, "00-valid"), "valid-root-skill");
+    await skill(path.join(skillRootDir, "skills", "examples", "fixture"), "fixture-skill");
+    const loaded = names(workspaceDir, [skillRootDir], {
+      limits: { maxCandidatesPerRoot: 1, maxSkillsLoadedPerSource: 10 },
     });
-    await writeSkill({
-      dir: path.join(skillRootDir, "skills", "examples", "fixture"),
-      name: "fixture-skill",
-      description: "Nested fixture should still be scanned",
-    });
-
-    const names = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        skills: {
-          load: { extraDirs: [skillRootDir] },
-          limits: {
-            maxCandidatesPerRoot: 1,
-            maxSkillsLoadedPerSource: 10,
-          },
-        },
-      },
-    }).map((entry) => entry.skill.name);
-
-    expect(names).toContain("valid-root-skill");
-    expect(names).toContain("fixture-skill");
+    expect(loaded).toContain("valid-root-skill");
+    expect(loaded).toContain("fixture-skill");
   });
 
   it("keeps configured root grouping outside skills within watcher depth", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const skillRootDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(skillRootDir, "group", "within-depth"),
-      name: "within-depth",
-      description: "Depth 2 from configured root",
-    });
-    await writeSkill({
-      dir: path.join(skillRootDir, "group", "d1", "too-deep"),
-      name: "too-deep",
-      description: "Depth 3 from configured root",
-    });
-    await writeSkill({
-      dir: path.join(skillRootDir, "skills", "d0", "d1", "d2", "d3", "d4", "d5"),
-      name: "deep-nested-skill",
-      description: "Depth 6 from nested skills root",
-    });
-
-    const names = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        skills: {
-          load: { extraDirs: [skillRootDir] },
-        },
-      },
-    }).map((entry) => entry.skill.name);
-
-    expect(names).toContain("within-depth");
-    expect(names).toContain("deep-nested-skill");
-    expect(names).not.toContain("too-deep");
+    await skill(path.join(skillRootDir, "group", "within-depth"), "within-depth");
+    await skill(path.join(skillRootDir, "group", "d1", "too-deep"), "too-deep");
+    await skill(
+      path.join(skillRootDir, "skills", "d0", "d1", "d2", "d3", "d4", "d5"),
+      "deep-nested-skill",
+    );
+    const loaded = names(workspaceDir, [skillRootDir]);
+    expect(loaded).toContain("within-depth");
+    expect(loaded).toContain("deep-nested-skill");
+    expect(loaded).not.toContain("too-deep");
   });
 
   it("does not spend nested candidate budget on ignored raw entries", async () => {
@@ -233,28 +153,13 @@ describe("discoverSkillCandidates", () => {
       await fs.writeFile(path.join(groupDir, `ignored-${String(i).padStart(2, "0")}.txt`), "");
     }
     for (const name of ["valid-a", "valid-b", "valid-c"]) {
-      await writeSkill({
-        dir: path.join(groupDir, name),
-        name,
-        description: `${name} nested under a group`,
-      });
+      await skill(path.join(groupDir, name), name, `${name} nested under a group`);
     }
 
-    const names = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        skills: {
-          limits: {
-            maxCandidatesPerRoot: 2,
-            maxSkillsLoadedPerSource: 10,
-          },
-        },
-      },
-    }).map((entry) => entry.skill.name);
-
-    expect(collectMatching(names, (name) => name.startsWith("valid-"))).toEqual([
-      "valid-a",
-      "valid-b",
-    ]);
+    const loaded = names(workspaceDir, [], {
+      limits: { maxCandidatesPerRoot: 2, maxSkillsLoadedPerSource: 10 },
+    });
+    expect(loaded.filter((name) => name.startsWith("valid-"))).toEqual(["valid-a", "valid-b"]);
   });
 
   it("limits discovery for nested repo-style skills roots (dir/skills/*)", async () => {
@@ -262,26 +167,14 @@ describe("discoverSkillCandidates", () => {
     const repoDir = await createTempWorkspaceDir();
     for (let i = 0; i < 8; i += 1) {
       const name = `repo-skill-${String(i).padStart(2, "0")}`;
-      await writeSkill({
-        dir: path.join(repoDir, "skills", name),
-        name,
-        description: `Desc ${i}`,
-      });
+      await skill(path.join(repoDir, "skills", name), name, `Desc ${i}`);
     }
 
-    const names = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        skills: {
-          load: { extraDirs: [repoDir] },
-          limits: {
-            maxCandidatesPerRoot: 5,
-            maxSkillsLoadedPerSource: 5,
-          },
-        },
-      },
-    }).map((entry) => entry.skill.name);
-
-    expect(names).toStrictEqual([
+    expect(
+      names(workspaceDir, [repoDir], {
+        limits: { maxCandidatesPerRoot: 5, maxSkillsLoadedPerSource: 5 },
+      }),
+    ).toStrictEqual([
       "repo-skill-00",
       "repo-skill-01",
       "repo-skill-02",
@@ -292,23 +185,15 @@ describe("discoverSkillCandidates", () => {
 
   it("skips skills whose SKILL.md exceeds maxSkillFileBytes", async () => {
     const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "small-skill"),
-      name: "small-skill",
-      description: "Small",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "big-skill"),
-      name: "big-skill",
-      description: "Big",
-      body: "x".repeat(5_000),
-    });
-
-    const names = loadTestWorkspaceSkills(workspaceDir, {
-      config: { skills: { limits: { maxSkillFileBytes: 1000 } } },
-    }).map((entry) => entry.skill.name);
-
-    expect(names).toContain("small-skill");
-    expect(names).not.toContain("big-skill");
+    await skill(path.join(workspaceDir, "skills", "small-skill"), "small-skill", "Small");
+    await skill(
+      path.join(workspaceDir, "skills", "big-skill"),
+      "big-skill",
+      "Big",
+      "x".repeat(5_000),
+    );
+    const loaded = names(workspaceDir, [], { limits: { maxSkillFileBytes: 1000 } });
+    expect(loaded).toContain("small-skill");
+    expect(loaded).not.toContain("big-skill");
   });
 });

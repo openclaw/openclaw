@@ -22,6 +22,12 @@ native builds use these assembled scripts. The npm package keeps both source
 files together for installed updater compatibility. Installing from the website
 never downloads a separate policy helper.
 
+Git installs retry transient remote-ref lookup failures up to three times. Failed
+lookups print Git's diagnostic with URLs, authorization headers, and GitHub tokens
+redacted. Missing refs and authentication failures stop without retrying.
+Release-tag fetches stay depth-limited when the existing checkout is shallow;
+full-history checkouts retain their history.
+
 | Script                             | Platform                      | What it does                                                                                                                   |
 | ---------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | [`install.sh`](#installsh)         | macOS / Linux / WSL           | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.                                       |
@@ -35,6 +41,8 @@ Before changing packages, every installer checks the exact npm executable it wil
 On npm 12, local `.tgz` and `.tar.gz` installs and updates need a comma-free archive filename and parent path. npm uses commas to separate lifecycle approvals, so move the archive to a comma-free path before retrying. Relative tarball arguments are still supported; the installer resolves their full path for approval.
 
 Install-method switches verify the replacement before retiring the current owner. Source wrappers use a same-directory atomic replacement; when an npm shim shares that path, the installer moves only an identity-matched source wrapper aside and restores it if npm installation, lifecycle checks, or candidate verification fails. On upgrades, `install.sh` and `install.ps1` run `openclaw doctor --fix`; repair or final verification failure exits nonzero, and the success banner appears only after those steps complete.
+
+Installer help includes [official OpenClaw support](https://community.openclaw.ai/) alongside the self-service FAQ. Handled installation failures also show the support link in human-readable output; `install-cli.sh --json` keeps its existing error and completion events without human support text. Review diagnostics for credentials and personal data before sharing them.
 
 ## Private Node recovery
 
@@ -408,6 +416,12 @@ For OpenAI API models, configure an API-key auth profile.
 Explicitly select `agentRuntime.id: "openclaw"` for the models you use.
 API-key access uses OpenAI Platform billing, separate from a ChatGPT/Codex subscription.
 See [OpenAI setup](/providers/openai/setup) and [runtime selection](/providers/openai/runtimes#implicit-agent-runtime).
+
+The installer creates a new prefix with mode `0700`, including under `umask 0002`.
+On Linux, Gateway service installation also tightens an existing owned state
+directory to `0700` if it is group- or world-writable. Service status checks do
+not change permissions. Foreign-owned directories and unsafe service directories
+still require operator repair before service installation.
 
 With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix>/tools/node-v<version>` and updating the `<prefix>/tools/node` alias. It skips Git, OpenClaw installation, onboarding, and Gateway service work. This mode refuses musl Linux and FreeBSD. Update their system Node packages manually.
 

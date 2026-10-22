@@ -48,14 +48,14 @@ vi.mock("../../packages/gateway-client/src/client.js", () => ({
 }));
 
 vi.mock("../infra/ssh-tunnel.js", () => ({ startSshPortForward: fixture.startSsh }));
-vi.mock("../infra/device-auth-store.js", () => ({
+vi.mock("../infra/device-auth-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-auth-store.js")>()),
   clearDeviceAuthToken: vi.fn(),
   clearOriginDeviceToken: fixture.clearOrigin,
   loadDeviceAuthToken: vi.fn(),
   loadDeviceAuthTokenReadOnly: vi.fn(),
   loadOriginDeviceToken: fixture.loadOrigin,
   loadOriginDeviceTokenReadOnly: vi.fn(),
-  prepareDeviceAuthStore: vi.fn(),
   storeDeviceAuthToken: vi.fn(),
   storeOriginDeviceToken: fixture.storeOrigin,
 }));

@@ -1,47 +1,51 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expectNodeFailure,
+  expectNodeReply as expectReply,
+  invokeNodeRequest,
+} from "./nodes.invoke.test-support.js";
 import { nodePendingWorkHandlers } from "./nodes.pending-work.js";
 import type { GatewayClient } from "./types.js";
 
-const mocks = vi.hoisted(() => ({
-  captureNodePairingGeneration: vi.fn(),
-  captureNodeWakeLifecycle: vi.fn(),
-  drainNodePendingWork: vi.fn(),
-  enqueueNodePendingWork: vi.fn(),
-  isNodePairingGenerationCurrent: vi.fn(),
-  isNodeWakeLifecycleCurrent: vi.fn(),
-  maybeWakeNodeWithApns: vi.fn(),
-  maybeSendNodeWakeNudge: vi.fn(),
-  removeNodePendingWorkItem: vi.fn(),
-  releaseNodeWakeLifecycle: vi.fn(),
-  waitForNodeReconnect: vi.fn(),
+const { pairing, work, wakeState, wake } = vi.hoisted(() => ({
+  pairing: { captureNodePairingGeneration: vi.fn(), isNodePairingGenerationCurrent: vi.fn() },
+  work: {
+    drainNodePendingWork: vi.fn(),
+    enqueueNodePendingWork: vi.fn(),
+    removeNodePendingWorkItem: vi.fn(),
+  },
+  wakeState: {
+    NODE_WAKE_RECONNECT_WAIT_MS: 3_000,
+    NODE_WAKE_RECONNECT_RETRY_WAIT_MS: 12_000,
+    captureNodeWakeLifecycle: vi.fn(),
+    isNodeWakeLifecycleCurrent: vi.fn(),
+    releaseNodeWakeLifecycle: vi.fn(),
+  },
+  wake: {
+    maybeWakeNodeWithApns: vi.fn(),
+    maybeSendNodeWakeNudge: vi.fn(),
+    waitForNodeReconnect: vi.fn(),
+  },
 }));
-vi.mock("../node-pending-work.js", () => ({
-  drainNodePendingWork: mocks.drainNodePendingWork,
-  enqueueNodePendingWork: mocks.enqueueNodePendingWork,
-  removeNodePendingWorkItem: mocks.removeNodePendingWorkItem,
-}));
-vi.mock("../../infra/device-pairing-node-state.js", () => ({
-  captureNodePairingGeneration: mocks.captureNodePairingGeneration,
-  isNodePairingGenerationCurrent: mocks.isNodePairingGenerationCurrent,
-}));
-vi.mock("../node-wake-state.js", () => ({
-  NODE_WAKE_RECONNECT_WAIT_MS: 3_000,
-  NODE_WAKE_RECONNECT_RETRY_WAIT_MS: 12_000,
-  captureNodeWakeLifecycle: mocks.captureNodeWakeLifecycle,
-  isNodeWakeLifecycleCurrent: mocks.isNodeWakeLifecycleCurrent,
-  releaseNodeWakeLifecycle: mocks.releaseNodeWakeLifecycle,
-}));
-vi.mock("./nodes.wake.js", () => ({
-  maybeWakeNodeWithApns: mocks.maybeWakeNodeWithApns,
-  maybeSendNodeWakeNudge: mocks.maybeSendNodeWakeNudge,
-  waitForNodeReconnect: mocks.waitForNodeReconnect,
-}));
+// mock-isolation: Pending work is owned by this fixture, not persistent Gateway state.
+vi.mock("../node-pending-work.js", () => work);
+// mock-isolation: Pairing generations are synthetic and must not read host pairings.
+vi.mock("../../infra/device-pairing-node-state.js", () => pairing);
+// mock-isolation: Wake lifecycle state is synthetic and must not read or change host nodes.
+vi.mock("../node-wake-state.js", () => wakeState);
+// mock-isolation: Exercise wake decisions without sending APNs or waking real nodes.
+vi.mock("./nodes.wake.js", () => wake);
 
 const nodeId = "node-1";
 const generation = { nodeId, key: "generation-1" };
 const item = { id: "pending-1", type: "location.request", priority: "high" };
 let lifecycle: AbortController;
-
+const wakeOptions = () => ({
+  wakeReason: "node.pending",
+  cfg: {},
+  lifecycle: lifecycle.signal,
+  generation,
+});
 function makeContext(
   getSession: () => { connId: string; pairingGeneration?: string } | undefined = () => undefined,
 ) {
@@ -56,66 +60,40 @@ function makeContext(
   };
 }
 
-async function callPending(
-  method: "node.pending.drain" | "node.pending.enqueue",
-  params: Record<string, unknown>,
-  context = makeContext(),
-  client: GatewayClient | null = null,
+async function request(
+  kind: "drain" | "enqueue",
+  params: Record<string, unknown> = {},
+  context = makeContext(
+    kind === "drain" ? () => ({ connId: "conn-1", pairingGeneration: generation.key }) : undefined,
+  ),
+  client: GatewayClient | null = kind === "drain"
+    ? ({ connId: "conn-1", connect: { device: { id: nodeId } } } as GatewayClient)
+    : null,
 ) {
-  const respond = vi.fn();
-  await nodePendingWorkHandlers[method]!({
-    params,
-    respond,
-    client,
-    context: context as never,
-    req: { type: "req", id: method, method },
-    isWebchatConnect: () => false,
+  const method = `node.pending.${kind}`;
+  return invokeNodeRequest(nodePendingWorkHandlers[method]!, context as never, client, method, {
+    ...(kind === "drain" ? { maxItems: 3 } : { nodeId, type: item.type }),
+    ...params,
   });
-  return respond;
 }
 
-function drain(
-  context = makeContext(() => ({ connId: "conn-1", pairingGeneration: generation.key })),
-) {
-  return callPending("node.pending.drain", { maxItems: 3 }, context, {
-    connId: "conn-1",
-    connect: { device: { id: nodeId } },
-  } as never);
-}
-function enqueue(params = {}, context = makeContext()) {
-  return callPending("node.pending.enqueue", { nodeId, type: item.type, ...params }, context);
-}
-function expectPairingChanged(respond: ReturnType<typeof vi.fn>) {
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ details: { code: "PAIRING_CHANGED" } }),
-  );
+function expectPairingChanged(respond: Awaited<ReturnType<typeof request>>) {
+  expectNodeFailure(respond, { details: { code: "PAIRING_CHANGED" } });
 }
 
 describe("node.pending handlers", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     lifecycle = new AbortController();
-    mocks.captureNodePairingGeneration.mockResolvedValue(generation);
-    mocks.captureNodeWakeLifecycle.mockReturnValue(lifecycle.signal);
-    mocks.isNodePairingGenerationCurrent.mockResolvedValue(true);
-    mocks.isNodeWakeLifecycleCurrent.mockImplementation(
+    pairing.captureNodePairingGeneration.mockResolvedValue(generation);
+    wakeState.captureNodeWakeLifecycle.mockReturnValue(lifecycle.signal);
+    pairing.isNodePairingGenerationCurrent.mockResolvedValue(true);
+    wakeState.isNodeWakeLifecycleCurrent.mockImplementation(
       (_nodeId: string, signal: AbortSignal) => !signal.aborted,
     );
-    mocks.enqueueNodePendingWork.mockReturnValue({ revision: 4, deduped: false, item });
-    mocks.maybeWakeNodeWithApns.mockResolvedValue({
-      available: true,
-      throttled: false,
-      path: "sent",
-      durationMs: 0,
-    });
-    mocks.maybeSendNodeWakeNudge.mockResolvedValue({
-      sent: false,
-      throttled: false,
-      reason: "no-registration",
-      durationMs: 0,
-    });
+    work.enqueueNodePendingWork.mockReturnValue({ revision: 4, deduped: false, item });
+    wake.maybeWakeNodeWithApns.mockResolvedValue({ available: true });
+    wake.maybeSendNodeWakeNudge.mockResolvedValue({});
   });
 
   it("drains pending work for the connected node identity", async () => {
@@ -124,51 +102,64 @@ describe("node.pending handlers", () => {
       items: [{ id: "baseline-status", type: "status.request" }],
       hasMore: false,
     };
-    mocks.drainNodePendingWork.mockReturnValue(drained);
-    expect(await drain()).toHaveBeenCalledWith(true, { nodeId, ...drained }, undefined);
-    expect(mocks.drainNodePendingWork).toHaveBeenCalledWith(nodeId, {
+    work.drainNodePendingWork.mockReturnValue(drained);
+    expect(await request("drain")).toHaveBeenCalledWith(true, { nodeId, ...drained }, undefined);
+    expect(work.drainNodePendingWork).toHaveBeenCalledWith(nodeId, {
       maxItems: 3,
       includeDefaultStatus: true,
       pairingGeneration: generation.key,
     });
   });
 
-  it("rejects node.pending.drain without a connected device identity", async () => {
-    expect(await callPending("node.pending.drain", {})).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("connected device identity") }),
+  it.each(["missing identity", "changed pairing", "same-generation reconnect"])(
+    "rejects %s before destructively draining",
+    async (reason) => {
+      let connId = "conn-1";
+      const context = makeContext(() => ({ connId, pairingGeneration: generation.key }));
+      context.nodeRegistry.isConnectionCurrentPairingState.mockImplementation(async () => {
+        connId = "replacement";
+        return reason === "same-generation reconnect";
+      });
+      if (reason === "missing identity") {
+        expectNodeFailure(await request("drain", {}, undefined, null), {
+          message: expect.stringContaining("connected device identity"),
+        });
+      } else {
+        expectPairingChanged(await request("drain", {}, context));
+      }
+      expect(work.drainNodePendingWork).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([999, 86_400_001, 1_000.5, Number.NaN, Number.POSITIVE_INFINITY, "1000"])(
+    "rejects invalid pending-work TTL %s before queueing",
+    async (expiresInMs) => {
+      expectNodeFailure(await request("enqueue", { expiresInMs, wake: false }), {
+        code: "INVALID_REQUEST",
+      });
+      expect(work.enqueueNodePendingWork).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([1_000, 86_400_000])("forwards admitted pending-work TTL %s", async (expiresInMs) => {
+    expectReply(
+      await request("enqueue", { expiresInMs, wake: false }),
+      expect.objectContaining({ queued: item }),
     );
-    expect(mocks.drainNodePendingWork).not.toHaveBeenCalled();
-  });
-
-  it("rejects a changed pairing before draining its pending work", async () => {
-    const context = makeContext(() => ({ connId: "conn-1", pairingGeneration: generation.key }));
-    context.nodeRegistry.isConnectionCurrentPairingState.mockResolvedValue(false);
-    expectPairingChanged(await drain(context));
-    expect(mocks.drainNodePendingWork).not.toHaveBeenCalled();
-  });
-
-  it("rejects a same-generation reconnect before destructively draining", async () => {
-    let connId = "conn-1";
-    const context = makeContext(() => ({ connId, pairingGeneration: generation.key }));
-    context.nodeRegistry.isConnectionCurrentPairingState.mockImplementation(async () => {
-      connId = "replacement";
-      return true;
-    });
-    expectPairingChanged(await drain(context));
-    expect(mocks.drainNodePendingWork).not.toHaveBeenCalled();
+    expect(work.enqueueNodePendingWork).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInMs }),
+    );
   });
 
   it("normalizes the target identity before queueing and waking a disconnected node", async () => {
     let connected = false;
     const context = makeContext(() => (connected ? { connId: "conn-1" } : undefined));
-    mocks.waitForNodeReconnect.mockImplementation(async () => {
+    wake.waitForNodeReconnect.mockImplementation(async () => {
       connected = true;
       return true;
     });
-    const respond = await enqueue({ nodeId: ` ${nodeId} `, priority: "high" }, context);
-    expect(mocks.enqueueNodePendingWork).toHaveBeenCalledWith({
+    const respond = await request("enqueue", { nodeId: ` ${nodeId} `, priority: "high" }, context);
+    expect(work.enqueueNodePendingWork).toHaveBeenCalledWith({
       nodeId,
       type: item.type,
       priority: "high",
@@ -179,26 +170,17 @@ describe("node.pending handlers", () => {
       nodeId,
       generation.key,
     );
-    expect(mocks.maybeWakeNodeWithApns).toHaveBeenCalledWith(nodeId, {
-      wakeReason: "node.pending",
-      cfg: {},
-      lifecycle: lifecycle.signal,
-      generation,
-    });
-    expect(mocks.waitForNodeReconnect).toHaveBeenCalledWith({
+    expect(wake.maybeWakeNodeWithApns).toHaveBeenCalledWith(nodeId, wakeOptions());
+    expect(wake.waitForNodeReconnect).toHaveBeenCalledWith({
       nodeId,
       context,
       timeoutMs: 3_000,
       lifecycle: lifecycle.signal,
       pairingGeneration: generation.key,
     });
-    expect(mocks.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
-    expect(mocks.releaseNodeWakeLifecycle).toHaveBeenCalledWith(nodeId, lifecycle.signal);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { nodeId, revision: 4, queued: item, wakeTriggered: true },
-      undefined,
-    );
+    expect(wake.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
+    expect(wakeState.releaseNodeWakeLifecycle).toHaveBeenCalledWith(nodeId, lifecycle.signal);
+    expectReply(respond, { nodeId, revision: 4, queued: item, wakeTriggered: true });
   });
 
   it.each([
@@ -207,56 +189,42 @@ describe("node.pending handlers", () => {
   ])(
     "retries a disconnected node only when its first wake is available=$available",
     async ({ available, forces, timeouts }) => {
-      mocks.maybeWakeNodeWithApns.mockResolvedValue({
-        available,
-        throttled: false,
-        path: available ? "sent" : "no-registration",
-        durationMs: 0,
-      });
-      mocks.waitForNodeReconnect.mockResolvedValue(false);
-      const respond = await enqueue();
-      expect(mocks.maybeWakeNodeWithApns.mock.calls.map(([, options]) => options.force)).toEqual(
+      wake.maybeWakeNodeWithApns.mockResolvedValue({ available });
+      wake.waitForNodeReconnect.mockResolvedValue(false);
+      const respond = await request("enqueue");
+      expect(wake.maybeWakeNodeWithApns.mock.calls.map(([, options]) => options.force)).toEqual(
         forces,
       );
-      expect(mocks.waitForNodeReconnect.mock.calls.map(([options]) => options.timeoutMs)).toEqual(
+      expect(wake.waitForNodeReconnect.mock.calls.map(([options]) => options.timeoutMs)).toEqual(
         timeouts,
       );
-      expect(mocks.maybeSendNodeWakeNudge).toHaveBeenCalledOnce();
-      expect(mocks.removeNodePendingWorkItem).not.toHaveBeenCalled();
-      expect(mocks.releaseNodeWakeLifecycle).toHaveBeenCalledWith(nodeId, lifecycle.signal);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ wakeTriggered: available }),
-        undefined,
-      );
+      expect(wake.maybeSendNodeWakeNudge).toHaveBeenCalledOnce();
+      expect(work.removeNodePendingWorkItem).not.toHaveBeenCalled();
+      expect(wakeState.releaseNodeWakeLifecycle).toHaveBeenCalledWith(nodeId, lifecycle.signal);
+      expectReply(respond, expect.objectContaining({ wakeTriggered: available }));
     },
   );
 
   it("does not enqueue work when pairing invalidates during the generation check", async () => {
-    mocks.isNodePairingGenerationCurrent.mockImplementation(async () => {
+    pairing.isNodePairingGenerationCurrent.mockImplementation(async () => {
       lifecycle.abort();
       return true;
     });
-    expectPairingChanged(await enqueue({ wake: false }));
-    expect(mocks.enqueueNodePendingWork).not.toHaveBeenCalled();
+    expectPairingChanged(await request("enqueue", { wake: false }));
+    expect(work.enqueueNodePendingWork).not.toHaveBeenCalled();
   });
 
   it("returns unavailable when pairing removal invalidates an enqueued item", async () => {
-    mocks.waitForNodeReconnect.mockImplementation(async () => {
+    wake.waitForNodeReconnect.mockImplementation(async () => {
       lifecycle.abort();
       return false;
     });
-    expectPairingChanged(await enqueue());
-    expect(mocks.captureNodeWakeLifecycle).toHaveBeenCalledWith(nodeId, generation.key);
-    expect(mocks.maybeWakeNodeWithApns).toHaveBeenCalledExactlyOnceWith(nodeId, {
-      wakeReason: "node.pending",
-      cfg: {},
-      lifecycle: lifecycle.signal,
-      generation,
-    });
-    expect(mocks.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
-    expect(mocks.releaseNodeWakeLifecycle).toHaveBeenCalledWith(nodeId, lifecycle.signal);
-    expect(mocks.removeNodePendingWorkItem).toHaveBeenCalledWith({
+    expectPairingChanged(await request("enqueue"));
+    expect(wakeState.captureNodeWakeLifecycle).toHaveBeenCalledWith(nodeId, generation.key);
+    expect(wake.maybeWakeNodeWithApns).toHaveBeenCalledExactlyOnceWith(nodeId, wakeOptions());
+    expect(wake.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
+    expect(wakeState.releaseNodeWakeLifecycle).toHaveBeenCalledWith(nodeId, lifecycle.signal);
+    expect(work.removeNodePendingWorkItem).toHaveBeenCalledWith({
       nodeId,
       itemId: item.id,
       pairingGeneration: generation.key,
@@ -264,10 +232,10 @@ describe("node.pending handlers", () => {
   });
 
   it("does not remove replacement work when an invalidated enqueue reused it", async () => {
-    mocks.enqueueNodePendingWork.mockReturnValue({ revision: 9, deduped: true, item });
-    mocks.isNodePairingGenerationCurrent.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-    expectPairingChanged(await enqueue({ wake: false }));
-    expect(mocks.enqueueNodePendingWork).toHaveBeenCalledOnce();
-    expect(mocks.removeNodePendingWorkItem).not.toHaveBeenCalled();
+    work.enqueueNodePendingWork.mockReturnValue({ revision: 9, deduped: true, item });
+    pairing.isNodePairingGenerationCurrent.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    expectPairingChanged(await request("enqueue", { wake: false }));
+    expect(work.enqueueNodePendingWork).toHaveBeenCalledOnce();
+    expect(work.removeNodePendingWorkItem).not.toHaveBeenCalled();
   });
 });

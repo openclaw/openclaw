@@ -22,6 +22,15 @@ export function createMergeOutcomeFixtureHarness() {
   afterEach(() => cleanupTempDirs(restoredRoots));
   let fixtureTemplate: ReturnType<typeof createFixtureTemplate> | undefined;
   const scripts = join(process.cwd(), "scripts");
+  const wrapper = readFileSync(join(scripts, "pr"), "utf8");
+  const workflowGitOwner = wrapper.slice(
+    wrapper.indexOf("pr_batch_wrapper_git() {"),
+    wrapper.indexOf("\nEOF_WRAPPER_GIT\n}") + "\nEOF_WRAPPER_GIT\n}".length,
+  );
+  const workflowSelectionOwner = wrapper.slice(
+    wrapper.indexOf("verify_pr_workflow_source() {"),
+    wrapper.indexOf("\n# Keep dependency sourcing independent"),
+  );
   const nodeExecutable = requireNodeTool("node");
   const nodeArgs = resolveVitestNodeArgs();
   const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
@@ -170,7 +179,7 @@ export function createMergeOutcomeFixtureHarness() {
       quotaTriggered: false,
       quotaFailuresRemaining: null as number | null,
       // Preserve GraphQL lifecycle fixtures through an explicit unsupported REST policy.
-      restPolicy: "classic",
+      restPolicy: "unsupported",
       restReadFailure: "",
       restDispatchChange: "",
       restMergeCommit: "",
@@ -412,15 +421,20 @@ const asyncUuid="630b9d5e-3f2a-4f7e-8b0c-2d5f9a8c1e42";
 const asyncPending=()=>({status:"pending",details:{message:"Merge request is in progress.",uuid:asyncUuid,
   merge_method:"squash",merge_action:"direct_merge",expected_head_sha:s.pr.headRefOid,bypass_rules:false}});
 const graphqlMerge=args[0]==="api"&&args.includes("graphql")&&args.includes("--input");
+const nativeChecks=()=>[...s.priorCi.nativeChecks,...(s.priorCi.otherCheck?[{name:s.priorCi.otherCheck,kind:"check",required:true,state:"failure"}]:[])];
 const restCheckRuns=()=>{
   if(["missing","status-only"].includes(s.restChecks)) return [];
   const check={id:1,head_sha:s.pr.headRefOid,name:s.restContexts[0],status:"completed",conclusion:s.gates==="pass"?"success":"failure",
     started_at:"2026-09-20T00:00:00Z",check_suite:{id:10},app:{id:s.restCheckApp,slug:s.restCheckApp===15368?"github-actions":"custom-ci"}};
   if(s.restUnseenSuite==="partial-pending") return [check,{...check,id:2,name:"detect-changes",check_suite:{id:2}}];
-  if(!s.restDuplicate) return s.restContexts.filter(name=>name!==s.priorCi.missingCheck).map((name,index)=>({...check,id:index+1,name,check_suite:{id:10+index},
+  if(!s.restDuplicate) return [...s.restContexts.filter(name=>name!==s.priorCi.missingCheck).map((name,index)=>({...check,id:index+1,name,check_suite:{id:10+index},
     ...(s.priorCi.enabled?{status:name===s.requiredCheckName&&s.gates==="pending"?"in_progress":"completed",
       conclusion:name===s.restFailedContext?"failure":name!==s.requiredCheckName?"success":s.gates==="pending"?null:s.gates==="pass"?"success":"failure"}:
-      {conclusion:name===s.restFailedContext?"failure":check.conclusion})}));
+      {conclusion:name===s.restFailedContext?"failure":check.conclusion})})),
+      ...nativeChecks().filter(value=>value.kind==="check"&&!s.priorCi.nativeMissingResult).flatMap((value,index)=>{
+        const latest={...check,app:{id:s.priorCi.nativeResultApp,slug:s.priorCi.nativeResultApp===15368?"github-actions":"custom-ci"},id:200+index,name:value.name,check_suite:{id:20+index},status:value.state==="pending"?"in_progress":"completed",conclusion:value.state==="pending"?null:value.state,started_at:"2026-09-20T00:01:00Z"};
+        return value.previousFailure?[{...latest,id:300+index,check_suite:{id:25+index},conclusion:"failure",started_at:"2026-09-20T00:00:00Z"},latest]:[latest];
+      })];
   return [{...check,conclusion:"failure"},{...check,id:2,check_suite:{id:20},
     started_at:s.restDuplicate==="missing-time"?null:s.restDuplicate==="same-time"?check.started_at:"2026-09-20T00:01:00Z"}];
 };
@@ -428,7 +442,7 @@ const restCheckSuites=()=>{
   const suites=restCheckRuns().map(check=>{
     const running=check.status!=="completed"||s.restSuite==="rerunning"||(s.restUnseenSuite==="partial-pending"&&check.check_suite.id===2);
     return {id:check.check_suite.id,head_sha:s.pr.headRefOid,app:check.app,
-      status:running?"in_progress":"completed",conclusion:running?null:check.conclusion};
+      status:running?"in_progress":"completed",conclusion:running?null:check.conclusion,updated_at:"2026-09-20T00:01:00Z",latest_check_runs_count:1};
   });
   if(s.restUnseenSuite&&s.restUnseenSuite!=="partial-pending") {
     const empty=s.restUnseenSuite.startsWith("queued-empty");
@@ -450,7 +464,7 @@ const suiteChecks=(suite)=>{
 };
 const currentSuite=(suite)=>suite.id<30?suite:s.restUnseenSuite==="changed-suite"?{...suite,updated_at:"2026-09-20T00:02:00Z"}:
   ["changed-count","queued-empty-drift"].includes(s.restUnseenSuite)?{...suite,latest_check_runs_count:4}:suite;
-const paginated=(values,key,total=values.length)=>Array.from({length:Math.max(1,Math.ceil(values.length/100))},(_,index)=>({total_count:total,[key]:values.slice(index*100,index*100+100)}));
+const paginated=(values,key,total=values.length,size=100)=>Array.from({length:Math.max(1,Math.ceil(values.length/size))},(_,index)=>({total_count:total,[key]:values.slice(index*size,index*size+size)}));
 const advanceClock=(seconds)=>{
   const clock=process.env.FIXTURE_CLOCK;
   fs.writeFileSync(clock,String(Number(fs.readFileSync(clock,"utf8"))+seconds)+"\\n");
@@ -513,7 +527,16 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("orgs/fixture/memberships
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actions/runs/501"))) {
   const jobs=s.priorCi.jobs??[{name:"openclaw/ci-gate",status:"completed",conclusion:"success",head_sha:s.priorCi.runHead,run_id:501}];
-  if(args.some(arg=>arg.includes("/jobs?"))) out([{total_count:jobs.length,jobs}]);
+  const jobsEndpoint=args.find(arg=>arg.includes("/jobs?"));
+  if(jobsEndpoint) {
+    const size=Number(new URL("https://api.github.com/"+jobsEndpoint).searchParams.get("per_page")??30);
+    if(jobs.length>20&&size>20) fail("gh: Bad Gateway (HTTP 502)");
+    const pages=paginated(jobs,"jobs",jobs.length,size);
+    if(s.priorCi.jobPageFault==="truncated") pages.pop();
+    if(s.priorCi.jobPageFault==="duplicate") pages.at(-1).jobs[0]=pages[0].jobs[0];
+    if(s.priorCi.jobPageFault==="inconsistent-total") pages.at(-1).total_count++;
+    out(args.includes("--paginate")&&args.includes("--slurp")?pages:pages[0]);
+  }
   else out({id:501,run_attempt:args.includes("repos/fixture/repo/actions/runs/501")?s.priorCi.latestAttempt:2,check_suite_id:10,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:s.priorCi.runRepository??s.priorCi.sourceRepository,status:"completed",conclusion:s.priorCi.runConclusion,pull_requests:s.priorCi.event==="pull_request"&&!s.priorCi.omitPullRequests?[{number:123,head:{sha:s.priorCi.runHead},base:{repo:{id:s.repoAuthority.id}}}]:[]});
   if(s.restObservation?.afterHistoricalRead&&s.restMainReads>0) applyRestObservation();
 }
@@ -523,7 +546,17 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/check
   out(annotations?[s.priorCi.deadline.annotations]:s.priorCi.deadline.check);
 }
 else if(args.includes("graphql")&&args.some(arg=>arg.includes("reviewThreads("))) {
-  out({data:{repository:{pullRequest:{headRefOid:s.pr.headRefOid,reviewDecision:s.priorCi.reviewDecision,reviewThreads:{nodes:[{isResolved:s.priorCi.resolved}],pageInfo:{hasNextPage:false}}}}}});
+  const start=Number(args.find(arg=>arg.startsWith("cursor="))?.slice(7)??0);
+  const nodes=[...Array.from({length:s.priorCi.nativeOptionalCount},(_,index)=>({__typename:"CheckRun",name:"optional-"+index,isRequired:false})),
+    ...nativeChecks().flatMap(check=>{
+      const node=check.kind==="status"?{__typename:"StatusContext",context:check.name,isRequired:check.required}:
+        {__typename:"CheckRun",name:check.name,isRequired:check.required,checkSuite:{app:{databaseId:s.restCheckApp}}};
+      return check.previousFailure?[node,node]:[node];
+    })];
+  const page=nodes.slice(start,start+100);
+  const fault=s.priorCi.nativePageFault;
+  out({data:{repository:{pullRequest:{headRefOid:start&&fault==="head"?"f".repeat(40):s.pr.headRefOid,reviewDecision:s.priorCi.reviewDecision,reviewThreads:{nodes:[{isResolved:s.priorCi.resolved}],pageInfo:{hasNextPage:false}},
+    commits:{nodes:[{commit:{oid:start&&fault==="commit"?"f".repeat(40):s.pr.headRefOid,statusCheckRollup:{contexts:{nodes:page,totalCount:nodes.length+(start&&fault==="total"?1:0),pageInfo:{hasNextPage:start+100<nodes.length,endCursor:fault==="cursor"?"0":String(start+100)}}}}}]}}}}});
   if(s.priorCi.mutateEvidence) fs.appendFileSync(s.priorCi.evidencePath," ");
 }
 else if(args[0]==="api"&&args.includes("user")) {
@@ -826,6 +859,8 @@ save();
       `#!/usr/bin/env bash
 set -euo pipefail
 script_parent_dir="$FIXTURE_SCRIPTS"
+${workflowGitOwner}
+${workflowSelectionOwner}
 source "$script_parent_dir/lib/plain-gh.sh"
 source "$script_parent_dir/pr-lib/worktree.sh"
 source "$script_parent_dir/pr-lib/operation-lock.sh"
@@ -916,6 +951,30 @@ pr_git() {
 export FIXTURE_LEADER="$$"
 acquire_pr_operation_lock 123
 begin_pr_operation_validation_phase
+if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
+  GIT_EXEC=$(command -v git)
+  canonical_repo_root="$FIXTURE_REPO"
+  PR_WORKFLOW_PR=123
+  binding=$(pr_batch_wrapper_git workflow-read "$canonical_repo_root" 123)
+  IFS=$'\\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
+  PR_WORKFLOW_SOURCE_REVISION="\${PR_WORKFLOW_SOURCE_REVISION:-\${FIXTURE_WORKFLOW_INITIAL_SOURCE:-$FIXTURE_BASE}}"
+  PR_WORKFLOW_BINDING_OID=$(pr_batch_wrapper_git workflow-admit "$canonical_repo_root" 123 "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID")
+  if [ "\${14:-false}" = true ]; then
+    PR_WORKFLOW_RECOVERY_OUTCOME="$2"
+    PR_WORKFLOW_RECOVERY_HEAD="$3"
+    binding=$(pr_batch_wrapper_git workflow-recovery-select "$canonical_repo_root" 123 "$2" "$3")
+    IFS=$'\\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
+    PR_WORKFLOW_BOOTSTRAP=0
+    PR_WORKFLOW_TRUST_ANCHOR=refs/remotes/origin/main
+    original_scripts="$script_parent_dir"
+    script_parent_dir="$FIXTURE_WORKFLOW_DIRECTORY/scripts"
+    hold_pr_workflow_selection "$PR_WORKFLOW_SOURCE_REVISION" "$FIXTURE_WORKFLOW_DIRECTORY"
+    [ -z "\${FIXTURE_WORKFLOW_AFTER_HOLD:-}" ] || source "$FIXTURE_WORKFLOW_AFTER_HOLD"
+    pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" 123 "$$" "$PPID" "$2" "$3" >/dev/null
+    admit_pr_workflow_binding 123
+    script_parent_dir="$original_scripts"
+  fi
+fi
 if [ "\${9:-}" = verify ]; then
   merge_verify 123 '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
 elif [ -n "\${5:-}" ]; then
@@ -952,6 +1011,8 @@ fi
       FIXTURE_GH: gh,
       FIXTURE_GH_BIN: join(bin, "gh"),
       FIXTURE_NODE: nodeExecutable,
+      FIXTURE_BASE: base,
+      FIXTURE_WORKFLOW_BINDING: "false",
       OPENCLAW_PR_MERGE_METHOD: "squash",
       OPENCLAW_PR_STRICT_DRIFT: "",
       // Only partial-clone cases consume trace evidence to reject implicit hydration.
@@ -973,6 +1034,7 @@ fi
       confirmedAdmin = false,
       mergedHead = "",
       observedHead = "",
+      currentWorkflow = false,
     ) => {
       const result = spawnSync(
         nodeExecutable,
@@ -994,6 +1056,7 @@ fi
           String(confirmedAdmin),
           mergedHead,
           observedHead,
+          String(currentWorkflow),
         ],
         {
           cwd,
@@ -1103,6 +1166,21 @@ fi
       state,
       save,
       run,
+      bindWorkflow: () => {
+        env.FIXTURE_WORKFLOW_BINDING = "true";
+      },
+      workflowSource: (source: string, directory: string) => {
+        Object.assign(env, {
+          FIXTURE_WORKFLOW_INITIAL_SOURCE: source,
+          FIXTURE_WORKFLOW_DIRECTORY: directory,
+        });
+      },
+      workflowAfterHold: (hook: string) => {
+        Object.assign(env, { FIXTURE_WORKFLOW_AFTER_HOLD: hook });
+      },
+      useScripts: (directory: string) => {
+        env.FIXTURE_SCRIPTS = directory;
+      },
       verifyPriorCi: (path: string) => {
         const result = spawnSync(
           nodeExecutable,

@@ -26,6 +26,7 @@ import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
+import { sessionManagerAppendInitialMetadata } from "./session-manager-metadata.js";
 import type { ModelChangeEntry, ThinkingLevelChangeEntry } from "./session-manager-types.js";
 import * as writeAdmission from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
@@ -73,7 +74,7 @@ it("restores prepared session context without waiting for an unrelated database 
       modelRegistry: ModelRegistry.inMemory(authStorage),
       sessionManager: manager,
       settingsManager: SettingsManager.inMemory(),
-      resourceLoader: createResourceLoader(),
+      resourceLoader: await createResourceLoader(),
     });
     try {
       expect(await Promise.race([restored.then(() => "ready"), requestedWrite.promise])).toBe(
@@ -92,7 +93,7 @@ it("restores prepared session context without waiting for an unrelated database 
   });
 });
 
-it.each(["model", "thinking", "context loading"] as const)(
+it.each(["metadata", "context loading"] as const)(
   "rejects SDK exposure after retargeting during %s initialization",
   async (after) => {
     await withOpenClawTestState({ label: `sdk-metadata-${after}` }, async (state) => {
@@ -129,31 +130,26 @@ it.each(["model", "thinking", "context loading"] as const)(
           throw new Error("Expected the real append's committed metadata entry");
         }
         completed.entry = structuredClone(entry);
-        // Inspect committed fixture bytes while the SDK still owns metadata admission.
+        // Retarget after the real append commits, before the factory exposes its session.
         completed.records = loadTranscriptEventsSync(original);
         completed.watermark = readSessionTranscriptWatermark(original);
         manager.setSessionTarget(replacement);
         return id;
       };
-      const appendModel = manager.appendModelChange.bind(manager);
-      const appendThinking = manager.appendThinkingLevelChange.bind(manager);
+      const appendInitial = manager[sessionManagerAppendInitialMetadata].bind(manager);
       const readInitialContext = manager[sessionManagerReadInitialContext].bind(manager);
       const intercepted =
-        after === "model"
+        after === "metadata"
           ? vi
-              .spyOn(manager, "appendModelChange")
-              .mockImplementation((provider, modelId) =>
-                retargetAfterAppend(() => appendModel(provider, modelId)),
+              .spyOn(manager, sessionManagerAppendInitialMetadata)
+              .mockImplementation((provider, modelId, level) =>
+                retargetAfterAppend(() => appendInitial(provider, modelId, level)),
               )
-          : after === "thinking"
-            ? vi
-                .spyOn(manager, "appendThinkingLevelChange")
-                .mockImplementation((level) => retargetAfterAppend(() => appendThinking(level)))
-            : vi.spyOn(manager, sessionManagerReadInitialContext).mockImplementation(async () => {
-                const context = await readInitialContext();
-                manager.setSessionTarget(replacement);
-                return context;
-              });
+          : vi.spyOn(manager, sessionManagerReadInitialContext).mockImplementation(async () => {
+              const context = await readInitialContext();
+              manager.setSessionTarget(replacement);
+              return context;
+            });
       const model = {
         ...testModel,
         id: "sdk-metadata-fixture",
@@ -183,7 +179,7 @@ it.each(["model", "thinking", "context loading"] as const)(
           compaction: { enabled: false },
           retry: { enabled: false },
         }),
-        resourceLoader: createResourceLoader(),
+        resourceLoader: await createResourceLoader(),
       }).then(
         (value) => ({ status: "fulfilled" as const, value }),
         (error: unknown) => ({ status: "rejected" as const, error }),
@@ -202,7 +198,7 @@ it.each(["model", "thinking", "context loading"] as const)(
           return;
         }
         expect(completed.entry).toBeDefined();
-        expect(completed.records).toHaveLength(after === "model" ? 2 : 3);
+        expect(completed.records).toHaveLength(3);
         expect(await loadTranscriptEvents(original)).toEqual(completed.records);
         expect.soft(await loadTranscriptEvents(replacement)).toEqual(replacementBefore);
         expect.soft(outcome.status).toBe("rejected");
@@ -282,7 +278,7 @@ it.each([
         modelRegistry: ModelRegistry.inMemory(authStorage),
         sessionManager: manager,
         settingsManager: SettingsManager.inMemory(),
-        resourceLoader: createResourceLoader(),
+        resourceLoader: await createResourceLoader(),
       }).then(
         (value) => ({ status: "fulfilled" as const, value }),
         (error: unknown) => ({ status: "rejected" as const, error }),
@@ -333,7 +329,7 @@ it.each([
 );
 
 async function createPersistenceExtensionSession(manager: SessionManager, cwd: string) {
-  const resourceLoader = createResourceLoader();
+  const resourceLoader = await createResourceLoader();
   const extensions = resourceLoader.getExtensions();
   let loadedApi: ExtensionAPI | undefined;
   extensions.extensions.push(
@@ -582,7 +578,7 @@ it.each(["SDK initialization", "model transition"] as const)(
           baseUrl: testModel.baseUrl,
           models: [reasoningModel, plainModel],
         });
-        const create = () =>
+        const create = async () =>
           createAgentSession({
             systemPrompt: "Test session prompt",
             cwd: firstDir,
@@ -592,21 +588,32 @@ it.each(["SDK initialization", "model transition"] as const)(
             modelRegistry,
             tools: [],
             settingsManager: SettingsManager.inMemory({ defaultThinkingLevel: "high" }),
-            resourceLoader: createResourceLoader(),
+            resourceLoader: await createResourceLoader(),
           });
         if (operation === "model transition") {
           session = (await create()).session;
         }
         const append = manager.appendModelChange.bind(manager);
+        const appendInitial = manager[sessionManagerAppendInitialMetadata].bind(manager);
         const completed: { records?: Awaited<ReturnType<typeof loadTranscriptEvents>> } = {};
-        const intercepted = vi
-          .spyOn(manager, "appendModelChange")
-          .mockImplementation(async (provider, modelId) => {
-            const id = await append(provider, modelId);
-            completed.records = loadTranscriptEventsSync(first);
-            process.chdir(secondDir);
-            return id;
-          });
+        const changeCwdAfterAppend = async (write: () => Promise<string>) => {
+          const id = await write();
+          completed.records = loadTranscriptEventsSync(first);
+          process.chdir(secondDir);
+          return id;
+        };
+        const intercepted =
+          operation === "SDK initialization"
+            ? vi
+                .spyOn(manager, sessionManagerAppendInitialMetadata)
+                .mockImplementation((provider, modelId, level) =>
+                  changeCwdAfterAppend(() => appendInitial(provider, modelId, level)),
+                )
+            : vi
+                .spyOn(manager, "appendModelChange")
+                .mockImplementation((provider, modelId) =>
+                  changeCwdAfterAppend(() => append(provider, modelId)),
+                );
         restoreAppend = () => intercepted.mockRestore();
         if (operation === "SDK initialization") {
           session = (await create()).session;
@@ -627,9 +634,13 @@ it.each(["SDK initialization", "model transition"] as const)(
         const firstAfter = await loadTranscriptEvents(first);
         expect(firstAfter.slice(0, completed.records?.length)).toEqual(completed.records);
         const level = operation === "SDK initialization" ? "high" : "off";
-        expect
-          .soft(firstAfter.slice(completed.records?.length))
-          .toMatchObject([{ type: "thinking_level_change", thinkingLevel: level }]);
+        if (operation === "SDK initialization") {
+          expect.soft(firstAfter).toEqual(completed.records);
+        } else {
+          expect
+            .soft(firstAfter.slice(completed.records?.length))
+            .toMatchObject([{ type: "thinking_level_change", thinkingLevel: level }]);
+        }
         expect.soft(await loadTranscriptEvents(second)).toEqual(secondBefore);
         expect(session?.thinkingLevel).toBe(level);
       } finally {

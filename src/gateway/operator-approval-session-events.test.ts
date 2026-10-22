@@ -576,7 +576,7 @@ describe("operator approval session events", () => {
     }
   });
 
-  it("invalidates a pending replay when a terminal event precedes the worker reply", async () => {
+  it("invalidates pending replay when a decision precedes the worker reply", async () => {
     const databaseOptions = createDatabaseOptions();
     const pending = await insertPendingApproval({
       databaseOptions,
@@ -860,6 +860,7 @@ describe("operator approval session events", () => {
     const record = manager.create(
       {
         command: "printf replay-expiry",
+        streamProposal: { jobId: "stream-attention", name: "Log watcher", operation: "add" },
         sessionKey: SOURCE_SESSION_KEY,
         sessionId: "approval-owner-session",
         runId: "approval-owner-run",

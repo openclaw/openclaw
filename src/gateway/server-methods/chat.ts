@@ -13,7 +13,10 @@ import {
   runWithSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
 import {
   projectChatDisplayMessage,
   resolveEffectiveChatHistoryMaxChars,
@@ -125,11 +128,17 @@ async function injectChat(
 
   let appended: Awaited<ReturnType<typeof appendInjectedAssistantMessageToTranscript>>;
   try {
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       agentId,
-      scope: storePath,
-      identities: [sessionKey, sessionId],
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey,
+        agentId,
+        incarnation: sessionId,
+      }),
+      storeWriterIdentities: [sessionKey],
       assertAllowed: () => {
+        sessionMutationCommitGuard?.();
         const current = retained?.readCurrent();
         if (retained && !current) {
           throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);

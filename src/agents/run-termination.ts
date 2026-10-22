@@ -19,19 +19,16 @@ import {
 } from "./failover/error.js";
 
 /**
- * Shared agent run termination constants.
  *
  * Runtime and stream consumers use these stable literals to recognize user or
  * controller aborts without matching free-form error text.
  */
-/** Error text used for aborted agent runs. */
 export const AGENT_RUN_ABORTED_ERROR = "agent run aborted" as const;
 export {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   AGENT_RUN_SUPERSEDED_STOP_REASON,
   isAbortedAgentStopReason,
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-/** Error text used for agent runs aborted by a gateway restart. */
 export const AGENT_RUN_RESTART_ABORT_ERROR = "agent run aborted for restart" as const;
 export const AGENT_RUN_SUPERSEDED_ERROR = "agent run superseded by a newer session writer" as const;
 

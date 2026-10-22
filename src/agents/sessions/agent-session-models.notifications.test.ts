@@ -31,15 +31,12 @@ async function createNotificationSession(
     model?: () => Promise<void>;
   } = {},
 ) {
-  const resourceLoader = createResourceLoader(
-    new Map([
-      [
-        "thinking_level_select",
-        [async (event: unknown) => options.thinking?.(event as ThinkingLevelSelectEvent)],
-      ],
-      ["model_select", [async () => options.model?.()]],
-    ]),
-  );
+  const resourceLoader = await createResourceLoader((api) => {
+    api.on("thinking_level_select", async (event: unknown) =>
+      options.thinking?.(event as ThinkingLevelSelectEvent),
+    );
+    api.on("model_select", async () => options.model?.());
+  });
   const fixture = await createTestSession({
     model: options.reasoning === false ? plainModel : reasoningModel,
     settingsManager: SettingsManager.inMemory({
@@ -205,7 +202,7 @@ describe("metadata notifications after publication", () => {
       entries: structuredClone(sessionManager.getEntries()),
       model: session.model,
       thinking: session.thinkingLevel,
-      defaultModel: settingsManager.getDefaultModel(),
+      defaultModel: settingsManager.getGlobalSettings().defaultModel,
       defaultThinking: settingsManager.getDefaultThinkingLevel(),
     };
     const entered = createDeferredCore();
@@ -234,7 +231,7 @@ describe("metadata notifications after publication", () => {
     expect.soft(sessionManager.getEntries()).toEqual(before.entries);
     expect.soft(session.model).toBe(before.model);
     expect.soft(session.thinkingLevel).toBe(before.thinking);
-    expect.soft(settingsManager.getDefaultModel()).toBe(before.defaultModel);
+    expect.soft(settingsManager.getGlobalSettings().defaultModel).toBe(before.defaultModel);
     expect.soft(settingsManager.getDefaultThinkingLevel()).toBe(before.defaultThinking);
     expect(failure).toBeInstanceOf(Error);
     expect(failure).toMatchObject({

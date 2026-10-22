@@ -140,18 +140,12 @@ function loadModelsJsonCostIndex(
       }
       modelsJsonCostCache = {
         providers: parsed?.providers,
-        entries: new WeakMap(),
       };
       pruneMapToMaxSize(MODELS_JSON_STATE.costCache, MODELS_JSON_COST_CACHE_LIMIT - 1);
       MODELS_JSON_STATE.costCache.set(agentDir, modelsJsonCostCache);
     }
 
-    let entries = modelsJsonCostCache.entries.get(normalizeKey);
-    if (!entries) {
-      entries = getProviderCostIndex(modelsJsonCostCache.providers, normalizeKey);
-      modelsJsonCostCache.entries.set(normalizeKey, entries);
-    }
-    return entries;
+    return getProviderCostIndex(modelsJsonCostCache.providers, normalizeKey);
   } catch {
     return EMPTY_PROVIDER_COST_INDEX;
   }

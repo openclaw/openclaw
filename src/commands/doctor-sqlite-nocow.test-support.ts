@@ -13,11 +13,11 @@ export function createDoctorNoCowToolFixture(root: string, nativeSpawnSync?: typ
   const fixture = {
     tools: "ok" as "ok" | "unavailable" | "busy" | "exchange-failed" | "exchange-timeout",
     attributes: false,
+    noCowInodes: new Set<number>(),
     exchanges: 0,
     acls: new Map<string, string>(),
     unavailableAclTool: undefined as "getfacl" | "setfacl" | undefined,
     rejectAclVerification: false,
-    verifyPrivateAclBoundary: false,
     beforeExchange: undefined as (() => void) | undefined,
     fuserResult: undefined as SpawnSyncReturns<string> | undefined,
   };
@@ -26,12 +26,9 @@ export function createDoctorNoCowToolFixture(root: string, nativeSpawnSync?: typ
   }
 
   function modeFromAcl(acl: string): number {
+    const entries = acl.split("\n");
     const entryBits = (tag: string) => {
-      const value =
-        acl
-          .split("\n")
-          .find((line) => line.startsWith(`${tag}::`))
-          ?.split(":")[2] ?? "---";
+      const value = entries.find((line) => line.startsWith(`${tag}::`))?.split(":")[2] ?? "---";
       return (
         (value.includes("r") ? 4 : 0) |
         (value.includes("w") ? 2 : 0) |
@@ -57,73 +54,52 @@ export function createDoctorNoCowToolFixture(root: string, nativeSpawnSync?: typ
         : `user::${owner}\ngroup::${group}\nother::${other}`);
     const masked = acl.includes("\nmask::");
     return acl
-      .split("\n")
-      .map((line) =>
-        line.startsWith("user::")
-          ? `user::${owner}`
-          : line.startsWith("mask::")
-            ? `mask::${group}`
-            : line.startsWith("group::") && !masked
-              ? `group::${group}`
-              : line.startsWith("other::")
-                ? `other::${other}`
-                : line,
-      )
-      .join("\n");
+      .replace(/(^|\n)user::[^\n]*/g, `$1user::${owner}`)
+      .replace(/(^|\n)mask::[^\n]*/g, `$1mask::${group}`)
+      .replace(/(^|\n)group::[^\n]*/g, masked ? "$&" : `$1group::${group}`)
+      .replace(/(^|\n)other::[^\n]*/g, `$1other::${other}`);
   }
 
   vi.mocked(isSqlitePathOnBtrfs).mockReturnValue(true);
   vi.mocked(setSqliteDirectoryNoCow).mockImplementation((dir) => {
-    expect(fs.statSync(dir).isDirectory()).toBe(true);
-    expect(fs.readdirSync(dir)).toEqual([]);
+    const stat = fs.statSync(dir);
+    expect(stat.isDirectory()).toBe(true);
+    fixture.noCowInodes.add(stat.ino);
   });
   vi.mocked(spawnSync).mockImplementation((command, args, options) => {
     const argv = args ?? [];
     let stdout = "";
     let status = 0;
     if (command === "lsattr") {
-      stdout = `${fixture.attributes || String(argv.at(-1)).includes(".nocow-backup-") ? "-------C------" : "--------------"} ${argv.at(-1)}`;
-      if (fixture.tools === "unavailable") {
-        status = 127;
+      const pathname = String(argv.at(-1));
+      const ino = fs.statSync(pathname).ino;
+      if (pathname.includes(".nocow-backup-")) {
+        fixture.noCowInodes.add(ino);
       }
+      stdout = `${fixture.attributes || fixture.noCowInodes.has(ino) ? "-------C------" : "--------------"} ${pathname}`;
+      status = fixture.tools === "unavailable" ? 127 : 0;
     } else if (command === "getfacl" || command === "setfacl") {
       expect(options?.env?.POSIXLY_CORRECT).toBeUndefined();
-      const pathname = String(argv.at(-1));
-      const existing = observedAcl(pathname);
       if (fixture.unavailableAclTool === command) {
         status = 127;
       } else if (command === "getfacl") {
         expect(argv.slice(0, 2)).toEqual(["-cEpn", "--"]);
-        stdout = existing;
-      } else if (argv[0] === "-k") {
-        fixture.acls.set(
-          pathname,
-          existing
-            .split("\n")
-            .filter((line) => !line.startsWith("default:"))
-            .join("\n"),
-        );
+        stdout = argv.slice(2).map(observedAcl).join("\n\n");
       } else {
-        expect(argv.slice(0, 3)).toEqual(["-n", "--set-file=-", "--"]);
+        expect(argv).toEqual(["--restore=-"]);
         if (typeof options?.input !== "string") {
           throw new Error("Expected textual ACL input");
         }
-        const input = options.input.trim();
-        if (fixture.verifyPrivateAclBoundary && fs.statSync(pathname).isDirectory()) {
-          expect(fs.statSync(pathname).mode & 0o077).toBe(0);
-          expect(input).toContain("user:12345:---");
+        for (const block of options.input.trim().split("\n\n")) {
+          const [header, ...lines] = block.split("\n");
+          const pathname = header!
+            .slice("# file: ".length)
+            .replaceAll("\\012", "\n")
+            .replaceAll("\\134", "\\");
+          const acl = fixture.rejectAclVerification ? baseAcl : lines.join("\n");
+          fixture.acls.set(pathname, acl);
+          fs.chmodSync(pathname, (fs.statSync(pathname).mode & 0o7000) | modeFromAcl(acl));
         }
-        const defaults = existing.split("\n").filter((line) => line.startsWith("default:"));
-        fixture.acls.set(
-          pathname,
-          fixture.rejectAclVerification
-            ? baseAcl
-            : input.includes("default:")
-              ? input
-              : [input, ...defaults].join("\n"),
-        );
-        const applied = fixture.acls.get(pathname)!;
-        fs.chmodSync(pathname, (fs.statSync(pathname).mode & 0o7000) | modeFromAcl(applied));
       }
     } else if (command === "fuser" && argv[0]?.includes(".nocow-probe-") && !nativeSpawnSync) {
       status = 0;
@@ -151,9 +127,7 @@ export function createDoctorNoCowToolFixture(root: string, nativeSpawnSync?: typ
       fs.renameSync(target, temporary);
       fs.renameSync(source, target);
       fs.renameSync(temporary, source);
-      if (!preflight && fixture.tools === "exchange-timeout") {
-        status = 1;
-      }
+      status = !preflight && fixture.tools === "exchange-timeout" ? 1 : 0;
     } else if (nativeSpawnSync) {
       return nativeSpawnSync(command, args, options);
     } else {

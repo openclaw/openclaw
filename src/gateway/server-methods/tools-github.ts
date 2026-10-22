@@ -38,7 +38,7 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
   const toolName = searching ? "github_search" : "github_read";
   const operation = searching
     ? ({ type: "search", params: gitHubPublicApi.parseGitHubSearchParams(params) } as const)
-    : ({ type: "read", params: gitHubPublicApi.parseGitHubTarget(params) } as const);
+    : ({ type: "read", params: gitHubPublicApi.parseGitHubReadTarget(params) } as const);
   if (
     !operation.params ||
     params.agentId !== undefined ||

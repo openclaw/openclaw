@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { getCurrentSessionControllerOwner } from "../sessions/session-controller.context.js";
 import {
   agentCommand,
   agentCommandFromGatewayIngress,
@@ -37,6 +38,19 @@ registerAgentCommandCompactionTestHooks();
 
 function makeEmbeddedResult(sessionId: string, text: string) {
   return makeResult({ sessionId, text, runner: "embedded", agentHarnessId: "openclaw" });
+}
+
+async function advanceWork(advanceClock: () => void) {
+  advanceClock();
+  const operation = getCurrentSessionControllerOwner();
+  if (!operation) {
+    throw new Error("Expected the simulated command or maintenance owner");
+  }
+  // The mocked model/checkpoint has completed work, not silently stalled.
+  // Sample the real watchdog so its one-second timer cannot decide the test outcome.
+  operation.watchdog.progress("semantic", "fixture:work_completed");
+  await operation.watchdog.tick();
+  operation.abortSignal.throwIfAborted();
 }
 
 describe("agentCommand embedded maintenance", () => {
@@ -75,6 +89,44 @@ describe("agentCommand embedded maintenance", () => {
     expect(foreground.pendingTokens).toBe(100);
   });
 
+  it("schedules retained maintenance when terminal cleanup rejects", async () => {
+    const sessionId = "maintenance-after-cleanup-rejection";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    const cleanupError = new Error("terminal cleanup failed");
+    let terminalDeliveryCalls = 0;
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      params.onSuccessfulAuthProfile?.({});
+      params.onCompactionRequestBudget?.({
+        contextWindow: 32_768,
+        reserveTokens: 8_192,
+        fixedTokens: 4_000,
+        pendingTokens: 100,
+      });
+      return makeEmbeddedResult(sessionId, "done");
+    });
+
+    await expect(
+      agentCommand({
+        message: "continue",
+        sessionId,
+        sessionKey,
+        beforeTerminalDelivery: async () => {
+          terminalDeliveryCalls += 1;
+          if (terminalDeliveryCalls === 2) {
+            throw cleanupError;
+          }
+        },
+      }),
+    ).rejects.toBe(cleanupError);
+    await waitForSessionMaintenance(sessionKey);
+
+    expect(state.runSessionCompactionIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        compactionRequestBudget: expect.objectContaining({ pendingTokens: 0 }),
+      }),
+    );
+  });
+
   it.each([462_153, 600_000])(
     "shares the command allowance after %i ms of foreground work",
     async (foregroundMs) => {
@@ -87,12 +139,16 @@ describe("agentCommand embedded maintenance", () => {
       let flushTimeout: number | undefined;
       state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
         params.onSuccessfulAuthProfile?.({});
-        now += foregroundMs;
+        await advanceWork(() => {
+          now += foregroundMs;
+        });
         return makeEmbeddedResult(sessionId, text);
       });
       state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
         flushTimeout = params.followupRun.run.timeoutMs;
-        now = startedAt + 600_000;
+        await advanceWork(() => {
+          now = startedAt + 600_000;
+        });
         return { sessionEntry: params.sessionEntry, outcome: "completed" };
       });
       try {
@@ -217,12 +273,16 @@ describe("agentCommand embedded maintenance", () => {
     let flushTimeout: number | undefined;
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
       params.onSuccessfulAuthProfile?.({});
-      now += 1_200_000;
+      await advanceWork(() => {
+        now += 1_200_000;
+      });
       return makeEmbeddedResult(sessionId, "unlimited answer");
     });
     state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
       flushTimeout = params.followupRun.run.timeoutMs;
-      now += 600_000;
+      await advanceWork(() => {
+        now += 600_000;
+      });
       return { sessionEntry: params.sessionEntry, outcome: "completed" };
     });
     try {
@@ -659,9 +719,7 @@ describe("agentCommand embedded maintenance", () => {
         deliver: true,
         abortSignal: abortController.signal,
       }),
-    ).rejects.toThrow(
-      restart ? "agent run aborted for restart" : "Agent run belongs to a stale gateway lifecycle",
-    );
+    ).rejects.toThrow("agent run aborted for restart");
 
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
     expect(findStoredSessionEntry(sessionKey)).toMatchObject({

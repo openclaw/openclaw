@@ -110,11 +110,10 @@ function isolatedConfig(
           resolveUserPath(agent.agentDir, sourceEnv),
         )
       : path.join(stateDir, "agents", id, "agent"),
-    heartbeat: { every: "0m" },
   });
   copied.agents = {
     ...copied.agents,
-    defaults: { ...copied.agents?.defaults, workspace, cwd: workspace, heartbeat: { every: "0m" } },
+    defaults: { ...copied.agents?.defaults, workspace, cwd: workspace },
     ...(entries
       ? {
           entries: Object.fromEntries(
@@ -168,6 +167,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
+  fullIntegrityCheck?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;

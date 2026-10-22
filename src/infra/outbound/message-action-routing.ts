@@ -231,7 +231,11 @@ export async function prepareMessageRoute(params: {
   // Missing targets must fail before channel discovery, which can bootstrap or
   // probe configured plugins. Non-standard params may still be owner aliases.
   if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, actionParams)) {
-    throw missingMessageActionTargetError(action);
+    throw missingMessageActionTargetError(action, {
+      hasCurrentSourceConversation: Boolean(
+        resolveImplicitMessageActionTarget(input.toolContext, "send"),
+      ),
+    });
   }
 
   const requestedChannel = readToolStringParam(actionParams, "channel");

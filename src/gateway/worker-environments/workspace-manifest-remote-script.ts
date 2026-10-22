@@ -31,10 +31,10 @@ function serializeManifest(baseCommit, entries) {
   return JSON.stringify({
     version: 1,
     baseCommit,
-    entries: entries
-      .filter((entry) => !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)))
-      .map(canonicalEntry)
-      .sort(compareManifestPaths),
+    entries: projectWorkspaceEntries(
+      entries.map(canonicalEntry).sort(compareManifestPaths),
+      (entryPath) => isStagedInputPath(entryPath, stagedInputs),
+    ),
   });
 }`;
 

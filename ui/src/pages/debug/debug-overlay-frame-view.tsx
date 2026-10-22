@@ -9,6 +9,7 @@ import type { DebugOverlayMode } from "./debug-overlay-state.ts";
 export function DebugOverlayFrame(props: {
   mode: DebugOverlayMode;
   body: JSX.Element;
+  ref?: (element: HTMLElement) => void;
   onToggleMode: () => void;
   onClose: () => void;
 }) {
@@ -43,6 +44,7 @@ export function DebugOverlayFrame(props: {
     <aside
       ref={(node) => {
         element = node;
+        props.ref?.(node);
       }}
       class={["debug-overlay", { "debug-overlay--minimized": mode() === "minimized" }]}
       aria-label={t("debug.overlay.title")}

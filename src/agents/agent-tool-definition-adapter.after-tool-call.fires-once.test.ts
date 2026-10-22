@@ -44,7 +44,7 @@ function createToolHandlerCtx() {
   return {
     params: { runId: "integration-test", session: { messages: [] } },
     hookRunner: hookMocks.runner,
-    state: { ...createBaseToolHandlerState(), successfulCronAdds: 0 },
+    state: createBaseToolHandlerState(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
     shouldEmitToolResult: () => false,
@@ -129,7 +129,7 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
         await def.execute(toolCallId, args, undefined, undefined, extensionContext);
       },
       async end(result: unknown) {
-        await handleToolExecutionEnd(
+        return await handleToolExecutionEnd(
           ctx as never,
           { type: "tool_execution_end", toolName, toolCallId, isError: fail, result } as never,
           prepareToolResult(result),
@@ -162,7 +162,7 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
 
     await call.start();
     expect(beforeToolCallMocks.consumeAdjustedParamsForToolCall).not.toHaveBeenCalled();
-    await call.end({ content: [{ type: "text", text: "ok" }] });
+    const terminal = await call.end({ content: [{ type: "text", text: "ok" }] });
 
     expect(beforeToolCallMocks.consumeAdjustedParamsForToolCall).toHaveBeenCalledExactlyOnceWith(
       toolCallId,
@@ -171,6 +171,9 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
     const event = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as { params?: unknown } | undefined;
     expect(event?.params).toEqual(adjusted);
+    // Plugin-owned hook inputs remain mutable without changing retained execution facts.
+    (event!.params as typeof adjusted).path = "/tmp/plugin.txt";
+    expect(terminal.executedArguments).toEqual({ path: "/tmp/adjusted.txt", mode: "safe" });
   });
 
   it("fires after_tool_call exactly once per tool across multiple sequential tool calls", async () => {

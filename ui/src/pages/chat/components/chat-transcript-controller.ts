@@ -12,15 +12,22 @@ import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.t
 export type ChatTranscript = ReturnType<typeof createChatTranscript>;
 
 export function createChatTranscript(
-  notify: () => void,
   scrollPaneId: () => string,
   callbacks: TranscriptCallbacks = {},
 ) {
   let activeSessionKey: string | null = null;
   let sessionVirtualizer: ChatSessionVirtualizerHost | null = null;
   let connected = false;
+  let onChange: (() => void) | undefined;
+  const publish = () => onChange?.();
 
   return {
+    subscribe(listener: () => void) {
+      onChange = listener;
+      return () => {
+        onChange = undefined;
+      };
+    },
     get renderedSessionKey(): string | null {
       return activeSessionKey;
     },
@@ -40,7 +47,7 @@ export function createChatTranscript(
           : (savedPosition?.scrollTop ?? null);
         activeSessionKey = sessionKey;
         sessionVirtualizer = new ChatSessionVirtualizerHost(
-          notify,
+          publish,
           initialOffset,
           (position) => saveChatSessionScrollPosition(paneId, sessionKey, position),
           callbacks,
@@ -77,6 +84,9 @@ export function createChatTranscript(
     },
     get scrollElement(): HTMLDivElement | null {
       return sessionVirtualizer?.scrollElement ?? null;
+    },
+    get messageElements() {
+      return sessionVirtualizer?.messageElements;
     },
     syncViewportGeometry(): void {
       sessionVirtualizer?.syncViewportGeometry();

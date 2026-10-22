@@ -1,4 +1,5 @@
-import { canonicalLobsterLook, lobsterLookStyle, renderLobsterSvg } from "./lobster-pet-look.ts";
+import { canonicalLobsterLook, lobsterLookStyle } from "./lobster-pet-identity.ts";
+import { renderLobsterSvg } from "./lobster-pet-look.tsx";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
 // Only presentation used by our trusted lobster artwork is baked. This is not
@@ -51,11 +52,12 @@ export async function loadLobsterImage(paletteId: string): Promise<HTMLImageElem
       lobsterLookStyle(look) +
       ";position:fixed;left:-10000px;top:0;bottom:auto;width:120px;height:105px;opacity:0;pointer-events:none;transform:none";
     document.body.append(host);
-    host.append(renderLobsterSvg(look, { standalone: true }));
-    const source = host.querySelector("svg");
-    if (!source) {
+    const artwork = renderLobsterSvg(look, { standalone: true });
+    const source = artwork.firstElementChild;
+    if (!(source instanceof SVGSVGElement)) {
       return null;
     }
+    host.append(artwork);
 
     // Use the neutral pose, not a time sample (blink/breathe have seeded delays).
     for (const element of [source, ...source.querySelectorAll<SVGElement>("*")]) {

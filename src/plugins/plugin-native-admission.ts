@@ -7,6 +7,7 @@ import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
 import {
   nativeAdmissionStateFor,
+  queuePluginNativeAdmissionPublication,
   retainNativePath,
   snapshotOwners,
   startNativeAdmissionPublication,
@@ -29,13 +30,13 @@ import {
 } from "./plugin-native-reference.js";
 import { retainPluginNativeRoot } from "./plugin-native-root-lease.js";
 import { resolvePluginModulePackageRoot } from "./plugin-package-metadata-capture.js";
-import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
+import { getPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import type {
   PluginNativeArtifactFact,
   PluginNativeNamespaceFact,
 } from "./plugin-source-admission.types.js";
 import {
-  createPluginNativeCaptureRoot,
+  type createPluginNativeCaptureRoot,
   isPluginSourceCaptureRetained,
   retainPluginNativeCapturePath,
 } from "./plugin-source-capture-directory.js";
@@ -241,9 +242,7 @@ export function createPluginNativeAdmission(
   const key = `${path.resolve(rootDir)}\0${entryKey ?? ""}`;
   const owner = state.owners.get(path.resolve(rootDir));
   const publishAdmission =
-    owner && !state.artifactPreservingReadOnly
-      ? createPluginSourceAdmissionPublisher({ stateDir: state.publicationStateDir })
-      : undefined;
+    owner && !state.artifactPreservingReadOnly ? getPluginSourceAdmissionPublisher() : undefined;
   const prepared = recovery?.receipt ?? state.receipts.get(key);
   const selected = new Map<string, PluginNativeNamespaceFact>();
   const priorNamespaces = new Set<PluginNativeNamespaceFact>();
@@ -313,10 +312,7 @@ export function createPluginNativeAdmission(
     previous?: PluginNativeNamespaceFact,
     retainedRoot?: string,
   ) => {
-    const root = createPluginNativeCaptureRoot(
-      state.captureStorage.stateDir,
-      state.captureStorage.placement,
-    );
+    const root = state.createRoot();
     state.roots.add(root);
     snapshotOwners.set(root, new Set([state]));
     const { fact, changed } = capturePluginNativeNamespace({
@@ -410,30 +406,17 @@ export function createPluginNativeAdmission(
       startNativeAdmissionPublication(state, key);
       return;
     }
-    const roots = [...state.roots].filter((root) => used.has(root.directory));
-    const publication = () =>
-      publishAdmission({
+    queuePluginNativeAdmissionPublication(
+      state,
+      {
         pluginId: owner.pluginId,
         rootDir: owner.rootDir,
         installRecordHash: owner.installRecordHash,
         key,
         receipt: next,
-      })
-        .then((accepted) => {
-          if (accepted) {
-            for (const root of roots) {
-              root.commit();
-            }
-            if (state.publications.get(key) === publication) {
-              state.publications.delete(key);
-            }
-          }
-        })
-        .catch((error: unknown) =>
-          process.emitWarning(`Plugin source receipt was not recorded: ${String(error)}`),
-        );
-    state.publications.set(key, publication);
-    startNativeAdmissionPublication(state, key);
+      },
+      publishAdmission,
+    );
   };
   const refreshReference = (fact: PluginNativeArtifactFact, input: string, target: string) => {
     const namespace = state.namespaces.get(fact.namespace)!;

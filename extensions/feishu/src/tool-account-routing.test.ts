@@ -1,4 +1,3 @@
-// Feishu tests cover tool account routing plugin behavior.
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { registerFeishuBitableTools } from "./bitable.js";
@@ -7,30 +6,62 @@ import { registerFeishuDocTools } from "./docx.js";
 import { registerFeishuDriveTools } from "./drive.js";
 import { registerFeishuPermTools } from "./perm.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
-import type { FeishuToolsConfig } from "./types.js";
+import type { FeishuAccountConfig, FeishuToolsConfig } from "./types.js";
 import { registerFeishuWikiTools } from "./wiki.js";
 
 const createFeishuClientMock = vi.fn((account: { appId?: string } | undefined) => ({
   __appId: account?.appId,
   wiki: {
     spaceNode: {
+      list: vi.fn(async () => ({ code: 0, data: { items: [] } })),
+    },
+  },
+  drive: {
+    permissionMember: {
       list: vi.fn(async () => ({
         code: 0,
-        data: { items: [] },
+        data: {
+          items: [
+            {
+              member_type: "userid",
+              member_id: "member-1",
+              perm: "view",
+              name: "Member One",
+            },
+          ],
+        },
       })),
     },
   },
 }));
+const registers = {
+  doc: registerFeishuDocTools,
+  chat: registerFeishuChatTools,
+  wiki: registerFeishuWikiTools,
+  drive: registerFeishuDriveTools,
+  perm: registerFeishuPermTools,
+  bitable: registerFeishuBitableTools,
+};
+function registerAll(api: OpenClawPluginApi) {
+  for (const register of Object.values(registers)) {
+    register(api);
+  }
+}
 
 vi.mock("./client.js", () => ({
   createFeishuClient: (account: { appId?: string } | undefined) => createFeishuClientMock(account),
 }));
+
+function makeAccount(appId: string, tools?: FeishuToolsConfig): FeishuAccountConfig {
+  return { appId, appSecret: `sec-${appId}`, tools };
+}
 
 function createConfig(params: {
   topTools?: FeishuToolsConfig;
   toolsA?: FeishuToolsConfig;
   toolsB?: FeishuToolsConfig;
   defaultAccount?: string;
+  accounts?: Record<string, FeishuAccountConfig>;
 }): OpenClawPluginApi["config"] {
   return {
     channels: {
@@ -38,42 +69,34 @@ function createConfig(params: {
         enabled: true,
         defaultAccount: params.defaultAccount,
         tools: params.topTools,
-        accounts: {
-          a: {
-            appId: "app-a",
-            appSecret: "sec-a", // pragma: allowlist secret
-            tools: params.toolsA,
-          },
-          b: {
-            appId: "app-b",
-            appSecret: "sec-b", // pragma: allowlist secret
-            tools: params.toolsB,
-          },
+        accounts: params.accounts ?? {
+          a: makeAccount("app-a", params.toolsA),
+          b: makeAccount("app-b", params.toolsB),
         },
       },
     },
   } as OpenClawPluginApi["config"];
 }
 
-function createMixedCaseConfig(params: {
-  toolsOps: FeishuToolsConfig;
-  toolsAdmin: FeishuToolsConfig;
+function createPunctuationConfig(params: {
+  topTools?: FeishuToolsConfig;
+  toolsSales: FeishuToolsConfig;
+  salesEnabled?: boolean;
 }): OpenClawPluginApi["config"] {
   return {
     channels: {
       feishu: {
         enabled: true,
+        appId: "app-root",
+        appSecret: "sec-root", // pragma: allowlist secret
+        tools: params.topTools,
         accounts: {
-          Ops: {
-            appId: "app-ops",
-            appSecret: "sec-ops", // pragma: allowlist secret
-            tools: params.toolsOps,
+          "sales.eu": {
+            ...makeAccount("app-sales", params.toolsSales),
+            appSecret: "sec-sales", // pragma: allowlist secret
+            enabled: params.salesEnabled ?? true,
           },
-          admin: {
-            appId: "app-admin",
-            appSecret: "sec-admin", // pragma: allowlist secret
-            tools: params.toolsAdmin,
-          },
+          sibling: { ...makeAccount("app-sibling", { perm: true }), appSecret: "sec-sibling" }, // pragma: allowlist secret
         },
       },
     },
@@ -86,26 +109,14 @@ function resolveAccountTool(
   agentAccountId?: string,
 ) {
   const { api, resolveTool } = createToolFactoryHarness(createConfig(config));
-  const register = {
-    wiki: registerFeishuWikiTools,
-    drive: registerFeishuDriveTools,
-    perm: registerFeishuPermTools,
-    bitable: registerFeishuBitableTools,
-  }[family];
-  register(api);
+  registers[family](api);
   return resolveTool(family === "bitable" ? "feishu_bitable_get_meta" : `feishu_${family}`, {
     agentAccountId,
   });
 }
 
-function clientAppIdAt(index: number): string | undefined {
-  const calls = createFeishuClientMock.mock.calls;
-  const resolvedIndex = index < 0 ? calls.length + index : index;
-  return calls[resolvedIndex]?.[0]?.appId;
-}
-
-function lastClientAppId(): string | undefined {
-  return clientAppIdAt(-1);
+function clientAppIdAt(index = -1): string | undefined {
+  return createFeishuClientMock.mock.calls.at(index)?.[0]?.appId;
 }
 
 describe("feishu tool account routing", () => {
@@ -130,16 +141,7 @@ describe("feishu tool account routing", () => {
     const disabled = createConfig({ topTools: { [family]: false } });
     const enabled = createConfig({ topTools: { [family]: true } });
     const { api, resolveTool } = createToolFactoryHarness(disabled);
-    for (const register of [
-      registerFeishuDocTools,
-      registerFeishuChatTools,
-      registerFeishuWikiTools,
-      registerFeishuDriveTools,
-      registerFeishuPermTools,
-      registerFeishuBitableTools,
-    ]) {
-      register(api);
-    }
+    registerAll(api);
 
     expect(() => resolveTool(name)).toThrow("Tool not registered");
     expect(resolveTool(name, { config: disabled, runtimeConfig: enabled }).name).toBe(name);
@@ -161,8 +163,7 @@ describe("feishu tool account routing", () => {
     await currentTool.execute("current", { action: "search" });
     await previousTool.execute("previous", { action: "search" });
 
-    expect(clientAppIdAt(0)).toBe("app-b");
-    expect(clientAppIdAt(1)).toBe("app-a");
+    expect([clientAppIdAt(0), clientAppIdAt(1)]).toEqual(["app-b", "app-a"]);
   });
 
   test.each([
@@ -186,16 +187,7 @@ describe("feishu tool account routing", () => {
     ],
   ])("does not expose workplace tools for %s", (_label, config) => {
     const { api, resolveTool } = createToolFactoryHarness(config);
-    for (const register of [
-      registerFeishuDocTools,
-      registerFeishuChatTools,
-      registerFeishuWikiTools,
-      registerFeishuDriveTools,
-      registerFeishuPermTools,
-      registerFeishuBitableTools,
-    ]) {
-      register(api);
-    }
+    registerAll(api);
     for (const name of [
       "feishu_doc",
       "feishu_app_scopes",
@@ -210,36 +202,30 @@ describe("feishu tool account routing", () => {
     expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
 
-  test("wiki tool rejects a mixed-case contextual account before sibling fallback", async () => {
-    const { api, resolveTool } = createToolFactoryHarness(
-      createMixedCaseConfig({
-        toolsOps: { wiki: false },
-        toolsAdmin: { wiki: true },
-      }),
-    );
-    registerFeishuWikiTools(api);
+  test.each([false, true])(
+    "wiki routes a mixed-case contextual account only when enabled: %s",
+    async (enabled) => {
+      const { api, resolveTool } = createToolFactoryHarness(
+        createConfig({
+          accounts: {
+            Ops: makeAccount("app-ops", { wiki: enabled }),
+            admin: makeAccount("app-admin", { wiki: true }),
+          },
+        }),
+      );
+      registerFeishuWikiTools(api);
 
-    const tool = resolveTool("feishu_wiki", { agentAccountId: "ops" });
-    const result = await tool.execute("call", { action: "search" });
+      const tool = resolveTool("feishu_wiki", { agentAccountId: "ops" });
+      const result = await tool.execute("call", { action: "search" });
 
-    expect(result.details.error).toBe('Feishu Wiki tools are disabled for account "ops"');
-    expect(createFeishuClientMock).not.toHaveBeenCalled();
-  });
-
-  test("wiki tool routes a mixed-case enabled contextual account without sibling fallback", async () => {
-    const { api, resolveTool } = createToolFactoryHarness(
-      createMixedCaseConfig({
-        toolsOps: { wiki: true },
-        toolsAdmin: { wiki: true },
-      }),
-    );
-    registerFeishuWikiTools(api);
-
-    const tool = resolveTool("feishu_wiki", { agentAccountId: "ops" });
-    await tool.execute("call", { action: "search" });
-
-    expect(lastClientAppId()).toBe("app-ops");
-  });
+      if (enabled) {
+        expect(clientAppIdAt()).toBe("app-ops");
+      } else {
+        expect(result.details.error).toBe('Feishu Wiki tools are disabled for account "ops"');
+        expect(createFeishuClientMock).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   test("wiki tool implicit fallback selects an account with wiki enabled", async () => {
     const tool = resolveAccountTool("wiki", {
@@ -248,7 +234,7 @@ describe("feishu tool account routing", () => {
     });
     await tool.execute("call", { action: "search" });
 
-    expect(lastClientAppId()).toBe("app-b");
+    expect(clientAppIdAt()).toBe("app-b");
   });
 
   test("wiki tool prefers the active contextual account over configured defaultAccount", async () => {
@@ -263,21 +249,12 @@ describe("feishu tool account routing", () => {
     );
     await tool.execute("call", { action: "search" });
 
-    expect(lastClientAppId()).toBe("app-a");
+    expect(clientAppIdAt()).toBe("app-a");
   });
 
   test("wiki tool rejects number-typed space IDs before Lark receives precision-corrupted values", async () => {
-    const tool = resolveAccountTool(
-      "wiki",
-      {
-        toolsA: { wiki: true },
-      },
-      "a",
-    );
-    const result = await tool.execute("call", {
-      action: "nodes",
-      space_id: 7616123456789015000,
-    });
+    const tool = resolveAccountTool("wiki", { toolsA: { wiki: true } }, "a");
+    const result = await tool.execute("call", { action: "nodes", space_id: 7616123456789015000 });
 
     expect(createFeishuClientMock).not.toHaveBeenCalled();
     expect(result.details.error).toContain("space_id must be a string");
@@ -285,17 +262,8 @@ describe("feishu tool account routing", () => {
   });
 
   test("wiki tool forwards quoted numeric-looking space IDs unchanged", async () => {
-    const tool = resolveAccountTool(
-      "wiki",
-      {
-        toolsA: { wiki: true },
-      },
-      "a",
-    );
-    await tool.execute("call", {
-      action: "nodes",
-      space_id: "7616123456789014828",
-    });
+    const tool = resolveAccountTool("wiki", { toolsA: { wiki: true } }, "a");
+    await tool.execute("call", { action: "nodes", space_id: "7616123456789014828" });
 
     const client = createFeishuClientMock.mock.results[0]?.value;
     expect(client.wiki.spaceNode.list).toHaveBeenCalledWith({
@@ -304,77 +272,76 @@ describe("feishu tool account routing", () => {
     });
   });
 
-  test("drive tool registers when first account disables it and routes to agentAccountId", async () => {
-    const tool = resolveAccountTool(
-      "drive",
-      {
-        toolsA: { drive: false },
-        toolsB: { drive: true },
-      },
-      "b",
+  test.each(["drive", "perm"] as const)(
+    "%s registers and routes when only second account enables it",
+    async (family) => {
+      const tool = resolveAccountTool(
+        family,
+        { toolsA: { [family]: false }, toolsB: { [family]: true } },
+        "b",
+      );
+      await tool.execute("call", { action: "unknown_action" });
+
+      expect(clientAppIdAt()).toBe("app-b");
+    },
+  );
+
+  test.each([
+    ["drive", "Drive", { action: "unknown_action" }],
+    ["perm", "Perm", { action: "unknown_action" }],
+    ["bitable", "Bitable", { url: "invalid-url" }],
+  ] as const)(
+    "%s rejects disabled contextual account instead of sibling fallback",
+    async (family, label, params) => {
+      const tool = resolveAccountTool(
+        family,
+        { toolsA: { [family]: false }, toolsB: { [family]: true } },
+        "a",
+      );
+      const result = await tool.execute("call", params);
+
+      expect(createFeishuClientMock).not.toHaveBeenCalled();
+      expect(result.details.error).toBe(`Feishu ${label} tools are disabled for account "a"`);
+    },
+  );
+
+  test.each([
+    { name: "contextual disabled family", permitted: false, explicit: false, enabled: true },
+    { name: "contextual enabled family", permitted: true, explicit: false, enabled: true },
+    { name: "explicit disabled family", permitted: false, explicit: true, enabled: true },
+    { name: "explicit disabled account", permitted: true, explicit: true, enabled: false },
+  ])("preserves punctuation-key authority for $name", async ({ permitted, explicit, enabled }) => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createPunctuationConfig({
+        topTools: { perm: true },
+        toolsSales: { perm: permitted },
+        salesEnabled: enabled,
+      }),
     );
-    await tool.execute("call", { action: "unknown_action" });
-
-    expect(lastClientAppId()).toBe("app-b");
-  });
-
-  test("drive tool rejects a disabled contextual account when another account enables it", async () => {
-    const tool = resolveAccountTool(
-      "drive",
-      {
-        toolsA: { drive: false },
-        toolsB: { drive: true },
-      },
-      "a",
-    );
-    const result = await tool.execute("call", { action: "unknown_action" });
-
-    expect(createFeishuClientMock).not.toHaveBeenCalled();
-    expect(result.details.error).toBe('Feishu Drive tools are disabled for account "a"');
-  });
-
-  test("perm tool registers when only second account enables it and routes to agentAccountId", async () => {
-    const tool = resolveAccountTool(
-      "perm",
-      {
-        toolsA: { perm: false },
-        toolsB: { perm: true },
-      },
-      "b",
-    );
-    await tool.execute("call", { action: "unknown_action" });
-
-    expect(lastClientAppId()).toBe("app-b");
-  });
-
-  test("perm tool rejects a disabled contextual account when another account enables it", async () => {
-    const tool = resolveAccountTool(
-      "perm",
-      {
-        toolsA: { perm: false },
-        toolsB: { perm: true },
-      },
-      "a",
-    );
-    const result = await tool.execute("call", { action: "unknown_action" });
-
-    expect(createFeishuClientMock).not.toHaveBeenCalled();
-    expect(result.details.error).toBe('Feishu Perm tools are disabled for account "a"');
-  });
-
-  test("bitable tool rejects a disabled contextual account when another account enables it", async () => {
-    const tool = resolveAccountTool(
-      "bitable",
-      {
-        toolsA: { bitable: false },
-        toolsB: { bitable: true },
-      },
-      "a",
-    );
-    const result = await tool.execute("call", { url: "invalid-url" });
-
-    expect(createFeishuClientMock).not.toHaveBeenCalled();
-    expect(result.details.error).toBe('Feishu Bitable tools are disabled for account "a"');
+    registerFeishuPermTools(api);
+    const tool = resolveTool("feishu_perm", { agentAccountId: explicit ? "sibling" : "sales-eu" });
+    const result = await tool.execute("call", {
+      action: "list",
+      token: "tok",
+      type: "file",
+      ...(explicit ? { accountId: "sales.eu" } : {}),
+    });
+    if (permitted && enabled) {
+      expect(clientAppIdAt(0)).toBe("app-sales");
+      expect(clientAppIdAt(0)).not.toBe("app-root");
+      expect(result.details).toEqual({
+        members: [
+          { member_type: "userid", member_id: "member-1", perm: "view", name: "Member One" },
+        ],
+      });
+    } else {
+      expect(createFeishuClientMock).not.toHaveBeenCalled();
+      expect(result.details.error).toBe(
+        enabled
+          ? 'Feishu Perm tools are disabled for account "sales-eu"'
+          : 'Feishu account "sales.eu" is disabled',
+      );
+    }
   });
 
   test("bitable tool routes to agentAccountId and allows explicit accountId override", async () => {
@@ -385,50 +352,31 @@ describe("feishu tool account routing", () => {
     await tool.execute("call-ctx", { url: "invalid-url" });
     await tool.execute("call-override", { url: "invalid-url", accountId: "a" });
 
-    expect(clientAppIdAt(0)).toBe("app-b");
-    expect(clientAppIdAt(1)).toBe("app-a");
+    expect([clientAppIdAt(0), clientAppIdAt(1)]).toEqual(["app-b", "app-a"]);
   });
 
-  test("top-level bitable disable wins over account-level bitable enable", async () => {
-    expect(() =>
-      resolveAccountTool("bitable", {
-        topTools: { bitable: false },
-        toolsA: { bitable: true },
-        toolsB: { bitable: true },
-      }),
-    ).toThrow("Tool not registered");
-  });
-
-  test("bitable tools are not registered when account bitable configs disable them", async () => {
-    expect(() =>
-      resolveAccountTool("bitable", {
-        toolsA: { bitable: false },
-        toolsB: { bitable: false },
-      }),
-    ).toThrow("Tool not registered");
+  test.each([
+    { topTools: { bitable: false }, toolsA: { bitable: true }, toolsB: { bitable: true } },
+    { toolsA: { bitable: false }, toolsB: { bitable: false } },
+  ])("does not register bitable when disabled: %j", async (config) => {
+    expect(() => resolveAccountTool("bitable", config)).toThrow("Tool not registered");
   });
 
   test("falls back to the configured Feishu default selection when agentAccountId is not a real account", async () => {
     const tool = resolveAccountTool(
       "wiki",
-      {
-        toolsA: { wiki: true },
-        toolsB: { wiki: true },
-      },
+      { toolsA: { wiki: true }, toolsB: { wiki: true } },
       "agent-spawner",
     );
     await tool.execute("call", { action: "search" });
 
-    expect(lastClientAppId()).toBe("app-a");
+    expect(clientAppIdAt()).toBe("app-a");
   });
 
   test("wiki tool rejects an explicit disabled account override", async () => {
     const tool = resolveAccountTool(
       "wiki",
-      {
-        toolsA: { wiki: false },
-        toolsB: { wiki: true },
-      },
+      { toolsA: { wiki: false }, toolsB: { wiki: true } },
       "b",
     );
     const result = await tool.execute("call", { action: "search", accountId: "a" });
@@ -438,25 +386,17 @@ describe("feishu tool account routing", () => {
   });
 
   test("does not silently fall back when the contextual account is real but uses non-env SecretRefs", async () => {
-    const { api, resolveTool } = createToolFactoryHarness({
-      channels: {
-        feishu: {
-          enabled: true,
-          accounts: {
-            a: {
-              appId: "app-a",
-              appSecret: "sec-a", // pragma: allowlist secret
-              tools: { wiki: true },
-            },
-            b: {
-              appId: "app-b",
-              appSecret: { source: "file", provider: "default", id: "feishu/b-secret" },
-              tools: { wiki: true },
-            } as never,
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        accounts: {
+          a: makeAccount("app-a", { wiki: true }),
+          b: {
+            ...makeAccount("app-b", { wiki: true }),
+            appSecret: { source: "file", provider: "default", id: "feishu/b-secret" },
           },
         },
-      },
-    } as OpenClawPluginApi["config"]);
+      }),
+    );
     registerFeishuWikiTools(api);
 
     const tool = resolveTool("feishu_wiki", { agentAccountId: "b" });

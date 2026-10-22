@@ -33,7 +33,7 @@ final class VoicePushToTalkHotkey {
     }
 
     private func reconcile() {
-        if self.enabled, !self.talkSuppressed, voiceWakeSupported {
+        if self.enabled, !self.talkSuppressed {
             self.startMonitoring()
         } else {
             self.stopMonitoring()
@@ -142,7 +142,7 @@ final class VoicePushToTalk {
     }
 
     func begin() {
-        guard self.permissions.supported(), self.state() != nil, self.holdID == nil else { return }
+        guard self.state() != nil, self.holdID == nil else { return }
         let snapshot = self.sessions.snapshot()
         // Retire the old capture, but retain its overlay and wake lease until admission
         // commits or cancels. Dismissing here would animate out the replacement overlay.

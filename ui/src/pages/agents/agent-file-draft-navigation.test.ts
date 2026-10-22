@@ -125,11 +125,11 @@ it.each([
   const settle = async () => {
     await vi.waitFor(() => {
       expect(
-        page.read().agentFiles.agentFileEditors[page.read().agentFiles.agentFileActive ?? ""]
+        page.read().readData().agentFileEditors[page.read().readData().agentFileActive ?? ""]
           ?.content,
       ).toBeDefined();
-      expect(page.read().agentFiles.agentFilesList?.agentId).toBe(selection.state.selectedId);
-      expect(page.read().agentFiles.agentFilesLoading).toBe(false);
+      expect(page.read().readData().agentFilesList?.agentId).toBe(selection.state.selectedId);
+      expect(page.read().readData().agentFilesLoading).toBe(false);
       paint();
       expect(container.querySelector(".agent-file-textarea")).not.toBeNull();
     });
@@ -170,6 +170,7 @@ it.each([
             agentId: "main",
             name: "AGENTS.md",
             content: draft,
+            expectedWorkspace: "/tmp/main",
             expectedHash: "a".repeat(64),
           }),
         );
@@ -212,7 +213,7 @@ it.each([
       expect(save().disabled).toBe(true);
     }
     if (transition === "external update" || transition === "missing file") {
-      expect(page.read().agentFiles.agentFileEditors["AGENTS.md"]?.content).toBe("changed on disk");
+      expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe("changed on disk");
       save().click();
       await vi.waitFor(() => {
         paint();
@@ -222,6 +223,7 @@ it.each([
         agentId: "main",
         name: "AGENTS.md",
         content: draft,
+        expectedWorkspace: "/tmp/main",
         ...(transition === "missing file"
           ? { expectedMissing: true }
           : { expectedHash: "a".repeat(64) }),
@@ -239,13 +241,14 @@ it.each([
       next.dispatchEvent(new Event("input", { bubbles: true }));
       save().click();
       await vi.waitFor(() =>
-        expect(page.read().agentFiles.agentFileEditors["AGENTS.md"]?.content).toBe("next edit"),
+        expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe("next edit"),
       );
       expect(save().disabled).toBe(true);
       expect(request).toHaveBeenLastCalledWith("agents.files.set", {
         agentId: "main",
         name: "AGENTS.md",
         content: "next edit",
+        expectedWorkspace: "/tmp/main",
         expectedHash: "b".repeat(64),
       });
     }

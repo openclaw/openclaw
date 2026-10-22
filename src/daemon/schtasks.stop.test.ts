@@ -197,7 +197,9 @@ describe("Scheduled Task stop/restart cleanup", () => {
         }
         expect(errors).toContain(cleanupFailure);
         expect(schtasksCalls).not.toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
-        expect(() => admission.assertCurrent()).toThrow("undergoing offline maintenance");
+        expect(() => admission.assertCurrent()).toThrow(
+          "without an active schema lease or maintenance scope",
+        );
       } finally {
         // The test retains handles only to clean its fixture; production retires the CLI process.
         failCleanup = false;

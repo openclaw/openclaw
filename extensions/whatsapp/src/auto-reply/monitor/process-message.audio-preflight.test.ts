@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestWebAudioInboundMessage } from "../../inbound/test-message.test-helper.js";
 
-// Mock the lazy-loaded audio preflight runtime boundary
 const transcribeFirstAudioMock = vi.fn();
 const maybeSendAckReactionMock = vi.fn();
 
@@ -9,11 +8,8 @@ vi.mock("./audio-preflight.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
 }));
 
-// Controllable shouldComputeCommandAuthorized for command-sync tests
-let shouldComputeCommandResult = false;
 let shouldComputeCommandBodies: string[] = [];
 
-// Minimal mocks for process-message dependencies
 vi.mock("../../accounts.js", () => ({
   resolveWhatsAppAccount: () => ({
     accountId: "default",
@@ -29,21 +25,9 @@ vi.mock("../../identity.js", () => ({
   getSenderIdentity: () => ({ e164: "+15550000002", name: "Alice" }),
 }));
 
-vi.mock("../../reconnect.js", () => ({
-  newConnectionId: () => "test-conn-id",
-}));
-
 vi.mock("../../session.js", () => ({
   formatError: (err: unknown) => String(err),
 }));
-
-vi.mock("../deliver-reply.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../deliver-reply.js")>();
-  return {
-    ...actual,
-    deliverWebReply: vi.fn(async () => {}),
-  };
-});
 
 vi.mock("../loggers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../loggers.js")>()),
@@ -70,14 +54,9 @@ vi.mock("./message-line.js", () => ({
 
 vi.mock("./runtime-api.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./runtime-api.js")>()),
-  buildHistoryContextFromEntries: (_p: { currentMessage: string }) => _p.currentMessage,
   createChannelMessageReplyPipeline: () => ({ onModelSelected: undefined }),
-  formatInboundEnvelope: (p: { body: string }) => p.body,
   isControlCommandMessage: () => false,
   logVerbose: () => {},
-  normalizeE164: (v: string) => v,
-  readStoreAllowFromForDmPolicy: async () => [],
-  recordSessionMetaFromInbound: async () => {},
   resolveChannelContextVisibilityMode: () => "standard",
   resolveInboundSessionEnvelopeContextAsync: async () => ({
     storePath: "/tmp/sessions.json",
@@ -87,10 +66,9 @@ vi.mock("./runtime-api.js", async (importOriginal) => ({
   resolvePinnedMainDmOwnerFromAllowlist: () => null,
   shouldComputeCommandAuthorized: (body: string) => {
     shouldComputeCommandBodies.push(body);
-    return shouldComputeCommandResult || body.startsWith("/");
+    return body.startsWith("/");
   },
   shouldLogVerbose: () => false,
-  type: undefined,
 }));
 
 vi.mock("./inbound-dispatch.js", async (importOriginal) => {
@@ -124,117 +102,47 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
       finalize: () => true,
     })),
     resolveWhatsAppDmRouteTarget: () => "+15550000002",
-    resolveWhatsAppResponsePrefix: () => undefined,
     updateWhatsAppMainLastRoute: () => {},
   };
 });
 
 import { createWhatsAppReplyPlan } from "./inbound-dispatch.js";
+import { createMonitorContext } from "./monitor.test-support.js";
 import { processMessage } from "./process-message.js";
 
 type WebInboundMsg = Parameters<typeof processMessage>[0]["msg"];
-type TestRoute = Parameters<typeof processMessage>[0]["route"];
-
-type AudioMessageOverrides = Partial<WebInboundMsg> & {
-  body?: string;
-  mediaPath?: string;
-  mediaType?: string;
-};
-
-function makeAudioMsg(overrides: AudioMessageOverrides = {}): WebInboundMsg {
-  const { body, mediaPath, mediaType, event, payload, platform, ...messageOverrides } = overrides;
-  const resolvedMediaPath = Object.hasOwn(overrides, "mediaPath") ? mediaPath : "/tmp/voice.ogg";
-  const resolvedMediaType = Object.hasOwn(overrides, "mediaType")
-    ? mediaType
-    : "audio/ogg; codecs=opus";
-  return createTestWebAudioInboundMessage({
-    event,
-    payload: {
-      body: body ?? "",
-      media: {
-        type: resolvedMediaType,
-        path: resolvedMediaPath,
-        kind: resolvedMediaType?.startsWith("audio/")
-          ? "audio"
-          : resolvedMediaType?.startsWith("image/")
-            ? "image"
-            : "unknown",
-        ...payload?.media,
-      },
-      ...payload,
-    },
-    platform,
-    ...messageOverrides,
-  }) as WebInboundMsg;
-}
-
-function makeRoute(overrides: Partial<TestRoute> = {}): TestRoute {
+function makeParams(msgOverrides: Parameters<typeof createTestWebAudioInboundMessage>[0] = {}) {
   return {
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    mainSessionKey: "agent:main:main",
-    accountId: "default",
-    ...overrides,
-  } as TestRoute;
-}
-
-function makeParams(msgOverrides: AudioMessageOverrides = {}) {
-  return {
+    ...createMonitorContext(),
     cfg: {
       tools: { media: { audio: { enabled: true } } },
       channels: { whatsapp: {} },
       commands: { useAccessGroups: false },
     } as never,
-    msg: makeAudioMsg(msgOverrides),
-    route: makeRoute(),
+    msg: createTestWebAudioInboundMessage(msgOverrides),
+    route: {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      accountId: "default",
+    } as Parameters<typeof processMessage>[0]["route"],
     groupHistoryKey: "whatsapp:default:+15550000002",
-    groupHistories: new Map(),
-    groupMemberNames: new Map(),
-    connectionId: "conn-1",
-    verbose: false,
-    maxMediaBytes: 1024 * 1024,
-    replyResolver: vi.fn() as never,
-    replyLogger: {
-      info: () => {},
-      warn: () => {},
-      debug: () => {},
-      error: () => {},
-    } as never,
-    backgroundTasks: new Set<Promise<unknown>>(),
   };
 }
 
-function firstTranscriptionContext(): Record<string, unknown> {
-  const call = transcribeFirstAudioMock.mock.calls[0]?.[0] as
-    | { ctx?: Record<string, unknown> }
-    | undefined;
-  if (!call?.ctx) {
-    throw new Error("expected transcribeFirstAudio ctx");
-  }
-  return call.ctx;
+function firstDispatchContext() {
+  return vi.mocked(createWhatsAppReplyPlan).mock.calls[0]![0].context;
 }
 
-function firstDispatchContext(): Record<string, unknown> {
-  const calls = vi.mocked(createWhatsAppReplyPlan).mock.calls as unknown[][];
-  const dispatch = calls[0]?.[0] as { context?: Record<string, unknown> } | undefined;
-  if (!dispatch?.context) {
-    throw new Error("expected WhatsApp dispatch context");
-  }
-  return dispatch.context;
-}
-
-function expectContextFields(context: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(context[key]).toEqual(value);
-  }
+function expectContextFields(context: object, fields: Record<string, unknown>) {
+  expect(context).toEqual(expect.objectContaining(fields));
 }
 
 describe("processMessage audio preflight transcription", () => {
+  const audio = { path: "/tmp/voice.ogg", contentType: "audio/ogg; codecs=opus", kind: "audio" };
   beforeEach(() => {
     transcribeFirstAudioMock.mockReset();
-    maybeSendAckReactionMock.mockReset();
-    maybeSendAckReactionMock.mockResolvedValue(null);
-    shouldComputeCommandResult = false;
+    maybeSendAckReactionMock.mockReset().mockResolvedValue(null);
     shouldComputeCommandBodies = [];
     vi.mocked(createWhatsAppReplyPlan).mockClear();
   });
@@ -247,16 +155,10 @@ describe("processMessage audio preflight transcription", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     expect(shouldComputeCommandBodies).toEqual([""]);
-    expectContextFields(firstTranscriptionContext(), {
+    expectContextFields(transcribeFirstAudioMock.mock.calls[0]![0].ctx, {
       AccountId: "default",
       From: "+15550000002",
-      media: [
-        {
-          path: "/tmp/voice.ogg",
-          contentType: "audio/ogg; codecs=opus",
-          kind: "audio",
-        },
-      ],
+      media: [audio],
       OriginatingChannel: "whatsapp",
       OriginatingTo: "+15550000002",
       Provider: "whatsapp",
@@ -272,14 +174,7 @@ describe("processMessage audio preflight transcription", () => {
       CommandBody: "",
       RawBody: "",
       Transcript: transcript,
-      media: [
-        expect.objectContaining({
-          path: "/tmp/voice.ogg",
-          contentType: "audio/ogg; codecs=opus",
-          kind: "audio",
-          transcribed: true,
-        }),
-      ],
+      media: [expect.objectContaining({ ...audio, transcribed: true })],
     });
   });
 
@@ -296,20 +191,21 @@ describe("processMessage audio preflight transcription", () => {
     {
       name: "does not call transcribeFirstAudio when mediaType is not audio",
       overrides: {
-        body: "<media:image>",
-        mediaType: "image/jpeg",
-        mediaPath: "/tmp/img.jpg",
+        payload: {
+          body: "<media:image>",
+          media: { type: "image/jpeg", path: "/tmp/img.jpg", kind: "image" as const },
+        },
       },
       assertEmptyBody: false,
     },
     {
       name: "does not call transcribeFirstAudio when mediaPath is absent",
-      overrides: { mediaPath: undefined },
+      overrides: { payload: { media: { type: "audio/ogg; codecs=opus", kind: "audio" as const } } },
       assertEmptyBody: false,
     },
     {
       name: "does not call transcribeFirstAudio when msg.mediaType is absent",
-      overrides: { mediaType: undefined, mediaPath: "/tmp/voice.ogg" },
+      overrides: { payload: { media: { path: "/tmp/voice.ogg", kind: "unknown" as const } } },
       assertEmptyBody: true,
     },
   ])("$name", async ({ overrides, assertEmptyBody }) => {

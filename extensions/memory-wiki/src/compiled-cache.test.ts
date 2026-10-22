@@ -9,7 +9,6 @@ import {
   createMemoryWikiCompiledCacheStore,
   loadMemoryWikiCompiledCache,
   readMemoryWikiDashboardState,
-  reconcileMemoryWikiCompiledCacheOwner,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
 } from "./compiled-cache.js";
@@ -164,9 +163,8 @@ describe("Memory Wiki compiled publication ownership", () => {
           await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
           // Publication must use the already-persisted payload, not serialize a
           // possibly changed compiler input again after its asynchronous gates.
-          claim.text = "changed during validation";
+          claim.text = "changed during commit";
         },
-        async () => {},
         async () => identity,
       );
 
@@ -207,7 +205,6 @@ describe("Memory Wiki compiled publication ownership", () => {
         identity.vaultGeneration,
         identity.compiledCachePublicationId,
       );
-      await reconcileMemoryWikiCompiledCacheOwner(config, async () => identity);
       const reloaded = await loadMemoryWikiCompiledCache(config);
       assert.ok(reloaded);
       expect(reloaded).toEqual(cached);

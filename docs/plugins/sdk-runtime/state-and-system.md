@@ -97,6 +97,33 @@ keep the existing synchronous fallback.
 
     `runHeartbeatOnce(...)` runs a single heartbeat cycle immediately, bypassing the normal coalesce timer. Delivery defaults to the configured operator DM (`commands.ownerAllowFrom`, then channel `allowFrom`); pass `{ heartbeat: { target: "none" } }` for an internal-only run.
 
+    To start an ordinary session turn, capture its target before asynchronous work:
+
+    ```typescript
+    const expectedTarget = await api.runtime.system.captureSessionEventTarget(agentId, sessionKey);
+    const text = await preparePluginEvent();
+    const receipt = api.runtime.system.enqueueSessionEvent(text, {
+      agentId,
+      sessionKey,
+      expectedTarget,
+    });
+    const admission = await receipt.accepted;
+    if (!admission.ok) throw new Error(admission.error);
+    const outcome = await receipt.settled;
+    if (outcome.status !== "completed") throw new Error(outcome.error ?? outcome.status);
+    ```
+
+    `enqueueSystemEvent(...)` remains passive. `enqueueSessionEvent(...)` uses the
+    ordinary session controller; acceptance confirms admission and settlement
+    reports completion separately from delivery. The opaque target binds the
+    original session generation. The runtime rechecks plugin and Gateway ownership
+    across awaited work, and rejects copied targets or revoked owners.
+
+    Event options require `agentId` and `sessionKey`; optional fields are
+    `contextKey`, `deliveryContext`, `abortSignal`, `expectedTarget`, and
+    `createIfMissing: true`. Use `createIfMissing` only for authorized fresh
+    ingress. The runtime fixes the source to the plugin.
+
     `runCommandWithTimeout(...)` returns captured `stdout` and `stderr`, optional
     truncation counts, `code`, `signal`, `killed`, `termination`, and
     `noOutputTimedOut`. Timeout and no-output-timeout results report `code: 124`
@@ -257,7 +284,10 @@ Preparation uses the state worker when the owner has no published row or absence
 The final read uses memory, follows committed replacements and deletions, and
 honors expiry and runtime retirement.
 
-Queued mutations deny these reads before commit. Known rollback preserves the
+Queued mutations deny reads of affected entries before commit. A write that can
+evict other live entries denies the namespace; native and compound writes without
+a captured scope retain database-wide denial. Independent keyed writes do not
+deny unrelated binding reads. Known rollback preserves the
 prior facts; compound binding cleanup publishes deletion or compensation before
 releasing denial. An unknown outcome keeps effect guards denied for that database
 identity until the Gateway restarts. Ordinary descriptive reads remain available.

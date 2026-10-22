@@ -1,4 +1,3 @@
-// Bridges OpenAI ChatGPT OAuth credentials into provider plugin auth.
 import type { OAuthCredentials } from "../llm/oauth.js";
 import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-runtime.js";
 import type { RuntimeEnv } from "../runtime.js";

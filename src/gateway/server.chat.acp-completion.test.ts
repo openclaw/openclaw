@@ -16,7 +16,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { tryDispatchAcpReplyHook } from "../plugin-sdk/acpx.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import type { Deferred } from "../shared/deferred.js";
@@ -232,7 +232,7 @@ describe("Gateway ACP completion ownership", () => {
         replyOptions: inboundReplyOptions,
       } = input as Parameters<typeof dispatchInboundMessage>[0];
       // Gateway admission outlives ACP dispatch and owns source transcript finalization.
-      const release = getSessionWorkAdmissionRelease({
+      const release = captureSessionControllerSettlement({
         scope: storePath,
         identities: [ctx.SessionKey],
       });

@@ -32,12 +32,12 @@ function startInitialize() {
   return { harness, initializing, outbound };
 }
 
-function createToolHarness(options: { budget?: number; completed?: boolean } = {}) {
+function createToolHarness(options: { budget?: number | null; completed?: boolean } = {}) {
   vi.useFakeTimers();
   vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
   const harness = createHarness();
   let requestSignal: AbortSignal | undefined;
-  let setBudget: ((timeoutMs: number) => void) | undefined;
+  let setBudget: ((timeoutMs: number | null) => void) | undefined;
   harness.client.addRequestHandler((_request, signal, setTimeoutMs) => {
     requestSignal = signal;
     setBudget = setTimeoutMs;
@@ -48,7 +48,7 @@ function createToolHarness(options: { budget?: number; completed?: boolean } = {
   });
   return Object.assign(harness, {
     getSignal: () => requestSignal,
-    setBudget: (timeoutMs: number) => setBudget?.(timeoutMs),
+    setBudget: (timeoutMs: number | null) => setBudget?.(timeoutMs),
   });
 }
 
@@ -466,6 +466,23 @@ it.each([
     expect(vi.getTimerCount()).toBe(0);
   },
 );
+
+it("keeps an unlimited parent request cancellable without a replacement deadline", async () => {
+  const harness = createToolHarness({ budget: null });
+  harness.send({
+    id: "unlimited-review",
+    method: "item/tool/call",
+    params: { tool: "autoreview" },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  harness.setBudget(1);
+  await vi.advanceTimersByTimeAsync(2_147_483_648);
+  expect(harness.writes).toHaveLength(0);
+  expect(harness.getSignal()?.aborted).toBe(false);
+  expect(vi.getTimerCount()).toBe(0);
+  harness.client.close();
+  expect(harness.getSignal()?.aborted).toBe(true);
+});
 
 it("ignores an execution budget reported after the request completed", async () => {
   const harness = createToolHarness({ completed: true });

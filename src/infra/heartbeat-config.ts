@@ -93,14 +93,9 @@ export function resolveHeartbeatTimeoutOverrideSeconds(
     return heartbeat.timeoutSeconds;
   }
   const agentDefaultTimeoutSeconds = cfg.agents?.defaults?.timeoutSeconds;
-  if (
-    typeof agentDefaultTimeoutSeconds === "number" &&
-    Number.isFinite(agentDefaultTimeoutSeconds)
-  ) {
+  if (agentDefaultTimeoutSeconds !== undefined) {
     // Preserve the unlimited sentinel consumed by resolveAgentTimeoutMs.
-    return agentDefaultTimeoutSeconds === 0
-      ? 0
-      : Math.max(1, Math.floor(agentDefaultTimeoutSeconds));
+    return agentDefaultTimeoutSeconds;
   }
   // Monitor turns use their cadence budget instead of the 48h built-in agent default.
   const intervalMs = resolveHeartbeatIntervalMs(cfg, undefined, heartbeat);

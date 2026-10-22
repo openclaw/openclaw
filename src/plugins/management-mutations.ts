@@ -11,7 +11,7 @@ import {
 } from "../config/config.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import { composeConfigWriteAssertions } from "../config/write-authority.js";
-import { isDefaultClawHubBaseUrl } from "../infra/clawhub-client.js";
+import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { reportClawHubPluginInstallTelemetry } from "../infra/clawhub-packages.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
@@ -127,18 +127,21 @@ export async function installManagedPlugin(
   } catch (error) {
     throw new ManagedPluginLifecycleError(formatErrorMessage(error), { cause: error });
   }
-  const { installManagedPluginSource } = await import("./management-install.js");
   const env = params.env ?? process.env;
+  const clawhubUrl = resolveClawHubBaseUrl(undefined, env);
+  const { installManagedPluginSource } = await import("./management-install.js");
   return await withManagedPluginMutation(params, async (beforePersistentApply) => {
     const performInstall = async () => {
-      const configuredClawHubUrl = env.OPENCLAW_CLAWHUB_URL ?? env.CLAWHUB_URL;
       const useHostedCatalog =
         params.request.source === "official" ||
-        (params.request.source === "clawhub" &&
-          (!configuredClawHubUrl || isDefaultClawHubBaseUrl(configuredClawHubUrl)));
+        (params.request.source === "clawhub" && isDefaultClawHubBaseUrl(clawhubUrl));
       const officialCatalog = useHostedCatalog ? await loadOfficialCatalog() : { entries: [] };
       const warnings: string[] = [];
-      const request = resolveManagedPluginInstallRequest(params.request, officialCatalog.entries);
+      const request = resolveManagedPluginInstallRequest(
+        params.request,
+        officialCatalog.entries,
+        clawhubUrl,
+      );
       // Official installs retain catalog-owned recovery after resolving their package source.
       const planned = resolvePluginInstallRequestContext({
         source: request.source,
@@ -511,7 +514,6 @@ export async function reloadManagedPlugin(
           );
         }
         const ownedPluginIds = ownership.value.pluginIds;
-        let install: { id: string; hash: string } | undefined;
         if (target.installHash !== undefined) {
           const owner = ownership.value.installOwner;
           if (
@@ -523,7 +525,6 @@ export async function reloadManagedPlugin(
               `Plugin ${pluginId} changed after the installation batch. Inspect it before reloading.`,
             );
           }
-          install = { id: owner, hash: target.installHash };
         }
         const sourceDigests = target.sourceDigests ?? {};
         if (Object.keys(sourceDigests).some((id) => !ownedPluginIds.includes(id))) {
@@ -535,7 +536,6 @@ export async function reloadManagedPlugin(
           pluginId,
           pluginIds: ownedPluginIds,
           sourceDigests,
-          install,
         };
       });
     };
@@ -570,13 +570,6 @@ export async function reloadManagedPlugin(
         reason: "reload",
         ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.signal } : {}),
         ...(expected.size ? { expectedSourceDigests: Object.fromEntries(expected) } : {}),
-        ...(resolved.every((target) => target.install !== undefined)
-          ? {
-              expectedInstallHashes: Object.fromEntries(
-                resolved.flatMap(({ install }) => (install ? [[install.id, install.hash]] : [])),
-              ),
-            }
-          : {}),
         assertInvokerOwned: beforePersistentApply,
       }),
     };

@@ -127,14 +127,9 @@ export class SqliteWorkerInputAdmission {
     return {
       assertCurrent,
       handoff: (dispatch) => {
-        try {
-          if (!this.inputPreparations.has(settled.promise)) {
-            throw new SqliteWorkerError("SQLite worker input preparation is closed", "closed");
-          }
-          assertCurrent();
-        } catch (error) {
+        if (!this.inputPreparations.has(settled.promise) || this.owner.isClosing()) {
           release();
-          throw error;
+          throw new SqliteWorkerError("SQLite worker input preparation is closed", "closed");
         }
         // Enqueue takes custody in this same synchronous turn, including its oversized checks.
         handedOff = true;

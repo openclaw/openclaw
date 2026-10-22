@@ -460,11 +460,11 @@ registerHooks({resolve(specifier, context, nextResolve) {
     expect(resolveImplicitVitestArgs(argv)).toEqual(expected);
   });
 
-  it("inserts bounded Gateway targets before the native separator", () => {
-    const argv = directArgs(gatewayConfig, "--reporter=verbose");
+  it("replaces broad Gateway filters while retaining options and the native separator", () => {
+    const argv = directArgs(gatewayConfig, "--reporter=verbose", "--testNamePattern", "server");
     const targets = ["src/gateway/server-a.test.ts", "src/gateway/server-b.test.ts"];
     expect(
-      resolveBoundedVitestInvocations([...argv, "--", "-x"], {
+      resolveBoundedVitestInvocations([...argv, "server", "--", "-x"], {
         env: {},
         gatewayServerTargetChunks: targets.map((target) => [target]),
       }),
@@ -476,7 +476,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
     const invocations = resolveBoundedVitestInvocations(argv, { env: { CI: "1" } });
     const targets = invocations.map((args) => args.slice(argv.length));
 
-    expect(targets.every((files) => files.length > 0 && files.length <= 50)).toBe(true);
+    expect(targets.every((files) => files.length > 0 && files.length <= 16)).toBe(true);
     expect(targets.flat()).toEqual(
       listGitTrackedFiles({ pathspecs: "src/gateway" })
         ?.filter(isGatewayServerTestFile)

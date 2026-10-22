@@ -70,7 +70,7 @@ function captureProcess(
   }
   try {
     const startedAt = getProcessInstanceStartTime(row.pid);
-    const observed = readDarwinProcessCommand(row.pid, row.uid);
+    const observed = readDarwinProcessCommand(row.pid, "same");
     if (
       !observed ||
       !("argv" in observed) ||

@@ -17,7 +17,7 @@ import {
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { Api, Context, Model } from "../llm/types.js";
-import { repairToolUseResultPairing } from "./session-transcript-repair.js";
+import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
   "anthropic-messages",
@@ -29,7 +29,6 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
 ]);
 
 // Responses-family APIs retain their inherited "aborted" synthetic-result convention.
-/** Transforms transcript messages into a provider-safe replay context. */
 export function transformTransportMessages(
   messages: Context["messages"],
   model: Model,
@@ -180,9 +179,9 @@ export function transformTransportMessages(
   // The local transport transform can synthesize missing results, but it does not move
   // displaced real results back before an intervening user turn. Shared repair
   // handles both and drops aborted/error turns together with their owned results.
-  return repairToolUseResultPairing(transformed, {
+  return sanitizeToolUseResultPairing(transformed, {
     erroredAssistantResultPolicy: "drop",
     missingToolResultText: syntheticToolResultText,
     preserveUnframedToolResults: options?.preserveUnframedToolResults,
-  }).messages as Context["messages"];
+  }) as Context["messages"];
 }

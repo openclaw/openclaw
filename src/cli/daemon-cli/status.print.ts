@@ -39,6 +39,7 @@ import {
   formatRuntimeStatus,
   projectDaemonServiceForJson,
   resolveDaemonInstallBlockMessage,
+  resolveDaemonServiceInstallGuidance,
   resolveRuntimeStatusColor,
   safeDaemonEnv,
 } from "./shared.js";
@@ -47,7 +48,6 @@ import {
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.gather.js";
-import { printDaemonStatusVersions } from "./status.print.version.js";
 
 function formatConnectionLine(
   connection: NonNullable<DaemonStatus["connections"]>["established"][number],
@@ -171,7 +171,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         (runtimeNeedsAttention
           ? `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively to resolve the runtime findings before reinstalling. Reinstalling alone may select the same runtime.`
           : `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively for guided checks, or reinstall with "${reinstallCommand}".`));
-    printWarning(recommendation);
+    if (service.configAudit.issues.some((issue) => issue.repair !== "host")) {
+      printWarning(recommendation);
+    }
   }
 
   if (status.config) {
@@ -250,7 +252,56 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
-  printDaemonStatusVersions(status, { label, infoText, warnText });
+  const gatewayVersion = status.rpc?.server?.version?.trim() || status.gateway?.version?.trim();
+  const cliVersionLine = status.cli
+    ? status.cli.entrypoint
+      ? `${status.cli.version} (${shortenHomePath(status.cli.entrypoint)})`
+      : status.cli.version
+    : null;
+  // The installed service is readable without a Gateway handshake, so its facts stay
+  // available for the failed-probe path below.
+  const serviceInstallVersion = status.service.layout?.packageVersion?.trim();
+  const serviceInstallLine = serviceInstallVersion
+    ? status.service.layout?.packageRoot
+      ? `${serviceInstallVersion} (${shortenHomePath(status.service.layout.packageRoot)})`
+      : serviceInstallVersion
+    : null;
+  if (gatewayVersion || serviceInstallLine) {
+    if (cliVersionLine) {
+      printInfo("CLI version:", cliVersionLine);
+    }
+    if (gatewayVersion) {
+      printInfo("Gateway version:", gatewayVersion);
+      if (status.cli?.version && status.cli.version !== gatewayVersion) {
+        printWarning(
+          `Warning: this OpenClaw command is version ${status.cli.version}, but the running Gateway is version ${gatewayVersion}.`,
+        );
+        printWarning(
+          "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`; if this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
+        );
+      }
+    } else if (serviceInstallLine) {
+      // No Gateway version came back (failed or skipped probe). Report the install the
+      // service points at so a stale service behind a bare connect error stays visible.
+      printInfo("Gateway service version:", serviceInstallLine);
+      defaultRuntime.log(infoText("The Gateway did not report its own version."));
+      if (
+        status.service.targetRole !== "diagnostic-only" &&
+        status.cli?.version &&
+        serviceInstallVersion &&
+        status.cli.version !== serviceInstallVersion
+      ) {
+        printWarning(
+          `Warning: this OpenClaw command is version ${status.cli.version}, but the installed Gateway service is version ${serviceInstallVersion}.`,
+        );
+        const guidance = resolveDaemonServiceInstallGuidance(status.service.targetRole);
+        if (guidance) {
+          printWarning(guidance);
+        }
+      }
+    }
+    spacer();
+  }
 
   const runtimeLine = formatRuntimeStatus(
     service.inspectionReason ? { ...service.runtime, detail: undefined } : service.runtime,
@@ -676,4 +727,5 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   defaultRuntime.log(`${label("Troubles:")} run ${formatCliCommand("openclaw status")}`);
   defaultRuntime.log(`${label("Troubleshooting:")} https://docs.openclaw.ai/troubleshooting`);
+  defaultRuntime.log(`${label("Support:")} https://community.openclaw.ai/`);
 }

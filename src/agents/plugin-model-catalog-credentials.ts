@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
@@ -27,13 +27,8 @@ export async function removePersistedPluginModelCatalogCredentials(params: {
   }));
   const candidates: PluginModelCatalogCredentialCandidate[] = [];
   for (const candidate of capturedCandidates) {
-    try {
-      await stat(candidate.databasePath);
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
+    if (!(await stat(candidate.databasePath).catch(ignoreMissingPath))) {
+      continue;
     }
     candidates.push(candidate);
   }

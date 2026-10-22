@@ -22,26 +22,27 @@ export type ClawAddApplyResult = {
   error?: { code: string; message: string };
 };
 
-function isOfficialEntry(entry: ClawCatalogEntry): boolean {
-  return (
-    entry.official && entry.channel === "official" && entry.packageName.startsWith("@openclaw/")
-  );
+function isPublicEntry(entry: ClawCatalogEntry): boolean {
+  return entry.channel === "official" || entry.channel === "community";
 }
 
-export async function searchOfficialClaws(
+export async function searchClaws(
   client: GatewayBrowserClient,
   query: string,
   limit?: number,
+  options: { category?: string; featured?: boolean } = {},
 ): Promise<ClawCatalogEntry[]> {
   const trimmed = query.trim();
   const result = await client.request<{ entries: ClawCatalogEntry[] }>("claws.catalog.search", {
     ...(trimmed ? { query: trimmed } : {}),
     ...(limit ? { limit } : {}),
+    ...(options.category ? { category: options.category } : {}),
+    ...(options.featured ? { featured: true } : {}),
   });
-  return result.entries.filter(isOfficialEntry);
+  return result.entries.filter(isPublicEntry);
 }
 
-export async function readOfficialClawDetail(
+export async function readClawDetail(
   client: GatewayBrowserClient,
   source: ClawCatalogSource,
 ): Promise<ClawCatalogDetail> {
@@ -51,7 +52,7 @@ export async function readOfficialClawDetail(
   );
   const detail = result.detail;
   if (
-    !isOfficialEntry(detail) ||
+    !isPublicEntry(detail) ||
     detail.packageName !== source.packageName ||
     detail.version !== source.version ||
     !detail.contents ||
@@ -65,7 +66,7 @@ export async function readOfficialClawDetail(
   return detail;
 }
 
-export async function readOfficialClawPreview(
+export async function readClawPreview(
   client: GatewayBrowserClient,
   source: ClawCatalogSource,
   request: Pick<ClawHubClawCatalogPreview, "kind" | "name">,
@@ -74,13 +75,10 @@ export async function readOfficialClawPreview(
     "claws.catalog.preview",
     { ...source, ...request },
   );
-  if (result.preview.kind !== request.kind || result.preview.name !== request.name) {
-    throw new Error("ClawHub returned a different preview item.");
-  }
   return result.preview;
 }
 
-export async function readOfficialClawAddReviewPlan(
+export async function readClawAddReviewPlan(
   client: GatewayBrowserClient,
   source: ClawCatalogSource,
 ): Promise<ClawAddReviewPlan> {
@@ -91,7 +89,7 @@ export async function readOfficialClawAddReviewPlan(
   return plan;
 }
 
-export async function applyOfficialClawAdd(
+export async function applyClawAdd(
   client: GatewayBrowserClient,
   source: ClawCatalogSource,
   options: {

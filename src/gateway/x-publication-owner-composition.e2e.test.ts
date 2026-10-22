@@ -55,9 +55,10 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
+import { prepareAgentWaitForTurn } from "./agent-turn/agent-wait.js";
 import { isPublicSessionShareActive } from "./control-ui-public-session-read.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -314,6 +315,12 @@ describe("X publication production-owner composition", () => {
       ],
     });
     gateway.resolveGatewayContext = () => gateway;
+    // Registry completion must observe the real child, not the direct fixture's empty wait result.
+    vi.mocked(
+      expectDefined(gateway.recoveryRuntime, "Gateway recovery fixture").waitForAgent,
+    ).mockImplementation(
+      async (params) => (await prepareAgentWaitForTurn(gateway, params).wait()).result,
+    );
     gateway.readPreparedGatewayModelCatalog = async () => {
       const catalog = await gateway.loadGatewayModelCatalogSnapshot();
       return { entries: catalog.entries, routeVariants: catalog.routeVariants };
@@ -383,19 +390,46 @@ describe("X publication production-owner composition", () => {
         if (!signal.aborted) {
           throw error;
         }
-        // Cleanup uses the same signal; preserve the first interrupted await.
-        interruptedWait ??= new Error(`X publication ${activeCase}: waiting for ${description}`, {
-          cause: error,
-        });
+        // Capture before cleanup restores the spy and clears its call history.
+        // Keep only the accepted child's cached status/error, never transcript payloads.
+        if (!interruptedWait) {
+          const allowed = outcomes.get("allowed");
+          const child =
+            isRecord(allowed) &&
+            allowed.status === "accepted" &&
+            typeof allowed.childSessionKey === "string" &&
+            typeof allowed.runId === "string"
+              ? { sessionKey: allowed.childSessionKey, runId: allowed.runId }
+              : undefined;
+          const cached = child ? gateway.dedupe.get(`chat:${child.runId}`) : undefined;
+          const payload = isRecord(cached?.payload) ? cached.payload : undefined;
+          const diagnostic = child
+            ? {
+                ...child,
+                embeddedRunnerEntries: model.mock.calls.filter(
+                  ([params]) => params.sessionKey === child.sessionKey,
+                ).length,
+                cachedStatus: typeof payload?.status === "string" ? payload.status : null,
+                cachedErrorCode: cached?.error?.code ?? null,
+                cachedError:
+                  cached?.error?.message ??
+                  (typeof payload?.summary === "string" ? payload.summary : null),
+              }
+            : undefined;
+          // Cleanup uses the same signal; preserve the first interrupted await.
+          interruptedWait = new Error(
+            `X publication ${activeCase}: waiting for ${description}${
+              diagnostic ? `; allowed child: ${JSON.stringify(diagnostic)}` : ""
+            }`,
+            { cause: error },
+          );
+        }
         throw interruptedWait;
       }
     };
     let creating = false;
     let creationSettled = Promise.withResolvers<void>();
-    let revokedInCatalogWait = false;
-    let delegationRevokedInCatalogWait = false;
-    let authorRevokedInCatalogWait = false;
-    let ownerRetiredInCatalogWait = false;
+    const revokedInCatalogWait = new Set<Case>();
     const staleSnapshots = new Map<Case, AllowlistSnapshot>();
     const creationRequests: Array<{ kind: Case; parent: unknown }> = [];
     const catalog = gateway.loadGatewayModelCatalogSnapshot;
@@ -403,25 +437,27 @@ describe("X publication production-owner composition", () => {
       const snapshot = await catalog(request);
       // Awaited creation dependency, after visible spawn captured its live
       // ingress capability and before the creation owner can commit any row.
-      if (creating && activeCase === "revoked" && !revokedInCatalogWait) {
-        revokedInCatalogWait = true;
+      if (
+        creating &&
+        !revokedInCatalogWait.has(activeCase) &&
+        (activeCase === "revoked" || activeCase === "delegation-revoked")
+      ) {
+        revokedInCatalogWait.add(activeCase);
         const next = structuredClone(cfg());
-        next.channels!.x!.autoPublishWorkSessions = false;
+        if (activeCase === "revoked") {
+          next.channels!.x!.autoPublishWorkSessions = false;
+        } else {
+          next.agents!.entries!.main!.subagents!.delegateToolsTo = [];
+        }
         setRuntimeConfigSnapshot(next);
       }
-      if (creating && activeCase === "delegation-revoked" && !delegationRevokedInCatalogWait) {
-        delegationRevokedInCatalogWait = true;
-        const next = structuredClone(cfg());
-        next.agents!.entries!.main!.subagents!.delegateToolsTo = [];
-        setRuntimeConfigSnapshot(next);
-      }
-      if (creating && activeCase === "author-revoked" && !authorRevokedInCatalogWait) {
-        authorRevokedInCatalogWait = true;
+      if (creating && activeCase === "author-revoked" && !revokedInCatalogWait.has(activeCase)) {
+        revokedInCatalogWait.add(activeCase);
         await allowlist.remove("default", "10");
         expect((await allowlist.readSnapshot("default")).allowFrom).not.toContain("10");
       }
-      if (creating && activeCase === "owner-retired" && !ownerRetiredInCatalogWait) {
-        ownerRetiredInCatalogWait = true;
+      if (creating && activeCase === "owner-retired" && !revokedInCatalogWait.has(activeCase)) {
+        revokedInCatalogWait.add(activeCase);
         // The Gateway fixture adopts this record into its retained registry.
         // Retire that current owner, not the builder registry it no longer owns.
         const ownerRegistry = getPluginRecordRegistry(builder.registry, record);
@@ -458,6 +494,15 @@ describe("X publication production-owner composition", () => {
       );
 
     const outcomes = new Map<Case, unknown>();
+    const expectedOutcomes: Record<Case, object> = {
+      allowed: { status: "accepted", publicRead: true },
+      guest: { status: "forbidden", error: expect.stringContaining("hidden helpers") },
+      "delegation-revoked": { error: expect.stringContaining("authorization changed") },
+      revoked: { error: expect.stringContaining("publication policy changed") },
+      "author-revoked": { error: expect.stringContaining("X allowlist changed") },
+      // The outer Gateway binding surfaces retirement before the publication guard.
+      "owner-retired": { error: "Error: Gateway instance unavailable for sessions.create" },
+    };
     const spawnErrors = new Map<Case, unknown>();
     const publications = new Map<Case, boolean>();
     const childWritten = observedDeferred<string>();
@@ -471,6 +516,33 @@ describe("X publication production-owner composition", () => {
       const key = expectDefined(params.sessionKey, "admitted session key");
       console.info("[x-proof] model admitted", key);
       const child = key.includes(":dashboard:");
+      const createTools = () =>
+        createOpenClawCodingToolsAsync({
+          config: params.config,
+          agentId: child ? "coder" : "main",
+          sessionKey: key,
+          runId: params.runId,
+          sessionId: params.sessionId,
+          operationalRunInstance: admitted.operationalRunInstance,
+          workspaceDir: params.workspaceDir,
+          ...(child
+            ? { inputProvenance: params.inputProvenance }
+            : {
+                messageProvider: params.messageProvider,
+                agentAccountId: params.agentAccountId,
+                senderId: params.senderId,
+                senderIsOwner: params.senderIsOwner,
+                groupId: params.groupId,
+                conversationToolPolicy: params.conversationToolPolicy,
+              }),
+          toolConstructionPlan: {
+            includeBaseCodingTools: true,
+            includeShellTools: true,
+            includeChannelTools: false,
+            includeOpenClawTools: !child,
+            includePluginTools: false,
+          },
+        });
       const modelCaller = expectDefined(
         createAdmittedGatewayToolCallerIdentity({
           admittedRunContext: admitted,
@@ -511,28 +583,7 @@ describe("X publication production-owner composition", () => {
             const result = await withGatewayToolCallerIdentity(caller, async () => {
               // Production assembly derives restrictions from the monitor context;
               // this fixture never manufactures inheritedToolPolicySource.
-              const tools = await createOpenClawCodingToolsAsync({
-                config: params.config,
-                agentId: "main",
-                sessionKey: key,
-                runId: params.runId,
-                sessionId: params.sessionId,
-                operationalRunInstance: admitted.operationalRunInstance,
-                workspaceDir: params.workspaceDir,
-                messageProvider: params.messageProvider,
-                agentAccountId: params.agentAccountId,
-                senderId: params.senderId,
-                senderIsOwner: params.senderIsOwner,
-                groupId: params.groupId,
-                conversationToolPolicy: params.conversationToolPolicy,
-                toolConstructionPlan: {
-                  includeBaseCodingTools: true,
-                  includeShellTools: true,
-                  includeChannelTools: false,
-                  includeOpenClawTools: true,
-                  includePluginTools: false,
-                },
-              });
+              const tools = await createTools();
               for (const name of ["exec", "write", "edit"]) {
                 expect(
                   tools.some((tool) => tool.name === name),
@@ -568,23 +619,7 @@ describe("X publication production-owner composition", () => {
             console.info("[x-proof] spawn error", activeCase, String(error));
           }
         } else {
-          const tools = await createOpenClawCodingToolsAsync({
-            config: params.config,
-            agentId: "coder",
-            sessionKey: key,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            operationalRunInstance: admitted.operationalRunInstance,
-            workspaceDir: params.workspaceDir,
-            inputProvenance: params.inputProvenance,
-            toolConstructionPlan: {
-              includeBaseCodingTools: true,
-              includeShellTools: true,
-              includeChannelTools: false,
-              includeOpenClawTools: false,
-              includePluginTools: false,
-            },
-          });
+          const tools = await createTools();
           for (const name of ["exec", "write", "edit"]) {
             expect(
               tools.some((tool) => tool.name === name),
@@ -771,13 +806,10 @@ describe("X publication production-owner composition", () => {
               }
               // Author removal forbids final delivery. Registry retirement may
               // instead reject the monitor's last plugin-runtime callback.
-              if (kind === "author-revoked") {
-                expect(authorRevokedInCatalogWait).toBe(true);
-              } else if (kind === "owner-retired") {
-                expect(ownerRetiredInCatalogWait).toBe(true);
-              } else {
+              if (kind !== "author-revoked" && kind !== "owner-retired") {
                 throw error;
               }
+              expect(revokedInCatalogWait.has(kind)).toBe(true);
             }),
           );
           if (kind !== "guest") {
@@ -799,7 +831,7 @@ describe("X publication production-owner composition", () => {
             await waitFor(
               "monitor shutdown",
               monitor.catch((error: unknown) => {
-                if (kind !== "owner-retired" || !ownerRetiredInCatalogWait) {
+                if (kind !== "owner-retired" || !revokedInCatalogWait.has(kind)) {
                   throw error;
                 }
                 // Retirement can reject the monitor's last plugin-runtime callback.
@@ -811,7 +843,7 @@ describe("X publication production-owner composition", () => {
           }
         }
         if (kind === "owner-retired") {
-          expect(ownerRetiredInCatalogWait, kind).toBe(true);
+          expect(revokedInCatalogWait.has(kind), kind).toBe(true);
           expect(
             creationRequests.filter((request) => request.kind === kind),
             kind,
@@ -840,98 +872,78 @@ describe("X publication production-owner composition", () => {
           expect(networkCase.replies, kind).toHaveLength(1);
         }
         const publicReads = networkCase.reads.filter((request) => request.appOnly);
-        if (kind === "guest") {
-          expect(publicReads).toEqual([]);
-          expect(publications.get(kind)).toBe(false);
-          expect(outcomes.get(kind)).toMatchObject({
-            status: "forbidden",
-            error: expect.stringContaining("hidden helpers"),
-          });
-          expect(creationRequests.filter((request) => request.kind === kind)).toEqual([]);
-        } else if (kind === "delegation-revoked") {
-          expect(publicReads).toEqual([]);
-          expect(publications.get(kind)).toBe(false);
-          expect(creationRequests.filter((request) => request.kind === kind)).toHaveLength(1);
-          expect(delegationRevokedInCatalogWait).toBe(true);
-          expect(outcomes.get(kind)).toMatchObject({
-            error: expect.stringContaining("authorization changed"),
-          });
-        } else {
-          expect(publicReads).toEqual([
-            { path: "/2/tweets", appOnly: true, ids: expect.arrayContaining([rootId, mention.id]) },
-          ]);
-          expect(publications.get(kind)).toBe(true);
-          expect(creationRequests.filter((request) => request.kind === kind)).toHaveLength(1);
-          if (kind === "allowed") {
-            expect(outcomes.get(kind)).toMatchObject({ status: "accepted", publicRead: true });
-            const key = await waitFor("child transcript write", childWritten.promise);
-            const entry = expectDefined(
-              loadSessionEntry({ agentId: "coder", sessionKey: key, storePath: childStore }),
-              "committed child row",
-            );
-            const publication = expectDefined(
-              resolveSessionPublicShare(entry),
-              "committed child publication",
-            );
-            expect(publication.sessionId).toBe(entry.sessionId);
-            // The append checkpoint precedes the run's final session metadata writes.
-            const childReleased = getSessionWorkAdmissionRelease({
-              scope: childStore,
-              identities: [key, entry.sessionId],
-            });
-            if (childReleased) {
-              await waitFor("child admission release", childReleased);
-            }
-            await waitFor("projection membership", projection.prepareMembership());
-            expect(
-              isPublicSessionShareActive(
-                cfg(),
+        const publishes = kind !== "guest" && kind !== "delegation-revoked";
+        expect(publicReads).toEqual(
+          publishes
+            ? [
                 {
-                  agentId: "coder",
-                  sessionKey: key,
-                  sessionId: publication.sessionId,
-                  shareId: publication.id,
+                  path: "/2/tweets",
+                  appOnly: true,
+                  ids: expect.arrayContaining([rootId, mention.id]),
                 },
-                projection,
-              ),
-            ).toBe(true);
-            const response = await waitFor(
-              "anonymous public read",
-              sendRequest(http, {
-                path: new URL(
-                  expectDefined(
-                    resolveControlUiSessionUrl(cfg(), { sessionKey: key }),
-                    "canonical child URL",
-                  ),
-                ).pathname,
-                host: "localhost",
-                remoteAddress: "127.0.0.1",
-              }),
-            );
-            expect(response.res.statusCode, response.getBody()).toBe(200);
-            expect(response.getBody()).toContain(
-              "X publication composition: durable child answer.",
-            );
-            expect(response.getBody()).not.toContain("openclaw-app");
-          } else if (kind === "revoked") {
-            expect(revokedInCatalogWait).toBe(true);
-            expect(outcomes.get(kind)).toMatchObject({
-              error: expect.stringContaining("publication policy changed"),
-            });
-          } else if (kind === "author-revoked") {
-            expect(staleSnapshots.has(kind)).toBe(true);
-            expect(authorRevokedInCatalogWait).toBe(true);
-            expect(outcomes.get(kind), kind).toMatchObject({
-              error: expect.stringContaining("X allowlist changed"),
-            });
-          } else {
-            expect(staleSnapshots.has(kind)).toBe(true);
-            expect(ownerRetiredInCatalogWait).toBe(true);
-            // The outer Gateway binding surfaces retirement before the inner publication error.
-            expect(outcomes.get(kind), kind).toMatchObject({
-              error: "Error: Gateway instance unavailable for sessions.create",
-            });
+              ]
+            : [],
+        );
+        expect(publications.get(kind)).toBe(publishes);
+        expect(creationRequests.filter((request) => request.kind === kind)).toHaveLength(
+          kind === "guest" ? 0 : 1,
+        );
+        expect(outcomes.get(kind), kind).toMatchObject(expectedOutcomes[kind]);
+        if (kind !== "allowed" && kind !== "guest") {
+          expect(revokedInCatalogWait.has(kind)).toBe(true);
+        }
+        if (kind === "author-revoked" || kind === "owner-retired") {
+          expect(staleSnapshots.has(kind)).toBe(true);
+        }
+        if (kind === "allowed") {
+          const key = await waitFor("child transcript write", childWritten.promise);
+          const entry = expectDefined(
+            loadSessionEntry({ agentId: "coder", sessionKey: key, storePath: childStore }),
+            "committed child row",
+          );
+          const publication = expectDefined(
+            resolveSessionPublicShare(entry),
+            "committed child publication",
+          );
+          expect(publication.sessionId).toBe(entry.sessionId);
+          // The append checkpoint precedes the run's final session metadata writes.
+          const childReleased = captureSessionControllerSettlement({
+            scope: childStore,
+            identities: [key, entry.sessionId],
+            agentId: "coder",
+          });
+          if (childReleased) {
+            await waitFor("child admission release", childReleased);
           }
+          await waitFor("projection membership", projection.prepareMembership());
+          expect(
+            isPublicSessionShareActive(
+              cfg(),
+              {
+                agentId: "coder",
+                sessionKey: key,
+                sessionId: publication.sessionId,
+                shareId: publication.id,
+              },
+              projection,
+            ),
+          ).toBe(true);
+          const response = await waitFor(
+            "anonymous public read",
+            sendRequest(http, {
+              path: new URL(
+                expectDefined(
+                  resolveControlUiSessionUrl(cfg(), { sessionKey: key }),
+                  "canonical child URL",
+                ),
+              ).pathname,
+              host: "localhost",
+              remoteAddress: "127.0.0.1",
+            }),
+          );
+          expect(response.res.statusCode, response.getBody()).toBe(200);
+          expect(response.getBody()).toContain("X publication composition: durable child answer.");
+          expect(response.getBody()).not.toContain("openclaw-app");
         }
       }
     } finally {
@@ -948,9 +960,10 @@ describe("X publication production-owner composition", () => {
             "child admission cleanup",
             Promise.all(
               children.flatMap(({ sessionKey, entry }) => {
-                const drain = getSessionWorkAdmissionRelease({
+                const drain = captureSessionControllerSettlement({
                   scope: childStore,
                   identities: [sessionKey, entry.sessionId],
+                  agentId: "coder",
                 });
                 return drain ? [drain] : [];
               }),

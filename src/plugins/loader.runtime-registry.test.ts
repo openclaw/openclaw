@@ -516,7 +516,7 @@ describe("cached plugin load failures", () => {
     if (!(failure instanceof PluginLoadFailureError)) {
       throw failure;
     }
-    expect(failure.pluginIds).toEqual([healthy.id]);
+    expect(failure.message).toContain(healthy.id);
     expect(failure.message).not.toContain(broken.id);
     expect(failure.registry.plugins.find((entry) => entry.id === broken.id)).toBe(retained);
     expect(failure.registry.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({

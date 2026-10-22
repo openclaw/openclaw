@@ -58,6 +58,14 @@ and `sourceContextFiles` map to its matching options. File inputs are relative
 to the current sandbox repository. The original session deadline and cancellation
 still apply.
 
+Under Codex, the whole call follows the initiating run's existing execution
+lifetime, covering preparation, every planned pass, and report completion.
+It is not shortened to the generic 90-second tool default or 600-second cap.
+An unlimited initiating run stays unlimited; Stop and authority revocation
+still cancel the review. The helper's timeout remains a per-pass limit, and
+an omitted timeout retains `openclaw agent exec`'s 600-second default for each
+pass. `/btw` retains its separate ten-minute parent deadline.
+
 An allowed configured reviewer model is preserved. If the caller cannot use that
 configured preference, the Gateway selects the caller's existing permitted
 default before execution and the helper records the effective model. An explicit

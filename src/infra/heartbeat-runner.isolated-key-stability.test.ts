@@ -42,11 +42,10 @@ function createFixture(tmpDir: string, storePath: string) {
       lastTo: "+1555",
       ...entry,
     });
-  const run = (options: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps"> = {}) =>
+  const run = (options: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg"> = {}) =>
     runHeartbeatOnce({
       cfg,
       ...options,
-      deps: { getQueueSize: () => 0, nowMs: () => nowMs },
     });
   return { baseKey, isolatedKey, nowMs, replySpy, seed, run, storePath };
 }

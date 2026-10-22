@@ -5,11 +5,8 @@ import {
   buildAgentRunTerminalOutcomeFromAttempt,
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
-import {
-  classifyFailoverReason,
-  parseImageSizeError,
-  pickFallbackThinkingLevel,
-} from "../../embedded-agent-helpers.js";
+import { parseImageSizeError } from "../../embedded-agent-helpers/image-errors.js";
+import { pickFallbackThinkingLevel } from "../../embedded-agent-helpers/thinking.js";
 import {
   coerceToFailoverError,
   describeFailoverError,
@@ -19,6 +16,7 @@ import {
   isNonProviderRuntimeCoordinationError,
   resolveFailoverStatus,
 } from "../../failover-error.js";
+import { classifyFailoverReason } from "../../failover/classify.js";
 import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";

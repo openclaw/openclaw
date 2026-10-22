@@ -6,7 +6,9 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
+import { modelDefinition, providerConfig } from "../agents/model-auth.fixtures.test-support.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { readConfigFileSnapshot, validateConfigObjectRaw } from "../config/config.js";
@@ -44,6 +46,22 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+const apiKey = (key: string) => ({ type: "api_key" as const, provider: "example", key });
+function rejectActivation(
+  configTarget: Parameters<typeof commitSetupInferenceActivation>[0]["configTarget"],
+  config: OpenClawConfig,
+  failure: Error,
+) {
+  return commitSetupInferenceActivation({
+    configTarget,
+    config,
+    assertCurrent: () => {},
+    activate: async () => {
+      throw failure;
+    },
+  });
+}
+
 it.each([
   { target: "file", changed: true, runtimeDefaults: false },
   { target: "stage", changed: true, runtimeDefaults: false },
@@ -54,6 +72,11 @@ it.each([
     state = await createOpenClawTestState({ label: "wizard-promotion-recovery" });
     let agentDir = state.agentDir("main");
     const validated = validateConfigObjectRaw({
+      ...providerConfig("example", {
+        baseUrl: "https://fixture.invalid/v1",
+        api: "openai-completions",
+        models: [modelDefinition("fixture", { name: "Fixture" })],
+      }),
       gateway: { mode: "local" },
       plugins: { slots: { memory: "none" } },
       agents: {
@@ -62,15 +85,6 @@ it.each([
           workspace: state.workspaceDir,
           model: "example/fixture@example:working",
           models: { "example/fixture": { agentRuntime: { id: "openclaw" } } },
-        },
-      },
-      models: {
-        providers: {
-          example: {
-            baseUrl: "https://fixture.invalid/v1",
-            api: "openai-completions",
-            models: [{ id: "fixture", name: "Fixture" }],
-          },
         },
       },
     });
@@ -84,9 +98,7 @@ it.each([
     const finalConfig = initialSnapshot.sourceConfig;
     await state.writeAuthProfiles({
       version: 1,
-      profiles: {
-        "example:working": { type: "api_key", provider: "example", key: "working-key" },
-      },
+      profiles: { "example:working": apiKey("working-key") },
     });
     const finalAuth = structuredClone(loadAuthProfileStoreWithoutExternalProfiles(agentDir));
     if (target === "stage") {
@@ -103,9 +115,7 @@ it.each([
     const candidate = structuredClone(config);
     candidate.agents!.defaults!.model = "example/fixture@example:pending";
     const pending = {
-      type: "api_key" as const,
-      provider: "example",
-      key: "pending-key",
+      ...apiKey("pending-key"),
       setup: {
         replacement: true,
         modelRef: "example/fixture",
@@ -113,19 +123,16 @@ it.each([
       },
     };
     const stateDir = stage?.staged.stateDir;
-    await updateAuthProfileStoreWithLock({
-      agentDir,
-      stateDir,
-      updater: (store) => {
-        store.profiles["example:working"] = {
-          type: "api_key",
-          provider: "example",
-          key: "working-key",
-        };
-        store.profiles["example:pending"] = pending;
-        return true;
-      },
-    });
+    const putProfiles = (profiles: AuthProfileStore["profiles"]) =>
+      updateAuthProfileStoreWithLock({
+        agentDir,
+        stateDir,
+        updater: (store) => {
+          Object.assign(store.profiles, profiles);
+          return true;
+        },
+      });
+    await putProfiles({ "example:working": apiKey("working-key"), "example:pending": pending });
     const targetOwner =
       stage?.inferenceConfigTarget ??
       createWizardInferenceConfigTarget((next, options) =>
@@ -134,24 +141,13 @@ it.each([
     const savedModels = structuredClone(
       (await targetOwner.read()).config.models?.providers?.example?.models,
     );
-    const editCredential = async () => {
-      if (!changed) {
-        return;
-      }
-      await updateAuthProfileStoreWithLock({
-        agentDir,
-        stateDir,
-        updater: (store) => {
-          store.profiles["example:pending"] = { ...pending, key: "user-changed-key" };
-          return true;
-        },
-      });
-    };
     const interceptWrite =
       (write: typeof targetOwner.write): typeof write =>
       async (...args) => {
         const committed = await write(...args);
-        await editCredential();
+        if (changed) {
+          await putProfiles({ "example:pending": { ...pending, key: "user-changed-key" } });
+        }
         return committed;
       };
     mocks.verify.mockImplementation(async (params) => {
@@ -180,7 +176,6 @@ it.each([
             modelApi: "openai-completions",
             authFingerprint: fingerprintResolvedProviderAuth(auth),
           },
-          deps: { pluginMetadataPlugins: [] },
         }),
       );
       return { ok: true, modelRef: "example/fixture", latencyMs: 1 };
@@ -230,9 +225,7 @@ it.each([
         : { selected: "example:pending", key: "pending-key" },
     );
     expect(store.profiles["example:pending"]).toEqual(
-      changed
-        ? { ...pending, key: "user-changed-key" }
-        : { type: "api_key", provider: "example", key: "pending-key" },
+      changed ? { ...pending, key: "user-changed-key" } : apiKey("pending-key"),
     );
     if (stage) {
       expect((await readConfigFileSnapshot()).sourceConfig).toEqual(finalConfig);
@@ -245,44 +238,27 @@ it.each([
 
 it("wizard recovery restores serialized model defaults after provider canonicalization", async () => {
   state = await createOpenClawTestState({ label: "wizard-serialized-recovery" });
-  const before = {
-    models: {
-      providers: {
-        Example: {
-          baseUrl: "https://fixture.invalid/v1",
-          api: "openai-completions",
-          models: [
-            {
-              id: "fixture",
-              name: "Fixture",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 32768,
-              maxTokens: 4096,
-            },
-          ],
-        },
-      },
-    },
-  } satisfies OpenClawConfig;
+  const provider = {
+    baseUrl: "https://fixture.invalid/v1",
+    api: "openai-completions" as const,
+    models: [
+      modelDefinition("fixture", {
+        name: "Fixture",
+        reasoning: false,
+        contextWindow: 32768,
+        maxTokens: 4096,
+      }),
+    ],
+  };
+  const before = providerConfig("Example", provider);
   await state.writeConfig(before);
   const candidate = materializeRuntimeConfig({
     ...before,
-    models: { providers: { example: before.models.providers.Example } },
+    ...providerConfig("example", provider),
   });
   const failure = new Error("activation refused");
   const target = createWizardInferenceConfigTarget(writeWizardConfigFile);
-  await expect(
-    commitSetupInferenceActivation({
-      configTarget: target,
-      config: candidate,
-      assertCurrent: () => {},
-      activate: async () => {
-        throw failure;
-      },
-    }),
-  ).rejects.toBe(failure);
+  await expect(rejectActivation(target, candidate, failure)).rejects.toBe(failure);
   expect((await target.read()).config.models?.providers).toEqual(before.models?.providers);
 });
 
@@ -293,17 +269,10 @@ it.each([
   "wizard recovery preserves concurrent ownership (pending=$pending, superseded=$superseded)",
   async ({ pending, superseded }) => {
     state = await createOpenClawTestState({ label: "wizard-concurrent-recovery" });
-    const base: OpenClawConfig = {
-      models: {
-        providers: {
-          example: {
-            baseUrl: "https://working.invalid/v1",
-            api: "openai-completions",
-            models: [],
-          },
-        },
-      },
-    };
+    const base: OpenClawConfig = providerConfig("example", {
+      baseUrl: "https://working.invalid/v1",
+      api: "openai-completions",
+    });
     if (pending) {
       base.plugins = { installs: { fixture: { source: "npm", spec: "fixture@1.0.0" } } };
     }
@@ -323,14 +292,7 @@ it.each([
       return committed;
     });
     await expect(
-      commitSetupInferenceActivation({
-        configTarget: target,
-        config: candidate,
-        assertCurrent: () => {},
-        activate: async () => {
-          throw new Error("promotion refused");
-        },
-      }),
+      rejectActivation(target, candidate, new Error("promotion refused")),
     ).rejects.toThrow(superseded ? "Newer connection settings" : "promotion refused");
     const restored = (await target.read()).config;
     expect(restored.models?.providers?.example).toEqual({

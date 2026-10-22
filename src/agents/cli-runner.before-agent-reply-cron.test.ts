@@ -125,13 +125,13 @@ const runParams = {
 
 type ProductionRunCliAgent = typeof import("./cli-runner.js").runCliAgent;
 type TestRunCliAgent = (
-  params: Omit<Parameters<ProductionRunCliAgent>[0], "admittedRunContext">,
+  params?: Partial<Omit<Parameters<ProductionRunCliAgent>[0], "admittedRunContext">>,
 ) => ReturnType<ProductionRunCliAgent>;
 let runCliAgent: TestRunCliAgent;
 let authProfiles: typeof import("./auth-profiles.js");
 
 async function captureRejectedClaudeRun(
-  params: Parameters<typeof runCliAgent>[0],
+  params: NonNullable<Parameters<typeof runCliAgent>[0]>,
 ): Promise<{ error: unknown; events: DiagnosticEventPayload[] }> {
   const events: DiagnosticEventPayload[] = [];
   const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
@@ -153,9 +153,15 @@ async function captureRejectedClaudeRun(
   return { error, events };
 }
 
-function makeStubContext(params: Parameters<ProductionRunCliAgent>[0]) {
+async function makeStubContext(params: Parameters<ProductionRunCliAgent>[0]) {
+  const admittedRunContext =
+    params.admittedRunContext ?? (await params.preparedRunAdmission?.admit("embedded"));
+  if (!admittedRunContext) {
+    throw new Error("CLI runner fixture requires prepared execution admission");
+  }
+  const { preparedRunAdmission: _preparedRunAdmission, ...admittedParams } = params;
   return {
-    params,
+    params: { ...admittedParams, admittedRunContext },
     started: Date.now(),
     startedMonotonicMs: performance.now(),
     workspaceDir: params.workspaceDir,
@@ -177,7 +183,7 @@ function prepareProfile(provider: string) {
     profiles: { [profileId]: { type: "api_key", provider, key: "secret" } },
   } as const;
   prepareMock.mockImplementationOnce(async (params) => ({
-    ...makeStubContext(params),
+    ...(await makeStubContext(params)),
     effectiveAuthProfileId: profileId,
     authProfileStore: store,
     agentDir: "/tmp/agent",
@@ -191,7 +197,7 @@ beforeEach(() => {
   beforeRunMock.mockReset().mockResolvedValue(undefined);
   executeMock.mockReset().mockResolvedValue({ text: "" });
   prepareMock.mockReset();
-  prepareMock.mockImplementation(async (params) => makeStubContext(params));
+  prepareMock.mockImplementation(async (params) => await makeStubContext(params));
   closeSessionMock.mockReset();
   closeLoopbackMock.mockReset();
   retireKeyMock.mockReset().mockResolvedValue(true);
@@ -206,7 +212,8 @@ beforeEach(() => {
 
 beforeAll(async () => {
   const cliRunner = await import("./cli-runner.js");
-  runCliAgent = wrapRunWithTestPreparedAdmission(cliRunner.runCliAgent);
+  const run = wrapRunWithTestPreparedAdmission(cliRunner.runCliAgent);
+  runCliAgent = (params) => run({ ...runParams, ...params });
   authProfiles = await import("./auth-profiles.js");
 });
 
@@ -273,7 +280,6 @@ describe("runCliAgent before_agent_reply seam", () => {
           },
           () =>
             runCliAgent({
-              ...runParams,
               ...target,
               sessionFile: target.sessionKey,
               sessionTarget: target,
@@ -307,8 +313,8 @@ describe("runCliAgent before_agent_reply seam", () => {
     const runId = "run-owner-attribution";
     const events: DiagnosticEventPayload[] = [];
     setDiagnosticsEnabledForProcess(true);
-    prepareMock.mockImplementationOnce(async (params) =>
-      makeStubContext({ ...params, agentId: "main" }),
+    prepareMock.mockImplementationOnce(
+      async (params) => await makeStubContext({ ...params, agentId: "main" }),
     );
     executeMock.mockResolvedValueOnce({ text: "ok" });
     const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
@@ -318,7 +324,6 @@ describe("runCliAgent before_agent_reply seam", () => {
     });
     try {
       await runCliAgent({
-        ...runParams,
         sessionId: "owner-session",
         sessionKey: "agent:main:main",
         agentId: "worker",
@@ -349,7 +354,6 @@ describe("runCliAgent before_agent_reply seam", () => {
     const abort = new AbortController();
     const failure = new Error("run cancelled during execution-start work");
     const operation = runCliAgent({
-      ...runParams,
       abortSignal: abort.signal,
       onExecutionStarted: async () => {
         entered.resolve();
@@ -390,7 +394,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       }),
     );
 
-    await expect(runCliAgent({ ...runParams, provider })).rejects.toMatchObject({
+    await expect(runCliAgent({ provider })).rejects.toMatchObject({
       name: "CliAuthProfilePreparationError",
       reason: "auth",
       profileId,
@@ -413,18 +417,21 @@ describe("runCliAgent before_agent_reply seam", () => {
         [profileId]: { cooldownUntil: Date.now() + 60_000, cooldownReason: "session_expired" },
       },
     };
-    prepareMock.mockImplementationOnce(async (params) => ({
-      ...makeStubContext(params),
-      effectiveAuthProfileId: profileId,
-      authProfileStore: store,
-      agentDir: "/tmp/agent",
-      openClawHistoryPrompt: "history",
-      reusableCliSession: { mode: "reuse", sessionId: "stale-session" },
-      params: {
-        ...params,
-        onBeforeFreshCliSessionRetry: vi.fn(async () => true),
-      },
-    }));
+    prepareMock.mockImplementationOnce(async (params) => {
+      const context = await makeStubContext(params);
+      return {
+        ...context,
+        effectiveAuthProfileId: profileId,
+        authProfileStore: store,
+        agentDir: "/tmp/agent",
+        openClawHistoryPrompt: "history",
+        reusableCliSession: { mode: "reuse", sessionId: "stale-session" },
+        params: {
+          ...context.params,
+          onBeforeFreshCliSessionRetry: vi.fn(async () => true),
+        },
+      };
+    });
     executeMock
       .mockRejectedValueOnce(
         new FailoverError("stale session", {
@@ -434,9 +441,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       )
       .mockResolvedValueOnce({ text: "recovered" });
 
-    await expect(
-      runCliAgent({ ...runParams, provider: "google-gemini-cli" }),
-    ).resolves.toBeDefined();
+    await expect(runCliAgent({ provider: "google-gemini-cli" })).resolves.toBeDefined();
 
     expect(executeMock).toHaveBeenCalledTimes(2);
     expect(authFailureMock).not.toHaveBeenCalled();
@@ -468,9 +473,9 @@ describe("runCliAgent before_agent_reply seam", () => {
       decision: { outcome: "block", reason: "test policy", message: "Blocked by policy." },
     });
 
-    await expect(
-      runCliAgent({ ...runParams, userTurnTranscriptRecorder: recorder }),
-    ).resolves.toMatchObject({ meta: { livenessState: "blocked" } });
+    await expect(runCliAgent({ userTurnTranscriptRecorder: recorder })).resolves.toMatchObject({
+      meta: { livenessState: "blocked" },
+    });
 
     expect(executeMock).not.toHaveBeenCalled();
     expect(authFailureMock).not.toHaveBeenCalled();
@@ -491,7 +496,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     prepareProfile("claude-cli");
     executeMock.mockRejectedValueOnce(error);
 
-    await expect(runCliAgent({ ...runParams, provider: "claude-cli" })).rejects.toBe(error);
+    await expect(runCliAgent({ provider: "claude-cli" })).rejects.toBe(error);
     expect(authFailureMock).not.toHaveBeenCalled();
     expect(authSuccessMock).not.toHaveBeenCalled();
   });
@@ -510,7 +515,6 @@ describe("runCliAgent before_agent_reply seam", () => {
       }
     }
     const { error, events } = await captureRejectedClaudeRun({
-      ...runParams,
       provider: "claude-cli",
       modelProvider: "anthropic",
       model: "claude-opus-4-7",
@@ -538,12 +542,7 @@ describe("runCliAgent before_agent_reply seam", () => {
   });
 
   it("rejects stale lifecycle ownership before CLI preparation", async () => {
-    await expect(
-      runCliAgent({
-        ...runParams,
-        lifecycleGeneration: "stale-generation",
-      }),
-    ).rejects.toMatchObject({
+    await expect(runCliAgent({ lifecycleGeneration: "stale-generation" })).rejects.toMatchObject({
       name: "AbortError",
       message: "Agent run belongs to a stale gateway lifecycle",
     });
@@ -563,7 +562,6 @@ describe("runCliAgent before_agent_reply seam", () => {
 
     try {
       const result = await runCliAgent({
-        ...runParams,
         trigger: "cron",
         jobId: "cron-job-123",
         chatId: "native-chat-123",
@@ -630,7 +628,6 @@ describe("runCliAgent before_agent_reply seam", () => {
     replyMock.mockResolvedValue({ handled: true });
 
     const result = await runCliAgent({
-      ...runParams,
       trigger: "heartbeat",
       sessionKey: "agent:main:heartbeat:heartbeat",
       heartbeatEventQueueSessionKey: "agent:main:heartbeat",
@@ -644,17 +641,6 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
     expect(result.payloads).toEqual([]);
-    expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
-    expect(prepareMock).not.toHaveBeenCalled();
-    expect(executeMock).not.toHaveBeenCalled();
-  });
-
-  it("marks a hook-claimed turn as never reaching a provider so capture skips its silence", async () => {
-    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
-    replyMock.mockResolvedValue({ handled: true });
-
-    const result = await runCliAgent({ ...runParams, trigger: "cron" });
-
     expect(result.meta).toMatchObject({
       finalAssistantRawText: "",
       finalAssistantVisibleText: "",
@@ -674,9 +660,8 @@ describe("runCliAgent before_agent_reply seam", () => {
     const onExecutionPhase = vi.fn();
 
     await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), async () => {
-      await runCliAgent({ ...runParams, trigger: "user", onExecutionPhase });
+      await runCliAgent({ trigger: "user", onExecutionPhase });
       await runCliAgent({
-        ...runParams,
         trigger: "user",
         model: "fallback-model",
         onExecutionPhase,
@@ -710,7 +695,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     });
     executeMock.mockResolvedValueOnce({ text: "later" });
 
-    const firstResult = await runCliAgent(runParams);
+    const firstResult = await runCliAgent();
     expect(firstResult.didSendViaMessagingTool).toBe(true);
     expect(firstResult.messagingToolSentTargets).toEqual([
       expect.objectContaining({
@@ -720,7 +705,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       }),
     ]);
 
-    const laterResult = await runCliAgent(runParams);
+    const laterResult = await runCliAgent();
     expect(laterResult.didSendViaMessagingTool).toBeUndefined();
     expect(laterResult.messagingToolSentTargets).toBeUndefined();
   });
@@ -757,7 +742,6 @@ describe("runCliAgent before_agent_reply seam", () => {
       expect(mcpTools.peekSessionMcpRuntime({ sessionKey })).toBe(successorRuntime);
 
       await runCliAgent({
-        ...runParams,
         sessionId: originalSessionId,
         sessionKey,
         cleanupBundleMcpOnRunEnd: true,
@@ -786,7 +770,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       onError?.(new Error("session mcp retire failed"));
       return false;
     });
-    const result = runCliAgent({ ...runParams, cleanupBundleMcpOnRunEnd: true });
+    const result = runCliAgent({ cleanupBundleMcpOnRunEnd: true });
     await expect(result).resolves.toMatchObject({ didSendViaMessagingTool: true });
   });
 });

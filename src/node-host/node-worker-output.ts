@@ -1,10 +1,19 @@
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 
 export const NODE_WORKER_STDOUT_MAX_BYTES = 64 * 1024;
 export const NODE_WORKER_STDERR_MAX_BYTES = 4 * 1024;
+
+const log = createSubsystemLogger("node/worker");
+
+export function warnNodeWorkerIdleCleanupFailure(): void {
+  log.warn(
+    "Idle worker cleanup failed; its slot remains reserved and cleanup will retry. Check the node host if cleanup keeps failing.",
+  );
+}
 
 export type NodeWorkerCredentialScrubber = ReturnType<typeof createNodeWorkerCredentialScrubber>;
 

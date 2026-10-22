@@ -683,9 +683,6 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     for (const [token, offer] of pendingOffers) {
       expirePendingOffer(token, offer);
     }
-    for (const { controller } of inFlightOffers.values()) {
-      controller.abort(new Error("OpenAI realtime broker stopped"));
-    }
     return cleanupInFlight.finally(() => {
       cleanupInFlight = undefined;
     });

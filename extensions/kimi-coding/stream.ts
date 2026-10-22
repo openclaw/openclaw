@@ -18,7 +18,11 @@ import {
   isRecord,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isKimiK3ModelId, KIMI_K3_THINKING_EFFORTS } from "./provider-policy-api.js";
+import {
+  isKimiCodeEnabledOnlyModelId,
+  isKimiK3ModelId,
+  KIMI_K3_THINKING_EFFORTS,
+} from "./provider-policy-api.js";
 
 const TOOL_CALLS_SECTION_BEGIN = "<|tool_calls_section_begin|>";
 const TOOL_CALLS_SECTION_END = "<|tool_calls_section_end|>";
@@ -201,14 +205,6 @@ function rewriteKimiTaggedToolCallsInMessage(message: AssistantMessage): void {
   }
 }
 
-function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    mapAssistantMessageStream(underlying(model, context, options), (stream) =>
-      transformProviderStreamMessages(stream, rewriteKimiTaggedToolCallsInMessage),
-    );
-}
-
 export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
   const configured = normalizeKimiThinkingConfig(ctx.extraParams?.thinking);
   const extraBody = asOptionalObjectRecord(
@@ -220,12 +216,18 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
       ctx.extraParams?.chatTemplateKwargs,
   );
   const underlying = ctx.streamFn ?? streamSimple;
-  return createKimiToolCallMarkupWrapper((model, context, options) => {
+  return (model, context, options) => {
     const api = ctx.sourceApi ?? model.api;
     const anthropic = api === "anthropic-messages";
     const k3 = anthropic && isKimiK3ModelId(model.id);
     const openaiK3 = api === "openai-completions" && isKimiK3ModelId(model.id);
-    const thinkingLevel = options?.reasoning ?? ctx.thinkingLevel ?? (k3 ? "high" : undefined);
+    const requestedLevel = options?.reasoning ?? ctx.thinkingLevel ?? (k3 ? "high" : undefined);
+    const thinkingLevel =
+      anthropic &&
+      isKimiCodeEnabledOnlyModelId(model.id) &&
+      (!requestedLevel || requestedLevel === "off")
+        ? "low"
+        : requestedLevel;
     const thinkingConfig = resolveKimiThinkingConfig(configured, thinkingLevel);
     const enabledLevel =
       thinkingLevel && thinkingLevel !== "off" ? thinkingLevel : k3 || openaiK3 ? "high" : "low";
@@ -242,7 +244,7 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
       : openaiK3
         ? { ...model, thinkingLevelMap: { ...KIMI_K3_THINKING_EFFORTS, ...model.thinkingLevelMap } }
         : model;
-    return streamWithPayloadPatch(
+    const stream = streamWithPayloadPatch(
       underlying,
       runtimeModel,
       context,
@@ -292,7 +294,10 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
         }
       },
     );
-  });
+    return mapAssistantMessageStream(stream, (resolved) =>
+      transformProviderStreamMessages(resolved, rewriteKimiTaggedToolCallsInMessage),
+    );
+  };
 }
 
 function stripContentArrayCacheControl(value: unknown): void {

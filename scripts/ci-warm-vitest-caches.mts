@@ -3,12 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildChildEnv } from "./ci-run-node-test-shard.mts";
 import { createVitestCacheWarmGroups } from "./lib/ci-node-test-plan.mts";
-import { BUN_UI_TEST_ENV, resolveCiTestRuntimeSelections } from "./lib/ci-test-runtime.mts";
+import { BUN_UI_TEST_ENV } from "./lib/ci-test-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
 // Consumer entrypoints choose their own reusable cache leaves; the planner owns
-// membership for both backend-local protected seeds. Trial policies never expand
-// this publisher: it prepares the same qualified Node+Bun caches for every consumer.
+// membership for both backend-local protected seeds. Publish both runtimes over
+// that bounded inventory regardless of the consumer workflow's runtime policy.
 const hosted = process.env.CACHE_WARM_PLATFORM === "linux-hosted";
 const groups = createVitestCacheWarmGroups(hosted ? "hybrid-hosted" : "full");
 const ui = groups.find((group) => group.shard_name === "cache-warm:ui-package");
@@ -76,35 +76,17 @@ try {
         OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
       });
     }
-    // Direct entrypoints retain the complete Node seed. Bun collects only
-    // compatible files already admitted to the bounded hosted inventory.
-    const bunGroups = tooling.configs.flatMap((config) =>
-      resolveCiTestRuntimeSelections(
-        { configs: [config], includePatterns: tooling.includePatterns, vitestArgs: collectionArgs },
-        "bun-compatible",
-      ).flatMap((selection) =>
-        selection.runtime === "bun"
-          ? [
-              {
-                configs: [config],
-                includePatterns: selection.includePatterns ?? tooling.includePatterns,
-                shard_name: `cache-warm:hosted-bun:${config}`,
-              },
-            ]
-          : [],
-      ),
-    );
-    if (bunGroups.length > 0) {
-      await collect(process.execPath, ["--import", "tsx", "scripts/ci-run-node-test-shard.mts"], {
-        ...baseEnv,
-        OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible",
-        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(bunGroups),
-      });
-    }
+    // Direct entrypoints retain the Node tooling and contract seeds. Only the
+    // tooling inventory also has a Bun consumer; contract lanes remain on Node.
+    await collect(process.execPath, ["--import", "tsx", "scripts/ci-run-node-test-shard.mts"], {
+      ...baseEnv,
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all",
+      OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([tooling]),
+    });
   } else {
     await collect(process.execPath, ["--import", "tsx", "scripts/ci-run-node-test-shard.mts"], {
       ...baseEnv,
-      OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual",
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all",
       OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(groups.filter((group) => group !== ui)),
     });
   }

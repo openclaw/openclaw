@@ -130,7 +130,7 @@ describe("session sharing group mutations", () => {
         const row = expectDefined(projection.capture(query), "shared-store projected row");
         expect(row.storeTarget).toMatchObject({ agentId: "main", storePath });
         expect(row.entry?.archivedAt).toBe(archived ? 1 : undefined);
-        expect(Boolean(row.materialized)).toBe(!archived);
+        expect(row.materialized).toBeUndefined();
         const readDefaults = async (visible = true) => {
           const respond = vi.fn();
           const defaults = sessionGroupHandlers["sessions.groups.defaults"]!({

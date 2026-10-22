@@ -357,4 +357,136 @@ describe("importMemoryWikiOkfBundle", () => {
       path: "tables/private.md",
     });
   });
+
+  it.each([false, true])(
+    "preserves marked Notes through unchanged and changed re-imports (open producer fence: %s)",
+    async (openFence) => {
+      const { bundlePath, config, run } = await createImport("notes-okf");
+      const conceptPath = path.join(bundlePath, "customers.md");
+      const producer = (version: number) =>
+        `Customer body ${version}.\n~~~markdown\n<!-- openclaw:human:start -->\nExample ${version}.\n<!-- openclaw:human:end -->\n~~~` +
+        (openFence ? "\n```sql\nSELECT 1" : "");
+      await writeConcept(conceptPath, "Customers", producer(1));
+      const first = await run();
+      const pagePath = path.join(config.vault.path, getOnlyPagePath(first.pagePaths));
+      const raw = await fs.readFile(pagePath, "utf8");
+      const emptyBlock = "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->";
+      const humanBlock = [
+        "<!-- openclaw:human:start -->",
+        "  Keep café 🦞 and $& exactly.  ",
+        "~~~markdown",
+        emptyBlock,
+        "~~~",
+        "Keep this trailing handwritten note.",
+        "<!-- openclaw:human:end -->",
+      ].join("\r\n");
+      // Main has no slot; append the same marked note so the regression fails on data loss.
+      await fs.writeFile(
+        pagePath,
+        raw.includes(emptyBlock)
+          ? raw.replace(emptyBlock, () => humanBlock)
+          : `${raw}\n## Notes\n${humanBlock}\n`,
+      );
+
+      await run(Date.UTC(2026, 5, 12, 11));
+      await expect(fs.readFile(pagePath, "utf8")).resolves.toContain(humanBlock);
+      await writeConcept(conceptPath, "Customers", producer(2));
+      const changed = await run(Date.UTC(2026, 5, 12, 12));
+      expect(changed.pagePaths).toEqual(first.pagePaths);
+      const refreshed = await fs.readFile(pagePath, "utf8");
+      expect(refreshed).toContain(humanBlock);
+      expect(refreshed).toContain(producer(2));
+      expect(refreshed).not.toContain("Customer body 1.");
+      expect(refreshed).not.toContain("Example 1.");
+    },
+  );
+
+  it.each(["Customer body.", "## Notes\nProducer-owned note."])(
+    "adds an empty Notes slot when re-importing unmarked legacy content %j",
+    async (body) => {
+      const { bundlePath, config, run } = await createImport("legacy-okf");
+      const conceptPath = path.join(bundlePath, "customers.md");
+      await writeConcept(conceptPath, "Customers", body);
+      const first = await run();
+      const pagePath = path.join(config.vault.path, getOnlyPagePath(first.pagePaths));
+      const { frontmatter } = parseWikiMarkdown(await fs.readFile(pagePath, "utf8"));
+      await fs.writeFile(pagePath, renderWikiMarkdown({ frontmatter, body }));
+      await writeConcept(conceptPath, "Customers", "Updated producer body.");
+
+      await run();
+
+      const refreshed = await fs.readFile(pagePath, "utf8");
+      expect(refreshed).toContain("Updated producer body.");
+      expect(refreshed).not.toContain(body);
+      expect(refreshed).toContain(
+        "## Notes\n<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+      );
+    },
+  );
+
+  it("preserves imported concepts when malformed UTF-8 is mixed with valid input", async () => {
+    const { bundlePath, config, run } = await createImport("encoding-okf");
+    const conceptPath = path.join(bundlePath, "tables", "customers.md");
+    await writeConcept(conceptPath, "Customers", "Original body.\n");
+    await writeConcept(path.join(bundlePath, "valid.md"), "Valid", "Café 😀 literal \uFFFD\n");
+    const first = await run();
+    const conceptPage = first.pagePaths.find((pagePath) => pagePath.includes("customers"));
+    if (!conceptPage) {
+      throw new Error("Expected the customers concept to be imported.");
+    }
+    const pagePath = path.join(config.vault.path, conceptPage);
+    const original = await fs.readFile(pagePath);
+    const malformed = Buffer.concat([
+      Buffer.from("---\ntype: Concept\ntitle: Customers\n---\nBroken "),
+      Buffer.from([0xc3, 0x28]),
+    ]);
+    await fs.writeFile(conceptPath, malformed);
+
+    const result = await run();
+
+    expect(result).toMatchObject({
+      importedCount: 1,
+      updatedCount: 0,
+      removedCount: 0,
+      skippedCount: 1,
+    });
+    expect(result.warnings).toEqual([
+      expect.objectContaining({
+        code: "unreadable-entry",
+        path: "tables/customers.md",
+        message: expect.stringContaining("UTF-8"),
+      }),
+    ]);
+    await expect(fs.readFile(pagePath)).resolves.toEqual(original);
+    await expect(fs.readFile(conceptPath)).resolves.toEqual(malformed);
+    const validPage = path.join(config.vault.path, getOnlyPagePath(result.pagePaths));
+    await expect(fs.readFile(validPage, "utf8")).resolves.toContain("Café 😀 literal \uFFFD");
+  });
+
+  it("rejects an unreadable root index without changing existing concept identities", async () => {
+    const { bundlePath, config, run } = await createImport("invalid-index-okf");
+    const indexPath = path.join(bundlePath, "index.md");
+    const index = "---\nid: stable\n---\nBundle description.\n";
+    await fs.writeFile(indexPath, index);
+    const conceptPath = path.join(bundlePath, "tables", "customers.md");
+    await writeConcept(conceptPath, "Customers", "Original body.\n");
+    const first = await run();
+    const pagesBefore = await fs.readdir(path.join(config.vault.path, "concepts"));
+    const pagePath = path.join(config.vault.path, getOnlyPagePath(first.pagePaths));
+    const original = await fs.readFile(pagePath);
+    await fs.writeFile(indexPath, Buffer.concat([Buffer.from(index), Buffer.from([0xff])]));
+    await writeConcept(conceptPath, "Customers", "Updated body.\n");
+
+    await expect(run()).rejects.toThrow(/index\.md.*UTF-8/);
+    await expect(fs.readFile(pagePath)).resolves.toEqual(original);
+    await expect(fs.readdir(path.join(config.vault.path, "concepts"))).resolves.toEqual(
+      pagesBefore,
+    );
+
+    await fs.writeFile(indexPath, index);
+    const recovered = await run();
+    expect(recovered).toMatchObject({ importedCount: 1, updatedCount: 1, warnings: [] });
+    expect(recovered.pagePaths).toEqual(first.pagePaths);
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toContain("Updated body.");
+  });
 });

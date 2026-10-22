@@ -2,6 +2,7 @@ export * from "./error-details.js";
 export * from "./node-permissions.js";
 export * from "./github-publication-api.js";
 export * from "./session-agent-status.js";
+export * from "./session-row-deltas.js";
 export type {
   ModelCatalogScope,
   ModelCatalogTarget,

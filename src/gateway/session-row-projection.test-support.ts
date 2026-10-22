@@ -1,14 +1,34 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  controlUiSessionSlug,
+  SESSION_UUID_SUFFIX_RE,
+} from "../../packages/session-url-contract/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import {
+  replaceSessionEntrySync,
+  persistSessionTranscriptTurn,
+} from "../config/sessions/session-accessor.js";
+import type {
+  InternalSessionEntry as SessionEntry,
+  SessionAcpMeta,
+} from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import type {
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+} from "./server-methods/types.js";
+import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   create as createSessionRow,
@@ -35,6 +55,100 @@ import type { SessionTitleFields } from "./session-utils.types.js";
 
 type Row = NonNullable<ReturnType<SessionRowProjection["describe"]>>;
 
+export function seedProjectionRow(
+  name: string,
+  fields: Partial<SessionEntry> = {},
+  agentId = "main",
+  storePath?: string,
+) {
+  const entry = { sessionId: name, updatedAt: 1, ...fields };
+  const scope = {
+    agentId,
+    sessionKey: name.startsWith("agent:") ? name : `agent:${agentId}:${name}`,
+    sessionId: entry.sessionId,
+    storePath,
+  };
+  replaceSessionEntrySync(scope, entry);
+  return {
+    scope,
+    target: scope,
+    query: { agentId, key: scope.sessionKey, ...(storePath === undefined ? {} : { storePath }) },
+    entry,
+  };
+}
+
+export function appendProjectionMessages(
+  scope: Parameters<typeof persistSessionTranscriptTurn>[0],
+  ...messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"][number]["message"][]
+) {
+  return persistSessionTranscriptTurn(scope, {
+    messages: messages.map((message) => ({ message })),
+    touchSessionEntry: false,
+  });
+}
+
+export function acpProjectionMeta(
+  backend: string,
+  runtimeSessionName: string,
+  lastActivityAt = 1,
+  extra: Partial<SessionAcpMeta> = {},
+): SessionAcpMeta {
+  return {
+    backend,
+    agent: "main",
+    runtimeSessionName,
+    mode: "persistent",
+    state: "idle",
+    lastActivityAt,
+    ...extra,
+  };
+}
+
+export function withSessionRowProjectionState(
+  run: (
+    create: typeof createSessionRowProjection,
+    state: OpenClawTestState,
+    cleanup: AsyncDisposableStack,
+  ) => Promise<void>,
+  foreground = false,
+  options: Parameters<typeof withOpenClawTestState>[0] = { scenario: "minimal" },
+) {
+  return withOpenClawTestState(options, async (state) => {
+    await using cleanup = new AsyncDisposableStack();
+    if (foreground) {
+      cleanup.defer(retainSessionListForegroundWork());
+    }
+    await run(
+      async (params) => {
+        const projection = await createSessionRowProjection(params);
+        cleanup.defer(() => projection.dispose());
+        return projection;
+      },
+      state,
+      cleanup,
+    );
+  });
+}
+
+export function requestSessionRow(
+  handler: GatewayRequestHandler,
+  context: GatewayRequestHandlerOptions["context"],
+  method: string,
+  params: GatewayRequestHandlerOptions["params"],
+  respond: GatewayRequestHandlerOptions["respond"],
+  client: GatewayRequestHandlerOptions["client"] = null,
+  id = method,
+) {
+  return handler({
+    req: { type: "req", id, method },
+    params,
+    context,
+    respond,
+    client,
+    isWebchatConnect: () => false,
+  });
+}
+
 /** Synthetic owner state; tests publish changes explicitly through setEntry. */
 export function createSessionRowProjectionFixture(params: {
   cfg: OpenClawConfig;
@@ -56,6 +170,13 @@ export function createSessionRowProjectionFixture(params: {
   let revisionToken = {};
   const id = (row: Pick<Row, "agentId" | "key" | "storeTarget">) =>
     `${row.agentId}\0${row.storeTarget.storePath}\0${row.key}`;
+  const matching = (query: { agentId?: string; key?: string; storePath?: string }) =>
+    [...rows.values()].filter(
+      (row) =>
+        (!query.agentId || row.agentId === query.agentId) &&
+        (!query.key || row.key === query.key) &&
+        (!query.storePath || row.storeTarget.storePath === query.storePath),
+    );
   const describe: SessionRowProjection["describe"] = (
     { agentId, key, storePath: path },
     captured,
@@ -64,18 +185,9 @@ export function createSessionRowProjectionFixture(params: {
       return undefined;
     }
     const canonical = resolveStoredSessionKeyForAgentStore({ cfg, agentId, sessionKey: key });
-    const exact = [...rows.values()].find(
-      (row) =>
-        row.agentId === agentId && row.key === key && (!path || row.storeTarget.storePath === path),
-    );
+    const candidates = matching({ storePath: path }).filter((row) => row.agentId === agentId);
     return (
-      exact ??
-      [...rows.values()].find(
-        (row) =>
-          row.agentId === agentId &&
-          row.key === canonical &&
-          (!path || row.storeTarget.storePath === path),
-      )
+      candidates.find((row) => row.key === key) ?? candidates.find((row) => row.key === canonical)
     );
   };
   function setEntry(key: string, entry: SessionEntry | undefined) {
@@ -122,11 +234,9 @@ export function createSessionRowProjectionFixture(params: {
     rows.set(id(fields), {
       ...createSessionRow(fields, entry),
       entry,
-      storedEntry: entry,
       materialized: materializeSessionRow(inputs),
       materializedSequence: revision,
       fallbackModel: presentation.activeModel,
-      membership: new Set(),
       parents: new Set(
         [
           entry.spawnedBy,
@@ -159,17 +269,36 @@ export function createSessionRowProjectionFixture(params: {
           )
           .map((row) => row.key),
       );
-    const selected = [...rows.values()].filter(
+    const selected = matching(query).filter(
       (row) =>
-        (!query.agentId || row.agentId === query.agentId) &&
-        (!query.storePath || row.storeTarget.storePath === query.storePath) &&
-        (!query.key || row.key === query.key) &&
         (!matchingKeys || matchingKeys.has(row.key)) &&
         (!query.parentSessionKey || row.parents.has(query.parentSessionKey)),
     );
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    findUrlCandidates(selection, agentId) {
+      return matching({ agentId })
+        .filter((row) => {
+          const uuid = parseAgentSessionKey(row.key)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
+          return "shortId" in selection
+            ? Boolean(
+                uuid?.toLowerCase().replaceAll("-", "").startsWith(selection.shortId.toLowerCase()),
+              )
+            : row.key === selection.key ||
+                Boolean(
+                  uuid &&
+                  selection.slug &&
+                  controlUiSessionSlug(resolveGatewaySessionDisplayName(row.key, row.entry)) ===
+                    selection.slug,
+                );
+        })
+        .map((row) => ({
+          agentId: row.agentId,
+          key: row.key,
+          storePath: row.storeTarget.storePath,
+        }));
+    },
     async readLookup() {
       throw new Error("Indexed lookup requires a real session row projection");
     },
@@ -287,6 +416,7 @@ export function createSessionRowProjectionFixture(params: {
     get sharingRevision() {
       return revisionToken;
     },
+    physicalPaths: (locator) => [locator],
     state: {
       get revision() {
         return revisionToken;

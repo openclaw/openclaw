@@ -1,8 +1,12 @@
 /** Behavior tests for live node-host MCP catalog and connection recovery. */
 
 import "./mcp-manager.test-support.js";
-import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import {
+  SdkHttpError,
+  SdkErrorCode,
+  type CallToolResult,
+  type Tool,
+} from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -38,7 +42,7 @@ function createClient(params: {
 }
 
 const stdioTransport = {
-  transport: {} as never,
+  transport: { start: async () => {}, send: async () => {}, close: async () => {} },
   transportType: "stdio" as const,
   connectionTimeoutMs: 100,
   requestTimeoutMs: 100,
@@ -225,7 +229,11 @@ describe("node host MCP live lifecycle", () => {
     const client = createClient({
       tools: () => [tool("fail")],
       call: async () => {
-        throw new StreamableHTTPError(500, "Error POSTing to endpoint: bearer=body-secret");
+        throw new SdkHttpError(
+          SdkErrorCode.ClientHttpNotImplemented,
+          "Error POSTing to endpoint: bearer=body-secret",
+          { status: 500 },
+        );
       },
     });
     const manager = await startNodeHostMcpManager(
@@ -238,7 +246,7 @@ describe("node host MCP live lifecycle", () => {
       .catch((caught: unknown) => caught);
     expect(error).toMatchObject({
       code: "MCP_TOOL_ERROR",
-      message: "Streamable HTTP error: Error POSTing to endpoint: bearer=body-secret",
+      message: "Error POSTing to endpoint: bearer=body-secret",
     });
     await manager.close();
   });
@@ -496,7 +504,9 @@ describe("node host MCP live lifecycle", () => {
         call: async () => {
           throw transportType === "sse"
             ? new McpSseSessionExpiredError("Session not found")
-            : new StreamableHTTPError(404, "Session not found");
+            : new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented, "Session not found", {
+                status: 404,
+              });
         },
       });
       const clients = {
@@ -511,7 +521,9 @@ describe("node host MCP live lifecycle", () => {
           createClient({
             tools: () => [tool("run")],
             call: async () => {
-              throw new StreamableHTTPError(404, "Not found");
+              throw new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented, "Not found", {
+                status: 404,
+              });
             },
           }),
         ],

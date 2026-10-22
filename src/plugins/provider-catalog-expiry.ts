@@ -9,12 +9,48 @@ type CatalogExpiryCapture = {
   observedServingLimits?: ModelServingContextLimit[];
   refreshKeys?: Set<string>;
   expiresAt?: number;
+  discoveryBudget?: { timeoutMs: number | null; deadlineMs: number };
 };
 
 const capture = resolveGlobalSingleton(
   Symbol.for("openclaw.providerCatalogExpiryCapture"),
   () => new AsyncLocalStorage<CatalogExpiryCapture>(),
 );
+
+/** Carry the existing acquisition budget without adding provider configuration. */
+export async function withProviderCatalogDiscoveryBudget<T>(
+  timeoutMs: number | null,
+  load: () => Promise<T>,
+): Promise<T> {
+  const parent = capture.getStore();
+  const current: CatalogExpiryCapture = {
+    ...(parent ?? {
+      providers: new Map(),
+      models: new Map(),
+      servingLimits: new Map(),
+    }),
+    discoveryBudget: {
+      timeoutMs:
+        timeoutMs === null
+          ? (parent?.discoveryBudget?.timeoutMs ?? null)
+          : Math.min(timeoutMs, parent?.discoveryBudget?.timeoutMs ?? Infinity),
+      deadlineMs: Math.min(
+        timeoutMs === null ? Infinity : performance.now() + timeoutMs,
+        parent?.discoveryBudget?.deadlineMs ?? Infinity,
+      ),
+    },
+  };
+  const value = await capture.run(current, load);
+  if (parent && current.expiresAt !== undefined) {
+    parent.expiresAt = Math.min(parent.expiresAt ?? Infinity, current.expiresAt);
+  }
+  return value;
+}
+
+/** Stable budget identity is separate from the time remaining on this acquisition. */
+export function getProviderCatalogDiscoveryBudget() {
+  return capture.getStore()?.discoveryBudget;
+}
 
 export async function captureProviderCatalogExpiries<T>(
   load: () => Promise<T>,
@@ -24,7 +60,16 @@ export async function captureProviderCatalogExpiries<T>(
   const models = new Map<string, Set<string>>();
   const refreshKeys = options.refresh ? new Set<string>() : undefined;
   const servingLimits = new Map<string, ModelServingContextLimit[]>();
-  const value = await capture.run({ providers, models, refreshKeys, servingLimits }, load);
+  const value = await capture.run(
+    {
+      providers,
+      models,
+      refreshKeys,
+      servingLimits,
+      discoveryBudget: capture.getStore()?.discoveryBudget,
+    },
+    load,
+  );
   return { value, providerExpiries: providers, providerModels: models, servingLimits };
 }
 
@@ -42,6 +87,7 @@ export async function withProviderCatalogExpiry<T>(
     servingLimits: parent.servingLimits,
     observedServingLimits: [],
     refreshKeys: parent.refreshKeys,
+    discoveryBudget: parent.discoveryBudget,
   };
   const value = await capture.run(current, load);
   for (const provider of providerIds(value)) {

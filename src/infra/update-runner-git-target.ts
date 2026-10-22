@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { executeGitCommand, gitNullConfigPath, normalizeGitPathForFilesystem } from "./git-exec.js";
 import {
   DEV_BRANCH,
@@ -163,11 +163,7 @@ export async function withGitTargetInspectionRoot<T>(
     );
     await fs
       .copyFile(path.resolve(params.root, shallow), path.join(inspectionRoot, "shallow"))
-      .catch((error: unknown) => {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-      });
+      .catch(ignoreMissingPath);
     const objectIds = new Set<string>();
     const branchObjects = new Set<string>();
     for (const ref of refs.trim().split("\n").filter(Boolean)) {
@@ -461,21 +457,22 @@ export async function fetchGitUpdateTarget(params: {
   // Implicit Dev updates use the same live source as discovery. Only an explicit
   // detached target may search for its requested object on other remotes.
   const authority =
-    channel !== "dev"
-      ? tagRemote
-      : devTarget?.mode === "detached"
-        ? (targetRemote ?? (targetRef?.startsWith("refs/heads/") ? "origin" : undefined))
-        : devSource?.remote;
+    devTarget?.mode === "detached"
+      ? (targetRemote ?? (targetRef?.startsWith("refs/heads/") ? "origin" : undefined))
+      : devSource?.remote;
   if (channel === "dev" && devTarget?.mode !== "detached" && !devSource) {
     return devTarget ? { ...result(false), reason: "tracked-upstream-invalid" } : result(true);
   }
-  const fetchRemotes = authority
-    ? [authority]
-    : channel !== "dev" || remoteRef || targetRef?.startsWith("refs/tags/")
+  const fetchRemotes =
+    channel !== "dev"
       ? []
-      : targetRef && !isFullGitObjectId(targetRef)
-        ? remotes.filter((candidate) => candidate === "origin")
-        : remotes;
+      : authority
+        ? [authority]
+        : remoteRef || targetRef?.startsWith("refs/tags/")
+          ? []
+          : targetRef && !isFullGitObjectId(targetRef)
+            ? remotes.filter((candidate) => candidate === "origin")
+            : remotes;
   const fetchConfigKey = `remote.${devSource?.remote}.fetch`;
   const exclusions = devSource
     ? await runStep(step("git-config-update-upstream", "config", "--get-all", fetchConfigKey))

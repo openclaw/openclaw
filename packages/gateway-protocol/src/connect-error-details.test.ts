@@ -1,4 +1,3 @@
-// Gateway Protocol tests cover connect error details behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildPairingConnectCloseReason,
@@ -18,13 +17,22 @@ import {
   resolveAuthConnectErrorDetailCode,
 } from "./connect-error-details.js";
 
-/**
- * Connect error detail regressions for Gateway/WebSocket clients.
- *
- * These tests pin structured auth/pairing details, human-readable fallback
- * formatting, and request-id sanitization because these strings surface in
- * control UI reconnect flows and device pairing diagnostics.
- */
+const expectFormatted = (input: Parameters<typeof formatConnectErrorMessage>[0], message: string) =>
+  expect(formatConnectErrorMessage(input)).toBe(message);
+const pairingDetails = {
+  code: "PAIRING_REQUIRED",
+  reason: "scope-upgrade",
+  requestId: "req-123",
+};
+const protocolDetails = {
+  code: "PROTOCOL_MISMATCH",
+  clientMinProtocol: 5,
+  clientMaxProtocol: 5,
+  expectedProtocol: 4,
+};
+const redirect = (location: string) => ({
+  details: { reason: "websocket-upgrade-rejected", httpStatus: 302, location },
+});
 
 describe("readConnectErrorDetailCode", () => {
   it("reads structured detail codes", () => {
@@ -33,18 +41,15 @@ describe("readConnectErrorDetailCode", () => {
 });
 
 describe("readControlUiBuildMismatchId", () => {
-  it.each([ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH])(
-    "returns a bounded reload target for %s",
-    (code) => {
-      expect(
-        readControlUiBuildMismatchId({
-          code,
-          gatewayBuildId: "gateway-build",
-          reloadRequired: true,
-        }),
-      ).toBe("gateway-build");
-    },
-  );
+  it("returns a bounded reload target for a Control UI build mismatch", () => {
+    expect(
+      readControlUiBuildMismatchId({
+        code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+        gatewayBuildId: "gateway-build",
+        reloadRequired: true,
+      }),
+    ).toBe("gateway-build");
+  });
 
   it.each([
     {},
@@ -77,7 +82,7 @@ describe("classifyGatewayConnectFailure", () => {
     {
       name: "structured pairing upgrade",
       input: {
-        details: { code: "PAIRING_REQUIRED", reason: "scope-upgrade", requestId: "req-123" },
+        details: pairingDetails,
         message: "connect failed",
       },
       kind: "pairing-required",
@@ -168,20 +173,10 @@ describe("classifyGatewayConnectFailure", () => {
   });
 
   it("adds a Cloudflare hint only for Cloudflare Access redirect hosts", () => {
-    const cloudflare = classifyGatewayConnectFailure({
-      details: {
-        reason: "websocket-upgrade-rejected",
-        httpStatus: 302,
-        location: "https://team.cloudflareaccess.com/cdn-cgi/access/login?token=***",
-      },
-    });
-    const generic = classifyGatewayConnectFailure({
-      details: {
-        reason: "websocket-upgrade-rejected",
-        httpStatus: 302,
-        location: "https://login.example/authorize",
-      },
-    });
+    const cloudflare = classifyGatewayConnectFailure(
+      redirect("https://team.cloudflareaccess.com/cdn-cgi/access/login?token=***"),
+    );
+    const generic = classifyGatewayConnectFailure(redirect("https://login.example/authorize"));
 
     expect(cloudflare.kind).toBe("identity-proxy");
     expect(cloudflare.kind).not.toBe("unreachable");
@@ -248,8 +243,7 @@ describe("pairing connect details", () => {
     expect(normalizePairingConnectRequestId("req-123;rm -rf /")).toBeUndefined();
     expect(
       readPairingConnectErrorDetails({
-        code: "PAIRING_REQUIRED",
-        reason: "scope-upgrade",
+        ...pairingDetails,
         requestId: "req-123;rm -rf /",
       }),
     ).toEqual({
@@ -260,13 +254,9 @@ describe("pairing connect details", () => {
   });
 
   it("formats upgrade rejections with the request id", () => {
-    expect(
-      formatConnectPairingRequiredMessage({
-        code: "PAIRING_REQUIRED",
-        requestId: "req-123",
-        reason: "scope-upgrade",
-      }),
-    ).toBe("scope upgrade pending approval (requestId: req-123)");
+    expect(formatConnectPairingRequiredMessage(pairingDetails)).toBe(
+      "scope upgrade pending approval (requestId: req-123)",
+    );
   });
 
   it("parses surfaced pairing-required messages", () => {
@@ -286,41 +276,32 @@ describe("pairing connect details", () => {
   });
 
   it("formats connect errors when padded detail codes are present", () => {
-    expect(
-      formatConnectErrorMessage({
+    expectFormatted(
+      {
         message: "pairing required",
         details: {
+          ...pairingDetails,
           code: "  PAIRING_REQUIRED  ",
-          requestId: "req-123",
-          reason: "scope-upgrade",
         },
-      }),
-    ).toBe("scope upgrade pending approval (requestId: req-123)");
-    expect(
-      formatConnectErrorMessage({
+      },
+      "scope upgrade pending approval (requestId: req-123)",
+    );
+    expectFormatted(
+      {
         message: "protocol mismatch",
-        details: {
-          code: "\tPROTOCOL_MISMATCH\n",
-          clientMinProtocol: 5,
-          clientMaxProtocol: 5,
-          expectedProtocol: 4,
-        },
-      }),
-    ).toBe("protocol mismatch: Control UI v5, Gateway v4");
+        details: { ...protocolDetails, code: "\tPROTOCOL_MISMATCH\n" },
+      },
+      "protocol mismatch: Control UI v5, Gateway v4",
+    );
   });
 
   it("formats protocol mismatch details with both client and gateway versions", () => {
-    expect(
-      formatConnectErrorMessage({
+    expectFormatted(
+      {
         message: "protocol mismatch",
-        details: {
-          code: "PROTOCOL_MISMATCH",
-          clientMinProtocol: 5,
-          clientMaxProtocol: 5,
-          expectedProtocol: 4,
-          minimumProbeProtocol: 4,
-        },
-      }),
-    ).toBe("protocol mismatch: Control UI v5, Gateway v4, connection check min v4");
+        details: { ...protocolDetails, minimumProbeProtocol: 4 },
+      },
+      "protocol mismatch: Control UI v5, Gateway v4, connection check min v4",
+    );
   });
 });

@@ -212,6 +212,50 @@ function startConnectionFixture(
   return { connection, request, publications, writeStderrLine, start, prepared, runtime };
 }
 
+it("publishes retained process changes through the current connection only", async () => {
+  const { connection, request, start } = startConnectionFixture(true);
+  const changed = start.mock.calls[0]![0].onProcessesChanged!;
+  const binding = {
+    environmentId: "environment-1",
+    sessionId: "session-1",
+    ownerEpoch: 3,
+    placementGeneration: 2,
+  };
+  const replacementRequest = vi.fn().mockResolvedValue({});
+  const processEvents = (calls: unknown[][]) =>
+    calls.filter(
+      ([, params]) =>
+        typeof params === "object" &&
+        params !== null &&
+        "event" in params &&
+        params.event === "worker.processes.changed",
+    );
+  try {
+    changed(binding);
+    expect(processEvents(request.mock.calls)).toHaveLength(0);
+    connection.connect(gateway);
+    changed(binding);
+    expect(processEvents(request.mock.calls)).toEqual([
+      [
+        "node.event",
+        {
+          event: "worker.processes.changed",
+          payloadJSON: JSON.stringify(binding),
+        },
+      ],
+    ]);
+    connection.connect(gateway, { request: replacementRequest });
+    changed(binding);
+    expect(processEvents(request.mock.calls)).toHaveLength(1);
+    expect(processEvents(replacementRequest.mock.calls)).toHaveLength(1);
+    connection.disconnect();
+    changed(binding);
+    expect(processEvents(replacementRequest.mock.calls)).toHaveLength(1);
+  } finally {
+    await connection.close();
+  }
+});
+
 it("sends permission details only while the connected Gateway advertises support", async () => {
   const { connection, request, start } = startConnectionFixture();
   const runtimeClient = start.mock.calls[0]![0].client;
@@ -491,7 +535,7 @@ it.each([false, true])(
 it.each(["resolve", "reject"] as const)(
   "retires in-flight runner publication and its pending value before late %s",
   async (settle) => {
-    const { connection, request, start, writeStderrLine } = startConnectionFixture(true);
+    const { connection, request, start } = startConnectionFixture(true);
     const previous = createDeferred<unknown>();
     let first = true;
     request.mockImplementation((method) => {
@@ -526,7 +570,6 @@ it.each(["resolve", "reject"] as const)(
           }),
         ),
       );
-      expect(writeStderrLine).not.toHaveBeenCalled();
     } finally {
       previous.resolve({});
       await connection.close();

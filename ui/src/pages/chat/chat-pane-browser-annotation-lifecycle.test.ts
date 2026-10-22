@@ -7,7 +7,7 @@ import type { BrowserAnnotationDraft } from "../../components/browser/browser-an
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
-import "../../lib/toast-host.ts";
+import "../../lib/toast-host.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentDataUrl,
@@ -16,6 +16,7 @@ import {
 } from "./attachment-payload-store.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
+  createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
   createPaneTestHost,
   getPaneTestRuntime,
@@ -46,7 +47,7 @@ function annotationPane(
 }
 
 function annotatedPane(sessions = createSessionCapabilityFixture(), noClient = false) {
-  const owner = {} as GatewayBrowserClient;
+  const owner = createGatewayBrowserClientFixture();
   const result = annotationPane(owner, sessions);
   if (noClient) {
     result.pane.connectedClient = null;
@@ -253,6 +254,8 @@ it.each(["first-client", "replacement"] as const)(
 
 it("preserves the package on same-client reconnect and clears it on replacement", () => {
   const { pane, state, owner, annotation: current, ordinary } = annotatedPane();
+  state.loadAssistantIdentity = vi.fn(async () => undefined);
+  const connected = pane.context.gateway.snapshot;
   pane.active = false;
   const fallback = storedAttachment("replacement-fallback", true);
   state.chatComposerFallbackByScope = { fallback: composerFallback([fallback, ordinary]) };
@@ -261,22 +264,11 @@ it("preserves the package on same-client reconnect and clears it on replacement"
   expect(state.chatAttachments).toEqual([current, ordinary]);
   expect(getChatAttachmentDataUrl(current)).not.toBeNull();
 
-  const stopAfterAnnotationOwner = new Error("stop after annotation owner");
-  const cancelHeaderRename = vi.spyOn(pane, "cancelHeaderRename").mockImplementation(() => {
-    throw stopAfterAnnotationOwner;
-  });
-  expect(() =>
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      client: owner,
-      phase: "connected",
-    }),
-  ).toThrow(stopAfterAnnotationOwner);
-  cancelHeaderRename.mockRestore();
+  pane.applyGatewaySnapshot(connected);
   expect(state.chatAttachments).toEqual([current, ordinary]);
   expect(getChatAttachmentDataUrl(current)).not.toBeNull();
 
-  reconnect(pane, {} as GatewayBrowserClient);
+  reconnect(pane, createGatewayBrowserClientFixture());
   expect(state.chatAttachments).toEqual([ordinary]);
   expect(state.chatComposerFallbackByScope.fallback?.attachments).toEqual([ordinary]);
   expectPayloads([ordinary], [current, fallback]);
@@ -289,6 +281,38 @@ it("discards a staged package captured without a client when the first client ar
 
   expect(state.chatAttachments).toEqual([ordinary]);
   expectPayloads([ordinary], [annotation]);
+});
+
+it("publishes annotation capture, removal, and Undo through the composer owner", async () => {
+  const { mount } = mountedPanes();
+  const pane = mount();
+  pane.active = true;
+  const state = pane.state;
+  const source = getPaneTestRuntime(pane).chatState.composerDraft;
+  const published: ChatAttachment[][] = [];
+  const unsubscribe = source.subscribe(() => published.push(source.read().attachments));
+  const toastHost = document.createElement("openclaw-toast-host");
+  document.body.append(toastHost);
+
+  try {
+    receive(pane);
+    const attachment = state.chatAttachments[0]!;
+    expect(published.at(-1)).toEqual([attachment]);
+
+    (pane as AnnotationPane).removeBrowserAnnotation(attachment);
+    expect(published.at(-1)).toEqual([]);
+    await waitForSolid(() =>
+      expect(toastHost.querySelector(".app-toast__action")?.textContent).toBe("Undo"),
+    );
+    toastHost.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
+
+    expect(published.at(-1)).toEqual([attachment]);
+    expect(state.chatAttachments[0]).toBe(attachment);
+    pane.discardStagedAttachments?.();
+  } finally {
+    unsubscribe();
+    toastHost.remove();
+  }
 });
 
 it("invalidates annotation Undo when the logical Gateway client is replaced", async () => {

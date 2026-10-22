@@ -1,10 +1,10 @@
 import type { GatewayEventFrame } from "../../api/gateway.ts";
+import type { SessionChangedRowResult } from "./session-row-reconcile.ts";
 import type {
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionRowEventListener,
-} from "./session-capability.ts";
-import type { SessionChangedRowResult } from "./session-row-reconcile.ts";
+} from "./session-types.ts";
 
 export type SessionEventDelivery<Registration extends { snapshot: unknown }> = {
   results: Map<Registration, SessionChangedRowResult>;

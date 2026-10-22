@@ -144,7 +144,8 @@ select.settings-select:not([multiple]) {
   font-size: 10px;
 }
 
-.settings-segmented > .settings-segmented__btn--active {
+.settings-segmented > .settings-segmented__btn--active,
+.settings-segmented > .settings-segmented__btn:has(> input:checked) {
   background: var(--bg-elevated);
   color: var(--text-strong);
   box-shadow: var(--shadow-sm);
@@ -181,26 +182,31 @@ select.settings-select:not([multiple]) {
 }
 
 :where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
-  > .settings-segmented__btn:focus-visible {
+  > .settings-segmented__btn:focus-visible,
+.settings-segmented > .settings-segmented__btn:has(> input:focus-visible) {
   outline: none;
   color: var(--text);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-:where(.settings-segmented:not(.settings-segmented--primary)) > .settings-segmented__btn:disabled {
+:where(.settings-segmented:not(.settings-segmented--primary)) > .settings-segmented__btn:disabled,
+.settings-toggle:has(input:disabled),
+.settings-segmented > .settings-segmented__btn:has(> input:disabled) {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 @media (forced-colors: active) {
   :where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
-    > .settings-segmented__btn--active {
+    > .settings-segmented__btn--active,
+  .settings-segmented > .settings-segmented__btn:has(> input:checked) {
     text-decoration: underline 2px;
     text-underline-offset: 3px;
   }
 
   :where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
-    > .settings-segmented__btn:focus-visible {
+    > .settings-segmented__btn:focus-visible,
+  .settings-segmented > .settings-segmented__btn:has(> input:focus-visible) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }

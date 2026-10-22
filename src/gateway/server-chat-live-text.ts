@@ -1,9 +1,11 @@
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import {
   ChatStatusEventSchema,
   type ChatEvent,
   type ChatStatusEvent,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { TOOL_CALL_RAW_TOOL_NAME } from "../agents/tool-search-types.js";
 import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
@@ -186,6 +188,22 @@ export function prepareAgentWirePayload(
   isCurrent: () => boolean,
 ): AgentEventPayload {
   let payload = event.runId === clientRunId ? event : { ...event, runId: clientRunId };
+  if (
+    event.stream === "tool" &&
+    event.data.phase === "result" &&
+    event.data.name === TOOL_CALL_RAW_TOOL_NAME
+  ) {
+    const result = readRecord(event.data.result);
+    const details = readRecord(result?.details);
+    if (details) {
+      // The dispatcher keeps raw target results for internal consumers, not display clients.
+      const { tool: _tool, result: _result, ...liveDetails } = details;
+      payload = {
+        ...payload,
+        data: { ...event.data, result: { ...result, details: liveDetails } },
+      };
+    }
+  }
   if (event.stream === "item" && event.data.kind === "preamble") {
     payload = {
       ...payload,

@@ -1,7 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPatch, SessionPatchOptions } from "./patch.ts";
-import type { SessionConnectionScope } from "./session-capability.ts";
 import type { SessionMutationsHost } from "./session-mutations-host.ts";
+import type { SessionConnectionScope } from "./session-types.ts";
 
 type Host = Pick<SessionMutationsHost, "connection" | "readState" | "publish" | "publishedRow">;
 

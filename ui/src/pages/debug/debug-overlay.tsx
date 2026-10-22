@@ -1,4 +1,4 @@
-import { createComponent, createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { Errored, lazy, Loading, onSettled, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   clearLazyShellAction,
@@ -12,8 +12,9 @@ import {
 } from "../../app/stale-chunk-reload.ts";
 import { DEBUG_OVERLAY_REQUEST_EVENT } from "../../components/panel-toggle-contract.ts";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
-import { useApplication } from "../../lib/reactive/context.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { DebugOverlayFrame } from "./debug-overlay-frame-view.tsx";
 import { DebugOverlayLoading } from "./debug-overlay-loading-view.tsx";
@@ -26,16 +27,18 @@ type Props = {
 };
 type Methods = { open(mode: DebugOverlayMode): void; toggle(): void };
 
+const synchronizers = new WeakMap<HTMLElement, () => void>();
+const Content = lazy(() => import("./debug-overlay-content.ts"), {
+  export: "DebugOverlayContent",
+});
+
 function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
   // A bridge's provider ancestry is fixed for this renderer lifetime.
-  const inherited = untrack(() => props.context) ? undefined : useApplication();
+  const inherited = useOptionalApplication();
   const close = () => {
     host.mode = "closed";
   };
-  const [Content, setContent] =
-    createSignal<typeof import("./debug-overlay-content.ts").DebugOverlayContent>();
-  const [error, setError] = createSignal<{ error: unknown; stale: boolean } | null>(null);
-  let disposed = false;
+  let contentLoaded = false;
   let request: { stale: boolean } | undefined;
   let recoveryActionPending = false;
   const clearRecoveryAction = () => {
@@ -54,10 +57,9 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
     request = undefined;
     clearRecoveryAction();
   };
-  async function load(recover = false) {
+  async function load(recover = false, reset?: () => void) {
     const current = { stale: recover };
     request = current;
-    setError(null);
     try {
       if (
         recover &&
@@ -78,18 +80,17 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
       if (request !== current) {
         return;
       }
-      const module = await import("./debug-overlay-content.ts");
-      // Registration survives dismissal; a later open reuses this lazy renderer.
-      if (!disposed) {
-        setContent(() => module.DebugOverlayContent);
-      }
+      reset?.();
+      // Preloading retains registration after dismissal and retires reload intent.
+      await Content.preload();
+      contentLoaded = true;
       if (request === current) {
         cancel();
       }
     } catch (failure) {
       if (request === current) {
         current.stale = isStaleChunkImportError(failure);
-        setError({ error: failure, stale: current.stale });
+        // The rendered lazy component reports the failure through Errored.
       }
     }
   }
@@ -99,30 +100,34 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
       close();
     }
   };
-  // The overlay mode owns its lazy-module request and document Escape handler.
-  createEffect(
-    () => ({ mode: props.mode, key: props.contentKey, loaded: Boolean(Content()) }),
-    (current, previous) => {
-      if (current.mode === "closed") {
-        cancel();
-        setError(null);
-        return undefined;
-      }
-      document.addEventListener("keydown", keydown, true);
-      if (current.key !== previous?.key && !current.loaded) {
+  let previousKey: number | undefined;
+  let stopKeydown: (() => void) | undefined;
+  const synchronize = () => {
+    stopKeydown?.();
+    stopKeydown = undefined;
+    if (host.mode === "closed") {
+      cancel();
+    } else {
+      stopKeydown = listen(document, "keydown", keydown, true);
+      if (host.contentKey !== previousKey && !contentLoaded) {
         cancel();
         recoveryActionPending = persistLazyShellAction({ eventType: DEBUG_OVERLAY_REQUEST_EVENT });
         void load();
       }
-      return () => document.removeEventListener("keydown", keydown, true);
-    },
-  );
-  onCleanup(() => {
-    disposed = true;
-    cancel();
-    if (!host.isConnected) {
-      close();
     }
+    previousKey = host.contentKey;
+  };
+  onSettled(() => {
+    synchronizers.set(host, synchronize);
+    synchronize();
+    return () => {
+      synchronizers.delete(host);
+      stopKeydown?.();
+      cancel();
+      if (!host.isConnected) {
+        close();
+      }
+    };
   });
   return (
     <Show when={props.mode !== "closed"}>
@@ -133,44 +138,35 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
         }}
         onClose={close}
         body={
-          <Show
-            when={!error()}
-            fallback={
-              <LazyViewError
-                actionLabel={t("common.retry")}
-                error={error()?.error}
-                stale={error()?.stale}
-                subtitle={t("debug.overlay.title")}
-                onRetry={() => void load(error()?.stale)}
-              />
-            }
-          >
-            <Show
-              when={Content()}
-              keyed
-              fallback={
-                <Show when={props.mode === "minimized"} fallback={<DebugOverlayLoading />}>
-                  <div class="debug-overlay__compact-loading" role="status">
-                    {t("common.loading")}
-                  </div>
-                </Show>
-              }
-            >
-              {(component) => (
-                <Show when={props.contentKey + 1} keyed>
-                  {(_contentKey) =>
-                    createComponent(component, {
-                      get context() {
-                        return props.context ?? inherited;
-                      },
-                      get minimized() {
-                        return props.mode === "minimized";
-                      },
-                    })
+          <Show when={props.contentKey + 1} keyed>
+            {(_contentKey) => (
+              <Errored
+                fallback={(error, reset) => (
+                  <LazyViewError
+                    actionLabel={t("common.retry")}
+                    error={error()}
+                    stale={isStaleChunkImportError(error())}
+                    subtitle={t("debug.overlay.title")}
+                    onRetry={() => void load(isStaleChunkImportError(error()), reset)}
+                  />
+                )}
+              >
+                <Loading
+                  fallback={
+                    <Show when={props.mode === "minimized"} fallback={<DebugOverlayLoading />}>
+                      <div class="debug-overlay__compact-loading" role="status">
+                        {t("common.loading")}
+                      </div>
+                    </Show>
                   }
-                </Show>
-              )}
-            </Show>
+                >
+                  <Content
+                    context={props.context ?? inherited}
+                    minimized={props.mode === "minimized"}
+                  />
+                </Loading>
+              </Errored>
+            )}
           </Show>
         }
       />
@@ -183,6 +179,12 @@ export const DebugOverlay = defineSolidBridge<Props, Methods>("openclaw-debug-ov
     context: { default: undefined, attribute: false },
     mode: { default: "closed", attribute: false },
     contentKey: { default: 0, attribute: false },
+  },
+  propertyChanged: (host, key) => {
+    if (key === "mode" || key === "contentKey") {
+      // Settle both writes from open() and retire the previous keyed content first.
+      onSettled(() => synchronizers.get(host)?.());
+    }
   },
   methods: {
     open: (host, mode) => {

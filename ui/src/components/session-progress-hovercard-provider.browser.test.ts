@@ -84,6 +84,11 @@ describe("progress hovercard provider boundary", () => {
     await h.mount();
     await h.focus();
     await expectText("Original gateway");
+    const originalPortal = portal();
+    h.provider.client = replacement.gateway.snapshot.client;
+    await drainTurn();
+    expect(portal()).toBe(originalPortal);
+    await expectText("Original gateway");
     h.provider.context = replacement.provider.context;
     h.provider.gateway = replacement.gateway;
     await drainTurn();

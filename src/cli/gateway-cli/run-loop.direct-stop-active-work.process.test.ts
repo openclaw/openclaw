@@ -10,6 +10,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
+import { formatCliProcessFailure } from "../cli-process-child.test-helpers.js";
 import { createProcessFixtures } from "./run-loop-process.test-support.js";
 
 const fixtures = createProcessFixtures("direct-stop fixture cleanup failed; retaining state");
@@ -18,19 +19,16 @@ const moduleUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
   resolveRuntimeWorkerUrl(entry).href;
 
 const childScript = `
-  import fs from "node:fs";
   import { createChannelIngressDrain } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.ingressDrain))};
   import { createChannelIngressQueue } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.ingressQueue))};
-  import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runs))};
-  import { getActiveEmbeddedRunCount } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.activeRunProjections))};
+  import { attachActiveEmbeddedRun, detachActiveEmbeddedRun } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runs))};
+  import { withSessionTurn } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.sessionControllerAdmission))};
+  import { getActiveSessionRunCount } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.sessionControllerQueries))};
   import { runGatewayLoop } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runLoop))};
   import { getActiveGatewayRootWorkCount } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.workAdmission))};
 
-  const [tracePath, stateDir] = process.argv.slice(1);
-  const trace = (line) => {
-    fs.appendFileSync(tracePath, line + "\\n");
-    process.stdout.write("process proof: " + line + "\\n");
-  };
+  const [stateDir] = process.argv.slice(1);
+  const trace = (line) => process.stdout.write("process proof: " + line + "\\n");
   const queue = createChannelIngressQueue({ channelId: "process-proof", accountId: "direct-stop", stateDir });
   const embedded = Promise.withResolvers();
   const adopted = Promise.withResolvers();
@@ -45,15 +43,21 @@ const childScript = `
   };
   const drain = createChannelIngressDrain({
     queue,
-    dispatchClaimedEvent: async (_event, lifecycle) => {
-      setActiveEmbeddedRun(sessionId, handle, sessionKey);
-      await lifecycle.onAdopted();
-      trace("adopted:roots=" + getActiveGatewayRootWorkCount() + ":embedded=" + getActiveEmbeddedRunCount());
-      adopted.resolve();
-      await embedded.promise;
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-      trace("embedded-completed");
-    },
+    // A keyed native run registers only under its controller turn admission.
+    dispatchClaimedEvent: (_event, lifecycle) =>
+      withSessionTurn({ sessionKey, sessionId }, async (operation) => {
+        const registration = attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, undefined, operation);
+        await lifecycle.onAdopted();
+        trace("adopted:roots=" + getActiveGatewayRootWorkCount() + ":embedded=" + getActiveSessionRunCount());
+        adopted.resolve();
+        await embedded.promise;
+        detachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, undefined, registration);
+        trace("embedded-completed");
+      }).catch((error) => {
+        // Fail fast: a dispatch failure would otherwise leave startup waiting for adoption.
+        trace("dispatch-failed:" + error.message);
+        process.exit(1);
+      }),
   });
 
   await queue.enqueue("event-direct-stop", { text: "hello" }, { laneKey: sessionKey });
@@ -82,10 +86,6 @@ const childScript = `
   process.exitCode = code;
   process.once("beforeExit", () => trace("process-exit:" + code));
 `;
-
-function readTrace(tracePath: string): string[] {
-  return fs.readFileSync(tracePath, "utf8").split("\n").filter(Boolean);
-}
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 
@@ -123,12 +123,11 @@ posixIt(
     const fixtureDir = fixtures.make("openclaw-direct-stop-active-work-");
     const stateDir = path.join(fixtureDir, "state");
     const homeDir = path.join(fixtureDir, "home");
-    const tracePath = path.join(fixtureDir, "trace.log");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.mkdirSync(homeDir, { recursive: true });
     const child = spawn(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", childScript, tracePath, stateDir],
+      ["--import", "tsx", "--input-type=module", "--eval", childScript, stateDir],
       {
         env: {
           ...process.env,
@@ -160,28 +159,36 @@ posixIt(
         "gateway-ready trace was not produced",
       ),
       signal,
-    );
+    ).catch((cause: unknown) => {
+      throw new Error(formatCliProcessFailure({ reason: String(cause), ...tracked.output }), {
+        cause,
+      });
+    });
     // The exit event can precede the final stdout data; close joins both streams.
     expect(child.kill("SIGTERM")).toBe(true);
 
     const exit = await withinTest(tracked.closed, signal);
-    const trace = readTrace(tracePath);
+    const output = tracked.output.stdout;
+    const trace = output
+      .split("\n")
+      .flatMap((line) =>
+        line.startsWith("process proof: ") ? [line.slice("process proof: ".length)] : [],
+      );
     expect(exit, `${trace.join(" -> ")}\n${tracked.output.stderr}`).toEqual([0, null]);
     expect(trace).toContain("adopted:roots=0:embedded=1");
     expect(trace).not.toContain("embedded-aborted");
     expect(trace.indexOf("signal:SIGTERM")).toBeLessThan(trace.indexOf("embedded-completed"));
     expect(trace.indexOf("embedded-completed")).toBeLessThan(trace.indexOf("gateway-close"));
     expect(trace.indexOf("gateway-close")).toBeLessThan(trace.indexOf("process-exit:0"));
-    const output = tracked.output.stdout;
     const drainSettled = output.indexOf("active-work drain settled; beginning server close");
     const embeddedCompleted = output.indexOf("process proof: embedded-completed");
     expect(output).toContain("embeddedRuns=1");
     expect(output.indexOf("embeddedRuns=1")).toBeLessThan(embeddedCompleted);
     expect(drainSettled).toBeGreaterThanOrEqual(0);
     expect(drainSettled).toBeLessThan(output.indexOf("process proof: gateway-close"));
-    expect(output).toContain("restart trace: stop.signal.received ");
-    expect(output).toContain("restart trace: stop.drain.begin ");
-    expect(output).toContain("restart trace: stop.drain ");
+    for (const phase of ["stop.signal.received", "stop.drain.begin", "stop.drain"]) {
+      expect(output).toContain(`restart trace: ${phase} `);
+    }
   },
   60_000,
 );

@@ -2,9 +2,9 @@
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
-import { formatRawAssistantErrorForUi } from "../agents/embedded-agent-helpers.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import type { FallbackNoticeState } from "../status/fallback-notice-state.js";
 import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.types.js";
 

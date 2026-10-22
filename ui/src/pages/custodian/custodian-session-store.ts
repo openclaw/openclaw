@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { CustodianTurnAdmission } from "../../components/custodian-alert-contract.ts";
 import { t } from "../../i18n/index.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { initialWizardValue } from "../model-setup/state.ts";
 import { CustodianAutoSetup } from "./custodian-auto-setup.ts";
 import { CustodianInputDrafts } from "./custodian-input-drafts.ts";
@@ -62,6 +62,7 @@ export class CustodianSessionStore {
   eventNudge: eventNudgeState.CustodianEventNudge | null = null;
   eventNudgePending: eventNudgeState.CustodianEventNudge | null = null;
   eventNudgeClosed = false;
+  healthNudgeSource: eventNudgeState.CustodianHealthNudgeSource | null = null;
   channelOnboardingNudgeClosed = false;
   earlierBoundaryAfterId: number | null = null;
   abandonedTurnOutcomeUnknown = false;
@@ -115,11 +116,13 @@ export class CustodianSessionStore {
         // Reconnect hydration supersedes the queued availability recovery.
         recover();
         this.synchronizeClient();
+        this.synchronizeHealthNudge();
         this.emit();
       });
       // Agent receipts reconcile configured inference and conversation admission before another turn can start.
       this.agentCleanup = context.agents.subscribe(() => {
         this.synchronizeClient();
+        this.synchronizeHealthNudge();
         this.emit();
       });
       this.eventCleanup = context.gateway.subscribeEvents((event) => {
@@ -127,13 +130,27 @@ export class CustodianSessionStore {
           return;
         }
         if (event.event === "health") {
+          if (this.healthNudgeSource) {
+            this.healthNudgeSource.pending = false;
+          }
           this.eventNudge = eventNudgeState.classifyCustodianHealthNudge(event.payload);
+        } else if (event.event === "tick") {
+          this.synchronizeHealthNudge();
         }
         this.emit();
       });
     }
     this.synchronizeClient();
+    this.synchronizeHealthNudge();
     this.emit();
+  }
+
+  private synchronizeHealthNudge(): void {
+    eventNudgeState.synchronizeCustodianHealthNudge(
+      this,
+      () => this.sessionOwner.key(this.context?.gateway ?? null),
+      () => this.emit(),
+    );
   }
 
   get input(): string {
@@ -472,8 +489,10 @@ export class CustodianSessionStore {
     const snapshot = context.gateway.snapshot;
     const client = snapshot.phase === "connected" ? snapshot.client : null;
     const chatSupported =
-      client !== null && canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin");
-    const chatUnsupported = isGatewayMethodAdvertised(snapshot, "openclaw.chat") === false;
+      client !== null &&
+      canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin", {
+        requireAdvertisement: false,
+      });
     const ownershipKey = this.sessionOwner.key(context.gateway);
     this.autoSetup.synchronize(context, this.variant === "onboarding", ownershipKey);
     const configuredInferenceState = this.autoSetup.configuredInferenceState;
@@ -518,9 +537,7 @@ export class CustodianSessionStore {
       if (!chatSupported) {
         this.sessionStarted = false;
         this.abandonPendingUserTurn(pendingParams);
-        this.error = t(
-          chatUnsupported ? "custodian.unsupportedGateway" : "custodian.accessRequired",
-        );
+        this.error = t("custodian.accessRequired");
         return;
       }
       this.chatAvailable = true;
@@ -553,7 +570,7 @@ export class CustodianSessionStore {
       return;
     }
     if (!chatSupported) {
-      this.error = t(chatUnsupported ? "custodian.unsupportedGateway" : "custodian.accessRequired");
+      this.error = t("custodian.accessRequired");
       return;
     }
     if (configuredInferenceState === "unresolved") {
@@ -599,9 +616,6 @@ export class CustodianSessionStore {
     client: GatewayBrowserClient,
     epoch: number,
   ): Promise<boolean> {
-    if (!this.transcript.available) {
-      return false;
-    }
     const isCurrent = () => epoch === this.requestEpoch && client === this.activeClient;
     const transcript = await this.transcript.loadMessages(
       client,
@@ -647,7 +661,9 @@ export class CustodianSessionStore {
     const canRequest = () =>
       client === this.activeClient &&
       context.gateway.snapshot.client === client &&
-      canCallGatewayMethod(context.gateway.snapshot, "openclaw.chat", "operator.admin");
+      canCallGatewayMethod(context.gateway.snapshot, "openclaw.chat", "operator.admin", {
+        requireAdvertisement: false,
+      });
     if (!canRequest()) {
       return "rejected";
     }
@@ -689,10 +705,8 @@ export class CustodianSessionStore {
       this.inferenceState = "ready";
       this.wizardValue = result.step ? initialWizardValue(result.step) : undefined;
       const message = createCustodianReplyMessage(this.nextMessageId, result);
-      if (message) {
-        this.nextMessageId += 1;
-        this.messages = [...this.messages, message];
-      }
+      this.nextMessageId += 1;
+      this.messages = [...this.messages, message];
       if (result.handoff?.kind === "model-accounts") {
         this.exitSetup("profile");
       } else if (result.action === "open-agent") {

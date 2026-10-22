@@ -4,11 +4,13 @@ import {
   isMainSessionRestartRecoveryInputProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { normalizePersistedSteerTargetRunId } from "../../sessions/user-turn-transcript.metadata.js";
 import { getTranscriptMessageRole } from "../embedded-agent-runner/message-visibility.js";
 import { hasReplaySafeCodeModeCheckpointInCurrentTurn } from "./main-session-restart-recovery-resume-policy.js";
 
 type RecoverySource =
   | "completion"
+  | "cron"
   | "harness_completion"
   | "inter_session"
   | "internal_system"
@@ -23,11 +25,24 @@ export function selectMainSessionRecoveryCheckpoint(
   // continue the original turn; both facts come from one constant-memory snapshot.
   visit((message) => {
     if (getTranscriptMessageRole(message) === "user") {
-      const provenance = normalizeInputProvenance(asOptionalRecord(message)?.provenance);
+      const record = asOptionalRecord(message);
+      const provenance = normalizeInputProvenance(record?.provenance);
       if (!isMainSessionRestartRecoveryInputProvenance(provenance)) {
         replaySafe = false;
+        // Confirmed steering belongs to the running cron occurrence. It cannot
+        // turn that occurrence into a replayable operator turn after restart.
+        if (
+          source === "cron" &&
+          normalizePersistedSteerTargetRunId(
+            asOptionalRecord(record?.["__openclaw"])?.steerTargetRunId,
+          )
+        ) {
+          return;
+        }
         switch (provenance?.kind) {
           case "internal_system":
+            source = provenance.sourceTool?.toLowerCase() === "cron" ? "cron" : provenance.kind;
+            break;
           case "external_user":
             source = provenance.kind;
             break;

@@ -7,6 +7,7 @@ import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/them
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import {
   interruptedChatHistory,
   interruptedChatCommentary,
@@ -14,6 +15,7 @@ import {
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import * as artworkLoader from "../../plugins/icon-loader.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
+import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
@@ -123,8 +125,10 @@ describe("chat transcript rendering", () => {
             expect(image?.getAttribute("src")).toBe(avatar);
             expect(image?.getAttribute("alt")).toBe(props.assistantName);
             image?.dispatchEvent(new Event("load"));
+            flush();
             expect(slot?.classList.contains("is-fallback")).toBe(false);
             image?.dispatchEvent(new Event("error"));
+            flush();
             expect(slot?.classList.contains("is-fallback")).toBe(true);
             expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
           } else {
@@ -472,13 +476,21 @@ describe("chat transcript rendering", () => {
         },
         { role: "assistant", content: "Done.", timestamp: 3_000 },
       ];
-      const props = {
+      const props: ChatThreadProps = {
         ...threadProps("pane-browser-work", "agent:main:dashboard:browser", messages),
         latestBrowserTabs: active ? latestBrowserTabCards(messages, []) : undefined,
         showToolCalls: true,
       };
       const container = document.body.appendChild(document.createElement("div"));
       const transcript = createTestTranscript();
+      const capture = vi.fn(async () => {
+        throw new Error("Screenshot unavailable");
+      });
+      const context = createInitializationContext();
+      context.gateway.snapshot.client = createTestGatewayClient(capture);
+      context.gateway.snapshot.phase = "connected";
+      context.gateway.snapshot.hello = gatewayHelloForMethods(["browser.request"]);
+      props.applicationContext = context;
       const thread = createChatThreadHarness(container, transcript);
       onTestFinished(() => thread.unmount());
       thread.render(props);
@@ -486,8 +498,17 @@ describe("chat transcript rendering", () => {
       transcript.start();
       await flushDeferredRowPrune();
       expect(container.querySelector(".chat-work-group")).not.toBeNull();
-      expect(container.querySelectorAll("openclaw-browser-tab-card")).toHaveLength(1);
-      expect(container.querySelector("openclaw-browser-tab-card")?.latest).toBe(active);
+      expect(container.querySelectorAll<HTMLElement>("openclaw-browser-tab-card")).toHaveLength(1);
+      await vi.waitFor(() =>
+        expect(capture).toHaveBeenCalledExactlyOnceWith(
+          "browser.request",
+          expect.objectContaining({
+            method: "POST",
+            path: "/screenshot",
+            body: { targetId: "tab-1", type: "png" },
+          }),
+        ),
+      );
       transcript.dispose();
     },
   );

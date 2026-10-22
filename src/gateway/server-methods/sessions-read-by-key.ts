@@ -57,7 +57,12 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
           read,
           client,
           Date.now(),
-          createVisibleActiveSessionRunProjector(context, read.state.rowContext.projectedAgentRuns),
+          createVisibleActiveSessionRunProjector(
+            read.state.rowContext.projectedAgentRuns,
+            undefined,
+            context.resolveGatewayContext,
+            read.physicalPaths,
+          ),
         );
         const denied = presentation.authorizeDescription(query);
         if (denied) {

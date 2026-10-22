@@ -5,7 +5,9 @@ import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/bro
 import type { Page } from "playwright";
 import qrcode from "qrcode";
 import { beforeEach, expect, it } from "vitest";
+import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
@@ -536,7 +538,43 @@ suite.define(() => {
             setupResult(`setup-node-${viewport.width}`, "node", Date.now() + 60_000),
           );
           await pairFromSettings.click();
-          await dialog.waitFor();
+          try {
+            await dialog.waitFor();
+          } catch (reopenError) {
+            try {
+              const state = await evaluateControlUiContext(page, (context) => {
+                const overlay = context.overlays.snapshot;
+                const gatewaySnapshot = context.gateway.snapshot;
+                return {
+                  gatewayPhase: gatewaySnapshot.phase,
+                  admin: gatewaySnapshot.hello?.auth?.scopes?.includes("operator.admin") ?? false,
+                  pairingOpen: overlay.devicePairSetupOpen,
+                  pairingPhase: overlay.devicePairSetupLifecycle.phase,
+                  modalLayers: document.openClawModalLayers?.size ?? 0,
+                  hosts: Array.from(
+                    document.querySelectorAll<OpenClawModalDialog>("openclaw-modal-dialog"),
+                    (host) => ({
+                      open: host.open,
+                      connected: host.isConnected,
+                      dialogs: Array.from(host.querySelectorAll("dialog"), (native) => ({
+                        open: native.open,
+                        inert: native.inert,
+                        phase: native.dataset.phase,
+                        visible: native.getClientRects().length > 0,
+                      })),
+                    }),
+                  ),
+                };
+              });
+              console.warn(
+                "[mobile-pairing] reopen timeout",
+                JSON.stringify({ viewport, pageErrorCount: pageErrors.length, state }),
+              );
+            } catch {
+              console.warn("[mobile-pairing] reopen timeout diagnostics unavailable");
+            }
+            throw reopenError;
+          }
           await page.locator('input[name="device-pair-access"]').nth(2).check();
           await page.getByRole("button", { name: "Create setup code" }).click();
           await page.getByText(nodeCommand, { exact: true }).waitFor();

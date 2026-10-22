@@ -183,6 +183,73 @@ describe("cron ownership access matrix", () => {
   });
   afterEach(() => resetPluginRuntimeStateForTest());
 
+  it("filters operator commands and foreign streams from caller-scoped cron.list", async () => {
+    getRuntimeConfig.mockReturnValue({});
+    const owner = { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" };
+    const streamPolicy = {
+      version: 1 as const,
+      mode: "account" as const,
+      ownerSessionKey: owner.sessionKey,
+      ownerAccountId: owner.accountId,
+    };
+    const streams = [
+      { id: "operator-stream" },
+      { id: "trusted-stream", scheduledToolPolicy: { version: 1, mode: "trusted" } },
+      { id: "own-stream", owner, scheduledToolPolicy: streamPolicy },
+      {
+        id: "foreign-session-stream",
+        owner: { ...owner, sessionKey: "agent:ops:other" },
+        scheduledToolPolicy: { ...streamPolicy, ownerSessionKey: "agent:ops:other" },
+      },
+      {
+        id: "foreign-account-stream",
+        owner: { ...owner, accountId: "other" },
+        scheduledToolPolicy: { ...streamPolicy, ownerAccountId: "other" },
+      },
+    ] satisfies Partial<CronJob>[];
+    const context = createCronTestContext(
+      [
+        createCronJob({
+          id: "command-job",
+          agentId: "ops",
+          payload: {
+            kind: "command",
+            argv: ["deploy"],
+            env: { MARKER_ENV: "fixture-marker" },
+          },
+        }),
+        createCronJob({ id: "agent-job", agentId: "ops", name: "agent job" }),
+        ...streams.map((stream) =>
+          createCronJob({
+            agentId: "ops",
+            schedule: { kind: "stream", command: ["fixture-private-watcher"] },
+            ...stream,
+          }),
+        ),
+      ],
+      getRuntimeConfig,
+    );
+
+    const { respond } = await invokeCron(
+      "cron.list",
+      { includeDisabled: true, compact: true },
+      { context, client: createCronCallerClient("ops") },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        total: 2,
+        jobs: [
+          expect.objectContaining({ id: "agent-job" }),
+          expect.objectContaining({ id: "own-stream" }),
+        ],
+      }),
+      undefined,
+    );
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("fixture-marker");
+  });
+
   // Every ownership shape x caller x tool-runtime edit, through the Gateway handlers and the SQLite service.
   it("allows only the recorded owner or live management to change prompt or tools", async () => {
     const violations: string[] = [];

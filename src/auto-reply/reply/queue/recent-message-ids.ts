@@ -1,40 +1,45 @@
-import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
-import type { TurnAdoptionLifecycle } from "../../get-reply-options.types.js";
-
-const RECENT_QUEUE_MESSAGE_ID_TTL_MS = 5 * 60 * 1000;
-const RECENT_QUEUE_MESSAGE_ID_MAX_SIZE = 10_000;
-
-/**
- * Keep queued message-id dedupe shared across bundled chunks so redeliveries
- * are rejected no matter which chunk receives the enqueue call.
- */
-const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(
-  Symbol.for("openclaw.recentQueueMessageIdOwners"),
-  {
-    ttlMs: RECENT_QUEUE_MESSAGE_ID_TTL_MS,
-    maxSize: RECENT_QUEUE_MESSAGE_ID_MAX_SIZE,
-  },
-);
-
-export function peekRecentQueueMessageId(key: string, now = Date.now()): boolean {
-  return RECENT_QUEUE_MESSAGE_IDS.peek(key, now);
-}
-
-export function recordRecentQueueMessageId(
-  run: { turnAdoptionLifecycle?: TurnAdoptionLifecycle },
+import type { SessionControllerMailbox } from "../../../sessions/session-controller.mailbox.js";
+import type { FollowupRun } from "./types.js";
+const TTL = 5 * 60 * 1000;
+const MAX = 10_000;
+export function peekRecentQueueMessageId(
   key: string,
+  mailbox: SessionControllerMailbox | undefined,
   now = Date.now(),
-): void {
-  const ownerToken = {};
-  RECENT_QUEUE_MESSAGE_IDS.delete(key);
-  RECENT_QUEUE_MESSAGE_IDS.check(key, now, ownerToken);
+): boolean {
+  const record = mailbox?.recentSources.get(key);
+  if (!record) {
+    return false;
+  }
+  if (record.expires > now) {
+    return true;
+  }
+  mailbox?.recentSources.delete(key);
+  return false;
+}
+export function recordRecentQueueMessageId(run: FollowupRun, key: string, now = Date.now()): void {
+  const input = run.controllerInput;
+  if (!input) {
+    throw new Error("Dedupe source was not submitted to its mailbox");
+  }
+  const mailbox = input.mailbox;
+  for (const [alias, record] of mailbox.recentSources) {
+    if (record.expires <= now) {
+      mailbox.recentSources.delete(alias);
+    }
+  }
+  if (mailbox.recentSources.size >= MAX) {
+    mailbox.recentSources.delete(mailbox.recentSources.keys().next().value!);
+  }
+  mailbox.recentSources.set(key, { input, expires: now + TTL });
   const lifecycle = run.turnAdoptionLifecycle;
   if (lifecycle) {
     const onAbandoned = lifecycle.onAbandoned;
     lifecycle.onAbandoned = () => {
-      // Lifecycle callbacks survive summary cloning. Free only this entry before retry.
-      RECENT_QUEUE_MESSAGE_IDS.delete(key, ownerToken);
-      onAbandoned?.();
+      if (mailbox.recentSources.get(key)?.input === input) {
+        mailbox.recentSources.delete(key);
+      }
+      return onAbandoned?.();
     };
   }
 }

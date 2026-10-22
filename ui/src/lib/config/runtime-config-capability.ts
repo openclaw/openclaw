@@ -2,7 +2,7 @@ import { registerListener } from "../../../../src/shared/listeners.js";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../gateway-methods.ts";
+import { canCallGatewayMethod } from "../gateway-methods.ts";
 import { showToast } from "../toast.ts";
 import { createAppliedConfigRefreshOwner } from "./applied-refresh.ts";
 import { clearConfigDraftTracking } from "./config-draft-model.ts";
@@ -18,6 +18,7 @@ import {
   agentConfigEntry,
   clearConfigRequestVersions,
   createInitialConfigState,
+  currentConfigConnectionEpoch,
   type RuntimeConfigGateway,
   type RuntimeConfigState,
 } from "./config-state-model.ts";
@@ -67,6 +68,7 @@ export function createRuntimeConfigCapability(
       listener(state);
     }
   };
+  // Bootstrap changes update the capability's fallback config before views read it.
   const stopBootstrap = bootstrap?.subscribe(publish);
   const run = async <T>(task: () => Promise<T>, loadKey?: "config" | "schema"): Promise<T> => {
     let result: Promise<T> | undefined;
@@ -116,6 +118,8 @@ export function createRuntimeConfigCapability(
     beforeApplySnapshot?: () => void,
     preservePendingChanges = false,
   ) => {
+    const epoch = currentConfigConnectionEpoch(state);
+    const pendingSchema = loads.get("schema");
     const config = run(
       () =>
         loadConfig(state, {
@@ -125,8 +129,15 @@ export function createRuntimeConfigCapability(
         }),
       "config",
     );
-    if (state.configSchemaVersion !== null && canLoadConfigSchema()) {
-      void run(() => loadConfigSchema(state), "schema");
+    if ((state.configSchemaVersion !== null || pendingSchema) && canLoadConfigSchema()) {
+      // Config success clears lastError; load the schema afterward to preserve its failures.
+      void config.then(async () => {
+        // A plugin change during a schema read needs one catch-up after that read.
+        await pendingSchema;
+        if (currentConfigConnectionEpoch(state) === epoch) {
+          await loadOnce("schema", () => loadConfigSchema(state));
+        }
+      });
     }
     return config;
   };
@@ -155,15 +166,10 @@ export function createRuntimeConfigCapability(
     }
     appliedRefresh.reconcile();
   };
-  // Schema reads fail open like operator-access: only a definitive denial
-  // (method advertised absent, or advertised scopes without read) skips the
-  // load, so legacy scope-less gateways keep schema-driven settings pages.
+  // Schema reads use the same read-access policy as the settings pages.
   const canLoadConfigSchema = () => {
     const snapshot = gateway.snapshot;
     if (!snapshot.client || snapshot.phase !== "connected") {
-      return false;
-    }
-    if (isGatewayMethodAdvertised(snapshot, "config.schema") === false) {
       return false;
     }
     return hasOperatorReadAccess(snapshot.hello?.auth ?? null);
@@ -199,7 +205,7 @@ export function createRuntimeConfigCapability(
         appliedRefresh.reconcile();
       }
     },
-    refreshSchema: () => run(() => loadConfigSchema(state), "schema"),
+    refreshSchema: () => loadOnce("schema", () => loadConfigSchema(state)),
     patchForm: writes.patchForm,
     removeFormValue: writes.removeFormValue,
     setRaw: writes.setRaw,

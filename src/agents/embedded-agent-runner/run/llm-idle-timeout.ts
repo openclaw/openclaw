@@ -256,13 +256,17 @@ export function streamWithIdleTimeout(
       reject: (error: Error) => void,
       budget = timeoutMs,
       reason = "no response from model",
+      name = "LlmIdleTimeoutError",
     ) => {
       const timer = setTimeout(() => {
         if (requestDeadline?.reject === reject) {
           requestTimedOut = true;
         }
         clearRequestDeadline();
-        const error = new Error(`LLM idle timeout (${Math.floor(budget / 1000)}s): ${reason}`);
+        const error = Object.assign(
+          new Error(`LLM idle timeout (${Math.floor(budget / 1000)}s): ${reason}`),
+          { name },
+        );
         streamAbortController.abort(error);
         onIdleTimeout?.(error);
         reject(error);
@@ -408,6 +412,7 @@ export function streamWithIdleTimeout(
               rejectTimeout,
               progressTimeoutMs,
               "no model progress",
+              "LlmNoProgressError",
             );
           }
         };

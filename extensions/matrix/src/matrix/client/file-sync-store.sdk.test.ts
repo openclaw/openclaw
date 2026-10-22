@@ -1,15 +1,13 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { ClientEvent, createClient, type ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
 import { RustCrypto } from "matrix-js-sdk/lib/rust-crypto/rust-crypto.js";
 import { SyncState } from "matrix-js-sdk/lib/sync.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installMatrixTestRuntime } from "../../test-runtime.js";
+import { describe, expect, it, vi } from "vitest";
+import { MatrixClient } from "../sdk.js";
 import { SqliteBackedMatrixSyncStore } from "./file-sync-store.js";
+import { matrixSyncResponse, useSyncStoreFixture } from "./sync-store.test-support.js";
 
 const userId = "@recipient:example.org";
 const roomId = "!verification:example.org";
@@ -17,78 +15,37 @@ const cachedEventId = "$completed-verification";
 const liveEventId = "$fresh-verification";
 
 function verificationSync(nextBatch: string, eventId: string): ISyncResponse {
-  return {
-    next_batch: nextBatch,
-    rooms: {
-      invite: {},
-      leave: {},
-      knock: {},
-      join: {
-        [roomId]: {
-          summary: { "m.heroes": [] },
-          state: { events: [] },
-          timeline: {
-            prev_batch: "pagination-cursor",
-            events: [
-              {
-                event_id: eventId,
-                sender: "@sender:example.org",
-                origin_server_ts: 1,
-                type: "m.room.message",
-                content: {
-                  msgtype: "m.key.verification.request",
-                  body: "Verification request",
-                  to: userId,
-                  from_device: "SENDER",
-                  methods: ["m.sas.v1"],
-                },
-              },
-            ],
-          },
-          ephemeral: { events: [] },
-          account_data: { events: [] },
-          unread_notifications: {},
-        },
-      },
+  const event = {
+    event_id: eventId,
+    sender: "@sender:example.org",
+    origin_server_ts: 1,
+    type: "m.room.message",
+    content: {
+      msgtype: "m.key.verification.request",
+      body: "Verification request",
+      to: userId,
+      from_device: "SENDER",
+      methods: ["m.sas.v1"],
     },
-    account_data: { events: [] },
   };
+  return matrixSyncResponse(nextBatch, roomId, event, "pagination-cursor");
 }
 
 describe("Matrix SDK sync-cache verification routing", () => {
-  let storageRoot: string;
-
-  beforeEach(() => {
-    resetPluginStateStoreForTests();
-    installMatrixTestRuntime();
-    storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sync-sdk-"));
-    // SDK HTTP deadlines leave timers after completed requests. Advance them only
-    // after the real sync loop stops, without delaying this contract test by 80s.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  });
-
-  afterEach(async () => {
-    await vi.runOnlyPendingTimersAsync();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    fs.rmSync(storageRoot, { recursive: true, force: true });
-  });
+  const storage = useSyncStoreFixture("openclaw-matrix-sync-sdk-", true);
 
   it.each([false, true])(
     "routes only fresh verification events to crypto (saved sync: %s)",
     async (hasCache) => {
       if (hasCache) {
-        const seed = await SqliteBackedMatrixSyncStore.create(storageRoot);
+        const seed = await SqliteBackedMatrixSyncStore.create(storage.root);
         await seed.setSyncData(verificationSync("saved-cursor", cachedEventId));
         seed.markCleanShutdown();
         await seed.flush();
         await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
       }
-      const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
+      const store = await SqliteBackedMatrixSyncStore.create(storage.root);
       expect(store.hasSavedSyncFromCleanShutdown()).toBe(hasCache);
       await expect(store.getSavedSyncToken()).resolves.toBe(hasCache ? "saved-cursor" : null);
 
@@ -98,7 +55,6 @@ describe("Matrix SDK sync-cache verification routing", () => {
       }
       const stopped = createDeferred<void>();
       const failed = createDeferred<never>();
-      const completed = Promise.race([stopped.promise, failed.promise]);
       const events: Array<string | undefined> = [];
       const syncRequests: Array<string | null> = [];
       const unexpectedRequests: string[] = [];
@@ -109,31 +65,25 @@ describe("Matrix SDK sync-cache verification routing", () => {
         if (endpoint === "/.well-known/matrix/client") {
           return Response.json({}, { status: 404 });
         }
-        if (endpoint.endsWith("/versions")) {
-          return Response.json({ versions: ["v1.11"], unstable_features: {} });
-        }
-        if (endpoint.endsWith("/capabilities")) {
-          return Response.json({ capabilities: {} });
+        const fixtures: Record<string, unknown> = {
+          "/versions": { versions: ["v1.11"], unstable_features: {} },
+          "/capabilities": { capabilities: {} },
+          "/pushrules/": {
+            global: { override: [], content: [], room: [], sender: [], underride: [] },
+          },
+          "/filter": { filter_id: "fixture-filter" },
+          "/keys/upload": { one_time_key_counts: { signed_curve25519: 100 } },
+          "/keys/query": { device_keys: {}, failures: {} },
+        };
+        const fixture = Object.entries(fixtures).find(([suffix]) => endpoint.endsWith(suffix));
+        if (fixture) {
+          return Response.json(fixture[1]);
         }
         if (endpoint.endsWith("/rtc/transports") || endpoint.endsWith("/room_keys/version")) {
           return Response.json(
             { errcode: "M_NOT_FOUND", error: "Not configured" },
             { status: 404 },
           );
-        }
-        if (endpoint.endsWith("/pushrules/")) {
-          return Response.json({
-            global: { override: [], content: [], room: [], sender: [], underride: [] },
-          });
-        }
-        if (endpoint.endsWith("/filter")) {
-          return Response.json({ filter_id: "fixture-filter" });
-        }
-        if (endpoint.endsWith("/keys/upload")) {
-          return Response.json({ one_time_key_counts: { signed_curve25519: 100 } });
-        }
-        if (endpoint.endsWith("/keys/query")) {
-          return Response.json({ device_keys: {}, failures: {} });
         }
         if (endpoint.endsWith("/sync")) {
           syncRequests.push(url.searchParams.get("since"));
@@ -178,7 +128,7 @@ describe("Matrix SDK sync-cache verification routing", () => {
         await client.initRustCrypto({ useIndexedDB: false });
         await client.startClient();
         started = true;
-        await completed;
+        await Promise.race([stopped.promise, failed.promise]);
         expect(unexpectedRequests).toEqual([]);
         expect(syncRequests).toEqual([hasCache ? "saved-cursor" : null]);
         expect(events).toEqual(hasCache ? [cachedEventId, liveEventId] : [liveEventId]);
@@ -200,4 +150,111 @@ describe("Matrix SDK sync-cache verification routing", () => {
       }
     },
   );
+});
+
+describe("Matrix sync ingress admission", () => {
+  const storage = useSyncStoreFixture("openclaw-matrix-sync-ingress-");
+
+  it("holds the cursor until admission and reports failure without losing the previous cursor", async () => {
+    const store = await SqliteBackedMatrixSyncStore.create(storage.root);
+    const client = new MatrixClient("https://example.org", "fixture-token", { syncStore: store });
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const failure = new Error("ingress storage unavailable");
+    const errors: Error[] = [];
+    const savedSyncContexts: boolean[] = [];
+    client.on("sync.unexpected_error", (error) => errors.push(error));
+    const dispose = await client.bindSyncIngress(async (sync, { hasSavedSync }) => {
+      savedSyncContexts.push(hasSavedSync);
+      if (sync.next_batch === "rejected-cursor") {
+        throw failure;
+      }
+      entered.resolve();
+      await release.promise;
+    });
+    let pending: Promise<void> | undefined;
+    try {
+      // Classic sync assigns its speculative token before invoking setSyncData.
+      store.setSyncToken("accepted-cursor");
+      pending = store.setSyncData(verificationSync("accepted-cursor", liveEventId));
+      await entered.promise;
+      await store.flush();
+      expect(store.getSyncToken()).toBeNull();
+      expect((await SqliteBackedMatrixSyncStore.create(storage.root)).hasSavedSync()).toBe(false);
+
+      release.resolve();
+      await pending;
+      await store.flush();
+      expect(store.getSyncToken()).toBe("accepted-cursor");
+      await expect(
+        (await SqliteBackedMatrixSyncStore.create(storage.root)).getSavedSyncToken(),
+      ).resolves.toBe("accepted-cursor");
+
+      store.setSyncToken("rejected-cursor");
+      await expect(
+        store.setSyncData(verificationSync("rejected-cursor", "$rejected")),
+      ).rejects.toBe(failure);
+      await store.flush();
+      expect(store.getSyncToken()).toBe("accepted-cursor");
+      await expect(
+        (await SqliteBackedMatrixSyncStore.create(storage.root)).getSavedSyncToken(),
+      ).resolves.toBe("accepted-cursor");
+      expect(savedSyncContexts).toEqual([false, false]);
+      expect(errors).toEqual([failure]);
+    } finally {
+      release.resolve();
+      await pending;
+      dispose();
+      await client.stopWithoutPersist();
+    }
+  });
+
+  it("joins an admitted write during shutdown without publishing its frozen cursor", async () => {
+    const seed = await SqliteBackedMatrixSyncStore.create(storage.root);
+    await seed.setSyncData(verificationSync("previous-cursor", cachedEventId));
+    seed.setSyncToken("previous-cursor");
+    await seed.flush();
+    const store = await SqliteBackedMatrixSyncStore.create(storage.root);
+    const client = new MatrixClient("https://example.org", "fixture-token", { syncStore: store });
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const admittedBatches: string[] = [];
+    const dispose = await client.bindSyncIngress(async (sync, { hasSavedSync }) => {
+      admittedBatches.push(sync.next_batch);
+      expect(hasSavedSync).toBe(true);
+      if (sync.next_batch === "previous-cursor") {
+        return;
+      }
+      entered.resolve();
+      await release.promise;
+    });
+    let pending: Promise<void> | undefined;
+    let freeze: Promise<void> | undefined;
+    try {
+      store.setSyncToken("shutdown-cursor");
+      pending = store.setSyncData(verificationSync("shutdown-cursor", liveEventId));
+      await entered.promise;
+      let frozen = false;
+      freeze = store.freezeSyncCursorPersistence().then(() => {
+        frozen = true;
+      });
+      await Promise.resolve();
+      expect(frozen).toBe(false);
+
+      release.resolve();
+      await Promise.all([pending, freeze]);
+      store.markCleanShutdown();
+      await store.flush();
+      expect(store.getSyncToken()).toBe("previous-cursor");
+      await expect(
+        (await SqliteBackedMatrixSyncStore.create(storage.root)).getSavedSyncToken(),
+      ).resolves.toBe("previous-cursor");
+      expect(admittedBatches).toEqual(["previous-cursor", "shutdown-cursor"]);
+    } finally {
+      release.resolve();
+      await Promise.all([pending, freeze]);
+      dispose();
+      await client.stopWithoutPersist();
+    }
+  });
 });

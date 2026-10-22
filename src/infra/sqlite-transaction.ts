@@ -620,7 +620,10 @@ export function runSqliteSingleStatementSync<T>(
   }
   assertTransactionUsable(db);
   return withSqlitePostCommitPublications(db, () => {
-    if (db.isTransaction) {
+    const location = writeAdmissionServices.size > 0 ? writeAdmissionLocation(db) : null;
+    // A worker can hold the writer lock while awaiting this host's commit grant.
+    // Reserve through the serviceable BEGIN owner before entering the callback.
+    if (db.isTransaction || (location !== null && writeAdmissionServices.has(location))) {
       return runSqliteTransactionSync(db, statement, "immediate");
     }
     const result = runSqliteReadOperationSync(db, statement);

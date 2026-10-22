@@ -68,7 +68,7 @@ function SearchConfigField(
 export function SearchSetup(
   props: SearchSettingsProps & {
     context: ApplicationContext;
-    gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected">;
+    gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected" | "client">;
     provider: SearchProvider;
   },
 ) {

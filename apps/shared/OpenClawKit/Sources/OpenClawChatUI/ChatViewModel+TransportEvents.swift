@@ -51,9 +51,10 @@ extension OpenClawChatViewModel {
             self.refreshSourceContext()
             self.refreshAgentsIfRequested()
             let session = self.currentSessionSnapshot()
-            let models = Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
+            let models = evt.refreshesModelCatalog(forAgentID: session.deliveryAgentID)
+                ? Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) } : nil
             let swarm = Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
-            return Task { _ = await (models.value, swarm.value) }
+            return Task { _ = await (models?.value, swarm.value) }
         case let .sessionsChanged(change):
             return self.handleSessionsChangedEvent(change)
         case let .sessionObserver(digest):
@@ -524,6 +525,9 @@ extension OpenClawChatViewModel {
                // A retry without its sequence cannot be ordered against what is already shown.
                chat.retry == nil || chat.seq != nil
             {
+                if matchesCurrentSession, self.pendingRuns.isEmpty {
+                    self.adoptRun(runId: runID, bufferedText: "")
+                }
                 self.reconcileRunStartup(ChatRunStartup(runID: runID, state: state, seq: chat.seq))
             }
             return nil

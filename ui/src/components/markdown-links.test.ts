@@ -1,11 +1,17 @@
-// Control UI tests cover markdown link rendering: autolinking, file links, and link marks.
 import { describe, expect, it } from "vitest";
+import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
+import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
 
-function htmlFragment(html: string): HTMLElement {
-  const container = document.createElement("div");
-  container.innerHTML = html;
-  return container;
+const repoUrl = "https://github.com/openclaw/openclaw";
+const itemLabel = "openclaw/openclaw#3434";
+const render = (input: string, options?: MarkdownRenderOptions) =>
+  htmlFragment(toSanitizedMarkdownHtml(input, options));
+
+function expectWwwLink(input: string, label: string, prefix = "", suffix = "", path = label) {
+  expect(toSanitizedMarkdownHtml(input)).toBe(
+    `<p>${prefix}<a href="http://${path}" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">${label}</a>${suffix}</p>\n`,
+  );
 }
 
 describe("toSanitizedMarkdownHtml links", () => {
@@ -44,64 +50,39 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it("strips trailing punctuation from links", () => {
-      const html1 = toSanitizedMarkdownHtml("Check www.example.com/help.");
-      expect(html1).toBe(
-        '<p>Check <a href="http://www.example.com/help" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/help</a>.</p>\n',
-      );
-
-      const html2 = toSanitizedMarkdownHtml("See www.example.com!");
-      expect(html2).toBe(
-        '<p>See <a href="http://www.example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com</a>!</p>\n',
-      );
+      expectWwwLink("Check www.example.com/help.", "www.example.com/help", "Check ", ".");
+      expectWwwLink("See www.example.com!", "www.example.com", "See ", "!");
     });
 
     it("strips entity-like suffixes per GFM spec", () => {
-      // &hl; looks like an entity reference, so strip it
-      const html1 = toSanitizedMarkdownHtml("www.google.com/search?q=commonmark&hl;");
-      expect(html1).toBe(
-        '<p><a href="http://www.google.com/search?q=commonmark" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.google.com/search?q=commonmark</a>&amp;hl;</p>\n',
+      expectWwwLink(
+        "www.google.com/search?q=commonmark&hl;",
+        "www.google.com/search?q=commonmark",
+        "",
+        "&amp;hl;",
       );
-
-      // &amp; is also entity-like
-      const html2 = toSanitizedMarkdownHtml("www.example.com/path&amp;");
-      expect(html2).toBe(
-        '<p><a href="http://www.example.com/path" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/path</a>&amp;</p>\n',
-      );
+      expectWwwLink("www.example.com/path&amp;", "www.example.com/path", "", "&amp;");
     });
 
     it("handles quotes with balance checking", () => {
-      // Quoted URL — trailing unbalanced " is stripped
-      const html1 = toSanitizedMarkdownHtml('"www.example.com"');
-      expect(html1).toBe(
-        '<p>"<a href="http://www.example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com</a>"</p>\n',
+      expectWwwLink('"www.example.com"', "www.example.com", '"', '"');
+      expectWwwLink(
+        'www.example.com/path"with"quotes',
+        'www.example.com/path"with"quotes',
+        "",
+        "",
+        "www.example.com/path%22with%22quotes",
       );
-
-      // Balanced quotes inside path — preserved
-      const html2 = toSanitizedMarkdownHtml('www.example.com/path"with"quotes');
-      expect(html2).toBe(
-        '<p><a href="http://www.example.com/path%22with%22quotes" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/path"with"quotes</a></p>\n',
-      );
-
-      // Trailing unbalanced " — stripped
-      const html3 = toSanitizedMarkdownHtml('www.example.com/path"');
-      expect(html3).toBe(
-        '<p><a href="http://www.example.com/path" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/path</a>"</p>\n',
-      );
+      expectWwwLink('www.example.com/path"', "www.example.com/path", "", '"');
     });
 
     it("does NOT link www. domains starting with non-ASCII", () => {
-      const html1 = toSanitizedMarkdownHtml("Visit www.ünich.de");
-      expect(html1).toBe("<p>Visit www.ünich.de</p>\n");
-
-      const html2 = toSanitizedMarkdownHtml("Visit www.ñoño.com");
-      expect(html2).toBe("<p>Visit www.ñoño.com</p>\n");
+      expect(toSanitizedMarkdownHtml("Visit www.ünich.de")).toBe("<p>Visit www.ünich.de</p>\n");
+      expect(toSanitizedMarkdownHtml("Visit www.ñoño.com")).toBe("<p>Visit www.ñoño.com</p>\n");
     });
 
     it("handles balanced parentheses in URLs", () => {
-      const html = toSanitizedMarkdownHtml("(see www.example.com/foo(bar))");
-      expect(html).toBe(
-        '<p>(see <a href="http://www.example.com/foo(bar)" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/foo(bar)</a>)</p>\n',
-      );
+      expectWwwLink("(see www.example.com/foo(bar))", "www.example.com/foo(bar)", "(see ", ")");
     });
 
     it("stops at < character", () => {
@@ -190,8 +171,6 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it("preserves mailto: scheme when trimming CJK from email links", () => {
-      // Email followed by space+CJK — linkify recognizes the email,
-      // then CJK trim should preserve the mailto: prefix.
       const html = toSanitizedMarkdownHtml("Contact test@example.com 中文说明");
       expect(html).toBe(
         '<p>Contact <a href="mailto:test@example.com" rel="noreferrer noopener" target="_blank">test@example.com</a> 中文说明</p>\n',
@@ -207,11 +186,9 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it("emits an inert hostname-only placeholder for enabled web links", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("[Docs](https://docs.example.com/a?secret=1#fragment)", {
-          linkFavicons: true,
-        }),
-      );
+      const fragment = render("[Docs](https://docs.example.com/a?secret=1#fragment)", {
+        linkFavicons: true,
+      });
 
       const image = fragment.querySelector<HTMLImageElement>("img.markdown-link-favicon");
       expect(image?.dataset.linkFaviconHost).toBe("docs.example.com");
@@ -220,11 +197,9 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it("keeps the bundled GitHub mark and skips image-only links", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(
-          "[OpenClaw](https://github.com/openclaw/openclaw) [![badge](data:image/png;base64,iVBORw0KGgo=)](https://example.com)",
-          { linkFavicons: true },
-        ),
+      const fragment = render(
+        "[OpenClaw](https://github.com/openclaw/openclaw) [![badge](data:image/png;base64,iVBORw0KGgo=)](https://example.com)",
+        { linkFavicons: true },
       );
 
       expect(fragment.querySelector("a.markdown-github-link")).not.toBeNull();
@@ -312,9 +287,7 @@ describe("toSanitizedMarkdownHtml links", () => {
       const previous = location.href;
       history.replaceState(null, "", "/chat/main/d0effac9");
       try {
-        const fragment = htmlFragment(
-          toSanitizedMarkdownHtml(`[${label}](${href})`, { sessionLinks: true, fileLinks: true }),
-        );
+        const fragment = render(`[${label}](${href})`, { sessionLinks: true, fileLinks: true });
         const link = fragment.querySelector<HTMLAnchorElement>("a")!;
         expect(link.classList.contains("markdown-session-link")).toBe(kind === "session");
         expect(link.hasAttribute("data-session-href")).toBe(kind === "session");
@@ -343,9 +316,7 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it("keeps punctuation outside the link and rejects embedded word matches", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(`(${sessionKey}), x${sessionKey}`, { sessionLinks: true }),
-      );
+      const fragment = render(`(${sessionKey}), x${sessionKey}`, { sessionLinks: true });
       const links = fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-session-link");
       expect(links).toHaveLength(1);
       expect(links[0]?.textContent).toBe(sessionKey);
@@ -385,24 +356,9 @@ describe("toSanitizedMarkdownHtml links", () => {
 
   describe("github link marks", () => {
     it.each([
-      [
-        "bare pull request",
-        "https://github.com/openclaw/openclaw/pull/3434",
-        "openclaw/openclaw#3434",
-        "pull",
-      ],
-      [
-        "bare issue",
-        "https://github.com/openclaw/openclaw/issues/3435",
-        "openclaw/openclaw#3435",
-        "issue",
-      ],
-      [
-        "autolink",
-        "<https://github.com/openclaw/openclaw/pull/3434>",
-        "openclaw/openclaw#3434",
-        "pull",
-      ],
+      ["bare pull request", `${repoUrl}/pull/3434`, itemLabel, "pull"],
+      ["bare issue", `${repoUrl}/issues/3435`, "openclaw/openclaw#3435", "issue"],
+      ["autolink", `<${repoUrl}/pull/3434>`, itemLabel, "pull"],
       [
         "bare www item",
         "https://www.github.com/openclaw/openclaw/issues/3435",
@@ -410,25 +366,20 @@ describe("toSanitizedMarkdownHtml links", () => {
         "issue",
         true,
       ],
-      ["repository", "https://github.com/openclaw/openclaw", "openclaw/openclaw", undefined],
+      ["repository", repoUrl, "openclaw/openclaw", undefined],
       [
         "other path",
-        "https://github.com/openclaw/openclaw/actions/runs/123",
+        `${repoUrl}/actions/runs/123`,
         "github.com/openclaw/openclaw/actions/runs/123",
         undefined,
       ],
       [
         "repository directory",
-        "https://github.com/openclaw/openclaw/tree/main/.agents/skills/test-audit",
+        `${repoUrl}/tree/main/.agents/skills/test-audit`,
         "openclaw/openclaw/…/test-audit",
         undefined,
       ],
-      [
-        "branch root",
-        "https://github.com/openclaw/openclaw/tree/main",
-        "github.com/openclaw/openclaw/tree/main",
-        undefined,
-      ],
+      ["branch root", `${repoUrl}/tree/main`, "github.com/openclaw/openclaw/tree/main", undefined],
       [
         "slash-containing branch root",
         "https://github.com/acme/project/tree/feature/link-labels",
@@ -437,26 +388,16 @@ describe("toSanitizedMarkdownHtml links", () => {
       ],
       [
         "labeled directory",
-        "[Audit skill](https://github.com/openclaw/openclaw/tree/main/.agents/skills/test-audit)",
+        `[Audit skill](${repoUrl}/tree/main/.agents/skills/test-audit)`,
         "Audit skill",
         undefined,
       ],
-      [
-        "pull shorthand",
-        "[#3434](https://github.com/openclaw/openclaw/pull/3434)",
-        "openclaw/openclaw#3434",
-        "pull",
-      ],
-      [
-        "repository shorthand",
-        "[openclaw/openclaw#3434](https://github.com/openclaw/openclaw/pull/3434)",
-        "openclaw/openclaw#3434",
-        "pull",
-      ],
+      ["pull shorthand", `[#3434](${repoUrl}/pull/3434)`, itemLabel, "pull"],
+      ["repository shorthand", `[${itemLabel}](${repoUrl}/pull/3434)`, itemLabel, "pull"],
       [
         "shorthand with authored tooltip",
-        '[#3434](https://github.com/openclaw/openclaw/pull/3434 "A pull request")',
-        "openclaw/openclaw#3434",
+        `[#3434](${repoUrl}/pull/3434 "A pull request")`,
+        itemLabel,
         "pull",
       ],
       [
@@ -502,7 +443,7 @@ describe("toSanitizedMarkdownHtml links", () => {
         undefined,
       ],
     ])("marks %s", (_kind, input, expectedText, expectedKind, keepsTitle = false) => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+      const fragment = render(input);
       const link = fragment.querySelector<HTMLAnchorElement>("a");
       expect(link?.classList.contains("markdown-github-link")).toBe(true);
       expect(link?.textContent).toBe(expectedText);
@@ -516,10 +457,8 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it("keeps the full repository in long generated item chips", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(
-          "https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/3434",
-        ),
+      const fragment = render(
+        "https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/3434",
       );
       const link = fragment.querySelector<HTMLAnchorElement>("a");
       expect(link?.textContent).toBe(
@@ -557,17 +496,14 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it.each([
-      ["a files-tab path", "https://github.com/openclaw/openclaw/pull/3434/files"],
-      [
-        "an issue comment fragment",
-        "https://github.com/openclaw/openclaw/issues/3434#issuecomment-1",
-      ],
-      ["a review comment query", "https://github.com/openclaw/openclaw/pull/3434?tab=files"],
-      ["a diff anchor", "https://github.com/openclaw/openclaw/pull/3434/files#diff-abc123"],
+      ["a files-tab path", `${repoUrl}/pull/3434/files`],
+      ["an issue comment fragment", `${repoUrl}/issues/3434#issuecomment-1`],
+      ["a review comment query", `${repoUrl}/pull/3434?tab=files`],
+      ["a diff anchor", `${repoUrl}/pull/3434/files#diff-abc123`],
     ])(
       "keeps the specific destination in the chip href without a native tooltip for %s",
       (_kind, input) => {
-        const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+        const fragment = render(input);
         const link = fragment.querySelector<HTMLAnchorElement>("a");
         expect(link?.classList.contains("markdown-github-link")).toBe(true);
         expect(link?.classList.contains("markdown-github-item")).toBe(true);
@@ -587,7 +523,7 @@ describe("toSanitizedMarkdownHtml links", () => {
       ["lookalike item", "https://github.com.example.com/o/r/pull/3434"],
       ["non-github shorthand", "[#3434](https://example.com/o/r/pull/3434)"],
     ])("leaves %s unmarked", (_kind, input) => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+      const fragment = render(input);
       expect(fragment.querySelector("a.markdown-github-link")).toBeNull();
       expect(fragment.querySelector("a.markdown-github-item, a[data-github-kind]")).toBeNull();
     });
@@ -603,17 +539,12 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it.each([
-      [
-        "pull request",
-        "`https://github.com/openclaw/openclaw/pull/141131`",
-        "openclaw/openclaw#141131",
-        "pull",
-      ],
+      ["pull request", `\`${repoUrl}/pull/141131\``, "openclaw/openclaw#141131", "pull"],
       ["issue", "` https://github.com/o/r/issues/3434 `", "o/r#3434", "issue"],
-      ["repository", "`https://github.com/openclaw/openclaw`", "openclaw/openclaw", undefined],
+      ["repository", `\`${repoUrl}\``, "openclaw/openclaw", undefined],
     ])("promotes a code span holding only a github %s url", (_kind, input, label, kind) => {
       const href = input.replaceAll("`", "").trim();
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(`See ${input} today`));
+      const fragment = render(`See ${input} today`);
       expect(fragment.querySelector("code")).toBeNull();
       const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-github-link");
       expect(link?.textContent).toBe(label);

@@ -1,4 +1,5 @@
 import type { Message } from "grammy/types";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStoredModelOverrideAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -10,7 +11,6 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type {

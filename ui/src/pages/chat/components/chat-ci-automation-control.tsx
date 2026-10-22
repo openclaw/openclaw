@@ -1,6 +1,15 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
-import { createEffect, createMemo, createStore } from "solid-js";
+import {
+  Errored,
+  Loading,
+  createMemo,
+  createSignal,
+  createStore,
+  isPending,
+  latest,
+} from "solid-js";
 import type { CronStatus } from "../../../api/types.ts";
+import type { MenuControls } from "../../../components/solid/menu.tsx";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
@@ -21,27 +30,28 @@ import { ChatCiAutomationView, type ChatCiAutomationProps } from "./chat-ci-auto
 import { createCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclosure.ts";
 
 /** Cron owns durable settings and execution; this element retains only the visible projection. */
-type Props = ChatCiDisclosureProps & { sessionId: string };
+type Props = ChatCiDisclosureProps & {
+  sessionId: string;
+  menuPresentation?: boolean;
+  controls?: MenuControls;
+};
+const inputHandlers = new WeakMap<HTMLElement, (key: keyof Props) => void>();
 
 type AutomationState = {
   jobs: CiAutomationJobs;
   pending: Partial<CiAutomationOptions>;
-  loading: boolean;
-  loaded: boolean;
   schedulerEnabled: boolean | undefined;
   error: string | null;
 };
+type Inventory = { jobs: CiAutomationJobs; schedulerEnabled: boolean };
 
 function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   const [state, setState] = createStore<AutomationState>({
     jobs: {},
     pending: {},
-    loading: false,
-    loaded: false,
     schedulerEnabled: undefined,
     error: null,
   });
-  const saving = createMemo(() => Object.keys(state.pending).length > 0);
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   const gatewayProjection = createMemo(() => {
     const source = props.gateway;
@@ -54,61 +64,80 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   let inventoryVersion = -1;
   let readController: AbortController | undefined;
   let refreshPending = true;
+  let stopGateway: (() => void) | undefined;
+  let stopEvents: (() => void) | undefined;
+  let targetKey = "";
+  let sessionKey = "";
+  let sessionId = "";
+  // Revision admission reads this synchronous snapshot; the store only presents it.
+  let accepted: Inventory | undefined;
+  const [receipt, setReceipt] = createSignal(Promise.resolve<Inventory | undefined>(undefined));
+  const read = createMemo(() => receipt());
+  const [presentationScope, setPresentationScope] = createSignal({});
   // Synchronous admission is separate from Solid's deferred presentation writes.
   const writes = new Set<CiAutomationOption>();
   const disclosure = createCiDisclosure(host, handleVisibility, () => {
-    version += 1;
-    connection.dispose();
-    readController?.abort();
+    inputHandlers.set(host, handleInputsChanged);
+    bindGateway();
+    syncTarget();
+    return () => {
+      inputHandlers.delete(host);
+      stopGateway?.();
+      stopEvents?.();
+      version += 1;
+      connection.dispose();
+      readController?.abort();
+    };
   });
 
-  // Bind Gateway inventory and invalidation subscriptions to the current connection.
-  createEffect(
-    () => props.gateway,
-    (source) => {
-      reset();
-      // Retire request authority on every connection transition, before subsequent events.
-      const stopGateway = source?.subscribe(() => {
-        syncConnection();
-        queueRefresh();
-      });
-      const stopEvents = source?.subscribeEvents((event) => {
-        if (event.event === "cron" || event.event === "config.changed") {
-          invalidate();
-        }
-      });
+  function bindGateway() {
+    stopGateway?.();
+    stopEvents?.();
+    const source = host.gateway;
+    reset();
+    // Retire request authority on every connection transition, before subsequent events.
+    stopGateway = source?.subscribe(() => {
       syncConnection();
       queueRefresh();
-      return () => {
-        stopGateway?.();
-        stopEvents?.();
-      };
-    },
-  );
-  const targetKey = createMemo(() =>
-    JSON.stringify([props.sessionKey, props.sessionId, automationTarget(props)]),
-  );
-  // Reset and suspend Gateway work when its session target or disclosure changes.
-  createEffect(
-    () => [targetKey(), props.presented, props.sessionKey, props.sessionId] as const,
-    ([target, , sessionKey, sessionId], previous) => {
-      if (previous?.[0] !== target) {
-        if (
-          previous &&
-          ((previous[2] && previous[2] !== sessionKey) ||
-            (previous[3] && previous[3] !== sessionId))
-        ) {
-          disclosure.close();
-        }
-        reset();
+    });
+    stopEvents = source?.subscribeEvents((event) => {
+      if (event.event === "cron" || event.event === "config.changed") {
+        invalidate();
       }
+    });
+    syncConnection();
+    queueRefresh();
+  }
+
+  function syncTarget() {
+    const next = JSON.stringify([host.sessionKey, host.sessionId, automationTarget()]);
+    if (targetKey === next) {
+      return false;
+    }
+    if (
+      (sessionKey && sessionKey !== host.sessionKey) ||
+      (sessionId && sessionId !== host.sessionId)
+    ) {
+      disclosure.close();
+    }
+    targetKey = next;
+    sessionKey = host.sessionKey;
+    sessionId = host.sessionId;
+    reset();
+    return true;
+  }
+
+  function handleInputsChanged(key: keyof Props) {
+    if (key === "gateway") {
+      bindGateway();
+    } else if (key === "presented" || key === "inline" || syncTarget()) {
       handleVisibility();
-    },
-  );
+    }
+  }
   function queueRefresh() {
     queueMicrotask(() => {
       if (refreshPending && disclosure.visible() && !readController && !writes.size) {
-        void load();
+        load();
       }
     });
   }
@@ -172,24 +201,24 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
     }
     readController.abort();
     readController = undefined;
-    setState((draft) => {
-      draft.loading = false;
-    });
+    void setReceipt(Promise.resolve(accepted));
     refreshPending = true;
   }
 
   function reset(): void {
     version += 1;
+    setPresentationScope({});
     cancelRead();
     inventoryVersion = -1;
+    accepted = undefined;
     writes.clear();
     setState((draft) => {
       draft.jobs = {};
-      draft.loaded = false;
       draft.pending = {};
       draft.schedulerEnabled = undefined;
       draft.error = null;
     });
+    void setReceipt(Promise.resolve(undefined));
     refreshPending = true;
   }
 
@@ -225,7 +254,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
     };
   }
 
-  async function load(): Promise<void> {
+  function load(): void {
     if (!disclosure.visible() || readController || writes.size) {
       return;
     }
@@ -235,41 +264,45 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
       queueRefresh();
       return;
     }
+    const admitted = owner;
     const controller = new AbortController();
     readController = controller;
-    setState((draft) => {
-      draft.loading = true;
-    });
     queueRefresh();
     const current = () => owner.current() && disclosure.visible() && readController === controller;
-    try {
-      const [jobs, status] = await Promise.all([
-        loadCiAutomationJobs(owner.client, owner.target, controller.signal),
-        owner.client.request<CronStatus>("cron.status", {}, { signal: controller.signal }),
-      ]);
-      if (current()) {
-        inventoryVersion = version;
-        setState((draft) => {
-          draft.jobs = jobs;
-          draft.schedulerEnabled = status.enabled;
-          draft.loaded = true;
-        });
-      }
-    } catch (error) {
-      if (current()) {
-        inventoryVersion = -1;
-        setState((draft) => {
-          draft.loaded = false;
-          draft.error = formatUiError(error, t("chat.pullRequests.automationLoadFailed"));
-        });
-      }
-    } finally {
-      if (current()) {
-        setState((draft) => {
-          draft.loading = false;
-        });
-        readController = undefined;
-        queueRefresh();
+    const result = request();
+    void setReceipt(result);
+    // The boundary owns the visible error; cancellation may retire its reader first.
+    void result.catch(() => {});
+
+    async function request(): Promise<Inventory | undefined> {
+      try {
+        const [jobs, status] = await Promise.all([
+          loadCiAutomationJobs(admitted.client, admitted.target, controller.signal),
+          admitted.client.request<CronStatus>("cron.status", {}, { signal: controller.signal }),
+        ]);
+        if (current()) {
+          inventoryVersion = version;
+          accepted = { jobs, schedulerEnabled: status.enabled };
+          setState((draft) => {
+            draft.jobs = jobs;
+            draft.schedulerEnabled = status.enabled;
+          });
+          return accepted;
+        }
+        return undefined;
+      } catch (error) {
+        if (current()) {
+          inventoryVersion = -1;
+          throw new Error(formatUiError(error, t("chat.pullRequests.automationLoadFailed")), {
+            cause: error,
+          });
+        }
+        return undefined;
+      } finally {
+        if (current()) {
+          readController = undefined;
+          queueRefresh();
+        }
       }
     }
   }
@@ -288,40 +321,45 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
     if (!owner || !owner.current()) {
       return;
     }
+    const admitted = owner;
+    const currentJob = accepted?.jobs[option];
     // A pre-click inventory must never overwrite newer intent or its acknowledged revision.
     cancelRead();
     writes.add(option);
     setState((draft) => {
+      // Each option settles independently, including a rejected sibling write.
       draft.pending[option] = enabled;
       draft.error = null;
     });
     queueRefresh();
     try {
       const job = await setCiAutomationEnabled(
-        owner.client,
-        owner.target,
+        admitted.client,
+        admitted.target,
         option,
         enabled,
-        state.jobs[option],
+        currentJob,
       );
-      if (!owner.current()) {
+      if (!admitted.current()) {
         return;
+      }
+      if (accepted) {
+        accepted = { ...accepted, jobs: { ...accepted.jobs, [option]: job } };
       }
       setState((draft) => {
         draft.jobs[option] = job;
       });
     } catch (error) {
-      if (owner.current()) {
+      if (admitted.current()) {
         // A rejected acknowledgement may hide an accepted write. Never mutate again
         // until a complete authoritative inventory has reconciled the actual outcome.
         inventoryVersion = -1;
         setState((draft) => {
-          draft.loaded = false;
           draft.error = formatUiError(error, t("chat.pullRequests.automationSaveFailed"));
         });
       }
     } finally {
-      if (owner.current()) {
+      if (admitted.current()) {
         writes.delete(option);
         setState((draft) => {
           delete draft.pending[option];
@@ -331,7 +369,8 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
     }
   }
 
-  const view = createMemo<ChatCiAutomationProps>(() => {
+  type ViewProps = Omit<ChatCiAutomationProps, "loading">;
+  const view = createMemo<ViewProps>(() => {
     const snapshot = gatewayProjection()?.read();
     const unavailable = !automationTarget(props)
       ? t("chat.pullRequests.automationSessionRequired")
@@ -346,13 +385,12 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
         autoMerge: state.pending.autoMerge ?? state.jobs.autoMerge?.enabled === true,
         autoArchive: state.pending.autoArchive ?? state.jobs.autoArchive?.enabled === true,
       },
-      jobs: state.jobs,
       pending: state.pending,
+      saving: Object.keys(state.pending).length > 0,
+      jobs: state.jobs,
       schedulerEnabled: state.schedulerEnabled,
-      loading: state.loading,
-      saving: saving(),
       error: state.error,
-      disabled: Boolean(unavailable) || !state.loaded,
+      disabled: Boolean(unavailable),
       disabledReason: unavailable,
       retryDisabled: !automationTarget(props) || !canRead(snapshot),
       onChange: (option, enabled) => void setEnabled(option, enabled),
@@ -360,26 +398,68 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
         setState((draft) => {
           draft.error = null;
         });
-        invalidate();
+        refreshPending = true;
+        load();
       },
     };
   });
-  return view;
+  return {
+    view,
+    read,
+    scope: presentationScope,
+    hasInventory: () => {
+      latest(read);
+      return inventoryVersion === version;
+    },
+  };
 }
 
 export type ChatCiAutomationElement = SolidBridgeElement<Props>;
 
 function ChatCiAutomationContent(props: Props, host: SolidBridgeElement<Props>) {
-  const read = createCiAutomation(props, host);
-  return <ChatCiAutomationView {...read()} />;
+  const model = createCiAutomation(props, host);
+  const content = (loading = false, error?: () => string, retry?: () => void) => (
+    <ChatCiAutomationView
+      {...model.view()}
+      loading={loading || isPending(model.read)}
+      disabled={loading || Boolean(error) || model.view().disabled || !model.hasInventory()}
+      error={error ? error() : model.view().error}
+      onRetry={retry ?? model.view().onRetry}
+      menuPresentation={props.menuPresentation}
+      controls={props.controls}
+    />
+  );
+  return (
+    <Errored
+      fallback={(error, reset) =>
+        content(
+          false,
+          () => formatUiError(error()),
+          () => {
+            model.view().onRetry();
+            reset();
+          },
+        )
+      }
+    >
+      <Loading on={model.scope()} fallback={content(true)}>
+        {(latest(model.read), null)}
+        {content()}
+      </Loading>
+    </Errored>
+  );
 }
 
 defineSolidBridge<Props>("openclaw-chat-ci-automation", ChatCiAutomationContent, {
+  propertyChanged: (host, key) => inputHandlers.get(host)?.(key),
   properties: {
     gateway: { default: undefined, attribute: false },
     pullRequest: { default: undefined, attribute: false },
     sessionKey: { default: "", attribute: false },
     sessionId: { default: "", attribute: false },
     presented: { default: true, type: Boolean },
+    inline: { default: false, attribute: false },
+    menuPresentation: { default: false, attribute: false },
+    controls: { default: undefined, attribute: false },
   },
 });

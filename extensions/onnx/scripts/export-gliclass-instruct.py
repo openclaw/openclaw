@@ -80,30 +80,10 @@ def parse_args():
 def publish(staged, output):
     # POSIX directory rename can replace another writer's empty directory.
     output.mkdir(exist_ok=False)
-    reservation = output.lstat()
-    linked = []
-    try:
-        files = sorted(path for path in staged.iterdir() if path.name != "model.json")
-        # Readers require the manifest, so it is the publication boundary.
-        for source in [*files, staged / "model.json"]:
-            target = output / source.name
-            identity = source.lstat()
-            os.link(source, target)
-            linked.append((target, identity))
-    except BaseException:
-        try:
-            for target, identity in linked:
-                if not os.path.samestat(output.lstat(), reservation):
-                    break
-                if target.exists() and os.path.samestat(target.lstat(), identity):
-                    target.unlink()
-            # A concurrent rename can replace the reservation during cleanup.
-            if os.path.samestat(output.lstat(), reservation):
-                # Unexpected files keep the reservation in place rather than being removed.
-                output.rmdir()
-        except OSError as error:
-            print(f"Incomplete output cleanup: {error}", file=sys.stderr)
-        raise
+    files = sorted(path for path in staged.iterdir() if path.name != "model.json")
+    # Manifest-last publication leaves failed exports visibly incomplete; choose a new output path.
+    for source in [*files, staged / "model.json"]:
+        os.link(source, output / source.name)
 
 
 def export(args):

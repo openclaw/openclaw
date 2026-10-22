@@ -5,6 +5,7 @@ import type {
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
+import { mapArrayIfChanged } from "../../shared/map-array-if-changed.js";
 import { estimateTokens, type Agent, type AgentMessage } from "../runtime/index.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
@@ -13,7 +14,6 @@ import {
   TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
-  createMessageCharEstimateCache,
   estimateMessageChars,
   estimateMessageCharsCached,
   getToolResultText,
@@ -21,19 +21,6 @@ import {
 } from "./tool-result-char-estimator.js";
 import { isToolResultTextBlock } from "./tool-result-text-budget.js";
 import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
-
-function projectMessages(
-  messages: AgentMessage[],
-  project: (message: AgentMessage) => AgentMessage,
-): AgentMessage[] {
-  let changed = false;
-  const projected = messages.map((message) => {
-    const next = project(message);
-    changed ||= next !== message;
-    return next;
-  });
-  return changed ? projected : messages;
-}
 
 function replaceToolResultContent(
   msg: AgentMessage,
@@ -328,8 +315,8 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const estimateCache = createMessageCharEstimateCache();
-    return projectMessages(sourceMessages, (message) =>
+    const estimateCache = new WeakMap<AgentMessage, number>();
+    return mapArrayIfChanged(sourceMessages, (message) =>
       truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
     );
   };

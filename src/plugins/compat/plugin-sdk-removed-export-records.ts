@@ -1,7 +1,6 @@
 import type { PluginCompatRecord } from "./types.js";
 
 const CHANNEL_CLEANUP_REMOVAL = {
-  commit: "2fec39f57319be5b6e0b20b5305665ed1ff5e685",
   removeAfter: "2026-10-04",
 } as const;
 
@@ -61,7 +60,6 @@ const REMOVED_EXPORT_SEEDS = [
   },
   {
     code: "plugin-sdk-persistent-dedupe-legacy-json-migration",
-    commit: "bd64d93ff1ae704d13813f6580c4809ba0e76606",
     removeAfter: "2026-10-04",
     owner: "sdk",
     subpath: "persistent-dedupe",
@@ -76,7 +74,6 @@ const REMOVED_EXPORT_SEEDS = [
   },
   {
     code: "plugin-sdk-provider-auth-copilot-helpers",
-    commit: "f2de06b38de710854aacd19218327358445816c8",
     removeAfter: "2026-10-01",
     owner: "provider",
     subpath: "provider-auth",
@@ -96,17 +93,11 @@ function buildRemovedExportRecord(seed: (typeof REMOVED_EXPORT_SEEDS)[number]) {
     code: seed.code,
     status: "removed",
     owner: seed.owner,
-    introduced: "2026-10-07",
     removeAfter: seed.removeAfter,
     replacement: seed.replacement,
     docsPath: "/plugins/sdk-migration/removed-surfaces#retroactively-recorded-shipped-exports",
     surfaces: seed.names.map((name) => `openclaw/plugin-sdk/${seed.subpath}.${name}`),
     diagnostics: ["plugin SDK shipped-surface guard and migration guide"],
-    tests: [
-      "src/plugins/compat/registry.test.ts",
-      "test/scripts/plugin-sdk-shipped-surface.test.ts",
-    ],
-    releaseNote: `The ${seed.names.join(", ")} exports from openclaw/plugin-sdk/${seed.subpath} were removed without a compatibility window in ${seed.commit}. This removal was recorded retroactively on 2026-10-07 when the shipped-surface guard was introduced.`,
   } satisfies PluginCompatRecord;
 }
 
@@ -116,7 +107,6 @@ export const PLUGIN_SDK_REMOVED_EXPORT_RECORDS = [
     code: "plugin-sdk-reply-silence-parsers",
     status: "removed",
     owner: "agent-runtime",
-    introduced: "2026-10-13",
     removeAfter: "2026-10-12",
     replacement:
       "Delivery plugins forward prepared text without parsing it. Harness producers use prepareAgentRunTerminalReply from openclaw/plugin-sdk/agent-harness-runtime once and publish its terminalReply. Import SILENT_REPLY_TOKEN from openclaw/plugin-sdk/reply-runtime instead of reply-chunking.",
@@ -127,8 +117,5 @@ export const PLUGIN_SDK_REMOVED_EXPORT_RECORDS = [
       "openclaw/plugin-sdk/reply-chunking.SILENT_REPLY_TOKEN",
     ],
     diagnostics: ["plugin SDK shipped-surface guard and migration guide"],
-    tests: ["src/plugin-sdk/reply-runtime.contract.test.ts", "src/plugins/compat/registry.test.ts"],
-    releaseNote:
-      "Reply silence is classified once by the terminal producer. Delivery-side parsers were removed without a compatibility shim so visible text is never reclassified as silence. The redundant reply-chunking.SILENT_REPLY_TOKEN export was removed; the constant remains available from reply-runtime.",
   },
 ] as const satisfies readonly PluginCompatRecord[];

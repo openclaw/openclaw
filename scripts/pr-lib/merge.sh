@@ -77,7 +77,7 @@ record_crabbox_landing_parent_audit() {
     echo "Admin landing parent audit matched: landed=$landed_sha parent=$actual_parent_sha"
   else
     echo "Admin landing parent audit drift: landed=$landed_sha expected_parent=$expected_parent_sha actual_parent=$actual_parent_sha"
-    echo "The merge already completed after intervening main movement; this audit reports the residual non-atomic race."
+    echo "Main advanced since the original admission snapshot; the completed merge receipt was verified against the actual landed parent."
   fi
 }
 
@@ -412,6 +412,10 @@ merge_verify() {
   ') || return 1
   local pending_required
   pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="pending")] | length') || return 1
+  MERGE_REQUIRED_CHECKS_PASSED=false
+  if [ "$failed_required" -eq 0 ] && [ "$pending_required" -eq 0 ]; then
+    MERGE_REQUIRED_CHECKS_PASSED=true
+  fi
 
   if [ "$pending_required" -gt 0 ] && [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" != true ] &&
     { [ "$github_pending" != true ] || [ "$qualified_refusal" = true ] || [ "$qualified_immediate_recovery" = true ]; }; then
@@ -617,6 +621,7 @@ merge_run() {
   local refusal_directory="${8:-}" refusal="" qualified_refusal=false
   local provider_rejection="" stale_head_retirement="" async_failure="" qualified_pending_recovery=false
   local retired_auto_admin=false stale_admin_head=false qualified_immediate_recovery=false
+  local MERGE_REQUIRED_CHECKS_PASSED=false
   local MERGE_REFUSAL_DIRECTORY=""
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
   local MERGE_USE_PRIOR_CI_ADMIN=false
@@ -650,6 +655,22 @@ merge_run() {
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
   local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_ENTRY_OBSERVATION MERGE_TRANSPORT=rest
   merge_outcome_init "$pr" || return 1
+  if [ -n "${PR_WORKFLOW_RECOVERY_PROVENANCE:-}" ]; then
+    [ "$recovery_oid" = "${PR_WORKFLOW_RECOVERY_OUTCOME:-}" ] &&
+      [ "$replacement_head" = "${PR_WORKFLOW_RECOVERY_HEAD:-}" ] &&
+      [ "$auto_merge_requested" = false ] && [ "$cancel_auto" = false ] &&
+      [ -z "$merged_head$observed_head$legacy_directory$refusal_directory" ] &&
+      [ "$recovery_oid" = "$MERGE_OUTCOME_OID" ] &&
+      printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg replacement "$replacement_head" \
+        --argjson admin "$MERGE_USE_PRIOR_CI_ADMIN" '
+        .phase == "intent" and .method == "squash" and
+        (if $replacement != "" then .route == "auto" and .cancellation.state == "confirmed"
+         else $admin and .route == "admin" and .accepted == false and
+           .priorCiAdmin.dispatchTransport == "rest" end)' >/dev/null || {
+        merge_outcome_stop "current workflow recovery requires the selected cancelled auto outcome or confirmed same-head REST admin recovery"
+        return 1
+      }
+  fi
   if [ "$cancel_auto" = true ]; then
     [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] && [ "$auto_merge_requested" = false ] || return 2
     merge_outcome_cancel_auto "$pr" "$recovery_oid" "$observed_head"
@@ -1029,15 +1050,20 @@ merge_run() {
     return 1
   fi
   if [ "$stale_admin_head" = true ] && [ "$route" != auto ]; then
-    merge_outcome_stop "stale admin head retirement requires MERGEABLE/BLOCKED or MERGEABLE/BEHIND auto admission"
-    return 1
+    # A completed replacement needs ordinary admission, never the old head's
+    # admin exception or pending-check permission intended for an auto request.
+    if [ "$route" != immediate ] || [ "$MERGE_REQUIRED_CHECKS_PASSED" != true ]; then
+      merge_outcome_stop "stale admin head retirement requires auto admission or passing required checks for immediate admission"
+      return 1
+    fi
   fi
   if [ "$route" = immediate ] && [ "$merge_method" = squash ] && [ -z "$merge_body_snapshot" ]; then
     merge_outcome_stop "ordinary squash requires the captured merge body; queue policy changed during admission"
     return 1
   fi
   local strict_immediate_recovery=false
-  if [ "$qualified_refusal" = true ] || [ "$qualified_immediate_recovery" = true ]; then strict_immediate_recovery=true; fi
+  if [ "$qualified_refusal" = true ] || [ "$qualified_immediate_recovery" = true ] ||
+    { [ "$stale_admin_head" = true ] && [ "$route" = immediate ]; }; then strict_immediate_recovery=true; fi
   verify_merge_route_projection "$pr" "$MERGE_OBSERVATION" "$route" "$strict_immediate_recovery" || return 1
   local observed_main
   observed_main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)
@@ -1269,6 +1295,10 @@ merge_run() {
   if [ -n "$refusal" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson refusal "$refusal" '.recovery.preDispatchRefusal=$refusal') || return 1
   fi
+  if [ -n "${PR_WORKFLOW_RECOVERY_PROVENANCE:-}" ]; then
+    intent=$(printf '%s\n' "$intent" | jq -c --argjson provenance "$PR_WORKFLOW_RECOVERY_PROVENANCE" \
+      '.workflowRecovery=$provenance') || return 1
+  fi
   if [ -n "$provider_rejection" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson rejection "$provider_rejection" '.recovery.providerRejection=$rejection') || return 1
   fi
@@ -1367,6 +1397,7 @@ merge_run() {
   cleanup_pr_worktree ".worktrees/pr-$pr" || cleanup_complete=false
   if [ "$cleanup_complete" = true ]; then
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="complete"')" || return 1
+    retire_pr_workflow_binding "$pr" || return 1
     echo "merge-run complete for PR #$pr"
   else
     echo "Merge confirmed; completion pending: inspect cleanup warnings. Recovery will not delete branches or worktrees."

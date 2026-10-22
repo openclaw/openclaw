@@ -21,10 +21,11 @@ import {
   createPrometheusMetricStore,
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
-import { recordChildProcessSpawn } from "./service-child-process.js";
+import { recordGatewayWsEvent } from "./service-gateway-ws.js";
 import { recordMemorySample } from "./service-memory.js";
 import { recordModelUsage } from "./service-model-usage.js";
-import { recordOperationTimingEvent } from "./service-operation-timing.js";
+import { recordOperationTimingEvent, reserveMainGcHistograms } from "./service-operation-timing.js";
+import { recordSessionRetention } from "./service-retention.js";
 import {
   createGatewayWorkMetricsRecorder,
   recordSessionDiagnosticEvent,
@@ -69,33 +70,17 @@ function recordDiagnosticEvent(
   }
 
   switch (evt.type) {
-    case "gateway.ws.event": {
-      if (!metadata.trusted) {
-        return;
-      }
-      const labels = { event: evt.event };
-      store.counter(
-        "openclaw_gateway_ws_events_total",
-        "Outbound Gateway WebSocket event frames accepted by the sender per socket.",
-        labels,
-        evt.count,
-      );
-      store.counter(
-        "openclaw_gateway_ws_event_bytes_total",
-        "Encoded outbound Gateway WebSocket event bytes before framing or compression per socket.",
-        labels,
-        evt.bytes,
-      );
-      return;
-    }
+    case "gateway.ws.event":
     case "gateway.ws.connections":
       if (metadata.trusted) {
-        store.gauge(
-          "openclaw_gateway_ws_operator_connections",
-          "Connected authenticated Gateway operator WebSockets.",
-          {},
-          evt.operators,
-        );
+        recordGatewayWsEvent(store, evt);
+      }
+      return;
+    case "sessions.list.retention":
+    case "sessions.event.retention":
+    case "sessions.event.rows.reset":
+      if (metadata.trusted) {
+        recordSessionRetention(store, evt);
       }
       return;
     case "worker.request":
@@ -107,6 +92,7 @@ function recordDiagnosticEvent(
     case "secret.egress":
     case "tool.catalog":
     case "gateway.rpc":
+    case "sessions.list.baseline.retired":
     case "gateway.http.cancelled":
     case "diagnostic.gc":
     case "gateway.event_loop.sample":
@@ -401,31 +387,42 @@ function recordDiagnosticEvent(
       recordSessionDiagnosticEvent(store, evt);
       return;
     case "queue.lane.enqueue":
-    case "queue.lane.dequeue":
+    case "queue.lane.dequeue": {
+      const labels = { lane: normalizeDiagnosticLane(evt.lane) };
       store.gauge(
         "openclaw_queue_lane_size",
         "Current diagnostic queue lane size.",
-        {
-          lane: normalizeDiagnosticLane(evt.lane),
-        },
+        labels,
         numericValue(evt.queueSize),
       );
       if (evt.type === "queue.lane.dequeue") {
         store.histogram(
           "openclaw_queue_lane_wait_seconds",
           "Queue lane wait time in seconds.",
-          { lane: normalizeDiagnosticLane(evt.lane) },
+          labels,
           seconds(evt.waitMs),
         );
       }
       return;
+    }
     case "session.state":
     case "session.stuck":
     case "session.turn.created":
       recordSessionDiagnosticEvent(store, evt);
       return;
     case "diagnostic.child_process.spawn":
-      recordChildProcessSpawn(store, evt);
+      // Git owners and SQLite session transports carry bounded operation labels.
+      store.counter(
+        "openclaw_child_process_spawn_total",
+        "Successful child launches through the shared spawn and exec owners.",
+        {
+          family: normalizeDiagnosticValue(evt.family),
+          operation: normalizeDiagnosticValue(
+            evt.operation ?? (evt.family === "git" ? "unknown" : "none"),
+          ),
+        },
+        numericValue(evt.count) ?? 0,
+      );
       return;
     case "diagnostic.memory.sample":
       recordMemorySample(store, evt.memory, BYTE_BUCKETS);
@@ -599,14 +596,18 @@ type PrometheusExporterHealthUpdate = {
   status: "started" | "dropped";
   reason?: "configured";
 };
-type TrustedExporterDiagnosticsBridge = NonNullable<
-  OpenClawPluginServiceContext["internalDiagnostics"]
-> & {
+type TrustedExporterDiagnosticsBridge = {
+  emit: NonNullable<OpenClawPluginServiceContext["internalDiagnostics"]>["emit"];
   reportExporterHealth?: (update: PrometheusExporterHealthUpdate) => void;
 };
 
 export function createDiagnosticsPrometheusExporter() {
-  const store = createPrometheusMetricStore();
+  let logger: OpenClawPluginServiceContext["logger"] | undefined;
+  const store = createPrometheusMetricStore((family) => {
+    logger?.warn(
+      `diagnostics-prometheus: series budget reached for ${family}; new label sets are being dropped. See openclaw_prometheus_family_series_dropped_total.`,
+    );
+  });
   let unsubscribe: (() => void) | undefined;
   let unsubscribeWork: (() => void) | undefined;
   let internalDiagnostics: TrustedExporterDiagnosticsBridge | undefined;
@@ -632,6 +633,8 @@ export function createDiagnosticsPrometheusExporter() {
         ctx.logger.error("diagnostics-prometheus: internal diagnostics capability unavailable");
         return;
       }
+      logger = ctx.logger;
+      reserveMainGcHistograms(store);
       const identity = isDiagnosticsEnabled(ctx.config)
         ? ctx.internalDiagnostics?.getRuntimeIdentity?.()
         : undefined;
@@ -684,12 +687,12 @@ export function createDiagnosticsPrometheusExporter() {
       });
       internalDiagnostics = undefined;
       store.reset();
+      logger = undefined;
     },
   } satisfies OpenClawPluginService;
 
   return {
     handler: createMetricsHandler(store),
-    render: store.render,
     service,
   };
 }

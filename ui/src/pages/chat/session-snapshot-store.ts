@@ -6,6 +6,7 @@ import {
   isChatTranscriptMetadata,
   isProgressCard,
 } from "../../lib/protocol-validators.generated/transcript.js";
+import { listen } from "../../lib/reactive/listener.ts";
 import * as json from "../../lib/snapshot-json.ts";
 import {
   getSessionCacheValue,
@@ -72,6 +73,9 @@ const paginationSchema = {
 };
 const snapshotSchema = json.object(
   {
+    board: json.optional(
+      json.nullable(json.object({ snapshot: json.unknown, receivedAtMs: nonnegative }, true)),
+    ),
     widgetHeights: json.optional(
       json.refine(
         json.record(json.refine(json.number, (height) => height >= 48 && height <= 8000)),
@@ -81,6 +85,8 @@ const snapshotSchema = json.object(
     transcriptMetadata: json.optional(json.checked(isChatTranscriptMetadata)),
     progressCard: json.optional(json.nullable(json.checked(isProgressCard))),
     deltaCursor: json.optional(json.text),
+    // Only persisted warm metadata needs its full validator; read admission loads it below.
+    historyState: json.optional(json.unknown),
     displayedLeafEntryId: json.optional(json.nullable(json.text)),
     // Message contents are opaque; only the array boundary needs validation.
     messages: json.checked<unknown[]>(Array.isArray),
@@ -106,7 +112,9 @@ const recordSchema = json.refine(
   (record) => record.sessionId === record.snapshot.sessionId,
 );
 
-type SessionSnapshotRecord = json.SnapshotValue<typeof recordSchema>;
+type SessionSnapshotRecord = Omit<json.SnapshotValue<typeof recordSchema>, "snapshot"> & {
+  snapshot: ChatSessionSnapshot;
+};
 const metadataFields = {
   savedAt: nonnegative,
   sessionKey: sessionKeySchema,
@@ -137,9 +145,26 @@ type PendingSessionState = {
 
 const activeStores = new Set<SessionSnapshotStore>();
 
-function parseSnapshotRecord(value: unknown, sessionKey?: string): SessionSnapshotRecord | null {
+async function parseSnapshotRecord(
+  value: unknown,
+  sessionKey?: string,
+  onBoard?: (board: ChatSessionSnapshot["board"]) => void,
+): Promise<SessionSnapshotRecord | null> {
   const parsed = json.parseSnapshot(recordSchema, value);
-  return parsed && (!sessionKey || parsed.sessionKey === sessionKey) ? parsed : null;
+  if (!parsed || (sessionKey && parsed.sessionKey !== sessionKey)) {
+    return null;
+  }
+  const historyState = parsed.snapshot.historyState;
+  if (historyState !== undefined) {
+    // Do not hold board restoration behind the lazy transcript validator.
+    onBoard?.(parsed.snapshot.board);
+    const { isChatHistoryState } =
+      await import("../../lib/protocol-validators.generated/history-state.js");
+    if (!isChatHistoryState(historyState)) {
+      return null;
+    }
+  }
+  return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
 }
 
 function createSnapshotRecord(
@@ -177,6 +202,7 @@ function createSnapshotRecord(
       };
     }
     // Pairing credentials stay in the live projection, never the browser's disk cache.
+    let redacted = false;
     const serialized = JSON.stringify(projected, (_key, value: unknown) => {
       if (value === projected.messages) {
         return projected.messages.map((message) => {
@@ -188,9 +214,15 @@ function createSnapshotRecord(
           return display;
         });
       }
-      return removePairingQrContent(value);
+      const sanitized = removePairingQrContent(value);
+      redacted ||= sanitized !== value;
+      return sanitized;
     });
     snapshot = JSON.parse(serialized);
+    // A receipt cannot certify metadata changed by the disk privacy projection.
+    if (redacted) {
+      delete snapshot.historyState;
+    }
     weight = serialized.length;
   } catch {
     return null;
@@ -455,7 +487,10 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
   }
 
-  async read(sessionKey: string): Promise<ChatSessionSnapshot | null> {
+  async read(
+    sessionKey: string,
+    onBoard?: (board: ChatSessionSnapshot["board"]) => void,
+  ): Promise<ChatSessionSnapshot | null> {
     const isCurrent = this.captureReadScope(sessionKey);
     const prewarm = consumePrewarmedChatSnapshot(sessionKey);
     const value = await (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey));
@@ -466,7 +501,10 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     if (asOptionalRecord(value)?.projectionVersion !== CHAT_SNAPSHOT_PROJECTION_VERSION) {
       return null;
     }
-    const record = parseSnapshotRecord(value, sessionKey);
+    const record = await parseSnapshotRecord(value, sessionKey, onBoard);
+    if (!isCurrent()) {
+      return null;
+    }
     if (!record) {
       debugSnapshotStore("resetting cache after record shape mismatch");
       await resetSessionSnapshotDatabase();
@@ -649,8 +687,8 @@ function flushActiveStores(): void {
 
 // Module-lifetime browser events flush every active store, including during page teardown.
 if (typeof window !== "undefined") {
-  window.addEventListener("pagehide", flushActiveStores);
-  document.addEventListener("visibilitychange", () => {
+  listen(window, "pagehide", flushActiveStores);
+  listen(document, "visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       flushActiveStores();
     }

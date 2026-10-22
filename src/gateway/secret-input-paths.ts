@@ -1,4 +1,3 @@
-// Gateway secret-input path helpers.
 // Lists config locations that may contain plaintext values or SecretRefs.
 import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

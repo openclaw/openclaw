@@ -1155,9 +1155,7 @@
 /* Owned surfaces keep positioning and dismissal with the overlay lifecycle. */
 .cron-job-menu > .oc-menu,
 .cron-filter-dropdown__details > .oc-menu {
-  padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
 }

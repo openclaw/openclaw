@@ -4,6 +4,9 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contra
 import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { transcriptEventUtf8BytesSql, type TranscriptPayloadAlias } from "./transcript-payload.js";
 
+/** Payload bytes, counted by `transcriptEventReadBytesSql`, one export slice reads before parsing. */
+export const TRANSCRIPT_PAYLOAD_SLICE_BYTES = 2 * 1024 * 1024;
+
 /** Preserve native identity accounting where a legacy row has no exact UTF-8 size. */
 export function transcriptEventReadBytesSql(
   alias: TranscriptPayloadAlias = "transcript_events",

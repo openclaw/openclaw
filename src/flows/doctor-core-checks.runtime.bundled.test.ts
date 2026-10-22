@@ -40,11 +40,17 @@ describe("doctor bundled provider catalog validation", () => {
           if (!Array.isArray(rawModels) || models?.length !== rawModels.length) {
             throw new Error("Manifest catalog normalization dropped a provider or model row");
           }
+          // Decision-only rows have no conversational provider config. Still validate
+          // every row above, and chat rows in mixed catalogs below.
+          const chatModels = models.filter((model) => model.inference?.chat !== false);
           // Runtime catalogs supply endpoints; empty catalogs only declare credential
           // ownership. Discovery converts only populated static catalogs into configs.
           const discovery = normalized?.discovery?.[providerId];
-          if (models.length > 0 && discovery !== "runtime" && discovery !== "refreshable") {
-            buildManifestModelProviderConfig({ providerId, catalog });
+          if (chatModels.length > 0 && discovery !== "runtime" && discovery !== "refreshable") {
+            buildManifestModelProviderConfig({
+              providerId,
+              catalog: { ...asOptionalRecord(catalog), models: chatModels },
+            });
           }
         } catch (error) {
           errors.push(`${manifest.id ?? extension.name}/${providerId}: ${String(error)}`);

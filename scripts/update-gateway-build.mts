@@ -1,12 +1,16 @@
 // Source-update lifecycle adapter. Both entry paths share the output transaction.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { assertManagedGatewayArtifactPublication } from "../src/cli/update-cli/update-command-service-revalidation.js";
 import { resolvePathViaExistingAncestorSync } from "../src/infra/boundary-path.js";
 import { sha256File } from "../src/infra/crypto-digest.js";
 import { hasErrnoCode } from "../src/infra/errno.js";
+import { readPackageVersion } from "../src/infra/package-json.js";
 import { isPathInside } from "../src/infra/path-guards.js";
+import { runUpdateCandidateAdmission } from "../src/infra/update-candidate-admission.js";
 import {
   readBuiltRuntimeCommit,
   verifyGitUpdateRecovery,
@@ -136,10 +140,79 @@ async function captureReferenceInputs(root: string, git: (args: string[]) => Pro
       .split("\0")
       .filter((name) => name && !name.split("/").some(isGitRuntimeStagingName))
       .toSorted();
-    return await Promise.all(
+    // Only native, reciprocal registrations identify a separate checkout. An unknown
+    // nested repository is still a build input we cannot safely copy or ignore.
+    let registrations: Promise<{ roots: Set<string>; common: string }> | undefined;
+    const inspectWorktree = async (file: string) => {
+      registrations ??= (async () => ({
+        roots: new Set(
+          (await git(["worktree", "list", "--porcelain", "-z"]))
+            .split("\0")
+            .filter((field) => field.startsWith("worktree "))
+            .map((field) => field.slice("worktree ".length)),
+        ),
+        common: await fs.promises.realpath(
+          path.resolve(root, (await git(["rev-parse", "--git-common-dir"])).trim()),
+        ),
+      }))();
+      const { roots, common } = await registrations;
+      const checkout = path.resolve(file);
+      const invalid = () =>
+        new Error(`Unverified nested worktree source input: ${path.relative(root, checkout)}`);
+      if (!roots.has(checkout) || (await fs.promises.realpath(checkout)) !== checkout) {
+        throw invalid();
+      }
+      const readPointer = async (marker: string) => {
+        const stat = await fs.promises.lstat(marker, { bigint: true });
+        if (!stat.isFile()) {
+          throw invalid();
+        }
+        return {
+          identity: `${stat.dev}:${stat.ino}`,
+          contents: await fs.promises.readFile(marker, "utf8"),
+        };
+      };
+      const marker = path.join(checkout, ".git");
+      const pointer = await readPointer(marker);
+      const target = /^gitdir: (.+)\r?\n?$/u.exec(pointer.contents)?.[1];
+      if (!target) {
+        throw invalid();
+      }
+      const admin = await fs.promises.realpath(path.resolve(checkout, target));
+      if (path.dirname(admin) !== path.join(common, "worktrees")) {
+        throw invalid();
+      }
+      const adminStat = await fs.promises.stat(admin, { bigint: true });
+      const backlink = await readPointer(path.join(admin, "gitdir"));
+      const commonPointer = await readPointer(path.join(admin, "commondir"));
+      if (
+        !adminStat.isDirectory() ||
+        path.resolve(admin, backlink.contents.trim()) !== marker ||
+        (await fs.promises.realpath(path.resolve(admin, commonPointer.contents.trim()))) !== common
+      ) {
+        throw invalid();
+      }
+      // Do not snapshot the other checkout's content/HEAD: unpublished edits stay
+      // operator-owned. Recheck just its registration and identity before stopping.
+      return {
+        admin,
+        identity: `${adminStat.dev}:${adminStat.ino}`,
+        pointer,
+        backlink,
+        commonPointer,
+      };
+    };
+    const entries = await Promise.all(
       names.map(async (name) => {
         const file = path.join(root, name);
         const stat = await fs.promises.lstat(file, { bigint: true });
+        if (stat.isDirectory()) {
+          return {
+            name,
+            identity: `${stat.dev}:${stat.ino}`,
+            worktree: await inspectWorktree(file),
+          };
+        }
         if (!stat.isFile() && !stat.isSymbolicLink()) {
           throw new Error(`Unsupported untracked source input: ${name}`);
         }
@@ -154,6 +227,10 @@ async function captureReferenceInputs(root: string, git: (args: string[]) => Pro
         };
       }),
     );
+    return {
+      files: entries.filter((entry) => entry.worktree === undefined),
+      worktrees: entries.filter((entry) => entry.worktree !== undefined),
+    };
   };
   const original = await snapshot();
   return {
@@ -169,7 +246,7 @@ async function captureReferenceInputs(root: string, git: (args: string[]) => Pro
       }
     },
     async copy(candidate: string) {
-      for (const entry of original) {
+      for (const entry of original.files) {
         const destination = path.join(candidate, entry.name);
         let parent = candidate;
         for (const component of entry.name.split("/").slice(0, -1)) {
@@ -206,7 +283,7 @@ async function captureReferenceInputs(root: string, git: (args: string[]) => Pro
         }
       }
       candidateExternal.length = 0;
-      for (const entry of original) {
+      for (const entry of original.files) {
         if (entry.target?.kind !== "candidate") {
           continue;
         }
@@ -305,6 +382,8 @@ async function runReferenceSourceUpdate(
       };
       const beforeSha = (await git(["rev-parse", "HEAD"])).trim();
       const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+      const installedVersion = await readPackageVersion(root);
+      const runId = randomUUID();
       const beforeBuiltCommit = await readBuiltRuntimeCommit(root);
       const sourceRuntimePrepared = await inspectOwnedSourceUpdateArtifacts(root, assertCurrent);
       const inputs = await captureReferenceInputs(root, git);
@@ -429,6 +508,52 @@ async function runReferenceSourceUpdate(
                     ) {
                       throw new Error(
                         "Prepared source runtime could not be verified; the serving checkout is unchanged.",
+                      );
+                    }
+                    // The candidate owns migration compatibility. Refuse before stopping the
+                    // incumbent; this adapter has no installed-admission fallback.
+                    const admission = await runUpdateCandidateAdmission({
+                      candidateRoot: candidate,
+                      env,
+                      timeoutMs: PROBE_TIMEOUT_MS,
+                      context: {
+                        protocol: 1,
+                        installation: {
+                          root,
+                          canonicalRoot: root,
+                          version: installedVersion,
+                          installKind: "git",
+                          packageManager: "pnpm",
+                        },
+                        target: {
+                          spec: head.stdout.trim(),
+                          version: await readPackageVersion(candidate),
+                          source: "artifact",
+                          channel: "dev",
+                        },
+                        request: {
+                          yes: true,
+                          noRestart: false,
+                          acceptCapabilities: false,
+                          json: true,
+                          timeoutMs: PROBE_TIMEOUT_MS,
+                        },
+                        run: { id: runId },
+                        supervisor: {
+                          version: installedVersion ?? "unknown",
+                          host: os.hostname(),
+                          pid: process.pid,
+                        },
+                      },
+                    });
+                    if (admission.verdict?.verdict !== "admit") {
+                      throw new Error(
+                        admission.verdict?.reasons
+                          .map((reason) =>
+                            [reason.message, reason.nextAction].filter(Boolean).join(" "),
+                          )
+                          .join("\n") ||
+                          `Candidate admission unavailable (${admission.fallbackReason ?? "missing verdict"}); the serving checkout is unchanged. Repair the candidate admission failure before retrying this source update.`,
                       );
                     }
                   },

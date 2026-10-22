@@ -63,7 +63,6 @@ try {
         input.storeId,
       );
       const params = {
-        anchor,
         db,
         namespace: input.namespace,
         storeId: input.storeId,

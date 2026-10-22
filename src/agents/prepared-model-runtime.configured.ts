@@ -38,6 +38,7 @@ import { resolveConfiguredModelHarnessRuntime } from "./harness-runtimes.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
@@ -69,6 +70,13 @@ export function collectPreparedModelRuntimeConfiguredRefs(
         }
       : config,
   );
+  // Decision profiles select credentials, not catalog identity. Keep other literal
+  // model suffixes intact and leave the shared raw-config collector lossless.
+  for (const ref of refs) {
+    if (ref.capability === "decision") {
+      ref.value = splitTrailingAuthProfile(ref.value).model;
+    }
+  }
   for (const [index, selection] of runtimePluginSelections.entries()) {
     refs.push({
       path: `runtimePluginSelections.${index}`,
@@ -102,6 +110,9 @@ export function collectPreparedModelRuntimeProviderIds(
     const separator = ref.value.indexOf("/");
     if (separator > 0) {
       addProviderId(ref.value.slice(0, separator));
+    }
+    if (ref.capability === "decision") {
+      continue;
     }
     addProviderId(
       resolveConfiguredModelHarnessRuntime({

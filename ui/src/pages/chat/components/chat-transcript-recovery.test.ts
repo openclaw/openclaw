@@ -3,7 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { resetChatViewState } from "../chat-view-state.ts";
+import { resetChatViewState } from "../chat-view-state.test-support.ts";
 import { renderChatThread, TranscriptTestHost } from "../test-helpers/chat-transcript-native.tsx";
 import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 import { toggleTranscriptSearch, type ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -31,15 +31,11 @@ function fullMessage(content: string): FullMessageResult {
 class RecoveryTranscriptElement extends TranscriptTestHost {
   props: ChatThreadProps = threadProps("recovery-pane");
   resetPresentationOnDisconnect = true;
-  override readonly transcript = createChatTranscript(
-    () => this.requestRender(),
-    () => this.props.paneId,
-  );
+  override readonly transcript = createChatTranscript(() => this.props.paneId);
 
   override renderTranscript = () => {
-    const requestUpdate = () => this.requestRender();
-    return renderChatThread({ ...this.props, onRequestUpdate: requestUpdate }, this.transcript, {
-      search: requestUpdate,
+    return renderChatThread(this.props, this.transcript, {
+      search: true,
     });
   };
 
@@ -71,8 +67,8 @@ function mountTranscript(
 
 async function searchTranscript(pane: RecoveryTranscriptElement, query: string) {
   if (!pane.querySelector(".agent-chat__search-bar input")) {
-    toggleTranscriptSearch(pane.props.paneId, () => pane.requestRender());
-    await pane.updateComplete;
+    toggleTranscriptSearch(pane.props.paneId);
+    await pane.settleUpdates();
   }
   const input = expectDefined(
     pane.querySelector<HTMLInputElement>(".agent-chat__search-bar input"),
@@ -80,7 +76,7 @@ async function searchTranscript(pane: RecoveryTranscriptElement, query: string) 
   );
   input.value = query;
   input.dispatchEvent(new Event("input", { bubbles: true }));
-  await pane.updateComplete;
+  await pane.settleUpdates();
 }
 
 describe("chat transcript full-message recovery", () => {
@@ -273,7 +269,7 @@ describe("chat transcript full-message recovery", () => {
     pane.requestRender();
     await pane.updateComplete;
     expect(pane.querySelector(".chat-bubble")).toBeNull();
-    toggleTranscriptSearch(pane.props.paneId, () => pane.requestRender());
+    toggleTranscriptSearch(pane.props.paneId);
     await vi.waitFor(() => expect(pane.textContent).toContain("Second scope."));
     expect(load).toHaveBeenLastCalledWith({
       sessionKey: pane.props.sessionKey,
@@ -321,7 +317,7 @@ describe("chat transcript full-message recovery", () => {
     pane.requestRender();
     await pane.updateComplete;
     expect(pane.querySelector(".chat-bubble")).toBeNull();
-    toggleTranscriptSearch(pane.props.paneId, () => pane.requestRender());
+    toggleTranscriptSearch(pane.props.paneId);
     await vi.waitFor(() => expect(pane.textContent).toContain("Revisited input."));
     expect(load).toHaveBeenCalledTimes(2);
   });

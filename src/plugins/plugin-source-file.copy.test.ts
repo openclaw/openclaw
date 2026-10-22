@@ -14,112 +14,106 @@ vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-function fixture(bytes = Buffer.from("captured"), basename = "input.js") {
+function fixture(bytes = Buffer.from("captured")) {
   const root = fs.realpathSync(dirs.make("plugin-small-copy-"));
-  const source = path.join(root, basename);
+  const source = path.join(root, "input.js");
   const outputRoot = path.join(root, "capture");
   fs.mkdirSync(outputRoot);
   fs.writeFileSync(source, bytes, { mode: 0o755 });
-  const target = path.join(outputRoot, basename);
-  return {
-    root,
-    source,
-    target,
-    bytes,
-    copy: () => copyPluginSourceFile(source, root, target, { hashCopiedContent: true }),
-  };
+  const target = path.join(outputRoot, "input.js");
+  const copy = () => copyPluginSourceFile(source, root, target, { hashCopiedContent: true });
+  return { root, source, target, bytes, copy };
 }
 
 it("copies small files through owned descriptors with the same bytes, identity and mode", () => {
-  const subject = fixture();
-  const admitted = fs.statSync(subject.source, { bigint: true });
+  const { source, target, bytes, copy } = fixture();
+  const admitted = fs.statSync(source, { bigint: true });
   const clone = vi.spyOn(fsSafe, "copyRootFileSync");
-  const copied = subject.copy();
+  const copied = copy();
   expect(clone).not.toHaveBeenCalled();
   expect(copied).toEqual({
-    contentHash: createHash("sha256").update(subject.bytes).digest("hex"),
-    sizeBytes: subject.bytes.length,
+    contentHash: createHash("sha256").update(bytes).digest("hex"),
+    sizeBytes: bytes.length,
     sourceIdentity: pluginSourceStatIdentity(admitted),
   });
-  expect(fs.readFileSync(subject.target)).toEqual(subject.bytes);
-  expect(fs.statSync(subject.target).ino).not.toBe(fs.statSync(subject.source).ino);
+  expect(fs.readFileSync(target)).toEqual(bytes);
+  expect(fs.statSync(target).ino).not.toBe(fs.statSync(source).ino);
   if (process.platform !== "win32") {
-    expect(fs.statSync(subject.target).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(target).mode & 0o777).toBe(0o700);
   }
-  fs.writeFileSync(subject.source, "edited");
-  expect(fs.readFileSync(subject.target)).toEqual(subject.bytes);
+  fs.writeFileSync(source, "edited");
+  expect(fs.readFileSync(target)).toEqual(bytes);
 });
 
 it("refuses source growth during the bounded transfer", () => {
-  const subject = fixture();
+  const { source, copy } = fixture();
   const write = fs.writeSync;
   let changed = false;
   vi.spyOn(fs, "writeSync").mockImplementation((...args) => {
     if (!changed) {
       changed = true;
-      fs.appendFileSync(subject.source, "more");
+      fs.appendFileSync(source, "more");
     }
     return Reflect.apply(write, fs, args);
   });
-  expect(subject.copy).toThrow("Plugin source changed");
+  expect(copy).toThrow("Plugin source changed");
   expect(changed).toBe(true);
 });
 
 it.each(["leaf", "parent", "hardlink"])(
   "refuses substituted destination %s before transfer",
   (change) => {
-    const subject = fixture();
+    const { target: destination, copy } = fixture();
     const transfer = fsSafe.copyFileDescriptorSync;
     vi.spyOn(fsSafe, "copyFileDescriptorSync").mockImplementation((source, target, options) => {
-      if (change === "parent") {
-        fs.renameSync(path.dirname(subject.target), `${path.dirname(subject.target)}.original`);
-        fs.mkdirSync(path.dirname(subject.target));
-        fs.writeFileSync(subject.target, "foreign");
-      } else if (change === "leaf") {
-        fs.renameSync(subject.target, `${subject.target}.original`);
-        fs.writeFileSync(subject.target, "foreign");
+      if (change === "hardlink") {
+        fs.linkSync(destination, `${destination}.alias`);
       } else {
-        fs.linkSync(subject.target, `${subject.target}.alias`);
+        const replaced = change === "parent" ? path.dirname(destination) : destination;
+        fs.renameSync(replaced, `${replaced}.original`);
+        if (change === "parent") {
+          fs.mkdirSync(replaced);
+        }
+        fs.writeFileSync(destination, "foreign");
       }
       return transfer(source, target, options);
     });
-    expect(subject.copy).toThrow();
+    expect(copy).toThrow();
     if (change !== "hardlink") {
-      expect(fs.readFileSync(subject.target, "utf8")).toBe("foreign");
+      expect(fs.readFileSync(destination, "utf8")).toBe("foreign");
     }
   },
 );
 
 it("preserves disk-full diagnostics and does not retry descriptor transfer", () => {
-  const subject = fixture();
+  const { copy } = fixture();
   const cause = Object.assign(new Error("capture filesystem is full"), { code: "ENOSPC" });
   const failure = new FsSafeError("helper-failed", "descriptor copy failed", { cause });
   const transfer = vi.spyOn(fsSafe, "copyFileDescriptorSync").mockImplementation(() => {
     throw failure;
   });
-  expect(subject.copy).toThrow("capture filesystem is full");
+  expect(copy).toThrow("capture filesystem is full");
   expect(transfer).toHaveBeenCalledOnce();
-  // A failed acquisition is not retried over the partially created output.
-  expect(subject.copy).toThrow(expect.objectContaining({ code: "already-exists" }));
+  expect(copy).toThrow(expect.objectContaining({ code: "already-exists" }));
   expect(transfer).toHaveBeenCalledOnce();
 });
 
 it("admits Windows copies through the native spelling of an aliased root", () => {
-  const subject = fixture(Buffer.alloc(128 * 1024, 1));
+  const { root, source, target } = fixture(Buffer.alloc(128 * 1024, 1));
   // A symlink stands in for an 8.3 alias: its native realpath differs from its spelling.
-  const alias = `${subject.root}-alias`;
-  fs.symlinkSync(subject.root, alias, "dir");
+  const alias = `${root}-alias`;
+  fs.symlinkSync(root, alias, "dir");
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   const copyFile = vi.fn<typeof fsSafe.copyRootFileSync>(() => {
     throw new FsSafeError("path-mismatch", "fixture stop");
   });
 
   expect(() =>
-    copyPluginSourceFile(path.join(alias, "input.js"), alias, subject.target, { copyFile }),
+    copyPluginSourceFile(path.join(alias, "input.js"), alias, target, { copyFile }),
   ).toThrow("fixture stop");
   expect(copyFile.mock.calls[0]?.[0].source).toEqual({
-    rootPath: subject.root,
-    absolutePath: subject.source,
+    rootPath: root,
+    absolutePath: source,
   });
   fs.unlinkSync(alias);
 });

@@ -1,23 +1,9 @@
 import { createHash } from "node:crypto";
 import { globSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
-import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
-import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
-import {
-  gatewayMethodsTestExclude,
-  gatewayMethodsTestInclude,
-} from "../../test/vitest/vitest.gateway-server-paths.mjs";
-import {
-  filterFilesByPatterns,
-  isPlainRepoRelativePath,
-} from "../../test/vitest/vitest.include-patterns.ts";
 import {
   loadPatternListFromEnv,
-  matchesVitestCliSelection,
   matchesVitestGlob,
-  relativizeScopedPatterns,
-  sharedVitestExcludePatterns,
 } from "../../test/vitest/vitest.pattern-file.ts";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { controlUiE2eTestGlobs, controlUiTestGlobs } from "../../test/vitest/vitest.ui-paths.mjs";
@@ -26,16 +12,12 @@ import {
   getUnitFastTestFiles,
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
-import {
-  filterUnitConfigTestFiles,
-  unitTestAdditionalExcludePatterns,
-  unitTestIncludePatterns,
-} from "../../test/vitest/vitest.unit-paths.mjs";
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
+import { listNodeTestConfigFiles } from "./ci-node-test-inventory.mts";
 import nativeBunQualification from "./ci-test-native-bun-qualification.json" with { type: "json" };
 import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 
-export type CiTestRuntimePolicy = "node" | "bun-compatible" | "dual" | "bun-all" | "dual-all";
+export type CiTestRuntimePolicy = "node" | "bun-all" | "dual-all";
 type TestRuntime = "node" | "bun";
 type TestSelection = {
   configs?: readonly string[];
@@ -81,200 +63,11 @@ export const BUN_UI_TEST_ENV = {
   MIMALLOC_PURGE_HOLES_MIN_INTERVAL: "1000",
 } as const;
 
-const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
-const gatewayClientConfig = "test/vitest/vitest.gateway-client.config.ts";
-const gatewayMethodsConfig = "test/vitest/vitest.gateway-methods.config.ts";
 const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
 const exactTestFilePattern = /^[\w./-]+\.test\.[cm]?[jt]sx?$/u;
 const nativeBunTestHashes: Readonly<Record<string, string>> = nativeBunQualification.tests;
 const nativeBunHelperHashes: Readonly<Record<string, Readonly<Record<string, string>>>> =
   nativeBunQualification.helpers;
-const bunCompatibleConfigs = new Set([
-  agentVitestProjectOwners.embeddedRun.config,
-  "test/vitest/vitest.cli.config.ts",
-  "test/vitest/vitest.unit-fast-fake-timers.config.ts",
-  "test/vitest/vitest.unit-fast-isolated.config.ts",
-  "test/vitest/vitest.extension-memory.config.ts",
-  gatewayClientConfig,
-]);
-const bunCompatibleWholeOwners = new Map<
-  string,
-  { dir: string; include: readonly string[]; exclude: readonly string[] }
->([
-  [agentVitestProjectOwners.support.config, agentVitestProjectOwners.support],
-  [
-    "test/vitest/vitest.commands.config.ts",
-    {
-      dir: "src/commands",
-      include: ["src/commands/**/*.test.ts"],
-      exclude: [...commandsLightTestFiles, ...databaseWorkerCoreTestFiles],
-    },
-  ],
-  [
-    gatewayMethodsConfig,
-    { dir: ".", include: gatewayMethodsTestInclude, exclude: gatewayMethodsTestExclude },
-  ],
-]);
-const bunCompatibleGatewayFiles = ["src/gateway/worker-environments/workspace-hash-memo.test.ts"];
-// Whole-file qualification keeps mixed and broad scoped-owner envelopes on Node.
-const bunCompatibleScopedOwners = new Map([
-  [
-    "test/vitest/vitest.extension-database-workers.config.ts",
-    {
-      dir: "extensions",
-      files: [
-        "extensions/codex/src/session-catalog-native-performance.test.ts",
-        "extensions/team-reports/src/render/theme.test.ts",
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.extension-whatsapp.config.ts",
-    {
-      dir: "extensions",
-      files: ["extensions/whatsapp/src/session.media-upload.test.ts"],
-    },
-  ],
-  [
-    "test/vitest/vitest.extension-slack.config.ts",
-    {
-      dir: "extensions",
-      files: [
-        "extensions/slack/src/monitor/ingress.auth-retry.test.ts",
-        "extensions/slack/src/monitor/ingress.deferred-stop.test.ts",
-        "extensions/slack/src/monitor/ingress.relay.test.ts",
-        "extensions/slack/src/monitor/message-handler.debounce-policy.test.ts",
-        "extensions/slack/src/monitor/provider.transport-credentials.test.ts",
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.extension-provider-openai.config.ts",
-    {
-      dir: "extensions",
-      files: ["extensions/openai/realtime-quicksilver-peer-worker.test.ts"],
-    },
-  ],
-  [
-    "test/vitest/vitest.plugins.config.ts",
-    {
-      dir: "src/plugins",
-      files: [
-        "src/plugins/plugin-module-generation.interop.test.ts",
-        "src/plugins/provider-discovery.capture-lifetime.test.ts",
-        "src/plugins/sdk-alias.test.ts",
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.tooling.config.ts",
-    {
-      dir: "",
-      files: [
-        "test/helpers/managed-handoff-isolation.test.ts",
-        "test/scripts-update-gateway-legacy.test.ts",
-        "test/scripts/bench-gateway-installed.test.ts",
-        "test/scripts/clawhub-bootstrap-artifact.test.ts",
-        "test/scripts/clawhub-fixture-server.test.ts",
-        "test/scripts/crabbox-untrusted-bootstrap.test.ts",
-        "test/scripts/oxlint-config.test.ts",
-        "test/scripts/pr-worktree-interruption.test.ts",
-        "test/scripts/pr-worktree-state.test.ts",
-        "test/scripts/pr-wrappers.test.ts",
-        "test/scripts/test-projects-empty-native.test.ts",
-        "test/scripts/test-projects.test.ts",
-        "test/scripts/upgrade-survivor-timeout-diagnostics.test.ts",
-        "test/scripts/watch-pr-ci-dependencies.test.ts",
-        "test/scripts/watch-pr-ci.test.ts",
-        "test/scripts/windows-repair-worker-probe.test.ts",
-        "test/vitest-pr-exempt-retention.test.ts",
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.tooling-isolated.config.ts",
-    {
-      dir: "",
-      files: [
-        "src/cli/update-cli/update-command-legacy-finalize.test.ts",
-        "test/scripts/control-ui-i18n.test.ts",
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.infra.config.ts",
-    {
-      dir: "",
-      files: [
-        "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
-        "src/cli/admin-state-owner.process.test.ts",
-        "src/infra/update-managed-service-handoff-reclamation.test.ts",
-        "src/infra/worker-cpu.test.ts",
-        "src/state/openclaw-state-lease.retention.test.ts",
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.gateway-database-workers.config.ts",
-    {
-      dir: ".",
-      files: ["src/gateway/server-methods/session-catalog.performance.test.ts"],
-    },
-  ],
-  [
-    "test/vitest/vitest.logging.config.ts",
-    {
-      dir: "src",
-      files: ["src/logging/diagnostic-memory.test.ts"],
-    },
-  ],
-  [
-    "test/vitest/vitest.ui-e2e.config.ts",
-    {
-      dir: "",
-      files: [
-        "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
-        "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
-        "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
-        "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
-        "ui/src/e2e/service-worker-update.e2e.test.ts",
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.cli-process.config.ts",
-    {
-      dir: "",
-      files: [
-        "src/cli/help-exit.process.test.ts",
-        "src/cli/update-cli/update-command-fresh-doctor-authority.test.ts",
-        "src/cli/update-cli/update-command-lease.test.ts",
-        "src/cli/update-cli/update-command-migrated.test.ts",
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.extension-qa.config.ts",
-    {
-      dir: "extensions",
-      files: ["extensions/qa-lab/src/multipass.runtime.test.ts"],
-    },
-  ],
-  [
-    "test/vitest/vitest.gateway.config.ts",
-    {
-      dir: ".",
-      files: bunCompatibleGatewayFiles,
-    },
-  ],
-  [
-    gatewayCoreConfig,
-    {
-      dir: "src/gateway",
-      files: bunCompatibleGatewayFiles,
-    },
-  ],
-]);
 // These contracts exercise Node's transferable POSIX pipe handles, including
 // suites that would otherwise pass on Bun by skipping their broker assertions.
 const nodeRequiredProcessFiles = new Set([
@@ -296,30 +89,16 @@ const nodeRequiredProcessFiles = new Set([
   "src/process/supervisor/adapters/child.service-lifecycle.test.ts",
   "src/process/supervisor/service-child-relay-host.retirement.test.ts",
 ]);
-// Trial policies remove qualification gates, but retain Node/V8 contracts and known fork defects.
+// Bun policies retain Node/V8 contracts and known fork defects on Node.
 const nodeRequiredFiles = new Set([
   ...nodeRequiredProcessFiles,
-  // Bun's fs.watch callback is not registered as an EventEmitter change listener.
-  "src/infra/owned-directory-observation.test.ts",
-  // Bun does not settle a pending IPC send callback when its parent disconnects.
-  "src/infra/tailscale-route-owner.worker.test.ts",
-  // Bun leaves a Proxy-closed FileHandle's finalizer armed (ERR_INVALID_STATE); fork repro reported.
-  "src/gateway/session-utils.fs.display-position.test.ts",
   // Bun reports peer ECONNRESET when destroying a socket with a pending reply; fork compat review pending.
   "src/infra/exec-host.socket.test.ts",
-  // Bun throws ENOTDIR despite statSync's throwIfNoEntry: false option.
-  "src/state/openclaw-database-preflight.startup-prepared.test.ts",
-  // Bun Worker termination leaves unmanaged fs.openSync descriptors open.
-  "src/state/openclaw-state-ownership.test.ts",
+  // The macOS directory watch helper serves Node's libuv watchers only.
+  "src/infra/directory-watch-host.test.ts",
   // Node's trace-exit, diagnostic reports, and native process/SQLite lifecycle.
   "src/cli/cli-process-diagnostics.test.ts",
   "test/scripts/bench-session-history.test.ts",
-  // Bun's node:module SourceMap.findOrigin returns {} for valid mappings.
-  "test/scripts/control-ui-cold-load-trace.test.ts",
-  // Bun's os.availableParallelism reads mutable navigator.hardwareConcurrency.
-  "test/talk-browser-defaults.test.ts",
-  // Bun's HTTP ServerResponse sends body bytes before an explicit uncork.
-  "src/gateway/artifact-downloads.test.ts",
   // These proofs require V8 heap instrumentation or Node worker heap flags.
   "src/infra/worker-heap-flag.test.ts",
   "src/logging/diagnostic-heap-profile.test.ts",
@@ -335,87 +114,6 @@ const knownConfigs = new Set([
   "ui/vitest.config.ts",
   ...fullSuiteVitestShards.flatMap(({ config, projects }) => [config, ...(projects ?? [])]),
 ]);
-
-// The census covers unit-src; other aggregate-unit owners retain their policy.
-const unitRequiresNode = (file: string) =>
-  !(
-    (file.startsWith("src/") &&
-      !file.startsWith("src/acp/") &&
-      !file.startsWith("src/security/")) ||
-    file === "packages/normalization-core/src/grapheme.test.ts"
-  );
-const runtimePartitions = new Map<
-  string,
-  {
-    files: (cwd: string, includePatterns?: string[]) => string[];
-    nodeRequired: ReadonlySet<string> | ((file: string) => boolean);
-    includeAfterShard?: true;
-  }
->([
-  [
-    "test/vitest/vitest.process.config.ts",
-    {
-      files: (cwd) =>
-        globSync("src/process/**/*.test.ts", { cwd, exclude: databaseWorkerCoreTestFiles })
-          .map((file) => file.replaceAll("\\", "/"))
-          .toSorted(),
-      nodeRequired: nodeRequiredProcessFiles,
-    },
-  ],
-  [
-    unitFastConfig,
-    {
-      files: (_cwd, includePatterns) => unitFastFiles(includePatterns),
-      nodeRequired: new Set([
-        ...nodeRequiredProcessFiles,
-        // Node's trace-exit and diagnostic-report instrumentation is not a Bun contract.
-        "src/cli/cli-process-diagnostics.test.ts",
-        // Preserve native Node process and SQLite lifecycle semantics for this benchmark.
-        "test/scripts/bench-session-history.test.ts",
-      ]),
-    },
-  ],
-  [
-    "test/vitest/vitest.unit.config.ts",
-    {
-      files: unitFiles,
-      nodeRequired: unitRequiresNode,
-    },
-  ],
-  [
-    "test/vitest/vitest.unit-src.config.ts",
-    {
-      files: (cwd) =>
-        unitFiles(cwd).filter(
-          (file) =>
-            file.startsWith("src/") &&
-            !file.startsWith("src/acp/") &&
-            !file.startsWith("src/security/"),
-        ),
-      nodeRequired: unitRequiresNode,
-    },
-  ],
-  [
-    "ui/vitest.config.ts",
-    {
-      files: (cwd) =>
-        globSync(controlUiTestGlobs, { cwd, exclude: controlUiE2eTestGlobs })
-          .map((file) => file.replaceAll("\\", "/"))
-          .toSorted(),
-      nodeRequired: new Set<string>(),
-      includeAfterShard: true,
-    },
-  ],
-]);
-
-function partitionRequiresNode(
-  partition: { nodeRequired: ReadonlySet<string> | ((file: string) => boolean) },
-  file: string,
-): boolean {
-  return typeof partition.nodeRequired === "function"
-    ? partition.nodeRequired(file)
-    : partition.nodeRequired.has(file);
-}
 
 function unitFastFiles(includePatterns?: string[]): string[] {
   const otherOwners = new Set([
@@ -500,19 +198,6 @@ function qualifiedNativeBunFiles(files: readonly string[], cwd: string): string[
   );
 }
 
-function unitFiles(cwd: string): string[] {
-  const fastFiles = new Set(getUnitFastTestFiles());
-  return filterUnitConfigTestFiles(
-    globSync(unitTestIncludePatterns, {
-      cwd,
-      exclude: [...sharedVitestExcludePatterns, ...unitTestAdditionalExcludePatterns],
-    }),
-  )
-    .map((file) => file.replaceAll("\\", "/"))
-    .filter((file) => !fastFiles.has(file))
-    .toSorted();
-}
-
 function selectionVitestArgs(selection: TestSelection): string[] | undefined {
   let args: unknown = selection.vitestArgs;
   if (!args) {
@@ -574,44 +259,12 @@ export function resolveCiTestRuntimePolicy(
   env: NodeJS.ProcessEnv = process.env,
 ): CiTestRuntimePolicy {
   const policy = env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "node";
-  if (
-    policy !== "node" &&
-    policy !== "bun-compatible" &&
-    policy !== "dual" &&
-    policy !== "bun-all" &&
-    policy !== "dual-all"
-  ) {
+  if (policy !== "node" && policy !== "bun-all" && policy !== "dual-all") {
     throw new Error(
-      `Invalid OPENCLAW_CI_TEST_RUNTIME_POLICY: ${policy}; expected node, bun-compatible, dual, bun-all, or dual-all`,
+      `Invalid OPENCLAW_CI_TEST_RUNTIME_POLICY: ${policy}; expected node, bun-all, or dual-all`,
     );
   }
   return policy;
-}
-
-function includesStayWithinWholeOwner(
-  config: string,
-  includePatterns: readonly string[] | null | undefined,
-): boolean {
-  if (!includePatterns?.length) {
-    return true;
-  }
-  const owner = bunCompatibleWholeOwners.get(config)!;
-  const canonical = relativizeScopedPatterns(owner.include, owner.dir);
-  return relativizeScopedPatterns(includePatterns, owner.dir).every((value) => {
-    const pattern = value.replace(/^\.\//u, "");
-    // Include files replace scoped config globs; uncertain patterns must keep Node's envelope.
-    if (!isPlainRepoRelativePath(pattern) || !exactTestFilePattern.test(pattern)) {
-      return canonical.includes(pattern);
-    }
-    const target = path.posix.join(owner.dir, pattern);
-    // Scoped configs also exclude the unit-fast families and shared fixture paths.
-    const exclude = [
-      ...sharedVitestExcludePatterns,
-      ...getUnitFastTestFiles([target]),
-      ...owner.exclude,
-    ];
-    return filterFilesByPatterns([target], owner.include, exclude, matchesVitestGlob).length === 1;
-  });
 }
 
 function resolveAllRuntimeSelections(
@@ -630,6 +283,13 @@ function resolveAllRuntimeSelections(
   const exactTargets =
     Boolean(targets?.length) && targets!.every((file) => exactTestFilePattern.test(file));
   const ui = configs.length === 1 && configs[0] === "ui/vitest.config.ts";
+  const supportsArgs = args && (ui ? supportsUiRuntime(args) : supportsRuntimePartition(args));
+  const uiFiles =
+    ui && supportsArgs
+      ? globSync(controlUiTestGlobs, { cwd, exclude: controlUiE2eTestGlobs })
+          .map((file) => file.replaceAll("\\", "/"))
+          .toSorted()
+      : undefined;
   const patterns = (key: string) => {
     const value = selection.env?.[key];
     return loadPatternListFromEnv(key, { [key]: typeof value === "string" ? value : undefined });
@@ -638,6 +298,15 @@ function resolveAllRuntimeSelections(
     ? selection.includePatterns
     : patterns("OPENCLAW_VITEST_INCLUDE_FILE");
   const postIncludes = patterns("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE");
+  const ownerConfigs =
+    !ui && supportsArgs && !includes && !exactTargets
+      ? configs.flatMap(
+          (config) =>
+            fullSuiteVitestShards.find((shard) => shard.config === config)?.projects ?? [config],
+        )
+      : [];
+  const inventories = ownerConfigs.map((config) => listNodeTestConfigFiles(config));
+  const unresolvedConfigs = ownerConfigs.filter((_, index) => !inventories[index]);
   const matches = (file: string, include: readonly string[]) =>
     include.some((pattern) => {
       const relative = relativePath(pattern);
@@ -665,22 +334,19 @@ function resolveAllRuntimeSelections(
     if (includes) {
       return true;
     }
-    if (
-      !args ||
-      !(ui ? supportsUiRuntime(args) : supportsRuntimePartition(args)) ||
-      !configs.length ||
-      configs.some((config) => !knownConfigs.has(config))
-    ) {
+    if (!supportsArgs || !configs.length || configs.some((config) => !knownConfigs.has(config))) {
       return true;
     }
-    const owners = new Set(buildVitestRunPlans([file], cwd).map((plan) => plan.config));
-    return configs.some(
-      (config) =>
-        owners.has(config) ||
-        fullSuiteVitestShards.some(
-          (shard) =>
-            shard.config === config && shard.projects?.some((project) => owners.has(project)),
-        ),
+    // The package config aggregates root UI owners under a different config path.
+    if (uiFiles) {
+      return uiFiles.includes(file);
+    }
+    // Leaf inventories own membership after aggregate configs have been split.
+    // Process, tooling and other unmapped owners still use the focused planner.
+    return (
+      inventories.some((inventory) => inventory?.includes(file)) ||
+      (unresolvedConfigs.length > 0 &&
+        buildVitestRunPlans([file], cwd).some((plan) => unresolvedConfigs.includes(plan.config)))
     );
   });
   if (
@@ -690,9 +356,8 @@ function resolveAllRuntimeSelections(
     return [node];
   }
   // UI membership is applied after native sharding, preserving each row's inventory.
-  if (ui && args && supportsUiRuntime(args)) {
-    const inventory = runtimePartitions.get("ui/vitest.config.ts")!.files(cwd);
-    const bunFiles = inventory.filter(
+  if (uiFiles) {
+    const bunFiles = uiFiles.filter(
       (file) => !nodeRequiredFiles.has(file) && (!postIncludes || matches(file, postIncludes)),
     );
     return [
@@ -714,26 +379,20 @@ function resolveAllRuntimeSelections(
   if (
     !selection.env?.OPENCLAW_VITEST_INCLUDE_FILE &&
     !postIncludes &&
-    args &&
-    supportsRuntimePartition(args) &&
+    args?.length === 0 &&
     (exactTargets || (configs.length === 1 && configs[0] === unitFastConfig))
   ) {
-    const qualified = resolveCiTestRuntimeSelections(selection, "bun-compatible", cwd);
-    if (qualified.some((entry) => entry.engine === "bun-test")) {
-      for (const entry of qualified) {
-        if (entry.runtime === "bun" && entry.engine !== "bun-test" && entry.includePatterns) {
-          entry.includePatterns = entry.includePatterns.filter(
-            (file) => !nodeRequiredFiles.has(file),
-          );
-        }
-      }
-      const bun = qualified.filter(
-        (entry) =>
-          entry.runtime === "bun" &&
-          (entry.engine === "bun-test" ||
-            !entry.includePatterns ||
-            entry.includePatterns.length > 0),
-      );
+    const inventory = exactTargets
+      ? targets!
+      : unitFastFiles(includes ? [...includes] : undefined).filter(
+          (file) => !includes || includes.some((pattern) => matchesVitestGlob(file, pattern)),
+        );
+    const bunFiles = inventory.filter((file) => !nodeRequiredFiles.has(file));
+    const nativeFiles = qualifiedNativeBunFiles(bunFiles, cwd);
+    // Exact argv is one envelope; partial native routing would change its meaning.
+    if (nativeFiles.length && (!exactTargets || nativeFiles.length === inventory.length)) {
+      const nativeSet = new Set(nativeFiles);
+      const vitestFiles = bunFiles.filter((file) => !nativeSet.has(file));
       return [
         ...(policy === "dual-all"
           ? [node]
@@ -745,10 +404,12 @@ function resolveAllRuntimeSelections(
                 },
               ]
             : []),
-        ...bun,
+        ...(vitestFiles.length ? [{ runtime: "bun" as const, includePatterns: vitestFiles }] : []),
+        { runtime: "bun", engine: "bun-test", files: nativeFiles },
       ];
     }
   }
+
   return [
     ...(policy === "dual-all"
       ? [node]
@@ -779,210 +440,9 @@ export function resolveCiTestRuntimeSelections(
   policy: CiTestRuntimePolicy,
   cwd = process.cwd(),
 ): CiTestRuntimeSelection[] {
-  if (policy === "bun-all" || policy === "dual-all") {
-    return resolveAllRuntimeSelections(selection, policy, cwd);
-  }
-  const node: CiTestRuntimeSelection[] = [{ runtime: "node" }];
-  const args = selectionVitestArgs(selection);
-  if (
-    policy === "node" ||
-    selection.env?.OPENCLAW_VITEST_INCLUDE_FILE ||
-    selection.env?.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE ||
-    !args
-  ) {
-    return node;
-  }
-  const completeBun = (): CiTestRuntimeSelection[] =>
-    policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }];
-  const uiPartition =
-    selection.configs?.length === 1 &&
-    selection.configs[0] === "ui/vitest.config.ts" &&
-    !selection.targets?.length &&
-    supportsUiRuntime(args);
-  if (!uiPartition && !supportsRuntimePartition(args)) {
-    return node;
-  }
-  if (selection.targets?.length) {
-    // Preserve exact target argv and its native owner; broad targets can carry
-    // multiple process/filter contracts and stay on Node.
-    if (selection.targets.some((target) => !exactTestFilePattern.test(target))) {
-      return node;
-    }
-    const plans = selection.targets.flatMap((target) => buildVitestRunPlans([target], cwd));
-    if (!plans.length) {
-      return node;
-    }
-    if (
-      plans.every(
-        (plan) =>
-          bunCompatibleConfigs.has(plan.config) || bunCompatibleWholeOwners.has(plan.config),
-      )
-    ) {
-      return completeBun();
-    }
-    const config = plans[0]!.config;
-    const scopedOwner = bunCompatibleScopedOwners.get(config);
-    if (
-      scopedOwner &&
-      plans.every((plan) => plan.config === config) &&
-      selection.targets.every((file) => scopedOwner.files.includes(file))
-    ) {
-      return completeBun();
-    }
-    const partition = runtimePartitions.get(config);
-    if (
-      !partition ||
-      partition.includeAfterShard ||
-      !plans.every((plan) => plan.config === config)
-    ) {
-      return node;
-    }
-    const files = new Set(partition.files(cwd, [...selection.targets]));
-    if (
-      !selection.targets.every(
-        (target) => files.has(target) && !partitionRequiresNode(partition, target),
-      )
-    ) {
-      return node;
-    }
-    if (
-      config === unitFastConfig &&
-      args.length === 0 &&
-      qualifiedNativeBunFiles(selection.targets, cwd).length === selection.targets.length
-    ) {
-      return [
-        ...(policy === "dual" ? node : []),
-        { runtime: "bun", engine: "bun-test", files: [...selection.targets] },
-      ];
-    }
-    return completeBun();
-  }
-  if (
-    selection.configs?.length === 2 &&
-    selection.configs[0] === gatewayCoreConfig &&
-    selection.configs[1] === gatewayClientConfig
-  ) {
-    const parallelProjects = selection.env?.OPENCLAW_TEST_PROJECTS_PARALLEL;
-    if (typeof parallelProjects === "string" && parallelProjects.trim() !== "1") {
-      return node;
-    }
-    // These leaf configs already run sequentially and intersect the shared
-    // include envelope with their own inventories. Keep that ownership intact.
-    const coreSelections = resolveCiTestRuntimeSelections(
-      { ...selection, configs: [gatewayCoreConfig] },
-      policy,
-      cwd,
-    );
-    return [
-      ...(policy === "dual" ? node : []),
-      ...coreSelections
-        .filter((entry) => policy !== "dual" || entry.runtime === "bun")
-        .map((entry) =>
-          entry.engine === "bun-test"
-            ? entry
-            : Object.assign({}, entry, { configs: [gatewayCoreConfig] }),
-        ),
-      { runtime: "bun", configs: [gatewayClientConfig] },
-    ];
-  }
-  if (selection.configs?.length !== 1) {
-    return node;
-  }
-  const config = selection.configs[0]!;
-  if (bunCompatibleWholeOwners.has(config)) {
-    return includesStayWithinWholeOwner(config, selection.includePatterns) ? completeBun() : node;
-  }
-  if (bunCompatibleConfigs.has(config)) {
-    return completeBun();
-  }
-  const scopedOwner = bunCompatibleScopedOwners.get(config);
-  if (scopedOwner) {
-    const includePatterns = selection.includePatterns?.length ? selection.includePatterns : null;
-    const qualifiedPatterns = relativizeScopedPatterns(scopedOwner.files, scopedOwner.dir);
-    if (
-      includePatterns &&
-      relativizeScopedPatterns(includePatterns, scopedOwner.dir).every((pattern) =>
-        qualifiedPatterns.includes(pattern),
-      )
-    ) {
-      return completeBun();
-    }
-    const bunFiles =
-      policy === "dual"
-        ? scopedOwner.files.filter((file) =>
-            matchesVitestCliSelection(
-              file,
-              scopedOwner.files,
-              [],
-              scopedOwner.dir,
-              {},
-              includePatterns,
-            ),
-          )
-        : [];
-    return bunFiles.length ? [...node, { runtime: "bun", includePatterns: bunFiles }] : node;
-  }
-  const partition = runtimePartitions.get(config);
-  if (!partition || (partition.includeAfterShard && !uiPartition)) {
-    return node;
-  }
-  // Reuse canonical scoped analysis only for exact files; glob envelopes keep
-  // their full inventory and existing matcher semantics.
-  const exactSelection = selection.includePatterns?.every((pattern) =>
-    exactTestFilePattern.test(pattern),
-  )
-    ? [...selection.includePatterns]
-    : undefined;
-  const inventory = partition.files(cwd, exactSelection);
-  const requested = new Set(selection.includePatterns ?? []);
-  // Canonical file inventories should not reparse every file pair as a glob.
-  const exactFiles = selection.includePatterns?.every(
-    (pattern) => /^[\w./-]+$/u.test(pattern) && inventory.includes(pattern),
-  );
-  const files = inventory.filter(
-    (file) =>
-      !selection.includePatterns ||
-      (exactFiles
-        ? requested.has(file)
-        : selection.includePatterns.some((pattern) => matchesVitestGlob(file, pattern))),
-  );
-  const bunFiles = files.filter((file) => !partitionRequiresNode(partition, file));
-  if (!bunFiles.length) {
-    return node;
-  }
-  const nodeFiles = files.filter((file) => partitionRequiresNode(partition, file));
-  // Ordinary CI passes no extra Vitest argv. Collection, filters and overrides
-  // keep Vitest's interpretation rather than silently changing native semantics.
-  const nativeFiles =
-    config === unitFastConfig && args.length === 0 ? qualifiedNativeBunFiles(bunFiles, cwd) : [];
-  const nativeSet = new Set(nativeFiles);
-  const vitestFiles = bunFiles.filter((file) => !nativeSet.has(file));
-  return [
-    ...(policy === "dual"
-      ? node
-      : nodeFiles.length
-        ? [
-            {
-              runtime: "node" as const,
-              includePatterns: nodeFiles,
-              ...(partition.includeAfterShard ? { includeAfterShard: true as const } : {}),
-            },
-          ]
-        : []),
-    ...(vitestFiles.length
-      ? [
-          {
-            runtime: "bun" as const,
-            includePatterns: vitestFiles,
-            ...(partition.includeAfterShard ? { includeAfterShard: true as const } : {}),
-            ...(config === "ui/vitest.config.ts" ? { env: BUN_UI_TEST_ENV } : {}),
-          },
-        ]
-      : []),
-    ...(nativeFiles.length
-      ? [{ runtime: "bun" as const, engine: "bun-test" as const, files: nativeFiles }]
-      : []),
-  ];
+  return policy === "node"
+    ? [{ runtime: "node" }]
+    : resolveAllRuntimeSelections(selection, policy, cwd);
 }
 
 /** Match the shard runner's original process envelopes without splitting or dropping coverage. */

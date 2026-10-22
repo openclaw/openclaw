@@ -12,7 +12,6 @@ import {
   type OwnedStdioProcess,
 } from "../process/owned-stdio.js";
 import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
-import { settlesWithin } from "../shared/settle-within.js";
 import { spawnLspServerProcess } from "./agent-bundle-lsp-process.js";
 import { normalizeReservedToolNames } from "./agent-bundle-mcp-names.js";
 import {
@@ -264,7 +263,7 @@ function sendRequest(
   };
   const pending = session.pendingRequests.add(id, {
     value: undefined,
-    timeoutMs: 10_000,
+    timeoutMs: method === "shutdown" ? LSP_SHUTDOWN_GRACE_MS : 10_000,
     timeoutError: () => new Error(`LSP request ${method} timed out`),
     dispose: () => signal?.removeEventListener("abort", onAbort),
   });
@@ -384,8 +383,7 @@ function disposeSession(session: LspSession): Promise<void> {
   session.disposal = (async () => {
     if (session.initialized && !session.failure) {
       try {
-        const shutdown = sendRequest(session, "shutdown").catch(() => undefined);
-        await settlesWithin(shutdown, LSP_SHUTDOWN_GRACE_MS);
+        await sendRequest(session, "shutdown").catch(() => undefined);
         session.process.stdin?.write(
           encodeLspMessage({ jsonrpc: "2.0", method: "exit", params: null }),
         );
@@ -536,6 +534,7 @@ export async function createBundleLspToolRuntime(params: {
       try {
         const child = await spawnLspServerProcess(launchConfig, {
           abortSignal: params.abortSignal,
+          serverName,
         });
         session = {
           serverName,
@@ -576,10 +575,6 @@ export async function createBundleLspToolRuntime(params: {
           });
           tools.push(tool);
         }
-
-        logDebug(
-          `bundle-lsp: started "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}) with ${serverTools.length} tools`,
-        );
       } catch (error) {
         if (session) {
           await disposeSessions([session]);

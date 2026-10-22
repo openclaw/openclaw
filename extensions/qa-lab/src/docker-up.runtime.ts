@@ -10,24 +10,18 @@ import {
   resolveHostPort,
   waitForDockerServiceHealth,
   waitForHealth,
-  type FetchLike,
 } from "./docker-runtime.js";
 
 const QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 
 async function isQaLabDockerHealthReachable(url: string) {
-  let response: Awaited<ReturnType<FetchLike>> | undefined;
   try {
-    response = await fetchHealthUrl(url, {
+    const response = await fetchHealthUrl(url, {
       signal: AbortSignal.timeout(QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS),
     });
     return response.ok;
   } catch {
     return false;
-  } finally {
-    try {
-      await response?.body?.cancel?.();
-    } catch {}
   }
 }
 
@@ -120,9 +114,6 @@ export async function runQaDockerUp(params: {
   composeArgs.push("-d");
 
   await execCommand("docker", composeArgs, repoRoot);
-
-  // Brief settle delay so Docker Desktop finishes port-forwarding setup.
-  await sleep(3_000);
 
   const qaLabUrl = `http://127.0.0.1:${qaLabPort}`;
   const hostGatewayUrl = `http://127.0.0.1:${gatewayPort}/`;

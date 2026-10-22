@@ -27,7 +27,7 @@ import type { BlockChunkMetadata } from "./embedded-agent-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
-} from "./embedded-agent-helpers.js";
+} from "./embedded-agent-helpers/messaging-dedupe.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   shouldSuppressSourceReplyOutput,

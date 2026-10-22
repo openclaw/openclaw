@@ -6,7 +6,6 @@ import {
   registerAgentDatabaseReaderCloser,
 } from "../infra/agent-database-readers.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { reserveAgentCreationClaimAdmission } from "./agent-creation-claim.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
@@ -44,7 +43,7 @@ const resources = resolveGlobalSingleton(
   () => ({
     active: new Set<AgentDatabaseResource>(),
     closing: new Map<AgentDatabaseResource, Promise<void> | undefined>(),
-    selections: new Map<AgentDatabaseCloseSelection, Promise<void>>(),
+    selections: new Map<AgentDatabaseCloseSelection, Promise<unknown> | undefined>(),
   }),
 );
 
@@ -53,15 +52,14 @@ export function hasOpenClawAgentDatabaseAsyncResources(): boolean {
   return resources.active.size > 0 || resources.closing.size > 0;
 }
 
-/** Observe an existing full close without revoking resources or selecting a successor. */
-export function captureAgentDatabaseCloseFence(
+/** Observe a full close without admitting a reader into its retiring lifetime. */
+export function isAgentDatabaseClosing(
   target: Pick<OpenClawAgentDatabaseAsyncResource, "agentId" | "path">,
-): Promise<void> | undefined {
+): boolean {
   const owned = { agentId: normalizeAgentId(target.agentId), path: path.resolve(target.path) };
-  const pending = [...resources.selections].flatMap(([selection, completion]) =>
-    matchesAgentDatabaseClose(selection, owned) ? [completion] : [],
+  return [...resources.selections.keys()].some((selection) =>
+    matchesAgentDatabaseClose(selection, owned),
   );
-  return pending.length ? Promise.all(pending).then(() => undefined) : undefined;
 }
 
 export { matchesAgentDatabaseReadCandidatePath };
@@ -304,20 +302,15 @@ export async function withAgentDatabaseCloseFence<T>(
   close: (resourcePaths: readonly string[]) => Promise<T>,
 ): Promise<T> {
   const ownedSelection = { ...selection };
-  const completion = createDeferredCore();
-  // A close may have no observer; its caller still receives the original failure.
-  void completion.promise.catch(() => {});
-  resources.selections.set(ownedSelection, completion.promise);
+  resources.selections.set(ownedSelection, undefined);
   try {
     const resourcePaths = [...new Set([...resources.active, ...resources.closing.keys()])]
       .filter((resource) => matchesAgentDatabaseClose(ownedSelection, resource))
       .map((resource) => resource.path);
-    const result = await close(resourcePaths);
-    completion.resolve();
-    return result;
-  } catch (error) {
-    completion.reject(error);
-    throw error;
+    const operation = close(resourcePaths);
+    // Teardown joins the real native close, without a separate completion mirror.
+    resources.selections.set(ownedSelection, operation);
+    return await operation;
   } finally {
     resources.selections.delete(ownedSelection);
   }

@@ -363,12 +363,7 @@ export function scheduleToolProgress(
   if (!onUpdate || options.signal?.aborted) {
     return () => {};
   }
-  let cleared = false;
   const clear = () => {
-    if (cleared) {
-      return;
-    }
-    cleared = true;
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", clear);
   };

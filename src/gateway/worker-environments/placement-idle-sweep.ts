@@ -1,9 +1,11 @@
-import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
+import {
+  hasSessionControllerQueuedWork,
+  isSessionControllerWorkActive,
+} from "../../sessions/session-controller.lifecycle.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
@@ -53,8 +55,8 @@ export function createWorkerPlacementIdleSweep(options: {
         if (memory) {
           const identities = [sessionKey, sessionId];
           return () =>
-            isSessionWorkAdmissionActive(memory.path, identities) ||
-            hasPendingFollowupQueueWork(identities);
+            isSessionControllerWorkActive(memory.path, identities, memory.agentId) ||
+            hasSessionControllerQueuedWork(memory.path, identities, memory.agentId);
         }
         const sessionRuntime = await loadSessionRuntime();
         const target = await sessionRuntime.resolveGatewaySessionStoreTargetInWorker({
@@ -69,8 +71,8 @@ export function createWorkerPlacementIdleSweep(options: {
         });
         const identities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
         return () =>
-          isSessionWorkAdmissionActive(target.storePath, identities) ||
-          hasPendingFollowupQueueWork(identities);
+          isSessionControllerWorkActive(target.storePath, identities, target.agentId) ||
+          hasSessionControllerQueuedWork(target.storePath, identities, target.agentId);
       }));
 
   return {

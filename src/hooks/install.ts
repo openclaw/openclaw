@@ -7,7 +7,7 @@ import {
   hasPackageRuntimeDependencies,
 } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
-import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
+import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import type { NpmIntegrityDriftPayload as HookNpmIntegrityDriftParams } from "../infra/npm-integrity.js";
 import { detectBundleManifestFormat } from "../plugins/bundle-manifest.js";
 import {
@@ -45,7 +45,6 @@ export type InstallHooksResult =
       targetDir: string;
       version?: string;
       npmResolution?: NpmSpecResolution;
-      integrityDrift?: NpmIntegrityDrift;
     }
   | {
       ok: false;

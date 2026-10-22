@@ -136,7 +136,6 @@ it.each([
     const session = createTalkRealtimeRelaySession({
       context: {
         broadcastToConnIds,
-        chatAbortControllers: new Map(),
         getRuntimeConfig: () => cfg,
         logGateway: { warn },
       } as never,

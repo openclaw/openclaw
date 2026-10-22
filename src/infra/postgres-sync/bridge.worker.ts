@@ -37,7 +37,10 @@ async function handleRequest(request: BridgeRequest) {
         try {
           // Validate only while idle: user statements are never replayed after a lost connection.
           await client.query("SELECT 1");
-          reply = { id: request.id, result: { rows: [], rowCount: 0, fields: [] } };
+          reply = {
+            id: request.id,
+            result: { inTransaction: false, rows: [], rowCount: 0, fields: [] },
+          };
           port.postMessage(reply);
           Atomics.store(control, 0, request.id);
           Atomics.notify(control, 0);
@@ -68,16 +71,22 @@ async function handleRequest(request: BridgeRequest) {
       });
       await client.connect();
       // Matches the pilot's SQLite WAL + synchronous=NORMAL durability tradeoff.
-      await client.query("SET synchronous_commit = off");
       await client.query(
-        "SELECT set_config('lock_timeout', $1, false), set_config('statement_timeout', $2, false)",
-        [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`],
+        "SELECT set_config('synchronous_commit', 'off', false), " +
+          "set_config('lock_timeout', $1, false), " +
+          "set_config('statement_timeout', $2, false), set_config('search_path', $3, false)",
+        [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`, `"${schema.replaceAll('"', '""')}"`],
       );
-      await client.query(`SET search_path TO "${schema.replaceAll('"', '""')}"`);
-      reply = { id: request.id, result: { rows: [], rowCount: 0, fields: [] } };
+      reply = {
+        id: request.id,
+        result: { inTransaction: false, rows: [], rowCount: 0, fields: [] },
+      };
     } else if (request.operation === "close") {
       await client.end();
-      reply = { id: request.id, result: { rows: [], rowCount: 0, fields: [] } };
+      reply = {
+        id: request.id,
+        result: { inTransaction: false, rows: [], rowCount: 0, fields: [] },
+      };
     } else {
       if (connectionError) {
         throw connectionError;
@@ -101,14 +110,26 @@ async function handleRequest(request: BridgeRequest) {
         reply = { id: request.id, generation };
       } else {
         const results = await client.query(request.sql, [...request.parameters]);
-        const result: QueryResult | undefined = Array.isArray(results) ? results.at(-1) : results;
-        if (!result) {
-          throw new Error("PostgreSQL returned no query result");
-        }
+        const result: QueryResult = Array.isArray(results) ? results.at(-1)! : results;
+        // A trailing SELECT must not hide an earlier write in the same SQL batch.
+        const commands = (Array.isArray(results) ? results : [results]).map(
+          ({ command }) => command,
+        );
+        const mutation = commands.some((command) =>
+          /^(?:CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE|COPY|CALL|DO|REFRESH)$/.test(
+            command,
+          ),
+        )
+          ? "unscoped"
+          : commands.some((command) => /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command))
+            ? "scoped"
+            : undefined;
         reply = {
           id: request.id,
           result: {
+            inTransaction: client.getTransactionStatus() !== "I",
             command: result.command,
+            mutation,
             rows: result.rows,
             rowCount: result.rowCount ?? 0,
             fields: result.fields.map(({ name, dataTypeID }) => ({ name, dataTypeID })),

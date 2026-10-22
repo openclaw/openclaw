@@ -38,9 +38,7 @@ export async function withMcpLifecycleLease<T>(
     },
     async (lease) => {
       lease.assertOwned();
-      const result = await run(() => lease.assertOwned(), lease);
-      lease.assertOwned();
-      return result;
+      return await run(() => lease.assertOwned(), lease);
     },
   );
 }

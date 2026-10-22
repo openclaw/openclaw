@@ -18,6 +18,7 @@ import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-en
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import { appendTranscriptEventInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
+import * as sessionTargets from "../config/sessions/targets.js";
 import { resetAgentRunRegistryForTest } from "../infra/agent-run-registry.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
@@ -314,14 +315,14 @@ describe("onboarding authored config persistence", () => {
         const published = await readConfigFileSnapshot();
         expect(Object.keys(published.config.agents?.entries ?? {})).toEqual(["robby"]);
         const log = { info: vi.fn(), warn: vi.fn() };
-        await runSessionStartupMigration({
-          cfg: published.config,
-          env: process.env,
-          log,
-          deps: {
-            resolveAllAgentSessionStoreTargetsSync: () => [],
-          },
-        });
+        const resolveTargets = vi
+          .spyOn(sessionTargets, "resolveAllAgentSessionStoreTargetsSync")
+          .mockReturnValue([]);
+        try {
+          await runSessionStartupMigration({ cfg: published.config, env: process.env, log });
+        } finally {
+          resolveTargets.mockRestore();
+        }
         expect(readEntry(sourcePath, "main", legacyKey)).toMatchObject(entry);
         expect(listSessionEntriesReadOnly({ agentId: "robby", storePath: ownerPath })).toEqual([]);
         expect(readLedgerStatus()).toBeUndefined();

@@ -47,6 +47,7 @@ vi.mock("./openclaw-tools.js", async (importOriginal) => {
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
+import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import {
@@ -59,6 +60,15 @@ function firstOpenClawToolsOptions(): { cronSelfRemoveOnlyJobId?: string } | und
     | { cronSelfRemoveOnlyJobId?: string }
     | undefined;
 }
+
+const openClawPlan = {
+  includeBaseCodingTools: false,
+  includeShellTools: false,
+  includeChannelTools: false,
+  includeOpenClawTools: true,
+  includePluginTools: false,
+};
+const shellPlan = { ...openClawPlan, includeShellTools: true, includeOpenClawTools: false };
 
 describe("createOpenClawCodingTools cron scope", () => {
   beforeEach(() => {
@@ -108,7 +118,25 @@ describe("createOpenClawCodingTools cron scope", () => {
     },
   );
 
-  it("keeps self-scoped automation inspection available without sender ownership", () => {
+  it("lets the owner reach a retained owner-only tool and stops a non-owner before preparation", async () => {
+    for (const senderIsOwner of [true, false]) {
+      mocks.onToolExecute.mockClear();
+      mocks.onToolPrepare.mockClear();
+      const tools = createOpenClawCodingTools({ senderIsOwner });
+      const gateway = tools.find((tool) => tool.name === "gateway")!;
+      const result = await gateway.execute(`dispatch-${senderIsOwner}`, { action: "config.get" });
+      if (senderIsOwner) {
+        expect(mocks.onToolPrepare).toHaveBeenCalledOnce();
+        expect(mocks.onToolExecute).toHaveBeenCalledOnce();
+      } else {
+        expect(result.details).toMatchObject({ gated: true });
+        expect(mocks.onToolPrepare).not.toHaveBeenCalled();
+        expect(mocks.onToolExecute).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it("keeps self-scoped automation inspection available without sender ownership", async () => {
     const tools = createOpenClawCodingTools({
       trigger: "cron",
       jobId: "job-current",
@@ -116,7 +144,7 @@ describe("createOpenClawCodingTools cron scope", () => {
     });
 
     expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
-    expect(tools.map((tool) => tool.name)).not.toContain("gateway");
+    await expectOwnerGated(tools, "gateway");
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
 
@@ -132,9 +160,9 @@ describe("createOpenClawCodingTools cron scope", () => {
 
   it.each([{ trigger: "cron" as const }, { jobId: "job-current" }])(
     "does not expose automation controls for an incomplete scheduled context: %j",
-    (context) => {
+    async (context) => {
       const tools = createOpenClawCodingTools({ ...context, senderIsOwner: false });
-      expect(tools.map((tool) => tool.name)).not.toContain(AUTOMATIONS_TOOL_NAME);
+      await expectOwnerGated(tools, AUTOMATIONS_TOOL_NAME);
     },
   );
 
@@ -163,19 +191,13 @@ describe("createOpenClawCodingTools cron scope", () => {
             runId,
             senderIsOwner: false,
             wrapBeforeToolCallHook: false,
-            toolConstructionPlan: {
-              includeBaseCodingTools: false,
-              includeShellTools: false,
-              includeChannelTools: false,
-              includeOpenClawTools: true,
-              includePluginTools: false,
-            },
+            toolConstructionPlan: openClawPlan,
           }),
       ),
     );
     const names = tools.map((tool) => tool.name);
     expect(names).toContain(AUTOMATIONS_TOOL_NAME);
-    expect(names).not.toContain("gateway");
+    await expectOwnerGated(tools, "gateway");
   });
 });
 
@@ -210,13 +232,7 @@ describe("createOpenClawCodingTools exec notification routing", () => {
       sessionKey: "agent:main:scope",
       abortSignal: generation.signal,
       wrapBeforeToolCallHook: false,
-      toolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: false,
-        includeOpenClawTools: true,
-        includePluginTools: false,
-      },
+      toolConstructionPlan: openClawPlan,
     });
     const tool = tools.find((candidate) => candidate.name === AUTOMATIONS_TOOL_NAME);
     if (!tool) {
@@ -234,13 +250,7 @@ describe("createOpenClawCodingTools exec notification routing", () => {
     createOpenClawCodingTools({
       sessionKey: policySessionKey,
       runSessionKey: liveSessionKey,
-      toolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: true,
-        includeChannelTools: false,
-        includeOpenClawTools: false,
-        includePluginTools: false,
-      },
+      toolConstructionPlan: shellPlan,
     });
 
     expect(createLazyExecToolMock).toHaveBeenLastCalledWith(
@@ -266,13 +276,7 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
       agentId: "work",
       sessionKey: "agent:main:policy",
       runSessionKey: "agent:work:run",
-      toolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: false,
-        includeOpenClawTools: true,
-        includePluginTools: true,
-      },
+      toolConstructionPlan: { ...openClawPlan, includePluginTools: true },
     });
 
     expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
@@ -286,13 +290,7 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
     expect(() =>
       createOpenClawCodingTools({
         sandbox,
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: true,
-          includeChannelTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: false,
-        },
+        toolConstructionPlan: shellPlan,
       }),
     ).toThrow("Sandbox filesystem bridge is unavailable.");
   });

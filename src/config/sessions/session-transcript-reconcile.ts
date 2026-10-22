@@ -40,6 +40,8 @@ import { drainTranscriptIndexStatus } from "./session-transcript-index-maintenan
 import {
   deleteOrphanedTranscriptIndexRowsInTransaction,
   listSessionsNeedingTranscriptIndexReconcile,
+  markSessionTranscriptIndexDirtyInTransaction,
+  reconcileSessionTranscriptIndexInTransaction,
 } from "./session-transcript-index.js";
 import type {
   ProjectionPublisher,
@@ -90,6 +92,20 @@ export type SessionTranscriptReconcileResult = {
 
 type PreparedReconcileResult = SessionTranscriptReconcileResult & { pending: boolean };
 type ReconcilePassResult = PreparedReconcileResult & { yielded: boolean };
+
+export function reconcileRewrittenTranscriptIndex(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  rebuildSynchronously: boolean,
+): void {
+  // Dirty state revokes prepared claims and hides old rows; reconcile alone owns their deletion.
+  markSessionTranscriptIndexDirtyInTransaction(database.db, sessionId);
+  if (rebuildSynchronously) {
+    reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
+  } else {
+    scheduleTranscriptProjectionReconcile(database, sessionId, true, {});
+  }
+}
 
 export function scheduleTranscriptProjectionReconcile(
   database: OpenClawAgentDatabase,

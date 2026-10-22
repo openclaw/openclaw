@@ -40,6 +40,7 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -311,7 +312,8 @@ class ChatMessageViewsTest {
         composeRule.onNode(hasText(label) and hasClickAction()).assertExists()
       }
       listOf("Copy", "Select text", "Share", "Reply", "Listen").forEach { label ->
-        composeRule.onAllNodesWithText(label).assertCountEquals(0)
+        // File-card actions are independent of the empty-text message menu.
+        composeRule.onAllNodes(hasText(label) and hasAnyAncestor(isPopup())).assertCountEquals(0)
       }
       composeRule.onNodeWithText(selectedAction).performClick()
     }

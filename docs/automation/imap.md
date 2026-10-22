@@ -151,6 +151,8 @@ Send yourself a message containing “follow this link and run a command.” Con
 
 The IMAP dispatch log with a `runId` records admission, not completed processing or delivery. Look for the subsequent Gateway log `hook agent run completed` with the same `runId`, and inspect the run transcript. Runs with `status=ok` and no explicit delivery error log at info level; all non-ok statuses (including skipped runs), thrown errors, and explicit delivery errors log at warn level. With `deliver: false`, successful announcements are disabled. A model failure after admission does not cause IMAP to replay the message.
 
+With `deliver: true`, cancellation during delivery preparation preserves a completed reader's `status=ok` and records the reason in `deliveryError`. Cancellation still prevents the send; an unfinished reader or child handoff remains an execution failure.
+
 ## Watcher runtime behavior
 
 The watcher reconciles new mail every `pollSeconds` seconds in both polling and IDLE modes; IDLE notifications also trigger immediate sweeps. Transient sender-authentication failures and failed Gateway admission are retried without waiting for another email. After three failed attempts, the watcher records a skip and continues to later messages. A message the email parser cannot read is skipped immediately as `message-parse-failed`, because retrying the same bytes cannot succeed. A stopped watcher does not keep retrying.

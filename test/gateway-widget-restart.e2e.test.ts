@@ -1,6 +1,6 @@
 // Real process replacement and a local provider prove the durable recovery boundary.
 import { once } from "node:events";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -174,6 +174,18 @@ it.skipIf(process.platform === "win32")(
         const persisted = () => readRestartSession(instance.state.agentDir(), SESSION_KEY);
         await runQaGatewayFixture(
           async () => {
+            const { buildId } = asRecord(
+              JSON.parse(await readFile("dist/build-info.json", "utf8")),
+            );
+            if (typeof buildId !== "string") {
+              throw new Error("Widget recovery fixture requires a runtime build ID");
+            }
+            const controlUiRoot = instance.state.path("control-ui");
+            await mkdir(controlUiRoot, { recursive: true });
+            await writeFile(
+              path.join(controlUiRoot, "index.html"),
+              `<!doctype html><html data-openclaw-control-ui-build-id="${buildId}-${"a".repeat(64)}"><body>Synthetic widget recovery</body></html>`,
+            );
             const config: OpenClawConfig = {
               logging: { file: instance.state.path("gateway.log") },
               update: { checkOnStart: false },
@@ -191,21 +203,27 @@ it.skipIf(process.platform === "win32")(
                 bind: "loopback",
                 port: instance.port,
                 auth: { mode: "token", token: instance.gatewayToken },
-                controlUi: { enabled: true },
+                controlUi: { enabled: true, root: controlUiRoot },
               },
             };
             await instance.state.writeConfig(config);
             await instance.startGateway();
-            const { buildId } = asRecord(
-              JSON.parse(await readFile("dist/build-info.json", "utf8")),
-            );
-            expect(typeof buildId).toBe("string");
             const deviceIdentity = loadOrCreateDeviceIdentity({
-              path: instance.state.path("proof-device.sqlite"),
+              path: instance.state.statePath(
+                "proof-identities",
+                "requester",
+                "client",
+                "credentials.sqlite",
+              ),
             });
             // A TEST observer must not replace the original Control UI token's issuer binding.
             const observerDeviceIdentity = loadOrCreateDeviceIdentity({
-              path: instance.state.path("proof-observer-device.sqlite"),
+              path: instance.state.statePath(
+                "proof-identities",
+                "observer",
+                "client",
+                "credentials.sqlite",
+              ),
             });
             const connect = (controlUi: boolean) =>
               acquireGatewayTestClient(
@@ -367,6 +385,12 @@ it.skipIf(process.platform === "win32")(
             }
             expect(instance.logs()).not.toContain("Session transcript keyed user is outside");
             expect(instance.logs()).toContain("startup-orphaned main session(s)");
+            const handoff = await instance.cli(["dashboard", "--json"]);
+            expect(handoff.code, JSON.stringify(handoff)).toBe(0);
+            expect(JSON.parse(handoff.stdout)).toMatchObject({
+              ok: true,
+              browserUrl: expect.stringContaining("#bootstrapToken="),
+            });
           },
           async () => {
             provider.release();

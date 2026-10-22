@@ -469,7 +469,7 @@ export class SqliteWorkerBroker {
     slot: Slot,
     body: RequestBody,
     bytes: number,
-    options: EnqueueOptions = {},
+    options: EnqueueOptions,
     admitted = false,
     observation = trackWorkerRequest("sqlite_writer", options.requestClass ?? body.type),
   ): Promise<unknown> {
@@ -529,6 +529,7 @@ export class SqliteWorkerBroker {
         databaseAdmissionDeadlineAtMs: readSqliteDatabaseAdmissionDeadline(),
       },
       bytes: reservedBytes,
+      result: result.promise,
       resolve: result.resolve,
       reject: result.reject,
       detach: () => signal?.removeEventListener("abort", abort),

@@ -48,6 +48,8 @@ export const ConnectParamsSchema = closedObject({
     instanceId: Type.Optional(NonEmptyString),
   }),
   caps: Type.Optional(Type.Array(NonEmptyString, { default: [] })),
+  /** Initial roster-body preference; exact subscriptions always receive complete messages. */
+  includeSessionMessageBodies: Type.Optional(Type.Boolean()),
   commands: Type.Optional(Type.Array(NonEmptyString)),
   /** Additive Computer Use declaration; the owning core contract validates its bounded shape. */
   computerUse: Type.Optional(Type.Unknown()),

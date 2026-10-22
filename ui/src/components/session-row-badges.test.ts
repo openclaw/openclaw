@@ -100,7 +100,11 @@ describe("session row placement badges", () => {
   it.each([
     { state: "open", numbers: [111532], label: "#111532 · Open" },
     { state: "draft", numbers: [107302], label: "#107302 · Draft" },
-    { state: "merged", numbers: [111751, 111772], label: "#111751, #111772 · Merged" },
+    {
+      state: "merged",
+      numbers: [111751, 111772],
+      label: "2 pull requests · #111751, #111772 · Merged",
+    },
   ] as const)(
     "renders catalog pull request metadata for $state threads",
     ({ state, numbers, label }) => {

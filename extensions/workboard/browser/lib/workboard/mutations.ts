@@ -169,11 +169,21 @@ export async function moveWorkboardCard(
       | { beforeCardId: string | null; boardFilter: string; position?: never }
     ),
 ) {
-  const cards = getWorkboardState(params.host).cards;
+  const current = getWorkboardState(params.host);
+  if (current.nextCursor && params.beforeCardId !== undefined) {
+    return;
+  }
+  const cards = current.cards;
   const card = cards.find((candidate) => candidate.id === params.cardId);
   const moves =
     params.beforeCardId === undefined
-      ? [{ id: params.cardId, status: params.status, position: params.position }]
+      ? [
+          {
+            id: params.cardId,
+            status: params.status,
+            ...(current.nextCursor ? {} : { position: params.position }),
+          },
+        ]
       : card
         ? planWorkboardCardDrop(cards, card, params.status, params.beforeCardId, params.boardFilter)
         : [];
@@ -357,6 +367,8 @@ export async function dispatchWorkboard(params: WorkboardClientContext) {
     const normalized = normalizeCardsPayload(payload);
     setWorkboardCards(state, normalized.cards);
     state.statuses = normalized.statuses;
+    state.nextCursor = normalized.nextCursor;
+    state.boards = normalized.boards;
     state.lastDispatchSummary = normalizeDispatchSummary(dispatchResult);
     // A teardown may have invalidated this in-flight dispatch. Keep its cached
     // result reload-required so reconnect cannot treat an old completion as canonical.

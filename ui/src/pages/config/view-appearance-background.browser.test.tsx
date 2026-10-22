@@ -13,6 +13,11 @@ import {
 registerEnglishCatalog(registerSettingsEnglish);
 let host: HTMLDivElement;
 let update: ((props: AppearanceBackgroundView) => void) | undefined;
+const button = (selector: string) => host.querySelector<HTMLButtonElement>(selector)!;
+const buttons = (selector: string) => [...host.querySelectorAll<HTMLButtonElement>(selector)];
+const source = (kind: string) => button(`[data-background-source="${kind}"]`);
+const mode = (kind: string) => button(`[data-test-id="background-presentation-${kind}"]`);
+const range = () => host.querySelector<HTMLInputElement>('input[type="range"]')!;
 function renderBackground(props: AppearanceBackgroundView) {
   if (!update) {
     const [current, setCurrent] = createSignal({ ...props });
@@ -59,7 +64,7 @@ describe("Appearance backgrounds", () => {
   it("keeps source selection separate from both placement preferences", () => {
     const props = fixture();
     renderBackground(props);
-    host.querySelector<HTMLButtonElement>('[data-background-source="none"]')!.click();
+    source("none").click();
     expect(props.onSource).toHaveBeenCalledWith("none");
     expect(props.onChange).not.toHaveBeenCalled();
     const rows = host.querySelectorAll<HTMLElement>(".settings-row--toggle");
@@ -72,12 +77,8 @@ describe("Appearance backgrounds", () => {
   it("defaults absent presentation to Faded and changes modes without replacing other choices", () => {
     const props = fixture();
     renderBackground(props);
-    const faded = host.querySelector<HTMLButtonElement>(
-      '[data-test-id="background-presentation-faded"]',
-    )!;
-    const fullBleed = host.querySelector<HTMLButtonElement>(
-      '[data-test-id="background-presentation-full-bleed"]',
-    )!;
+    const faded = mode("faded");
+    const fullBleed = mode("full-bleed");
     expect(faded.getAttribute("aria-pressed")).toBe("true");
     expect(faded.closest(".settings-segmented")).not.toBeNull();
     fullBleed.click();
@@ -101,12 +102,8 @@ describe("Appearance backgrounds", () => {
       }),
     );
     expect(host.textContent).toContain("Both pages are off");
-    expect(host.querySelector<HTMLInputElement>('input[type="range"]')!.disabled).toBe(false);
-    renderBackground(
-      fixture({
-        preference: { ...DEFAULT_BACKGROUND_PREFERENCE, visibility: 0 },
-      }),
-    );
+    expect(range().disabled).toBe(false);
+    renderBackground(fixture({ preference: { ...DEFAULT_BACKGROUND_PREFERENCE, visibility: 0 } }));
     expect(host.textContent).toContain("At 0%, the artwork is hidden");
   });
 
@@ -120,41 +117,28 @@ describe("Appearance backgrounds", () => {
       hasImage: true,
     });
     renderBackground(props);
-    expect(
-      host.querySelector('[data-background-source="none"]')?.getAttribute("aria-pressed"),
-    ).toBe("true");
+    expect(source("none").getAttribute("aria-pressed")).toBe("true");
     const switches = [...host.querySelectorAll<HTMLInputElement>(".settings-toggle__input")];
     expect(switches).toHaveLength(2);
     expect(switches.every((input) => input.disabled)).toBe(true);
-    expect(host.querySelector<HTMLInputElement>('input[type="range"]')?.disabled).toBe(true);
+    expect(range().disabled).toBe(true);
     expect(
-      [
-        ...host.querySelectorAll<HTMLButtonElement>('[data-test-id^="background-presentation-"]'),
-      ].every((mode) => mode.disabled),
+      buttons('[data-test-id^="background-presentation-"]').every((control) => control.disabled),
     ).toBe(true);
-    expect(
-      host
-        .querySelector('[data-test-id="background-presentation-full-bleed"]')
-        ?.getAttribute("aria-pressed"),
-    ).toBe("true");
+    expect(mode("full-bleed").getAttribute("aria-pressed")).toBe("true");
     expect(host.textContent).toContain("without removing your saved image or choices");
     expect(props.onRemoveImage).not.toHaveBeenCalled();
-    host.querySelector<HTMLButtonElement>("[data-background-remove]")!.click();
+    button("[data-background-remove]").click();
     expect(props.onRemoveImage).toHaveBeenCalledOnce();
   });
 
   it("leaves the plain choices available when custom uploads are unavailable", () => {
     renderBackground(fixture({ uploadAllowed: false }));
-    expect(host.querySelector<HTMLButtonElement>('[data-background-source="none"]')?.disabled).toBe(
-      false,
-    );
-    expect(
-      host.querySelector<HTMLButtonElement>('[data-background-source="theme"]')?.disabled,
-    ).toBe(false);
-    expect(
-      host.querySelector<HTMLButtonElement>('[data-background-source="custom"]')?.disabled,
-    ).toBe(true);
-    expect(host.querySelector<HTMLButtonElement>("[data-background-upload]")?.disabled).toBe(true);
+    expect([source("none").disabled, source("theme").disabled]).toEqual([false, false]);
+    expect([source("custom").disabled, button("[data-background-upload]").disabled]).toEqual([
+      true,
+      true,
+    ]);
   });
 
   it("delivers the chosen file once and clears the input so it can be selected again", () => {
@@ -176,8 +160,6 @@ describe("Appearance backgrounds", () => {
     );
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Image <failed>");
     expect(host.querySelector("failed")).toBeNull();
-    expect(
-      [...host.querySelectorAll<HTMLButtonElement>("button")].every((button) => button.disabled),
-    ).toBe(true);
+    expect(buttons("button").every((control) => control.disabled)).toBe(true);
   });
 });

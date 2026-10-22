@@ -1,4 +1,5 @@
-import { isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual, toUSVString } from "node:util";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
@@ -117,7 +118,7 @@ function assertCronStoreChangesCurrent(
 
 /** Load once inside the write transaction and share with mutation planning. */
 export function loadCronStoreForChanges(db: EngineConnection, storeKey: string) {
-  const rows = loadCronRows(db, storeKey);
+  const rows = loadCronRows(db, storeKey, undefined, { includeGrantDefinitionProjection: true });
   const store = loadedCronStoreFromRows(rows).store;
   const currentJobs = store.jobs;
   const authority = loadCronRuntimeAuthorities({ db, storeKey, jobs: currentJobs });
@@ -129,7 +130,8 @@ export function loadCronStoreForChanges(db: EngineConnection, storeKey: string) 
       jobIds: authority.repairJobIds,
     });
   }
-  return { rows, store };
+  const names = new Map(rows.map((row) => [row.job_id, normalizeOptionalString(row.name)]));
+  return { rows, store, names };
 }
 
 /** Applies prepared changes inside the caller's synchronous write transaction. */
@@ -143,12 +145,15 @@ export function saveCronStoreChangesInDatabase(
   hooks?: CronAdmittedStoreTransactionHooks,
 ): CronStoreFile {
   const { previousById, nextById, changedIds } = prepared;
-  const { rows, store } = inventory;
+  const { rows, store, names } = inventory;
   const rowsById = new Map(rows.map((row) => [row.job_id, row] as const));
   const currentById = new Map(store.jobs.map((job) => [job.id, job] as const));
+  // Change-save hooks own receipts, not the loaded job definitions or grants.
   hooks?.hooks.beforeWrite?.(db, hooks.receiptSchema);
   assertCronStoreChangesCurrent(prepared, currentById, resolvedStorePath, opts);
   let nextSortOrder = rows.reduce((max, row) => Math.max(max, row.sort_order), -1) + 1;
+  // Each canonical job is upserted once. Repeated upserts would need the preceding
+  // write's generation copied back into rowsById before the next upsert.
   for (const jobId of changedIds) {
     const before = previousById.get(jobId);
     const after = nextById.get(jobId);
@@ -156,6 +161,7 @@ export function saveCronStoreChangesInDatabase(
     if (!after) {
       if (current) {
         deleteCronJobRowInDatabase(db, storeKey, jobId);
+        names.delete(jobId);
       }
       currentById.delete(jobId);
       continue;
@@ -170,11 +176,14 @@ export function saveCronStoreChangesInDatabase(
           updatedAtMs: Math.max(after.updatedAtMs, current.updatedAtMs),
         }
       : after;
+    const existingRow =
+      rowsById.get(toUSVString(normalizeOptionalString(merged.id) ?? merged.id)) ?? null;
     const persisted = upsertCronJobRow(
       db,
       storeKey,
       merged,
       rowsById.get(jobId)?.sort_order ?? nextSortOrder++,
+      { knownExistingRow: existingRow },
     );
     if (hasCanonicalCronDeliveryMode(persisted.delivery)) {
       replaceCronRuntimeAuthorityRows({ db, storeKey, jobs: [persisted] });
@@ -185,6 +194,7 @@ export function saveCronStoreChangesInDatabase(
         postimage.runtimeAuthority = persisted.runtimeAuthority;
       }
       currentById.set(jobId, postimage);
+      names.set(toUSVString(persisted.id), normalizeOptionalString(toUSVString(persisted.name)));
     }
   }
   hooks?.hooks.afterWrite?.(db, hooks.receiptSchema);

@@ -12,6 +12,15 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 
+export type TelegramGroupConfigResolver = (
+  chatId: string | number,
+  messageThreadId: number | undefined,
+  cfg: OpenClawConfig,
+) => {
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  topicConfig?: TelegramTopicConfig;
+};
+
 export function resolveTelegramScopedGroupConfig(
   telegramCfg: TelegramAccountConfig,
   chatId: string | number,
@@ -64,17 +73,20 @@ export function resolveTelegramGroupPromptSettings(params: {
 
 export function resolveTelegramDirectToolPolicy(params: {
   directConfig?: Pick<TelegramDirectConfig, "tools" | "toolsBySender">;
+  senderPolicyMode?: "always" | "never";
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
 }): GroupToolPolicyConfig | undefined {
   return (
-    resolveToolsBySender({
-      toolsBySender: params.directConfig?.toolsBySender,
-      messageProvider: "telegram",
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-    }) ?? params.directConfig?.tools
+    (params.senderPolicyMode === "never"
+      ? undefined
+      : resolveToolsBySender({
+          toolsBySender: params.directConfig?.toolsBySender,
+          messageProvider: "telegram",
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+        })) ?? params.directConfig?.tools
   );
 }

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isPathInside } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
@@ -199,12 +200,7 @@ async function cleanupStagedPackageInstall(stage: StagedPackageInstall): Promise
       await removePackageUpdatePath(stage.native.binDir);
     }
   };
-  const prefix = await fs.realpath(stage.prefix).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const prefix = (await fs.realpath(stage.prefix).catch(ignoreMissingPath)) ?? null;
   const candidates = [stage.packageRoot];
   if (prefix && stage.native && stage.installTarget.pnpmIsolated) {
     // Activation follows active hash links only. Disposal also removes unlinked
@@ -212,12 +208,7 @@ async function cleanupStagedPackageInstall(stage: StagedPackageInstall): Promise
     // a completed manifest or lockfile. Discovery errors must preserve the stage.
     const entries = await fs
       .readdir(stage.native.globalRoot, { withFileTypes: true })
-      .catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return [];
-        }
-        throw error;
-      });
+      .catch((error: unknown) => ignoreMissingPath(error) ?? []);
     for (const entry of entries) {
       if (entry.isDirectory() || entry.isSymbolicLink()) {
         candidates.push(

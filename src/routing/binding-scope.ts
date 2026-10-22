@@ -1,4 +1,3 @@
-// Binding scope helpers normalize route binding scope values.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";

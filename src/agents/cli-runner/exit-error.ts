@@ -1,5 +1,6 @@
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { ResolvedCliBackend } from "../cli-backends.js";
 import { extractCliErrorMessage } from "../cli-output.js";
 import {
   coerceToFailoverError,
@@ -15,6 +16,7 @@ type CliExitFailoverErrorParams = {
   fallbackMessage: string;
   retryEmptyFailure: boolean;
   resumeAtArg?: string;
+  classifyErrorCode?: ResolvedCliBackend["classifyErrorCode"];
 };
 
 export function createCliFailoverError(
@@ -78,6 +80,6 @@ export function createCliExitFailoverError(params: CliExitFailoverErrorParams): 
       ? "cli_context_overflow"
       : candidates.length === 0 && params.retryEmptyFailure
         ? "cli_unknown_empty_failure"
-        : undefined;
+        : params.classifyErrorCode?.(message);
   return createCliFailoverError(message, reason, params.context, { code });
 }

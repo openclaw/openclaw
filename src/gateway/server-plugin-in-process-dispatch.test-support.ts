@@ -20,11 +20,12 @@ export function createContext(
   methods: Array<
     [name: string, scope: GatewayMethodScope, area: string, handler: GatewayMethodHandler]
   > = [],
+  getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({}),
 ): GatewayRequestContext {
   const context = {
     trackExecution: trackAsyncWork,
     dedupe: new Map(),
-    getRuntimeConfig: () => ({}),
+    getRuntimeConfig,
     logGateway: { error: vi.fn(), warn: vi.fn() },
   } as unknown as GatewayRequestContext;
   if (methods.length) {

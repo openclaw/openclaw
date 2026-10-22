@@ -36,16 +36,15 @@ export function withDoctorState<T>(
   return withOpenClawTestState({ scenario: "minimal", env }, run);
 }
 
-export const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDoctorResult"]> =
-  {
-    status: "advisory",
-    advisory: {
-      kind: "package-post-install-doctor",
-      message: "recoverable plugin repair",
-      reason: "deferred-configured-plugin-repair",
-      details: ["plugin repair deferred"],
-    },
-  };
+const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDoctorResult"]> = {
+  status: "advisory",
+  advisory: {
+    kind: "package-post-install-doctor",
+    message: "recoverable plugin repair",
+    reason: "deferred-configured-plugin-repair",
+    details: ["plugin repair deferred"],
+  },
+};
 
 const mocks = vi.hoisted(() => {
   const handles = {
@@ -173,6 +172,20 @@ vi.mock("../gateway/call.js", async (original) => {
   };
 });
 
+vi.mock("../infra/restart-stale-pids.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/restart-stale-pids.js")>();
+  return {
+    ...actual,
+    // Synthetic Gateway PIDs must not collide with the test worker's real ancestors.
+    inspectSelfAndAncestorPidsSync: (
+      ...args: Parameters<typeof actual.inspectSelfAndAncestorPidsSync>
+    ) =>
+      mocks.emulateNativeInstall
+        ? { pids: new Set([process.pid, 1]), complete: true }
+        : actual.inspectSelfAndAncestorPidsSync(...args),
+  };
+});
+
 vi.mock("../daemon/service-process-membership.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../daemon/service-process-membership.js")>();
   return {
@@ -251,35 +264,6 @@ vi.mock("../infra/gateway-supervision.js", async (importOriginal) => {
 });
 
 export { mocks };
-
-export const doctorServiceInspectionCases = [
-  "inspection-failed",
-  "runtime-only",
-  "owned-unknown",
-  "foreign-running",
-  "foreign-unknown",
-  "foreign-stopped",
-  "foreign-stopped-loaded",
-  "foreign-stopped-loaded-disabled",
-  "foreign-stopped-loaded-unknown",
-  "foreign-respawning",
-  "unresolved-running",
-  "unresolved-unknown",
-  "unresolved-stopped",
-  "unresolved-stopped-loaded",
-  "unresolved-respawning",
-  "absent",
-  "absent-unknown",
-  "absent-busy-port",
-  "absent-unknown-port",
-  "windows-ready",
-  "windows-queued",
-  "windows-startup-stopped",
-  "windows-startup-unknown",
-].flatMap((kind) => [
-  { kind, updateParent: false },
-  { kind, updateParent: true },
-]);
 
 export function seedMaintenanceStartupFailure(openDatabase: () => OpenClawStateDatabase) {
   openDatabase().db.exec(

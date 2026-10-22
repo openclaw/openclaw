@@ -410,9 +410,16 @@ export type WorkboardCard = {
   metadata?: WorkboardMetadata;
 };
 
+export type WorkboardCardCursor = {
+  position: number;
+  createdAt: number;
+  id: string;
+};
+
 export type WorkboardListResult = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
+  nextCursor?: WorkboardCardCursor;
 };
 export {
   createDefaultWorkboardSessionsBoardSpec,

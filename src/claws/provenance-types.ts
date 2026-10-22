@@ -3,9 +3,7 @@ import type { CLAW_SCHEMA_VERSION, ClawSourceIdentity } from "./manifest-contrac
 import type { ClawAgentOrigin } from "./provenance-agent-origin.js";
 import type { parseClawInstallRecordSchemaVersion } from "./provenance-schema-version.js";
 
-export type ClawOrphanWorkspace = { workspace: string; updatedAtMs: number };
-
-export type ClawInstallStatus = ClawStatusEntry["status"];
+type ClawInstallStatus = ClawStatusEntry["status"];
 
 export type PersistedClawInstall = {
   schemaVersion: ReturnType<typeof parseClawInstallRecordSchemaVersion>;

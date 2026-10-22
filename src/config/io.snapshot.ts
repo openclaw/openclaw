@@ -4,6 +4,7 @@ import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js
 import { isSqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
   includeContributionOwnsAgentRoster,
@@ -65,6 +66,7 @@ type InternalReadOptions = {
   allowCurrentPluginMetadata?: boolean;
   recoverSuspicious?: boolean;
   skipSuspiciousRecovery?: boolean;
+  onSourceEnvApplied?: ConfigSnapshotReadOptions["onSourceEnvApplied"];
   allowSuspiciousRecovery?: (
     candidate: OpenClawConfig,
     current: OpenClawConfig,
@@ -164,9 +166,7 @@ async function readConfigSnapshot(
     const rawHash = await deps.measure("config.snapshot.read.hash", () => hashConfigRaw(raw));
     fallbackRaw = raw;
     fallbackHash = rawHash;
-    const parsedRes = await deps.measure("config.snapshot.read.parse", () =>
-      parseConfigJson5(raw, deps.json5),
-    );
+    const parsedRes = await deps.measure("config.snapshot.read.parse", () => parseConfigJson5(raw));
     if (!parsedRes.ok) {
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: invalidSourceSnapshot(
@@ -235,6 +235,7 @@ async function readConfigSnapshot(
         () => resolveConfigForRead(resolved, deps.env, deps.lowerPrecedenceEnv),
         (restore) => {
           restoreReadEnv = restore;
+          options.onSourceEnvApplied?.(restore);
         },
       );
     });
@@ -285,7 +286,13 @@ async function readConfigSnapshot(
       resolutionFacts: readResolution.resolutionFacts,
     });
     if (!validated.ok) {
-      const availableSnapshot = pluginMetadata.getSnapshot();
+      // Core schema failures precede metadata loading; reload diagnostics still use boot facts.
+      const availableSnapshot =
+        pluginMetadata.getSnapshot() ??
+        (context.options.pluginValidation !== "core-only" &&
+        options.allowCurrentPluginMetadata !== false
+          ? getProcessGatewayPluginMetadataSnapshot()
+          : undefined);
       const collect = () =>
         context.options.pluginValidation === "core-only"
           ? findLegacyConfigIssues(effectiveConfigRaw, effectiveParsed)
@@ -295,6 +302,7 @@ async function readConfigSnapshot(
           ? withPluginMetadataSnapshotScope(availableSnapshot, collect, {
               config: coerceConfig(effectiveConfigRaw),
               env: deps.env,
+              trustConfigIdentity: true,
             })
           : collect(),
       );
@@ -501,6 +509,7 @@ export async function readConfigFileSnapshotFromContext(
     await readConfigFileSnapshotInternal(context, {
       recoverSuspicious: options.recoverSuspicious === true,
       allowSuspiciousRecovery: options.allowSuspiciousRecovery,
+      onSourceEnvApplied: options.onSourceEnvApplied,
     })
   ).snapshot;
 }
@@ -523,6 +532,7 @@ async function readConfigSnapshotWithPluginMetadata(
     allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     recoverSuspicious: options.recoverSuspicious === true,
     allowSuspiciousRecovery: options.allowSuspiciousRecovery,
+    onSourceEnvApplied: options.onSourceEnvApplied,
   });
   let pluginMetadataSnapshot = result.pluginMetadataSnapshot;
   if (
@@ -608,7 +618,7 @@ export async function readSourceConfigBestEffortFromContext(
   // degradation records why the real config was not used.
   try {
     const raw = deps.fs.readFileSync(configPath, "utf-8");
-    const parsed = parseConfigJson5(raw, deps.json5);
+    const parsed = parseConfigJson5(raw);
     if (!parsed.ok) {
       deps.logger.warn(
         `Config (${configPath}): best-effort read ignored unparseable config: ${parsed.error}`,

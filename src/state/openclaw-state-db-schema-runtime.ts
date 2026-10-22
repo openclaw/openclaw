@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
+import { prepareClientCredentialMigration } from "../infra/client-credential-migration.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
@@ -116,6 +117,16 @@ export function ensureOpenClawStateRuntimeSchema(
           return [];
         }
         const previousVersion = readStateSchemaContentVersion(db);
+        if (previousVersion === 0 && !isUninitializedNativeStartupDatabase(db)) {
+          throw new Error(
+            "Unrecognized native bootstrap database; preserve it and run openclaw doctor --fix.",
+          );
+        }
+        if (previousVersion > 0) {
+          // Doctor-owned legacy repairs must keep their diagnostic before credential extraction.
+          assertCanonicalStateSchemaShape(db, pathname);
+        }
+        prepareClientCredentialMigration(db, { path: pathname, env, fromVersion: previousVersion });
         const schema = getAdmittedSqliteSchemaFacts(db);
         if (previousVersion === 0 && schema?.tables.size === 0 && schema.views.size === 0) {
           // The admitted empty catalog has no history to migrate or indexes to repair.
@@ -232,6 +243,7 @@ export function ensureOpenClawStateRuntimeSchema(
         });
         writeCurrentStateSchemaMetadata(db, now);
         assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+        assertMigratedStateTableIntegrity(db, pathname, previousVersion, true);
         runtimeReady = true;
         warnAgentPathMigration(stateDbLog, pathMigration, pathname);
         return changes;

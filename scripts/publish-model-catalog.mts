@@ -693,7 +693,7 @@ const PROVIDER_MODEL_INVENTORIES: Readonly<
   novita: { url: "https://api.novita.ai/openai/v1/models", caseInsensitive: true },
   nvidia: { url: "https://integrate.api.nvidia.com/v1/models" },
   opencode: { url: "https://opencode.ai/zen/v1/models" },
-  "opencode-go": { url: "https://opencode.ai/zen/go/v1/models" },
+  "opencode-go": { url: "https://opencode.ai/inference/go/v1/models" },
   venice: { url: "https://api.venice.ai/api/v1/models" },
 };
 

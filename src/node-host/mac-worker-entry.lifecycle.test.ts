@@ -98,16 +98,21 @@ it.each([
   },
 );
 
-it("reports startup failure and finalizes an unsuccessful exit", async () => {
+it.each([
+  { args: ["node", "worker"], error: "worker bootstrap failed" },
+  { args: ["node", "run"], error: "Private macOS worker accepts only: node worker" },
+  { args: ["--profile"], error: "--profile requires a value" },
+])("reports $error and finalizes an unsuccessful exit", async ({ args, error }) => {
   const { defaultRuntime } = await import("../runtime.js");
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   fixture.bootstrap.mockRejectedValue(new Error("worker bootstrap failed"));
+  process.argv.splice(2, process.argv.length - 2, ...args);
 
   await import("./mac-worker-entry.js");
 
   expect(fixture.worker).not.toHaveBeenCalled();
-  expect(stderr).toHaveBeenCalledWith("worker bootstrap failed\n");
+  expect(stderr).toHaveBeenCalledWith(`${error}\n`);
   expect(process.exitCode).toBe(1);
   expect(exit).not.toHaveBeenCalled();
 });

@@ -513,7 +513,6 @@ export async function createOwnedWorktree<T>(
   params: CreateManagedWorktreeParams & WorktreeAllocationGuard & WorktreeSourceCustody,
   repository: ResolvedRepository,
   env: NodeJS.ProcessEnv,
-  now: () => number,
   create: (name: string) => Promise<T>,
 ): Promise<ManagedWorktreeCreationOutcome | T> {
   if (params.ownerId) {
@@ -539,7 +538,7 @@ export async function createOwnedWorktree<T>(
         await updateRegistryWorktree(
           env,
           existing.id,
-          { removedAt: now() },
+          { removedAt: Date.now() },
           {
             workerAuthority: {
               ...current.workerAuthority,

@@ -7,7 +7,6 @@ import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-mo
 import { PreparedModelRuntimeOwnerNotPublishedError } from "../../agents/prepared-model-runtime.errors.js";
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -68,13 +67,9 @@ export async function resolveModelsListOwner({
     : scope?.sessionEntry;
   const useRequesterDefaults = !scope?.sessionKey && !scope?.sessionEntry;
   draft?.assertCurrent();
-  const currentConfig =
-    source.kind === "gateway"
-      ? source.context.getRuntimeConfig
-      : (source.getConfig ?? getRuntimeConfig);
   const publishedOwner = source.kind === "published" ? source.owner : undefined;
-  const requestConfig = currentConfig();
-  const initialConfig = publishedOwner?.config ?? requestConfig;
+  const initialConfig =
+    source.kind === "published" ? source.owner.config : source.context.getRuntimeConfig();
   const initialAgentId = resolveAmbientOwnerAgentId(initialConfig, params.agentId);
   const profiles = resolveSessionCatalogProfiles(sessionEntry, initialConfig, initialAgentId);
   const view = params.params.view ?? "default";

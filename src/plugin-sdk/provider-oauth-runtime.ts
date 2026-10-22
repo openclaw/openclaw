@@ -1,4 +1,3 @@
-// Provider OAuth runtime helpers expose shared browser/OAuth flows for provider plugins.
 import { randomBytes } from "node:crypto";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {

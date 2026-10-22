@@ -17,6 +17,62 @@ describe("Gateway core reload policy", () => {
   beforeEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
   afterEach(() => resetPluginRuntimeStateForTest());
 
+  it("hot-applies DeepSeek search credentials without replacing plugin resources", async () => {
+    const { default: deepseek } = await loadBundledPluginFacade<{
+      default: OpenClawPluginDefinition;
+    }>({ pluginId: "deepseek", artifactBasename: "index.ts" });
+    const registry = createEmptyPluginRegistry();
+    deepseek.register?.(
+      createTestPluginApi({
+        id: "deepseek",
+        registerReload(registration) {
+          registry.reloads.push({ pluginId: "deepseek", source: "test", registration });
+        },
+      }),
+    );
+    setActivePluginRegistry(registry);
+    const keyPath = "plugins.entries.deepseek.config.webSearch.apiKey";
+    const config = (apiKey: unknown): OpenClawConfig => ({
+      plugins: { entries: { deepseek: { enabled: true, config: { webSearch: { apiKey } } } } },
+    });
+    const previous = config({ source: "env", provider: "default", id: "DEEPSEEK_API_KEY" });
+    const candidate = config({ source: "store", provider: "default", id: "DEEPSEEK_API_KEY" });
+    for (const [before, after] of [
+      [previous, candidate],
+      [config(undefined), candidate],
+      [candidate, config(undefined)],
+    ] as const) {
+      const paths = diffGatewayReloadPaths(before, after, listConfigReloadRefinementPrefixes());
+      const plan = buildGatewayReloadPlan(paths, {
+        previousConfig: before,
+        candidateConfig: after,
+      });
+      expect(
+        plan.hotReasons.some((path) => path === keyPath || path.startsWith(keyPath + ".")),
+      ).toBe(true);
+      expect(plan.reloadPlugins).toBe(false);
+      expect(plan.disposeMcpRuntimes).toBe(false);
+      expect(plan.restartGateway).toBe(false);
+    }
+    // Activation, code replacement, and undeclared settings still own normal settlement.
+    expect(
+      buildGatewayReloadPlan([keyPath + ".source", "plugins.entries.deepseek.enabled"])
+        .reloadPlugins,
+    ).toBe(true);
+    expect(buildGatewayReloadPlan(["plugins.entries.deepseek.config.other"]).reloadPlugins).toBe(
+      true,
+    );
+    expect(
+      buildGatewayReloadPlan([keyPath + ".source"], {
+        pluginLifecycle: {
+          pluginIds: ["deepseek"],
+          reason: "reload",
+          operationId: "explicit-reload",
+        },
+      }).reloadPlugins,
+    ).toBe(true);
+  });
+
   it.each(["memory-core", "none"])(
     "reloads the selected memory index service for provider changes (memory slot: %s)",
     async (memorySlot) => {

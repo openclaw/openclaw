@@ -13,7 +13,7 @@ import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update
 
 let originalWebkit: PropertyDescriptor | undefined;
 const checkFailure = "Could not check the latest update";
-const reconnectFailure = "Actions are unavailable while the Gateway reconnects.";
+const reconnectFailure = "Could not refresh. Check your connection and try again.";
 async function settle() {
   await Promise.resolve();
   flush();
@@ -138,6 +138,21 @@ afterEach(async () => {
 });
 
 describe("SidebarUpdateCard", () => {
+  it("reviews updates through the latest callback on the retained card", async () => {
+    const initial = vi.fn();
+    const current = vi.fn();
+    const card = await mount(stableUpdate, {
+      statusBanner: { tone: "warn", text: "Review available update" },
+      onReviewUpdate: initial,
+    });
+    const review = card.find<HTMLButtonElement>(".sidebar-update-card__review")!;
+    await card.update({ onReviewUpdate: current });
+    review.click();
+    expect(current).toHaveBeenCalledOnce();
+    expect(initial).not.toHaveBeenCalled();
+    expect(card.find(".sidebar-update-card__review")).toBe(review);
+  });
+
   it.each([
     ["native", false],
     ["native", true],
@@ -315,12 +330,17 @@ describe("SidebarUpdateCard", () => {
   );
 
   it("retries a failed fresh target check in the compact row", async () => {
+    const check = createDeferred<boolean>();
     const element = await mount(stableUpdate, {
       compact: true,
-      onCheckStatus: vi.fn(async () => false),
+      onCheckStatus: vi.fn().mockReturnValueOnce(check.promise).mockResolvedValue(false),
       onUpdate: vi.fn(),
     });
     element.find("details")!.open = true;
+    await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledOnce());
+    expect(element.action()?.disabled).toBe(true);
+    expect(element.action()?.getAttribute("aria-busy")).toBe("true");
+    check.reject(new Error("Status unavailable"));
     await vi.waitFor(() => expect(element.text()).toContain(checkFailure));
     const action = element.action()!;
     await vi.waitFor(() => expect(action.disabled).toBe(false));
@@ -350,7 +370,7 @@ describe("SidebarUpdateCard", () => {
     expect(element.props().onUpdate).not.toHaveBeenCalled();
   });
 
-  it("ignores an obsolete refresh result after recovery state is re-established", async () => {
+  it("retains refresh retries across shell updates and ignores obsolete recovery results", async () => {
     const element = await mount(null);
     const first = createDeferred<boolean>();
     const second = createDeferred<boolean>();
@@ -378,9 +398,14 @@ describe("SidebarUpdateCard", () => {
     expect(action?.disabled).toBe(true);
     expect(element.text()).not.toContain(reconnectFailure);
 
+    await element.update({ connected: false });
+    expect(action?.disabled).toBe(true);
     second.resolve(false);
     await vi.waitFor(() => expect(action?.disabled).toBe(false));
     expect(element.text()).toContain(reconnectFailure);
+    await element.update({ connected: true });
+    expect(element.text()).toContain(reconnectFailure);
+    expect(action?.textContent).toContain("Retry now");
     action?.click();
     expect(onRefresh).toHaveBeenCalledTimes(3);
   });
@@ -614,19 +639,26 @@ describe("SidebarUpdateCard", () => {
     expect(clearInterval).toHaveBeenCalled();
   });
 
-  it("keeps a consumed hold hidden across shared-state rerenders after expiry", async () => {
+  it("retries a declined hold and keeps a consumed hold hidden across rerenders after expiry", async () => {
     vi.useFakeTimers({ now: 1_000 });
-    const onHoldUpdate = vi.fn(async () => true);
+    const holding = createDeferred<boolean>();
+    const onHoldUpdate = vi.fn().mockReturnValueOnce(holding.promise).mockResolvedValue(true);
     const element = await mount(stableUpdate, {
       updateSchedule: packageSchedule({}),
       onHoldUpdate,
     });
 
-    element.find<HTMLButtonElement>(".sidebar-update-card__hold")?.click();
-    await Promise.resolve();
+    const hold = element.find<HTMLButtonElement>(".sidebar-update-card__hold")!;
+    hold.click();
     await settle();
-
+    expect(hold.disabled).toBe(true);
+    hold.click();
     expect(onHoldUpdate).toHaveBeenCalledOnce();
+    holding.resolve(false);
+    await vi.waitFor(() => expect(hold.disabled).toBe(false));
+    expect(element.find(".sidebar-update-card__hold")).toBe(hold);
+    hold.click();
+    await vi.waitFor(() => expect(onHoldUpdate).toHaveBeenCalledTimes(2));
     await element.update({
       heldUpdateCampaignId: "campaign-1",
       updateSchedule: packageSchedule({ holdUntilMs: 61_000 }),

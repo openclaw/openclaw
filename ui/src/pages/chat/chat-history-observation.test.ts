@@ -145,7 +145,7 @@ async function fixture(primary = initial, observeManaged = true, models: ModelCa
   const makeState = (owner = sessions) => {
     const state = createPageState(
       { ...context, sessions: owner },
-      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      { afterCommit: () => () => {} },
       document.createElement("div"),
     );
     state.client = client;
@@ -513,6 +513,9 @@ it.each([false, true])(
     expect(getChatHistoryLoadState(state).phase).toBe("failed");
     const older = h.holdManaged();
     renderCurrent();
+    expect(container.querySelector(".chat-history-error__stage p")?.textContent).toContain(
+      "Temporary history failure",
+    );
     const retry = expectDefined(
       container.querySelector<HTMLButtonElement>(".chat-history-error button"),
       "Retry button",

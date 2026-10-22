@@ -493,7 +493,7 @@ class ClientTurnRouter {
   private async routeRequest(
     request: CodexAppServerServerRequest,
     signal: AbortSignal = new AbortController().signal,
-    setExecutionTimeoutMs?: (timeoutMs: number) => void,
+    setExecutionTimeoutMs?: (timeoutMs: number | null) => void,
   ): Promise<JsonValue | undefined> {
     if (this.closeError || signal.aborted) {
       return undefined;

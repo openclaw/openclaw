@@ -10,6 +10,17 @@ import config from "../../tsdown.ai.config.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+function linkDependencies(root: string, dependencies: Record<string, string>) {
+  for (const dependency of Object.keys(dependencies)) {
+    const destination = path.join(root, "node_modules", dependency);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.symlinkSync(
+      fs.realpathSync(path.join("packages/ai/node_modules", dependency)),
+      destination,
+      "junction",
+    );
+  }
+}
 
 it("streams Mistral from the built AI package without installing the SDK", async () => {
   const root = createTempDir("openclaw-ai-package-");
@@ -26,23 +37,17 @@ it("streams Mistral from the built AI package without installing the SDK", async
     logLevel: "silent",
   });
   try {
-    for (const dependency of Object.keys(manifest.dependencies)) {
-      const destination = path.join(root, "node_modules", dependency);
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.symlinkSync(
-        fs.realpathSync(path.join("packages/ai/node_modules", dependency)),
-        destination,
-        "junction",
-      );
-    }
+    linkDependencies(root, manifest.dependencies);
     expect(fs.readFileSync(path.join(outDir, "mistral.LICENSE"), "utf8")).toContain(
       "Apache License",
     );
     const script = `
       import assert from "node:assert/strict";
       import { registerHooks } from "node:module";
+      const loadedDependencies = new Set();
       registerHooks({ resolve(specifier, context, next) {
         assert(!specifier.startsWith("@mistralai/"), "Mistral SDK must be bundled");
+        loadedDependencies.add(specifier);
         return next(specifier, context);
       }});
       const { createApiRegistry, createNodeLlmRuntime } = await import("./dist/index.mjs");
@@ -73,11 +78,24 @@ it("streams Mistral from the built AI package without installing the SDK", async
       assert.deepEqual(result.content, [{ type: "text", text: "bundled response" }]);
       assert.equal(request.model, "mistral-test");
       assert.equal(request.messages[0].content, "hello");
+      assert(loadedDependencies.has("zod-to-json-schema"));
+      if (process.argv[1] === "with-telemetry") {
+        assert(loadedDependencies.has("@opentelemetry/semantic-conventions/incubating"));
+      }
     `;
-    await promisify(execFile)(resolveTestNodeExecPath(), ["--input-type=module", "-e", script], {
-      cwd: root,
-      timeout: 30_000,
-    });
+    for (const mode of ["without-telemetry", "with-telemetry"]) {
+      if (mode === "with-telemetry") {
+        linkDependencies(root, manifest.peerDependencies);
+      }
+      await promisify(execFile)(
+        resolveTestNodeExecPath(),
+        ["--input-type=module", "-e", script, mode],
+        {
+          cwd: root,
+          timeout: 30_000,
+        },
+      );
+    }
   } finally {
     await Promise.all(bundles.map((bundle) => bundle[Symbol.asyncDispose]()));
   }

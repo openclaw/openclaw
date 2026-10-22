@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, untrack, onCleanup } from "solid-js";
+import { createMemo, For, Show, onSettled, untrack } from "solid-js";
 import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
@@ -17,14 +17,13 @@ import {
   beginNativeWindowDrag,
   beginNativeWindowDragFromTopInset,
 } from "../app/native-window-drag.ts";
-import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../lib/keyboard-shortcut-contract.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
 import {
   renderSidebarAgentCard,
   renderAppSidebarFooterBar,
@@ -33,17 +32,16 @@ import {
   type AppSidebarRenderHost,
 } from "./app-sidebar-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { McpAppCatalog } from "./mcp-app-catalog.tsx";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
+import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
-import "./sidebar-collapse-toggle.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { renderNewSessionLink } from "./solid/new-session-link.tsx";
-import {
-  SessionGlyph,
-  renderSessionUnreadBadge,
-  renderSessionOwnerAvatar,
-} from "./solid/session-presentation.tsx";
+import { ShortcutHint } from "./solid/kbd.tsx";
+import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
+import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
+import { SessionGlyph, renderSessionUnreadBadge } from "./solid/session-presentation.tsx";
 
 type SidebarZone = ReturnType<AppSidebarRenderHost["reconciledSidebarZone"]>;
 type RailPinTouchPress = {
@@ -73,78 +71,95 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
     <nav
       class="sidebar-rail"
       aria-label={t("nav.pages")}
+      data-tooltip-placement="right"
       onMouseDown={beginNativeWindowDragFromTopInset}
     >
       {renderSidebarAgentCard(host)}
       <div class="sidebar-rail__create">
-        {renderNewSessionLink({
-          get basePath() {
-            return host.basePath;
-          },
-          get agentId() {
-            return host.expandedAgentId();
-          },
-          class: "sidebar-rail__button sidebar-new-session",
-          get label() {
-            return t("agentChip.newConversation");
-          },
-          showShortcut: true,
-          get disabledReason() {
+        <NewSessionLink
+          basePath={host.basePath}
+          agentId={host.expandedAgentId()}
+          class="sidebar-rail__button sidebar-new-session"
+          label={t("agentChip.newConversation")}
+          showShortcut
+          disabledReason={(() => {
             const access = newSessionAccess();
             return access.allowed ? undefined : access.reason;
-          },
-          onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-        })}
+          })()}
+          onOpen={(agentId, target) => host.requestOpenNewSession(agentId, target)}
+        />
       </div>
       <div class="sidebar-rail__views">
         <For each={views}>
-          {(view) => (
-            <button
-              type="button"
-              class="sidebar-rail__button"
-              title={
-                host.navigationView === view && view !== "online"
-                  ? `${viewLabel(view)} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`
-                  : viewLabel(view)
-              }
-              data-navigation-view={view}
-              aria-label={viewLabel(view)}
-              aria-pressed={
-                host.navigationVisible && !host.navigationCollapsed && host.navigationView === view
-                  ? "true"
-                  : "false"
-              }
-              onClick={() => {
-                const active = host.navigationView === view;
-                host.navigationView = view;
-                if (
-                  !isMobileNavLayout() &&
-                  ((active && view !== "online") || host.navigationCollapsed)
-                ) {
-                  host.onToggleSidebar?.();
-                }
-                host.invalidate();
-              }}
-            >
-              <Icon
-                name={
-                  view === "pages" ? "layoutGrid" : view === "sessions" ? "messageCircle" : "users"
-                }
-              />
-            </button>
-          )}
+          {(view) => {
+            return (
+              <openclaw-tooltip prop:content={viewLabel(view)}>
+                <button
+                  ref={[
+                    elementRef((element: HTMLButtonElement) => {
+                      host.navigationViewElements.set(view, element);
+                      return () => {
+                        if (host.navigationViewElements.get(view) === element) {
+                          host.navigationViewElements.delete(view);
+                        }
+                      };
+                    }),
+                  ]}
+                  type="button"
+                  class="sidebar-rail__button"
+                  data-navigation-view={view}
+                  aria-label={viewLabel(view)}
+                  aria-pressed={
+                    host.navigationVisible &&
+                    !host.navigationCollapsed &&
+                    host.navigationView === view
+                      ? "true"
+                      : "false"
+                  }
+                  onClick={() => {
+                    const active = host.navigationView === view;
+                    host.navigationView = view;
+                    if (
+                      !isMobileNavLayout() &&
+                      ((active && view !== "online") || host.navigationCollapsed)
+                    ) {
+                      host.onToggleSidebar?.();
+                    }
+                    host.invalidate();
+                  }}
+                >
+                  <Icon
+                    name={
+                      view === "pages"
+                        ? "layoutGrid"
+                        : view === "sessions"
+                          ? "messageCircle"
+                          : "users"
+                    }
+                  />
+                </button>
+              </openclaw-tooltip>
+            );
+          }}
         </For>
       </div>
-      <button
-        type="button"
-        class="sidebar-rail__button sidebar-brand__search sidebar-brand__desktop-control"
-        title={`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
-        aria-label={t("chat.openCommandPalette")}
-        disabled={!host.onOpenPalette}
-        onClick={() => host.onOpenPalette?.()}
-      >
-        <Icon name="search" />
-      </button>
+      <openclaw-tooltip>
+        <span slot="content">
+          <ShortcutHint
+            label={t("chat.openCommandPalette")}
+            combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette}
+          />
+        </span>
+        <button
+          type="button"
+          class="sidebar-rail__button sidebar-brand__search sidebar-brand__desktop-control"
+          aria-label={t("chat.openCommandPalette")}
+          disabled={!host.onOpenPalette}
+          onClick={() => host.onOpenPalette?.()}
+        >
+          <Icon name="search" />
+        </button>
+      </openclaw-tooltip>
       <div
         class={[
           "sidebar-rail__pins",
@@ -175,7 +190,11 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         onDrop={(event) => host.sessionOrganizer.handleSidebarZoneDrop(event)}
       >
         <For each={pins()} keyed={serializeSidebarEntry}>
-          {(entry) => renderRailPin(host, untrack(entry), zone)}
+          {(entry) => {
+            // The serialized entry is this pin's key; its live row facts come from zone.
+            const initialEntry = untrack(entry);
+            return renderRailPin(host, initialEntry, zone);
+          }}
         </For>
       </div>
       <div class="sidebar-rail__bottom">{renderAppSidebarFooterBar(host)}</div>
@@ -230,9 +249,12 @@ function renderRailPin(
           }),
         )
       : null;
+  let trigger: HTMLElement | undefined;
+  const triggerRef = (element: HTMLAnchorElement) => (trigger = element);
   const content =
     entry.type === "person" ? (
       <a
+        ref={triggerRef}
         class="sidebar-rail__button"
         draggable="false"
         href={person()?.href}
@@ -247,11 +269,11 @@ function renderRailPin(
             </Show>
           }
         >
-          {(user) => renderSessionOwnerAvatar(user())}
+          {(user) => <SessionOwnerAvatar owner={user()} />}
         </Show>
       </a>
     ) : entry.type === "route" ? (
-      host.sidebarMenus.renderRoute(entry.route, host)
+      host.sidebarMenus.renderRoute(entry.route, host, triggerRef)
     ) : (
       <Show
         when={session()}
@@ -270,13 +292,14 @@ function renderRailPin(
                 </Show>
               }
             >
-              {(item) => renderAppSidebarPluginTab(host, item)}
+              {(item) => renderAppSidebarPluginTab(host, item, triggerRef)}
             </Show>
           ) : undefined
         }
       >
         {(row) => (
           <a
+            ref={triggerRef}
             class="sidebar-rail__button"
             draggable="false"
             href={host.sidebarSessionHref(row())}
@@ -319,14 +342,16 @@ function renderRailPin(
   };
   const openMenu = (event: MouseEvent | KeyboardEvent) => {
     if (!host.sidebarSnapshot) {
-      handleContextMenuEvent(event, pin?.querySelector("a, button") ?? null, (trigger, x, y) =>
-        host.sidebarMenus.openRailPinMenu(serialized, label(), x, y, trigger),
+      handleContextMenuEvent(event, trigger ?? pin ?? null, (menuTrigger, x, y) =>
+        host.sidebarMenus.openRailPinMenu(serialized, label(), x, y, menuTrigger),
       );
     }
   };
-  onCleanup(() => {
+  onSettled(() => () => {
     clearTimeout(press?.timer);
-    pin?.removeEventListener("click", captureClick, true);
+    if (host.sidebarMenus.railPins.get(serialized) === pin) {
+      host.sidebarMenus.railPins.delete(serialized);
+    }
   });
   const available = () =>
     entry.type === "person" ||
@@ -336,20 +361,33 @@ function renderRailPin(
   return (
     <Show when={available()}>
       <div
-        ref={(element) => {
-          pin = element;
-          element.addEventListener("click", captureClick, true);
-        }}
+        ref={[
+          (element: HTMLDivElement) => {
+            pin = element;
+            host.sidebarMenus.railPins.set(serialized, element);
+          },
+          nativeListener("click", captureClick, true),
+        ]}
         class={[
           "sidebar-rail__pin",
           drop()?.entry === serialized ? `sidebar-zone-entry--drop-${drop()?.position}` : undefined,
         ]}
         data-sidebar-entry={serialized}
+        tabindex={-1}
         title={host.sidebarMenus.railPinMenuPosition ? "" : label()}
         draggable={!host.sidebarSnapshot ? "true" : "false"}
         onContextMenu={openMenu}
         onKeyDown={openMenu}
+        onFocusIn={(event) => {
+          if (event.target instanceof HTMLElement && event.target.matches("a, button")) {
+            trigger = event.target;
+          }
+        }}
         onPointerDown={(event) => {
+          const target = event.target.closest<HTMLElement>("a, button");
+          if (target && pin?.contains(target)) {
+            trigger = target;
+          }
           clearTimeout(press?.timer);
           press = undefined;
           if (host.sidebarSnapshot || event.pointerType !== "touch" || !event.isPrimary) {
@@ -364,13 +402,18 @@ function renderRailPin(
           press = current;
           current.timer = setTimeout(() => {
             current.timer = undefined;
-            const trigger = pin?.querySelector<HTMLElement>("a, button");
-            if (host.sidebarSnapshot || !pin?.isConnected || !trigger) {
+            if (host.sidebarSnapshot || !pin?.isConnected) {
               press = undefined;
               return;
             }
             current.opened = true;
-            host.sidebarMenus.openRailPinMenu(serialized, label(), current.x, current.y, trigger);
+            host.sidebarMenus.openRailPinMenu(
+              serialized,
+              label(),
+              current.x,
+              current.y,
+              trigger ?? pin,
+            );
           }, 500);
         }}
         onPointerMove={(event) => {
@@ -463,7 +506,9 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
   const entries = createMemo(() => {
     const result: SidebarZoneEntry[] = SIDEBAR_NAV_ROUTES.filter((route) =>
       host.sidebarMenus.isRouteEnabled(route),
-    ).map((route) => ({ type: "route", route }));
+    )
+      .toSorted((left, right) => titleForRoute(left).localeCompare(titleForRoute(right)))
+      .map((route) => ({ type: "route", route }));
     for (const key of new Set([
       ...zone().pluginTabs.keys(),
       ...host.pluginNavigation().map((entry) => entry.key),
@@ -484,16 +529,20 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
     >
       <div class="sidebar-pages__heading sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
         <span>{t("nav.pages")}</span>
-        <openclaw-sidebar-collapse-toggle prop:onToggle={() => host.onToggleSidebar?.()} />
+        <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
       </div>
-      <openclaw-mcp-app-catalog surface="sidebar" />
+      <McpAppCatalog surface="sidebar" />
       <For each={entries()} keyed={serializeSidebarEntry}>
         {(entry) => {
-          const fixedEntry = untrack(entry);
-          const key = serializeSidebarEntry(fixedEntry);
+          // The For key is the complete serialized identity; labels stay live in the renderer.
+          const initialEntry = untrack(entry);
+          const key = serializeSidebarEntry(initialEntry);
           // Allocate once per entry; the rendered link owns its reactive fields.
-          const content = untrack(() =>
-            renderAppSidebarPageEntry(host, fixedEntry, rows, () => zone().pluginTabs),
+          const content = renderAppSidebarPageEntry(
+            host,
+            initialEntry,
+            rows,
+            () => zone().pluginTabs,
           );
           return (
             <div class="sidebar-pages__entry">

@@ -8,7 +8,6 @@ import type {
   OpenClawConfig,
 } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import * as backoff from "../infra/backoff.js";
 import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
 import {
@@ -17,13 +16,21 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import {
   startGatewayConfigReloader as startGatewayConfigReloaderImpl,
-  type GatewayConfigReloadTransactionOwnership,
   type GatewayReloadPlan,
 } from "./config-reload.js";
 import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 
-const activeReloaders = new Set<ReturnType<typeof startGatewayConfigReloaderImpl>>();
+type Reloader = ReturnType<typeof startGatewayConfigReloaderImpl>;
+type ReloadOptions = Parameters<typeof startGatewayConfigReloaderImpl>[0];
+const activeReloaders = new Set<Reloader>();
 let currentTest: { timeout: number; signal: AbortSignal } | undefined;
+
+function mockCallback<F extends (...args: never[]) => unknown>(
+  callback: F | undefined,
+  fallback: NoInfer<F>,
+) {
+  return vi.fn<F>(callback ?? fallback);
+}
 
 export function prepareConfigReloadTest(
   { task, signal }: TestContext,
@@ -140,8 +147,8 @@ export function createRecoveryRestartMock() {
 export function startGatewayConfigReloader({
   scheduler = createTestGatewayScheduler("fake-timers"),
   ...opts
-}: Omit<Parameters<typeof startGatewayConfigReloaderImpl>[0], "scheduler"> & {
-  scheduler?: Parameters<typeof startGatewayConfigReloaderImpl>[0]["scheduler"];
+}: Omit<ReloadOptions, "scheduler"> & {
+  scheduler?: ReloadOptions["scheduler"];
 }) {
   const reloader = startGatewayConfigReloaderImpl({ ...opts, scheduler });
   activeReloaders.add(reloader);
@@ -178,16 +185,38 @@ export async function waitForReloadState(isSettled: () => boolean) {
   );
 }
 
-export async function flushReload(
-  reloader: Pick<ReturnType<typeof startGatewayConfigReloaderImpl>, "isReloading">,
-  delayMs = 0,
-) {
+export async function flushReload(reloader: Pick<Reloader, "isReloading">, delayMs = 0) {
   await vi.advanceTimersByTimeAsync(delayMs);
   await waitForReloadState(() => !reloader.isReloading());
 }
 
 export function makeGatewayPortConfig(port: number): OpenClawConfig {
   return { gateway: { reload: {}, port } };
+}
+
+export async function ownedConfigReloadOptions(snapshot: ConfigFileSnapshot, configPath: string) {
+  const { registerConfigWriteListener } = await import("../config/io.runtime.js");
+  return {
+    scheduler: createTestGatewayScheduler("fake-timers"),
+    initialConfig: snapshot.config,
+    initialCompareConfig: snapshot.sourceConfig ?? snapshot.config,
+    initialSnapshotRawHash: snapshot.hash ?? null,
+    initialAuthoredConfig: snapshot.parsed,
+    initialSnapshotValid: snapshot.valid,
+    initialSnapshotIssues: snapshot.issues,
+    testDebounceMs: 0,
+    watchPath: configPath,
+    initialPluginInstallRecords: {},
+    readPluginInstallRecords: async () => ({}),
+    subscribeToWrites: (listener: (event: ConfigWriteNotification) => void) =>
+      registerConfigWriteListener(listener, {
+        ownsRuntimeActivationFor: configPath,
+        preCommitRuntimePreflight: async (config) => ({
+          runtimeConfig: config,
+          compareConfig: config,
+        }),
+      }),
+  };
 }
 
 export function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigFileSnapshot {
@@ -216,21 +245,8 @@ export function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigF
 }
 
 export function makeZeroDebounceHookSnapshot(hash: string): ConfigFileSnapshot {
-  return makeSnapshot({
-    sourceConfig: {
-      gateway: { reload: {} },
-      hooks: { enabled: true },
-    },
-    runtimeConfig: {
-      gateway: { reload: {} },
-      hooks: { enabled: true },
-    },
-    config: {
-      gateway: { reload: {} },
-      hooks: { enabled: true },
-    },
-    hash,
-  });
+  const config = () => ({ gateway: { reload: {} }, hooks: { enabled: true } });
+  return makeSnapshot({ config: config(), sourceConfig: config(), runtimeConfig: config(), hash });
 }
 
 export function makeZeroDebounceHookWrite(persistedHash: string): ConfigWriteNotification {
@@ -244,7 +260,6 @@ export function makeZeroDebounceHookWrite(persistedHash: string): ConfigWriteNot
     revision: 1,
     fingerprint: `runtime-${persistedHash}`,
     sourceFingerprint: `source-${persistedHash}`,
-    writtenAtMs: Date.now(),
   };
 }
 
@@ -264,71 +279,37 @@ export function makeWrite(
 
 export function createReloaderHarness(
   readSnapshot: () => Promise<ConfigFileSnapshot>,
-  options: {
-    scheduler?: Parameters<typeof startGatewayConfigReloaderImpl>[0]["scheduler"];
-    initialConfig?: OpenClawConfig;
-    initialCompareConfig?: OpenClawConfig;
-    initialSnapshotRawHash?: string | null;
-    initialAuthoredConfig?: unknown;
-    initialIncludedPaths?: readonly string[];
-    initialSnapshotValid?: boolean;
-    initialSnapshotIssues?: ConfigFileSnapshot["issues"];
-    prepareConfigCandidate?: Parameters<
-      typeof startGatewayConfigReloader
-    >[0]["prepareConfigCandidate"];
-    promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
-    initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
-    readPluginInstallRecords?: () => Promise<Record<string, PluginInstallRecord>>;
-    runTransaction?: <T>(run: () => Promise<T>) => Promise<T>;
-    onConfigCandidateObserved?: () => void;
-    onConfigAccepted?: Parameters<typeof startGatewayConfigReloader>[0]["onConfigAccepted"];
-    onEffectiveConfigUnchanged?: Parameters<
-      typeof startGatewayConfigReloader
-    >[0]["onEffectiveConfigUnchanged"];
-    onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
-    onConfigRevisionApplied?: (hash: string) => void;
-    onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
-    onNoopConfigCommit?: Parameters<typeof startGatewayConfigReloader>[0]["onNoopConfigCommit"];
-    onHotReload?: Parameters<typeof startGatewayConfigReloader>[0]["onHotReload"];
-    onRestart?: Parameters<typeof startGatewayConfigReloader>[0]["onRestart"];
-  } = {},
+  options: Partial<
+    Omit<
+      ReloadOptions,
+      | "readSnapshot"
+      | "log"
+      | "subscribeToWrites"
+      | "watchPath"
+      | "testDebounceMs"
+      | "onReloadEnabledChange"
+      | "onRuntimeConfigCommitted"
+      | "hasOutstandingGatewayRestart"
+      | "onConfigCandidateCommitted"
+      | "onWatcherReady"
+    >
+  > = {},
 ) {
   const watcher = installWatcherMock();
-  const onConfigChange = vi.fn(
-    options.onConfigChange ?? (async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {}),
-  );
-  const onConfigApplied = vi.fn(
-    options.onConfigApplied ??
-      (async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {}),
-  );
-  const onConfigAccepted = vi.fn(options.onConfigAccepted ?? (async () => {}));
-  const onConfigRevisionApplied = vi.fn(options.onConfigRevisionApplied ?? (() => {}));
-  const onReloadEnabledChange = vi.fn<(enabled: boolean) => void>();
-  const onEffectiveConfigUnchanged = vi.fn(
-    options.onEffectiveConfigUnchanged ?? (async () => ({ rollback: async () => {} })),
-  );
-  const onNoopConfigCommit = vi.fn(
-    options.onNoopConfigCommit ??
-      (async (
-        _plan: GatewayReloadPlan,
-        _nextConfig: OpenClawConfig,
-        _ownership: GatewayConfigReloadTransactionOwnership,
-      ) => {}),
-  );
-  const onHotReload = vi.fn(
-    options.onHotReload ??
-      (async (
-        _plan: GatewayReloadPlan,
-        _nextConfig: OpenClawConfig,
-        _ownership: GatewayConfigReloadTransactionOwnership,
-      ) => "applied" as const),
-  );
-  const onRestart = vi.fn(
-    options.onRestart ?? ((_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {}),
-  );
-  const onConfigCandidateCommitted = vi.fn(
-    (_info: { path: string; persistedHash: string | null; changedPaths: readonly string[] }) => {},
-  );
+  const callbacks = {
+    onConfigChange: mockCallback(options.onConfigChange, async () => {}),
+    onConfigApplied: mockCallback(options.onConfigApplied, async () => {}),
+    onConfigAccepted: mockCallback(options.onConfigAccepted, async () => {}),
+    onConfigRevisionApplied: mockCallback(options.onConfigRevisionApplied, () => {}),
+    onReloadEnabledChange: vi.fn<(enabled: boolean) => void>(),
+    onEffectiveConfigUnchanged: mockCallback(options.onEffectiveConfigUnchanged, async () => ({
+      rollback: async () => {},
+    })),
+    onNoopConfigCommit: mockCallback(options.onNoopConfigCommit, async () => {}),
+    onHotReload: mockCallback(options.onHotReload, async () => "applied"),
+    onRestart: mockCallback(options.onRestart, () => {}),
+    onConfigCandidateCommitted: vi.fn<NonNullable<ReloadOptions["onConfigCandidateCommitted"]>>(),
+  };
   let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
   const subscribeToWrites = vi.fn((listener: (event: ConfigWriteNotification) => void) => {
     writeListener = listener;
@@ -341,55 +322,27 @@ export function createReloaderHarness(
   const log = createInfoWarnErrorLogger();
   const initialConfig = options.initialConfig ?? { gateway: { reload: {} } };
   const reloader = startGatewayConfigReloader({
-    scheduler: options.scheduler,
+    ...options,
+    ...callbacks,
     testDebounceMs: 0,
     initialConfig,
-    initialCompareConfig: options.initialCompareConfig,
     initialSnapshotRawHash:
       options.initialSnapshotRawHash === undefined
         ? hashConfigRaw(JSON.stringify(options.initialAuthoredConfig ?? initialConfig))
         : options.initialSnapshotRawHash,
     initialAuthoredConfig: options.initialAuthoredConfig ?? initialConfig,
-    initialIncludedPaths: options.initialIncludedPaths,
     initialSnapshotValid: options.initialSnapshotValid ?? true,
     initialSnapshotIssues: options.initialSnapshotIssues ?? [],
-    ...(options.prepareConfigCandidate
-      ? { prepareConfigCandidate: options.prepareConfigCandidate }
-      : {}),
     readSnapshot,
-    promoteSnapshot: options.promoteSnapshot,
     initialPluginInstallRecords: options.initialPluginInstallRecords ?? {},
     readPluginInstallRecords: options.readPluginInstallRecords ?? (async () => ({})),
     subscribeToWrites,
-    ...(options.onConfigCandidateObserved
-      ? { onConfigCandidateObserved: options.onConfigCandidateObserved }
-      : {}),
-    onConfigChange,
-    onConfigApplied,
-    onConfigRevisionApplied,
-    onReloadEnabledChange,
-    onConfigAccepted,
-    onEffectiveConfigUnchanged,
-    onNoopConfigCommit,
-    onHotReload,
-    onRestart,
-    onConfigCandidateCommitted,
-    ...(options.runTransaction ? { runTransaction: options.runTransaction } : {}),
     log,
     watchPath: "/tmp/openclaw.json",
   });
   return {
     watcher,
-    onConfigChange,
-    onConfigApplied,
-    onConfigRevisionApplied,
-    onReloadEnabledChange,
-    onConfigAccepted,
-    onEffectiveConfigUnchanged,
-    onNoopConfigCommit,
-    onHotReload,
-    onRestart,
-    onConfigCandidateCommitted,
+    ...callbacks,
     log,
     reloader,
     emitWrite(event: ConfigWriteNotification) {
@@ -405,13 +358,17 @@ export async function flushWatcherChange(harness: ReloaderHarness) {
   await flushReload(harness.reloader);
 }
 
-export function getOnlyRestartCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenClawConfig] {
-  expect(harness.onRestart).toHaveBeenCalledTimes(1);
-  const call = harness.onRestart.mock.calls[0];
-  if (!call) {
-    throw new Error("expected one restart call");
-  }
+function onlyReloadCall(
+  callback: ReloaderHarness["onRestart"] | ReloaderHarness["onHotReload"],
+): [GatewayReloadPlan, OpenClawConfig] {
+  expect(callback).toHaveBeenCalledTimes(1);
+  const call = callback.mock.calls[0];
+  assert.isDefined(call);
   return [call[0], call[1]];
+}
+
+export function getOnlyRestartCall(harness: ReloaderHarness) {
+  return onlyReloadCall(harness.onRestart);
 }
 
 // Writer-focused cases own a persisted snapshot as well as the notification.
@@ -429,13 +386,6 @@ export function createWriteReloaderHarness(
   };
 }
 
-export function getOnlyHotReloadCall(
-  harness: ReloaderHarness,
-): [GatewayReloadPlan, OpenClawConfig] {
-  expect(harness.onHotReload).toHaveBeenCalledTimes(1);
-  const call = harness.onHotReload.mock.calls[0];
-  if (!call) {
-    throw new Error("expected one hot reload call");
-  }
-  return [call[0], call[1]];
+export function getOnlyHotReloadCall(harness: ReloaderHarness) {
+  return onlyReloadCall(harness.onHotReload);
 }

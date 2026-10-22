@@ -14,6 +14,7 @@ import type {
   SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRuntimeSpawnModelAutoSelection } from "./agent-runtime-session-spawn-context.js";
 import type {
@@ -188,6 +189,8 @@ export type CreateGatewaySessionParams = {
   waitForModelCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Trusted in-process initializer; never populated from public Gateway params. */
   initialEntry?: TrustedInitialSessionEntry;
+  /** Trusted prepared assistant reply committed with a new ordinary session, never a wire input. */
+  initialAssistantMessage?: { message: SessionTranscriptAssistantMessage; idempotencyKey?: string };
   /** Keep a new ordinary session unusable until afterCreate succeeds, or roll it back. */
   atomicInitialization?: true;
   /** Public callers need admin before reconfiguring an adopted keyed session. */
@@ -205,6 +208,8 @@ export type CreateGatewaySessionParams = {
     actor?: SessionCreatedActor;
     /** Host-verified human requester for matching spawn-owner inheritance. */
     requesterProfileId?: string;
+    /** Host-verified request credit, independent of operator role and ownership. */
+    gitContributorProfileId?: string;
     /** Trusted owner status of the spawning invocation, never synthetic child launch authority. */
     requesterSenderIsOwner?: boolean;
     sandbox?: "required";

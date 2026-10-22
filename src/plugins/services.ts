@@ -12,6 +12,7 @@ import { createPluginServiceGatewayEvents } from "./gateway-events.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginInstance, runPluginCleanup } from "./plugin-instance-scope.js";
+import { withPluginRetentionOwner } from "./plugin-retention-diagnostics.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
@@ -19,6 +20,7 @@ import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
 import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
+import { pluginRuntimeLoaderLogger } from "./runtime/load-context.js";
 import { createPluginServiceAutomationCapabilities } from "./service-automation-capabilities.js";
 import { createPluginServiceControlUiIngress } from "./service-control-ui-ingress.js";
 import { createPluginServiceDiagnostics } from "./service-diagnostics.js";
@@ -488,7 +490,9 @@ async function startPreparedPluginServices({
     const instance = record && getPluginInstance(record);
     // Native service receivers retain their brands; registration owns their invocation scope.
     const runServiceCleanup = <T>(run: () => T): T =>
-      instance ? instance.runCleanup(run) : runPluginCleanup(service, run);
+      withPluginRetentionOwner({ serviceId: id }, () =>
+        instance ? instance.runCleanup(run) : runPluginCleanup(service, run),
+      );
     const traceName = `sidecars.plugin-services.${encodeStartupTraceSegment(entry.pluginId)}.${encodeStartupTraceSegment(entry.id)}`;
     const lease = createPluginRuntimeCapabilityLease("plugin service");
     const gatewayEvents = createPluginServiceGatewayEvents({
@@ -537,12 +541,7 @@ async function startPreparedPluginServices({
       config,
       workspaceDir,
       stateDir: STATE_DIR,
-      logger: {
-        info: (msg) => log.info(msg),
-        warn: (msg) => log.warn(msg),
-        error: (msg) => log.error(msg),
-        debug: (msg) => log.debug(msg),
-      },
+      logger: pluginRuntimeLoaderLogger,
       serviceHealth: health,
       ...(getCron ? { getCron } : {}),
       ...(mcpEvents ? { mcpEvents } : {}),
@@ -626,9 +625,14 @@ async function startPreparedPluginServices({
         const settled = createDeferredCore();
         ownedService.startup = settled.promise;
         try {
-          ownedService.startupConsumer = instance?.retainConsumer();
+          ownedService.startupConsumer = instance?.retainConsumer(undefined, registry, "work", {
+            reason: "service-start",
+            owner: { serviceId: id },
+          });
           const start = () =>
-            withPluginServiceScheduler(scheduling.scheduler, () => service.start(serviceContext));
+            withPluginRetentionOwner({ serviceId: id }, () =>
+              withPluginServiceScheduler(scheduling.scheduler, () => service.start(serviceContext)),
+            );
           // Reload may originate in an RPC or tool; background work captures
           // service-owned Gateway/worker context, never that caller's authority or generation.
           await runOutsideOperatorToolGatewayAuthority(() =>

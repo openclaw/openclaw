@@ -1,0 +1,111 @@
+.chat-details-people {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0 0;
+}
+
+.chat-details-people__row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  color: var(--text);
+  font-size: calc(14px * var(--control-ui-text-scale));
+  line-height: 24px;
+  text-decoration: none;
+}
+
+a.chat-details-people__row:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.chat-details-people__avatar {
+  display: inline-flex;
+}
+
+.chat-details-people__avatar .viewer-avatar,
+.chat-details-people__preview .viewer-avatar {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  font-size: 11px;
+}
+
+.chat-details-people__name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.chat-details-people__name > span {
+  display: inline-block;
+}
+
+.chat-details-people__name[data-overflow] {
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+}
+
+.chat-details-people__name[data-overflow]:dir(rtl) {
+  mask-image: linear-gradient(to left, black calc(100% - 24px), transparent);
+}
+
+.chat-details-people__role,
+.chat-details-people__remaining,
+.chat-details-people__count {
+  color: var(--muted);
+  font-size: calc(12px * var(--control-ui-text-scale));
+  font-weight: 400;
+}
+
+.chat-details-people__role {
+  max-width: 96px;
+  text-align: end;
+}
+
+.chat-details-people__remaining {
+  padding-block: 4px;
+}
+
+.chat-details-people__summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin-inline-start: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-details-people__preview {
+  display: inline-flex;
+  align-items: center;
+}
+
+.chat-details-people__preview-avatar {
+  display: inline-flex;
+}
+
+.chat-details-people__preview-avatar + .chat-details-people__preview-avatar,
+.chat-details-people__preview-avatar + .chat-details-people__overflow {
+  margin-inline-start: -7px;
+}
+
+.chat-details-people__preview .viewer-avatar,
+.chat-details-people__overflow {
+  border: 2px solid var(--panel-strong);
+  font-size: 10px;
+}
+
+.chat-details-people__overflow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 28%, var(--panel-strong));
+  color: var(--text);
+  font-weight: 500;
+  line-height: 1;
+}

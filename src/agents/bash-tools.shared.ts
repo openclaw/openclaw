@@ -1,7 +1,3 @@
-/**
- * Shared helpers for bash exec/process tools.
- * Owns output slicing, environment coercion, and compact session labels.
- */
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe } from "../utils.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
@@ -25,7 +21,6 @@ export type BashSandboxConfig = {
   finalizeExec?: SandboxBackendHandle["finalizeExec"];
 };
 
-/** Builds the environment passed into sandboxed exec calls. */
 export function buildSandboxEnv(params: {
   defaultPath: string;
   paramsEnv?: Record<string, string>;
@@ -75,14 +70,11 @@ export function readEnvInt(key: string, legacyKey?: string) {
 }
 
 /** Splits output into bounded chunks without splitting UTF-16 surrogate pairs. */
-export function chunkString(input: string, limit = CHUNK_LIMIT) {
+export function chunkString(input: string) {
   const chunks: string[] = [];
-  const chunkLimit = Number.isNaN(limit) ? CHUNK_LIMIT : Math.max(1, Math.floor(limit));
   let i = 0;
   while (i < input.length) {
-    const firstCodePointWidth = (input.codePointAt(i) ?? 0) > 0xffff ? 2 : 1;
-    // A code point is indivisible; a tiny limit may require one chunk to exceed it.
-    const chunk = sliceUtf16Safe(input, i, i + Math.max(chunkLimit, firstCodePointWidth));
+    const chunk = sliceUtf16Safe(input, i, i + CHUNK_LIMIT);
     chunks.push(chunk);
     i += chunk.length;
   }
@@ -98,7 +90,6 @@ export function truncateMiddle(str: string, max: number) {
   return `${sliceUtf16Safe(str, 0, half)}...${sliceUtf16Safe(str, -half)}`;
 }
 
-/** Returns a line-based log slice plus original line/character counts. */
 export function sliceLogLines(
   text: string,
   offset?: number,

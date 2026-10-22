@@ -43,8 +43,8 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { acquireCronInferenceAuthorization } from "../inference-binding.runtime.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
+import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
@@ -176,15 +176,13 @@ export function createCronPromptExecutor(
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
     using inferenceLease = new DisposableStack();
     const binding = params.job.inferenceBinding;
-    const inferenceAuthorization = binding
-      ? await acquireCronInferenceAuthorization({
-          binding,
-          cfg: params.cfgWithAgentDefaults,
-          agentDir: params.agentDir,
-        })
-      : undefined;
-    if (inferenceAuthorization) {
-      inferenceLease.defer(() => inferenceAuthorization.dispose());
+    const inference = await prepareCronRunInference({
+      binding,
+      cfg: params.cfgWithAgentDefaults,
+      agentDir: params.agentDir,
+    });
+    if (inference) {
+      inferenceLease.defer(inference.dispose);
     }
     let canReusePreparedSession = preparedSessionAvailable;
     preparedSessionAvailable = false;
@@ -212,6 +210,7 @@ export function createCronPromptExecutor(
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
     const cronAdmission = prepareCronRunAdmission({
+      operatorAuthority: params.operatorAuthority,
       admissionSource: params.admissionSource,
       deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
@@ -375,12 +374,7 @@ export function createCronPromptExecutor(
           catalog: thinkingCatalog,
           agentRuntime: candidateRuntime,
         });
-        if (binding && (providerOverride !== binding.provider || cliExecution)) {
-          throw new Error(
-            "Automation candidate is incompatible with its recorded inference account and route.",
-          );
-        }
-        inferenceAuthorization?.assertCurrent();
+        inference?.assertCandidate(providerOverride, cliExecution);
         assertCronRuntimeAuthorityCandidate({
           authority: params.job.runtimeAuthority,
           candidateRuntime,
@@ -455,6 +449,7 @@ export function createCronPromptExecutor(
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
             thinkingExplicit: candidateConfiguredThinkLevel !== undefined,
+            reasoningLevel: params.agentPayload?.includeReasoning ? "on" : undefined,
             timeoutMs: params.timeoutMs,
             runId,
             lane: resolveCronAgentLane(params.lane),
@@ -466,6 +461,7 @@ export function createCronPromptExecutor(
             extraSystemPrompt: params.deliverySystemPrompt,
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+            messageToolFinalByDefault: sourceDelivery.messageTool.finalByDefault,
             scheduledToolPolicy,
             onExecutionStarted: notifyExecutionStarted,
             onExecutionPhase: notifyExecutionPhase,
@@ -562,11 +558,7 @@ export function createCronPromptExecutor(
                   nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
-                  cliSessionBindingFacts: {
-                    extraSystemPromptStatic: params.deliverySystemPrompt,
-                    sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
-                    requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
-                  },
+                  cliSessionBindingFacts: params.cliSessionBindingFacts,
                   toolsAllow: resolveCliRuntimeToolsAllow(params.agentPayload?.toolsAllow),
                   abortSignal: cliAbortSignal,
                 });
@@ -645,28 +637,11 @@ export function createCronPromptExecutor(
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
           resolvedModelSelection: runOptions.resolvedModelSelection,
-          authProfileId: binding?.profileId ?? params.liveSelection.authProfileId,
-          ...(binding && inferenceAuthorization
-            ? {
-                authProfileBinding: {
-                  profileId: binding.profileId,
-                  authRequirement: binding.authRequirement,
-                  assertCurrent: inferenceAuthorization.assertCurrent,
-                  revalidate: inferenceAuthorization.revalidate,
-                },
-                allowAuthProfileFallback: false,
-                onSuccessfulAuthProfile: (profileId: string | undefined) => {
-                  if (profileId !== binding.profileId) {
-                    throw new Error("Automation inference account changed during execution.");
-                  }
-                },
-              }
-            : {}),
-          authProfileIdSource:
-            binding?.source ??
-            (params.liveSelection.authProfileId
-              ? params.liveSelection.authProfileIdSource
-              : undefined),
+          authProfileId: params.liveSelection.authProfileId,
+          authProfileIdSource: params.liveSelection.authProfileId
+            ? params.liveSelection.authProfileIdSource
+            : undefined,
+          ...inference?.runParams,
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",
           verboseLevel: params.resolvedVerboseLevel,

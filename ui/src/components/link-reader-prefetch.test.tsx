@@ -243,6 +243,7 @@ describe("GitHub preview warming", () => {
     ["data-session-href", "session"],
     ["class", "markdown-session-link"],
     ["data-link-reader-external", ""],
+    ["data-link-reader-preview", "off"],
   ])("never observes a claimed link excluded by %s", async (attribute, value) => {
     await show([]);
     const link = document.createElement("a");

@@ -1,4 +1,4 @@
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
@@ -51,8 +51,7 @@ type MatrixDirectRoomMappingWriteResult = {
   directContentAfter: MatrixDirectAccountData;
 };
 
-const DIRECT_ACCOUNT_DATA_QUEUE_KEY = EventType.Direct;
-const directAccountDataWriteQueues = new WeakMap<MatrixClient, KeyedAsyncQueue>();
+const directAccountDataWriteQueues = new WeakMap<MatrixClient, Promise<void>>();
 
 async function readMatrixDirectAccountData(client: MatrixClient): Promise<MatrixDirectAccountData> {
   const direct = (await client.getAccountData(EventType.Direct)) as MatrixDirectAccountData;
@@ -67,24 +66,15 @@ function normalizeRemoteUserId(remoteUserId: string): string {
   return normalized;
 }
 
-function resolveDirectAccountDataWriteQueue(client: MatrixClient): KeyedAsyncQueue {
-  const existing = directAccountDataWriteQueues.get(client);
-  if (existing) {
-    return existing;
-  }
-  const created = new KeyedAsyncQueue();
-  directAccountDataWriteQueues.set(client, created);
-  return created;
-}
-
 async function writeMatrixDirectRoomMappings(params: {
   client: MatrixClient;
   remoteUserId: string;
   roomIds: readonly string[];
 }): Promise<MatrixDirectRoomMappingWriteResult> {
-  return await resolveDirectAccountDataWriteQueue(params.client).enqueue(
-    DIRECT_ACCOUNT_DATA_QUEUE_KEY,
-    async () => {
+  return await enqueueKeyedTask({
+    tails: directAccountDataWriteQueues,
+    key: params.client,
+    task: async () => {
       const directContentBefore = await readMatrixDirectAccountData(params.client);
       const current = normalizeUniqueTrimmedStringList(directContentBefore[params.remoteUserId]);
       const next = normalizeUniqueTrimmedStringList([...params.roomIds, ...current]);
@@ -100,7 +90,7 @@ async function writeMatrixDirectRoomMappings(params: {
         directContentAfter,
       };
     },
-  );
+  });
 }
 
 export async function persistMatrixDirectRoomMapping(params: {

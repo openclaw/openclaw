@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { requestCloudWorkerStop } from "../components/cloud-worker-stop.runtime.ts";
@@ -244,6 +245,7 @@ describe("placement startup Stop", () => {
         expect(request).toHaveBeenCalledWith(
           "sessions.send",
           expect.objectContaining({ key: "agent:cloud:other", idempotencyKey: "other-message" }),
+          expect.anything(),
         );
         expect(startup.get(input.recovery.sessionKey)?.action).toBe("retry");
       } finally {
@@ -348,7 +350,11 @@ describe("placement startup Stop", () => {
       try {
         startup.start(input);
         await vi.waitFor(() =>
-          expect(request).toHaveBeenCalledWith("sessions.send", expect.anything()),
+          expect(request).toHaveBeenCalledWith(
+            "sessions.send",
+            expect.anything(),
+            expect.anything(),
+          ),
         );
         await requestCloudWorkerStop(stopClient, { key: input.recovery.sessionKey }, startup);
         sent.resolve({ status: "started", runId: input.recovery.messageId });
@@ -495,6 +501,11 @@ describe("placement startup Retry", () => {
               key: sessionKey,
               message: input.recovery.message,
               idempotencyKey: messageId,
+            }),
+            expect.objectContaining({
+              timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+              signal: expect.any(AbortSignal),
+              retainSentResultOnAbort: true,
             }),
           ],
         ]);

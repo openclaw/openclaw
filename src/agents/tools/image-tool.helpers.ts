@@ -139,12 +139,8 @@ function modelIdMatchesProviderlessRef(params: {
 
 function findConfiguredImageModelMatches(params: { cfg?: OpenClawConfig; ref: string }): string[] {
   const providers = params.cfg?.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return [];
-  }
-
   const matches = new Set<string>();
-  for (const [providerKey, providerConfig] of Object.entries(providers)) {
+  for (const [providerKey, providerConfig] of Object.entries(providers ?? {})) {
     const provider = normalizeProviderId(providerKey);
     if (!provider || !Array.isArray(providerConfig?.models)) {
       continue;

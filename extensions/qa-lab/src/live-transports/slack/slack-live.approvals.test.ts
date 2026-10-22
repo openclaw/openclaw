@@ -2,11 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { writeSlackApprovalCheckpoint } from "./slack-live.approval-checkpoint.js";
 import { runSlackApprovalScenario, waitForSlackApprovalMessage } from "./slack-live.approvals.js";
 import { runSlackCodexApprovalScenario } from "./slack-live.codex-approval-runner.js";
-import type {
-  SlackMessage,
-  SlackObservedMessage,
-  SlackQaFetchFunction,
-} from "./slack-live.contracts.js";
+import type { SlackMessage, SlackQaFetchFunction } from "./slack-live.contracts.js";
 import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 vi.mock("./slack-live.approval-checkpoint.js", () => ({
@@ -44,16 +40,13 @@ function observation(pages: SlackMessage[][]) {
     return Response.json({ ok: true, messages });
   };
   const client = loadSlackQaRuntime().createSlackWebClient("xoxb-qa-approval-fixture", { fetch });
-  const observedMessages: SlackObservedMessage[] = [];
   return {
     approvalKind: "plugin" as const,
     channelId: "channel",
     client,
     decision: "allow-once" as const,
-    observedMessages,
     oldestTs: "99.0",
     scenarioId: "approval",
-    scenarioTitle: "Approval",
     sutIdentity: { userId: "sut" },
     timeoutMs: 3_000,
     token: "marker",
@@ -72,6 +65,7 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
   async (outcome) => {
     const phases: string[] = [];
     const marker = "SLACK_QA_CODEX_APPROVAL";
+    const title = "Codex app-server command approval";
     let runId: unknown;
     let sessionKey: unknown;
     let resolved = false;
@@ -81,15 +75,18 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
         const request = args as { idempotencyKey: string; sessionKey: string };
         runId = request.idempotencyKey;
         sessionKey = request.sessionKey;
-        return { runId, status: "accepted" };
       }
-      if (method === "plugin.approval.list") {
-        return [
+      if (method === "plugin.approval.resolve") {
+        resolved = true;
+      }
+      const replies: Record<string, unknown> = {
+        agent: { runId, status: "accepted" },
+        "plugin.approval.list": [
           {
             id: "plugin:owned",
             request: {
               pluginId: "codex",
-              title: "Codex app-server command approval",
+              title,
               toolName: "codex_command_approval",
               sessionKey,
               turnSourceChannel: "slack",
@@ -97,17 +94,10 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
               turnSourceAccountId: "sut",
             },
           },
-        ];
-      }
-      if (method === "plugin.approval.resolve") {
-        resolved = true;
-        return {};
-      }
-      if (method === "agent.wait") {
-        return { status: outcome === "failed" ? "failed" : "ok" };
-      }
-      if (method === "chat.history") {
-        return {
+        ],
+        "plugin.approval.resolve": {},
+        "agent.wait": { status: outcome === "failed" ? "failed" : "ok" },
+        "chat.history": {
           messages: [
             {
               role: "toolResult",
@@ -115,12 +105,13 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
             },
             { role: "assistant", content: marker },
           ],
-        };
+        },
+        "chat.abort": {},
+      };
+      if (!Object.hasOwn(replies, method)) {
+        throw new Error(`unexpected Gateway method ${method}`);
       }
-      if (method === "chat.abort") {
-        return {};
-      }
-      throw new Error(`unexpected Gateway method ${method}`);
+      return replies[method];
     });
     const fetch: SlackQaFetchFunction = async () => {
       phases.push(resolved ? "observe-resolved" : "observe-pending");
@@ -128,9 +119,7 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
         ok: true,
         messages: [
           message({
-            text: resolved
-              ? "Plugin approval: Allowed once codex Codex app-server command approval"
-              : "Plugin approval required codex Codex app-server command approval",
+            text: `Plugin approval${resolved ? ": Allowed once" : " required"} codex ${title}`,
             blocks: resolved ? [] : buttons,
           }),
         ],
@@ -140,11 +129,6 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
     vi.mocked(writeSlackApprovalCheckpoint).mockImplementation(async ({ state }) => {
       await Promise.resolve();
       phases.push(`checkpoint-${state}`);
-      return {
-        ackPath: `${state}.ack.json`,
-        checkpointPath: `${state}.json`,
-        screenshotPath: `${state}.png`,
-      };
     });
     const stopGateway = vi.fn(async () => {
       phases.push("stop");
@@ -152,7 +136,6 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
     const result = runSlackCodexApprovalScenario({
       channelId: "channel",
       context: { gateway: { call }, sutIdentity: { userId: "sut" }, sutReadClient: client },
-      observedMessages: [],
       primaryModel: "openai/gpt-5.6-luna",
       run: {
         kind: "codex-approval",
@@ -166,19 +149,7 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
       sutAccountId: "sut",
     });
     if (outcome === "ok") {
-      await expect(result).resolves.toMatchObject({
-        artifact: {
-          approvalId: "plugin:owned",
-          appServerMethod: "item/commandExecution/requestApproval",
-          codexModelKey: "openai/gpt-5.6-luna",
-          finalCodexTurnStatus: "ok",
-          operationVerified: true,
-          pendingMessageTs: "100.1",
-          resolvedMessageTs: "100.1",
-          pendingCheckpointPath: "pending.json",
-          resolvedCheckpointPath: "resolved.json",
-        },
-      });
+      await result;
     } else {
       await expect(result).rejects.toThrow(
         outcome === "failed"
@@ -187,12 +158,9 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
       );
     }
     expect(phases).toEqual([
-      "agent",
-      "observe-pending",
-      "plugin.approval.list",
-      "checkpoint-pending",
-      "plugin.approval.resolve",
-      "agent.wait",
+      ..."agent observe-pending plugin.approval.list checkpoint-pending plugin.approval.resolve agent.wait".split(
+        " ",
+      ),
       ...(outcome === "failed" ? [] : ["chat.history"]),
       ...(outcome === "ok" ? ["observe-resolved", "checkpoint-resolved"] : []),
       "chat.abort",
@@ -204,7 +172,7 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
   },
 );
 
-it("retains prompt evidence while waiting for the requested native decision", async () => {
+it("waits for the requested native approval actions", async () => {
   vi.useFakeTimers();
   const withoutActions = message({ blocks: [] });
   const params = observation([
@@ -219,26 +187,8 @@ it("retains prompt evidence while waiting for the requested native decision", as
   await vi.advanceTimersByTimeAsync(1_000);
   expect(await pending).toMatchObject({
     approvalId: "plugin:owned",
-    actionValues: [actionValue],
     message: { ts: "100.1" },
   });
-  expect(params.observedMessages).toEqual([
-    {
-      actionValues: [],
-      blockText: [],
-      botId: undefined,
-      channelId: "channel",
-      matchedScenario: true,
-      scenarioId: "approval",
-      scenarioTitle: "Approval",
-      text: "Plugin approval required marker",
-      threadTs: undefined,
-      ts: "100.1",
-      userId: "sut",
-    },
-    expect.objectContaining({ text: "unrelated approval", matchedScenario: false }),
-    expect.objectContaining({ actionValues: [actionValue], matchedScenario: true }),
-  ]);
 });
 
 it("waits for the original approval message to lose its native actions after resolution", async () => {
@@ -254,11 +204,7 @@ it("waits for the original approval message to lose its native actions after res
     messageTs: "100.1",
   });
   await vi.advanceTimersByTimeAsync(1_000);
-  expect(await pending).toMatchObject({ actionValues: [], message: { ts: "100.1" } });
-  expect(params.observedMessages).toMatchObject([
-    { ts: "100.1", matchedScenario: false, actionValues: [actionValue] },
-    { ts: "100.1", matchedScenario: true, actionValues: [] },
-  ]);
+  expect(await pending).toMatchObject({ message: { ts: "100.1" } });
 });
 
 it("allows live approval decision RPCs to take longer than the generic gateway probe timeout", async () => {
@@ -279,19 +225,14 @@ it("allows live approval decision RPCs to take longer than the generic gateway p
       sutIdentity: params.sutIdentity,
       sutReadClient: params.client,
     },
-    observedMessages: params.observedMessages,
     run: { kind: "approval", approvalKind: "plugin", decision: "allow-once", token: "marker" },
     scenario: { id: "slack-approval", title: "Slack approval", timeoutMs: 1_000 },
     sutAccountId: "sut",
   });
-  expect(call).toHaveBeenCalledWith(
-    "plugin.approval.resolve",
-    { decision: "allow-once", id: "plugin:owned" },
-    { expectFinal: false, timeoutMs: 35_000 },
-  );
-  expect(call).toHaveBeenCalledWith(
-    "plugin.approval.waitDecision",
-    { id: "plugin:owned" },
-    { expectFinal: true, timeoutMs: 35_000 },
-  );
+  for (const [method, input, expectFinal] of [
+    ["plugin.approval.resolve", { decision: "allow-once", id: "plugin:owned" }, false],
+    ["plugin.approval.waitDecision", { id: "plugin:owned" }, true],
+  ] as const) {
+    expect(call).toHaveBeenCalledWith(method, input, { expectFinal, timeoutMs: 35_000 });
+  }
 });

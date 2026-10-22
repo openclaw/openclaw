@@ -4,6 +4,7 @@ import {
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
   createLivePreviewLifecycle,
+  resolveChannelPreviewStreamMode,
   resolveChannelDraftStreamingChunking,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewCommandText,
@@ -27,7 +28,6 @@ import {
   withDiscordRequestAuthority,
 } from "../internal/request-authority.js";
 import { DISCORD_TEXT_CHUNK_LIMIT } from "../outbound-adapter.js";
-import { resolveDiscordPreviewStreamMode } from "../preview-streaming.js";
 import { retainDiscordProgressDraft } from "./message-handler.progress-continuation.js";
 
 type DraftReplyReference = {
@@ -49,15 +49,13 @@ export function createDiscordDraftPreviewController(params: {
   deliveryRest: RequestClient;
   deliverChannelId: string;
   replyReference: DraftReplyReference;
-  onFinalReplyStart?: () => void;
-  onFinalReplyDelivered?: () => void;
   log: (message: string) => void;
 }) {
   // Capture the channel owner before per-reply delivery binds a requester assertion.
   // Retained work restores this scope, never a settled requester or child tool scope.
   const runInChannelScope = AsyncLocalStorage.snapshot();
   const assertChannelAuthority = captureDiscordRequestAuthority();
-  const discordStreamMode = resolveDiscordPreviewStreamMode(params.discordConfig);
+  const discordStreamMode = resolveChannelPreviewStreamMode(params.discordConfig, "progress");
   // Provider drafts are visible before outbound modifiers run. Keep them off whenever a hook
   // can rewrite or cancel so the original payload cannot flash before durable delivery.
   const hookRunner = getGlobalHookRunner();
@@ -118,7 +116,6 @@ export function createDiscordDraftPreviewController(params: {
   const progressSeed = `${params.accountId}:${params.deliverChannelId}`;
   const progressDraft = createChannelProgressDraftCompositor({
     preparedItems: true,
-    showWorkStatus: true,
     entry: params.discordConfig,
     mode: discordStreamMode,
     active: Boolean(draftStream),
@@ -189,13 +186,9 @@ export function createDiscordDraftPreviewController(params: {
       : undefined,
     retainOnError: true,
     cleanupUndelivered: true,
-    onFinalStarted: () => {
-      freezeProgress();
-      params.onFinalReplyStart?.();
-    },
+    onFinalStarted: freezeProgress,
     onFinalDelivered: () => {
       progressDraft.markFinalReplyDelivered();
-      params.onFinalReplyDelivered?.();
     },
     onCleanupFailure: (err) => params.log(`discord: draft cleanup failed: ${String(err)}`),
   });

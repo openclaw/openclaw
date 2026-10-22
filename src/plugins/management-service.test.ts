@@ -189,10 +189,6 @@ describe("plugin management service", () => {
           first: "a".repeat(64),
           second: "b".repeat(64),
         });
-        expect(request.expectedInstallHashes).toEqual({
-          first: hashStableJson(first.index.installRecords.first),
-          second: hashStableJson(second.index.installRecords.second),
-        });
         return application;
       });
       const request: PluginsReloadParams = {
@@ -251,7 +247,6 @@ describe("plugin management service", () => {
     mocks.readPersistedRecords.mockReturnValue(installRecords);
     const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => {
       request.assertInvokerOwned?.();
-      expect(request.expectedInstallHashes).toBeUndefined();
       return {
         operationId: "discovered-reload",
         generation: 4,

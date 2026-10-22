@@ -7,7 +7,6 @@ import { GatewaySuspensionSchema } from "./gateway-suspend.js";
 import { NonEmptyString } from "./primitives.js";
 import { GatewayEventLoopHealthSchema } from "./runtime-vitals.js";
 import { SessionPersonSchema } from "./session-participant.js";
-// Gateway Protocol schema module defines protocol validation shapes.
 import { stringLiteralUnion } from "./string-literal-union.js";
 
 /**

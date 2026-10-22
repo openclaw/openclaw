@@ -389,7 +389,7 @@ export async function editSlackRenderedMessage(
     }
     logVerbose("slack edit: native data block rejected, retrying with text fallback");
     const survivorBlocks = stripSlackNativeDataBlocks(blocks);
-    const survivorText = buildSlackBlocksFallbackText(survivorBlocks) ?? "";
+    const survivorText = buildSlackBlocksFallbackText(survivorBlocks);
     const authoredEditText = content.trim();
     const baseText =
       authoredEditText && !survivorText.includes(authoredEditText) ? authoredEditText : "";
@@ -594,7 +594,6 @@ export async function downloadSlackFile(
   const isFileAllowed = (file: SlackFileInfoSummary) =>
     hasSlackScopeProof({ file, channelId: opts.channelId, threadId: opts.threadId });
 
-  // Fetch fresh file metadata (includes a current url_private_download).
   const info = await client.files.info({ file: fileId });
   const file = info.file as SlackFileInfoSummary | undefined;
 

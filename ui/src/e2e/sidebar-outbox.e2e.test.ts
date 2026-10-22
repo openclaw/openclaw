@@ -118,7 +118,7 @@ suite.define(() => {
       await gateway.setOnline(false);
       await incident.locator(".sidebar-outbox-row__offline").waitFor();
       await expectCompactRow(incident);
-      await page.locator(".sidebar-footer-bar .gateway-status--reconnecting").waitFor();
+      await page.locator(".sidebar-shell__footer .gateway-status--reconnecting").waitFor();
       expect(
         await page
           .locator('[data-attention-kind="scopeUpgrade"], [data-attention-kind="updateAvailable"]')
@@ -139,7 +139,13 @@ suite.define(() => {
       await gateway.setOnline(false);
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       await page.locator(".chat-queue__item").waitFor();
-      await page.locator(".sidebar-footer-bar .gateway-status--reconnecting").waitFor();
+      await page
+        .locator(".sidebar-shell__footer .gateway-status")
+        .getByText("Reconnecting… · 1 queued", { exact: true })
+        .waitFor();
+      expect(
+        await page.locator(".sidebar-shell__footer .gateway-status").getByRole("button").count(),
+      ).toBe(0);
       expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
     });

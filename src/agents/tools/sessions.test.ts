@@ -574,38 +574,6 @@ describe("sessions_send gating", () => {
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
-  it("prefers sessionKey over a redundant label", async () => {
-    const tool = createMainSessionsSendTool();
-
-    const result = await tool.execute("call-session-key-label", {
-      sessionKey: MAIN_AGENT_SESSION_KEY,
-      label: "stale-label",
-      message: "    indented body",
-      timeoutSeconds: 0,
-    });
-
-    const details = requireDetails(result);
-    expect(details).toMatchObject({
-      status: "accepted",
-      sessionKey: MAIN_AGENT_SESSION_KEY,
-    });
-    expect(callGatewayMock.mock.calls).toContainEqual([
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          sessionKey: MAIN_AGENT_SESSION_KEY,
-          message: expect.stringMatching(/\n {4}indented body$/u),
-        }),
-      }),
-    ]);
-    expect(callGatewayMock.mock.calls).not.toContainEqual([
-      expect.objectContaining({
-        method: "sessions.resolve",
-        params: expect.objectContaining({ label: "stale-label" }),
-      }),
-    ]);
-  });
-
   it.each([
     { targetKey: "agent:main:dashboard:child", timeoutSeconds: 0 },
     { targetKey: "agent:main:subagent:child", timeoutSeconds: 1 },

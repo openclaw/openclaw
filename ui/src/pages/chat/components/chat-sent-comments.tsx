@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, For, Show, untrack } from "solid-js";
+import { createMemo, createSignal, For, Loading, onCleanup, Show } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import { parseCommentAttachment, type CommentPreview } from "./chat-comment-preview.ts";
@@ -20,6 +20,7 @@ type SentCommentSource = {
 };
 type Props = {
   comments: AttachmentItem[];
+  inline?: boolean;
   options: ImageRenderOptions;
   resolve: (item: AttachmentItem) => SentCommentSource;
 };
@@ -27,6 +28,7 @@ type Props = {
 export function SentCommentAttachments(props: Props) {
   const renderComments = (admission?: AttachmentAdmission) => (
     <SentComments
+      inline={props.inline}
       sources={props.comments.map((item) =>
         admission?.observeElement
           ? { identity: item.attachment.url, pending: true, fallback: () => undefined }
@@ -62,93 +64,154 @@ export function SentCommentAttachments(props: Props) {
 
 function SentComments(props: {
   sources: SentCommentSource[];
+  inline?: boolean;
   scope: string;
   admission?: AttachmentAdmission;
 }) {
-  const sources = createMemo(() => props.sources);
+  const sources = () => props.sources;
+  const inline = createMemo(() => Boolean(props.inline));
   const [revealed, setRevealed] = createSignal(false);
   // Ignore fallback JSX identity: sibling cards must not restart these reads.
-  const key = createMemo(() =>
-    JSON.stringify([props.scope, sources().map(({ fallback: _fallback, ...source }) => source)]),
+  const request = createMemo(
+    () => {
+      const current = sources();
+      return {
+        key: JSON.stringify([
+          props.scope,
+          current.map(({ fallback: _fallback, ...source }) => source),
+        ]),
+        sources: current,
+      };
+    },
+    { equals: (before, next) => before.key === next.key },
   );
-  const [comments, setComments] = createSignal<Array<CommentPreview | null | undefined>>(() => {
-    key();
-    return untrack(() =>
-      sources().map((source) => (!source.src && !source.pending ? null : undefined)),
+  const comments = createMemo(() => {
+    const current = request().sources;
+    let values: Array<CommentPreview | null | undefined> = current.map((source) =>
+      !source.src && !source.pending ? null : undefined,
     );
-  });
-  createEffect(
-    () => ({ key: key(), revealed: revealed(), current: untrack(sources) }),
-    ({ revealed: wasRevealed, current: requestSources }) => {
-      if (!wasRevealed) {
-        return undefined;
+    if (!inline() && !revealed()) {
+      return values;
+    }
+    const controller = new AbortController();
+    onCleanup(() => controller.abort());
+    const pending = new Map<number, Promise<{ index: number; comment: CommentPreview | null }>>();
+    current.forEach((source, index) => {
+      if (source.src) {
+        pending.set(
+          index,
+          readAttachmentText(source.src, source.sizeBytes, controller.signal)
+            .then(
+              (text) => parseCommentAttachment(text),
+              () => null,
+            )
+            .then((comment) => ({ index, comment })),
+        );
       }
-      const controller = new AbortController();
-      requestSources.forEach((source, index) => {
-        if (!source.src) {
+    });
+    // Publish each completed attachment independently while retaining cancellation at this read.
+    return (async function* () {
+      yield values;
+      while (pending.size) {
+        const { index, comment } = await Promise.race(pending.values());
+        pending.delete(index);
+        if (controller.signal.aborted) {
           return;
         }
-        void readAttachmentText(source.src, source.sizeBytes, controller.signal)
-          .then(
-            (text) => parseCommentAttachment(text),
-            () => null,
-          )
-          .then((comment) => {
-            if (!controller.signal.aborted) {
-              setComments((previous) =>
-                previous.map((value, i) => (i === index ? comment : value)),
-              );
-            }
-          });
-      });
-      return () => controller.abort();
-    },
-  );
+        values = values.map((value, i) => (i === index ? comment : value));
+        yield values;
+      }
+    })();
+  });
   const count = () => sources().filter((_, index) => comments()[index] !== null).length;
   return (
     <openclaw-chat-sent-comments style={{ display: "contents" }}>
-      <Show when={count()}>
-        <CommentPreviewChip
-          count={count()}
-          onReveal={() => {
-            setRevealed(true);
-            props.admission?.onAdmit();
-          }}
-          elementRef={props.admission?.observeElement}
+      <Loading>
+        <Show
+          when={inline()}
+          fallback={
+            <Show when={count()}>
+              <CommentPreviewChip
+                count={count()}
+                onReveal={() => {
+                  setRevealed(true);
+                  props.admission?.onAdmit();
+                }}
+                elementRef={props.admission?.observeElement}
+              >
+                <ol class="chat-comment-preview__list" role="list">
+                  <For each={sources()} keyed={false}>
+                    {(source, index) => (
+                      <Show
+                        when={comments()[index]}
+                        fallback={
+                          comments()[index] === null ? undefined : (
+                            <li class="chat-comment-preview__item muted">
+                              {source().src || source().pending
+                                ? t("common.loading")
+                                : t("chat.attachments.textPreviewUnavailable")}
+                            </li>
+                          )
+                        }
+                      >
+                        {(comment) => <CommentPreviewRow comment={comment()} />}
+                      </Show>
+                    )}
+                  </For>
+                </ol>
+              </CommentPreviewChip>
+            </Show>
+          }
         >
-          <ol class="chat-comment-preview__list" role="list">
+          <div class="chat-sent-comments-inline" ref={props.admission?.observeElement}>
             <For each={sources()} keyed={false}>
-              {(source, index) => (
+              {(_source, index) => (
                 <Show
                   when={comments()[index]}
                   fallback={
-                    comments()[index] === null ? undefined : (
-                      <li class="chat-comment-preview__item muted">
-                        {source().src || source().pending
-                          ? t("common.loading")
-                          : t("chat.attachments.textPreviewUnavailable")}
-                      </li>
-                    )
+                    comments()[index] === undefined ? (
+                      <span class="muted">{t("common.loading")}</span>
+                    ) : undefined
                   }
                 >
-                  {(comment) => <CommentPreviewRow comment={comment()} />}
+                  {(comment) => (
+                    <div class="chat-sent-comments-inline__item">
+                      <blockquote aria-label={t("chat.messages.annotationSelectedText")}>
+                        <openclaw-tooltip
+                          class="chat-comment-preview"
+                          prop:placement="top-start"
+                          prop:autoSize={true}
+                          prop:describe={false}
+                          prop:openOnClick={true}
+                        >
+                          <button type="button" class="chat-sent-comments-inline__selection">
+                            {comment().text}
+                          </button>
+                          <div
+                            slot="content"
+                            class="chat-comment-preview__scroll"
+                            tabindex={0}
+                            role="region"
+                            aria-label={t("chat.messages.annotationSelectedText")}
+                          >
+                            {comment().text}
+                          </div>
+                        </openclaw-tooltip>
+                      </blockquote>
+                      <Show when={comment().comment}>
+                        <div class="chat-sent-comments-inline__comment">{comment().comment}</div>
+                      </Show>
+                    </div>
+                  )}
                 </Show>
               )}
             </For>
-          </ol>
-        </CommentPreviewChip>
-      </Show>
-      <For each={sources()} keyed={false}>
-        {(source, index) => <Show when={comments()[index] === null}>{source().fallback()}</Show>}
-      </For>
+          </div>
+        </Show>
+        <For each={sources()} keyed={false}>
+          {(source, index) => <Show when={comments()[index] === null}>{source().fallback()}</Show>}
+        </For>
+      </Loading>
     </openclaw-chat-sent-comments>
   );
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-sent-comments": HTMLAttributes<HTMLElement>;
-    }
-  }
 }

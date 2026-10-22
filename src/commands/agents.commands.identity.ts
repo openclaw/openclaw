@@ -23,7 +23,7 @@ import type { IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { requireValidConfigForWrite } from "./config-validation.js";
@@ -57,10 +57,7 @@ function resolveAgentIdByWorkspace(
   );
 }
 
-export async function agentsSetIdentityCommand(
-  opts: AgentsSetIdentityOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
+export async function agentsSetIdentityCommand(opts: AgentsSetIdentityOptions) {
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
     return;

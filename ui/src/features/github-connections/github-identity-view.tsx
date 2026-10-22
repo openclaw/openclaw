@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Match, Show, Switch } from "solid-js";
+import { createMemo, Errored, isPending, latest, Loading, Match, Show, Switch } from "solid-js";
 import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -10,12 +10,12 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
-import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
+import { registerGitHubConnectionsEnglish } from "../../i18n/locales/en-github-connections.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
+import type { GitHubIdentityView as GitHubIdentityModel } from "../../lib/reactive/domain-github-identity.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import type { GitHubIdentity as GitHubIdentityModel } from "./github-identity.ts";
 
 const GITHUB_CREDENTIAL_STATUS = {
   available: { kind: "ok", label: "agentTools.githubStateVerified" },
@@ -47,21 +47,33 @@ const GITHUB_AUTHORIZATION_LABEL = {
   network_error: "agentTools.githubNetworkRetry",
 } as const;
 
-type RequestStatus = Pick<ReturnType<GitHubIdentityModel["read"]>, "loading" | "error">;
+type RequestStatus = Pick<ReturnType<GitHubIdentityModel["read"]>, "statusCompletion">;
 type IdentityProps = { identity: GitHubIdentityModel };
 
 export function GitHubUnloadedStatus(props: { request: RequestStatus }) {
+  const completed = createMemo(() => props.request.statusCompletion);
   return (
-    <SettingsStatus
-      kind={props.request.error ? "warn" : "muted"}
-      label={
-        props.request.loading
-          ? t("githubConnections.checking")
-          : props.request.error
-            ? t("githubConnections.statusUnavailable")
-            : t("githubConnections.notLoaded")
-      }
-    />
+    <Errored
+      fallback={(_error) => (
+        <SettingsStatus
+          kind={isPending(() => completed()) ? "muted" : "warn"}
+          label={
+            isPending(() => completed())
+              ? t("githubConnections.checking")
+              : t("githubConnections.statusUnavailable")
+          }
+        />
+      )}
+    >
+      <Loading
+        on={props.request.statusCompletion}
+        fallback={<SettingsStatus kind="muted" label={t("githubConnections.checking")} />}
+      >
+        <Show when={completed() === undefined}>
+          <SettingsStatus kind="muted" label={t("githubConnections.notLoaded")} />
+        </Show>
+      </Loading>
+    </Errored>
   );
 }
 
@@ -300,18 +312,25 @@ function GitHubAuthorizationCode(
               {props.authorization.userCode}
             </code>
             <Show when={props.authorization.userCode} keyed>
-              {(userCode) => (
-                <button
-                  type="button"
-                  class="btn btn--sm"
-                  onClick={(event) =>
-                    void handleCopyButton(event, userCode, t("agentTools.githubCopyCode"))
-                  }
-                >
-                  <Icon name="copy" />
-                  <span data-copy-label>{t("agentTools.githubCopyCode")}</span>
-                </button>
-              )}
+              {(userCode) => {
+                let label!: HTMLSpanElement;
+                return (
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    onClick={(event) =>
+                      void handleCopyButton(event, userCode, t("agentTools.githubCopyCode"), {
+                        label,
+                      })
+                    }
+                  >
+                    <Icon name="copy" />
+                    <span ref={(element) => (label = element)} data-copy-label>
+                      {t("agentTools.githubCopyCode")}
+                    </span>
+                  </button>
+                );
+              }}
             </Show>
           </>
         }
@@ -351,7 +370,7 @@ function GitHubAuthorizationCode(
   );
 }
 
-export function GitHubConnectionError(props: { error: string | null; control?: JSX.Element }) {
+function ConnectionErrorRow(props: { error: string | null; control?: JSX.Element }) {
   return (
     <Show when={props.error}>
       <SettingsRow
@@ -363,9 +382,44 @@ export function GitHubConnectionError(props: { error: string | null; control?: J
   );
 }
 
+export function GitHubConnectionError(props: {
+  error: string | null;
+  completion?: Promise<void>;
+  secondaryCompletion?: Promise<void>;
+  control?: JSX.Element;
+}) {
+  const completed = createMemo(() =>
+    props.secondaryCompletion
+      ? Promise.all([props.completion, props.secondaryCompletion]).then(() => undefined)
+      : props.completion,
+  );
+  return (
+    <Show
+      when={props.error}
+      fallback={
+        <Errored
+          fallback={(error) => (
+            <ConnectionErrorRow error={formatUiError(error())} control={props.control} />
+          )}
+        >
+          <Loading on={latest(() => [props.completion, props.secondaryCompletion])} fallback={null}>
+            <Show when={completed() === undefined}>{null}</Show>
+          </Loading>
+        </Errored>
+      }
+    >
+      <ConnectionErrorRow error={props.error} control={props.control} />
+    </Show>
+  );
+}
+
 export function GitHubConnectionSetup(props: IdentityProps) {
   const view = () => props.identity.read();
-  const disabled = () => view().busy || !view().configurable || view().authorizationActive;
+  const disabled = () =>
+    props.identity.saving() ||
+    !view().connectionReady ||
+    !view().configurable ||
+    view().authorizationActive;
   const authorRow = (field: "name" | "email", label: string) => (
     <SettingsRow
       title={label}
@@ -409,7 +463,7 @@ export function GitHubConnectionSetup(props: IdentityProps) {
             <div class="settings-row__control">
               <button
                 class="btn"
-                disabled={view().busy}
+                disabled={props.identity.saving()}
                 onClick={() => props.identity.hidePatFallback()}
               >
                 {t("common.cancel")}
@@ -419,7 +473,7 @@ export function GitHubConnectionSetup(props: IdentityProps) {
                 disabled={disabled()}
                 onClick={() => void props.identity.configure()}
               >
-                {view().busy ? t("common.saving") : t("agentTools.githubConfigure")}
+                {props.identity.saving() ? t("common.saving") : t("agentTools.githubConfigure")}
               </button>
             </div>
           </div>
@@ -467,7 +521,7 @@ export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () =>
             </>
           }
         />
-        <GitHubConnectionError error={view().error} />
+        <GitHubConnectionError error={view().error} completion={view().completion} />
         <Show when={view().configurable}>
           <details class="settings-row settings-row--stacked">
             <summary class="settings-row__title">{t("githubConnections.advancedOverride")}</summary>
@@ -505,4 +559,4 @@ export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () =>
   );
 }
 
-registerEnglishCatalog(registerGitHubEnglish);
+registerEnglishCatalog(registerGitHubConnectionsEnglish);

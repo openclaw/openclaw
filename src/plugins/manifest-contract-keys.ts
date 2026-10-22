@@ -2,7 +2,6 @@
 export const PLUGIN_MANIFEST_CONTRACT_KEYS = [
   /** Executor ids implemented by the plugin's code-mode-executor-api artifact. */
   "codeModeExecutors",
-  "embeddedExtensionFactories",
   "agentToolResultMiddleware",
   "trustedToolPolicies",
   /** Provider ids whose runtime-only auth hooks let overlays load only the owning plugin. */

@@ -9,8 +9,8 @@ import type {
 
 export const CLAW_PACKAGE_REF_SCHEMA_VERSION = "openclaw.clawPackageRef.v1" as const;
 export type ClawPackageRefStatus = "pending" | "complete" | "failed" | "rolled_back";
-export type ClawPackageRelationship = "managed" | "referenced";
-export type ClawPackageOrigin = "claw-introduced" | "pre-existing";
+type ClawPackageRelationship = "managed" | "referenced";
+type ClawPackageOrigin = "claw-introduced" | "pre-existing";
 
 export type PersistedClawPackageRef = {
   schemaVersion: typeof CLAW_PACKAGE_REF_SCHEMA_VERSION;
@@ -45,29 +45,6 @@ export type PackageRefRow = Omit<
   installed_at_ms: number | bigint;
   updated_at_ms: number | bigint;
 };
-
-type PackageRefExtensionSqlParams = Pick<
-  PackageRefRow,
-  | "extension_id"
-  | "extension_format"
-  | "extension_detected_format"
-  | "extension_mapped_json"
-  | "extension_unavailable_json"
-  | "extension_adapter_identity"
->;
-
-export function toPackageRefExtensionSqlParams(
-  extension: ClawAppliedExtension | undefined,
-): PackageRefExtensionSqlParams {
-  return {
-    extension_id: extension?.id ?? null,
-    extension_format: extension?.format ?? null,
-    extension_detected_format: extension?.detectedFormat ?? null,
-    extension_mapped_json: extension ? JSON.stringify(extension.mapped) : null,
-    extension_unavailable_json: extension ? JSON.stringify(extension.unavailable) : null,
-    extension_adapter_identity: extension?.adapterIdentity ?? null,
-  };
-}
 
 function parsePackageRefExtension(row: PackageRefRow): ClawAppliedExtension | undefined {
   const values = [

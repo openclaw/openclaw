@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createCronTool } from "./cron-tool.js";
+import { wrapToolWithGatewayCallerIdentity } from "./gateway-caller-context.js";
+import * as gatewayModule from "./gateway.js";
 
 const gateway = vi.fn();
 const job = {
@@ -10,7 +12,7 @@ const job = {
   payload: { kind: "agentTurn", message: "work" },
 };
 function execute(args: Record<string, unknown>) {
-  return createCronTool(undefined, { callGatewayTool: gateway }).execute("cron", args);
+  return createCronTool().execute("cron", args);
 }
 function expectAdd(params: Record<string, unknown>) {
   expect(gateway).toHaveBeenCalledExactlyOnceWith(
@@ -19,17 +21,98 @@ function expectAdd(params: Record<string, unknown>) {
     expect.objectContaining(params),
   );
 }
+function expectUpdate(id: string, patch: Record<string, unknown>, revision?: string) {
+  expect(gateway.mock.calls).toEqual(
+    revision
+      ? [
+          ["cron.get", expect.anything(), { id }],
+          ["cron.update", expect.anything(), { id, expectedConfigRevision: revision, patch }],
+        ]
+      : [["cron.update", expect.anything(), { id, patch }]],
+  );
+}
+function updatePatch() {
+  const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> } | undefined;
+  return params?.patch;
+}
+function update(params: Record<string, unknown>) {
+  return execute({ action: "update", jobId: "job", ...params });
+}
 
 beforeEach(() => {
+  const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gateway);
+  onTestFinished(() => gatewaySpy.mockRestore());
   setRuntimeConfigSnapshot({});
   gateway.mockReset().mockResolvedValue({ ok: true });
 });
 
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
-});
+afterEach(clearRuntimeConfigSnapshot);
 
 describe("cron shorthand recovery", () => {
+  it.each(
+    (["factory", "host-bound"] as const).flatMap((caller) =>
+      (["remove", "update"] as const).flatMap((action) =>
+        [false, true].map((retired) => ({ caller, action, retired })),
+      ),
+    ),
+  )(
+    "pins $action to the active $caller caller after lookup (retired=$retired)",
+    async ({ caller, action, retired }) => {
+      let current = true;
+      let mutated = false;
+      gateway.mockImplementation(async (method: string) => {
+        if (method === "cron.get") {
+          current = !retired;
+          return { id: "watcher", configRevision: "sha256:captured" };
+        }
+        if (method === `cron.${action}`) {
+          mutated = true;
+          return { ok: true };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      const identity = {
+        agentId: "main",
+        sessionKey: "agent:main:watcher-control",
+        receiptAuthority: () => current,
+      };
+      // The harness host binds the admitted caller after a plugin builds its tools.
+      const tool = wrapToolWithGatewayCallerIdentity(
+        createCronTool(
+          caller === "factory"
+            ? { agentId: identity.agentId, agentSessionKey: identity.sessionKey }
+            : undefined,
+        ),
+        identity,
+      );
+      const patch = action === "update" ? { enabled: false } : undefined;
+      const mutation = tool.execute("stop-watcher", {
+        action,
+        jobId: "watcher",
+        ...(patch ? { job: patch } : {}),
+      });
+      if (retired) {
+        await expect(mutation).rejects.toThrow("The requesting turn is no longer active.");
+        expect(gateway.mock.calls).toEqual([["cron.get", expect.anything(), { id: "watcher" }]]);
+      } else {
+        await expect(mutation).resolves.toMatchObject({ details: { ok: true } });
+        expect(gateway.mock.calls).toEqual([
+          ["cron.get", expect.anything(), { id: "watcher" }],
+          [
+            `cron.${action}`,
+            expect.anything(),
+            {
+              id: "watcher",
+              expectedConfigRevision: "sha256:captured",
+              ...(patch ? { patch } : {}),
+            },
+          ],
+        ]);
+      }
+      expect(mutated).toBe(!retired);
+    },
+  );
+
   it("presents list metadata without private job content", () => {
     const presentation = getToolTerminalPresentation(createCronTool());
     if (!presentation) {
@@ -46,6 +129,48 @@ describe("cron shorthand recovery", () => {
       text: "Automations listed.\nCount: 250",
     });
     expect(presentation({ action: "add" }, result)).toBeUndefined();
+  });
+
+  it("presents watcher execution separately from its saved setting", () => {
+    const presentation = getToolTerminalPresentation(createCronTool());
+    expect(presentation).toBeTypeOf("function");
+    const observed = {
+      id: "watcher",
+      name: "Application errors",
+      schedule: { kind: "stream" },
+      enabled: false,
+      state: { streamStatus: "error", streamError: "PRIVATE_DIAGNOSTIC" },
+    };
+    const uncertain = presentation?.({ action: "update" }, { content: [], details: observed });
+    expect(uncertain?.text).toContain("Paused. Source termination is not confirmed.");
+    expect(uncertain?.text).not.toContain("PRIVATE_DIAGNOSTIC");
+    expect(
+      presentation?.(
+        { action: "get" },
+        {
+          content: [],
+          details: {
+            ...observed,
+            state: { streamStatus: "stopped" },
+          },
+        },
+      )?.text,
+    ).toContain("Source termination confirmed.");
+    expect(
+      presentation?.(
+        { action: "add" },
+        {
+          content: [],
+          details: {
+            created: true,
+            job: { ...observed, enabled: true, state: { streamStatus: "running" } },
+          },
+        },
+      )?.text,
+    ).toContain("Source running.");
+    expect(
+      presentation?.({ action: "remove" }, { content: [], details: { ok: true, removed: true } }),
+    ).toBeUndefined();
   });
 
   it.each([
@@ -77,11 +202,63 @@ describe("cron shorthand recovery", () => {
   });
 
   it.each([
-    { action: "add", kind: "on-exit", command: "pnpm build", cwd: "/repo", message: "rebuilt" },
-  ])("rejects explicit or inferred on-exit shorthand on $action", async (args) => {
-    await expect(execute(args)).rejects.toThrow(
-      "automation on-exit schedules cannot be created or edited",
-    );
+    {
+      name: "explicit on-exit creation",
+      args: {
+        action: "add",
+        kind: "on-exit",
+        command: "pnpm build",
+        cwd: "/repo",
+        message: "rebuilt",
+      },
+      error: "automation on-exit schedules cannot be created or edited",
+    },
+    {
+      name: "ambiguous command-only update",
+      args: { action: "update", jobId: "job", command: "make" },
+      error: "Read the full automations schema and WATCH OUTPUT example",
+    },
+    {
+      name: "command creation with a flat interval but no schedule kind",
+      args: {
+        action: "add",
+        name: "Build watcher",
+        everyMs: 60_000,
+        command: ["tail", "-F", "/tmp/build.log"],
+        message: "Report build output",
+      },
+      error: "Read the full automations schema and WATCH OUTPUT example",
+    },
+    {
+      name: "command creation with a nested cron expression but no schedule kind",
+      args: {
+        action: "add",
+        job: {
+          name: "Build watcher",
+          schedule: { expr: "* * * * *", command: ["tail", "-F", "/tmp/build.log"] },
+          payload: { kind: "agentTurn", message: "Report build output" },
+        },
+      },
+      error: "Read the full automations schema and WATCH OUTPUT example",
+    },
+    {
+      name: "malformed stream creation without a schedule kind",
+      args: {
+        action: "add",
+        job: {
+          name: "Build watcher",
+          schedule: {
+            type: "stream",
+            command: "/usr/bin/tail -n 0 -F /tmp/build.log",
+            pattern: "^BUILD:",
+          },
+          payload: { type: "send_message", conversationId: "current", template: "{{line}}" },
+        },
+      },
+      error: "Read the full automations schema and WATCH OUTPUT example",
+    },
+  ])("rejects $name before Gateway effects", async ({ args, error }) => {
+    await expect(execute(args)).rejects.toThrow(error);
     expect(gateway).not.toHaveBeenCalled();
   });
 
@@ -94,14 +271,7 @@ describe("cron shorthand recovery", () => {
     });
     const trigger = { script: "json({ fire: true })", once: false };
     await execute({ action: "update", jobId: "job", trigger });
-    expect(gateway.mock.calls).toEqual([
-      ["cron.get", expect.anything(), { id: "job" }],
-      [
-        "cron.update",
-        expect.anything(),
-        { id: "job", expectedConfigRevision: "sha256:trigger", patch: { trigger } },
-      ],
-    ]);
+    expectUpdate("job", { trigger }, "sha256:trigger");
   });
 
   it("repairs recognized padded keys (#95407)", async () => {
@@ -131,87 +301,38 @@ describe("cron shorthand recovery", () => {
   });
 
   it("preserves canonical/padded conflicts for gateway rejection (#95407)", async () => {
-    await execute({
-      action: "add",
-      job: {
-        ...job,
-        "schedule ": { kind: "every", everyMs: 60_000 },
-        enabled: false,
-        "enabled ": true,
-      },
-    });
-    expectAdd({
-      schedule: job.schedule,
-      enabled: false,
+    const conflict = () => ({
       "schedule ": { kind: "every", everyMs: 60_000 },
+      enabled: false,
       "enabled ": true,
     });
+    await execute({ action: "add", job: { ...job, ...conflict() } });
+    expectAdd({ schedule: job.schedule, ...conflict() });
   });
 
-  it("merges sibling dotted keys under one recovered object (#120616)", async () => {
-    // The first field creates the payload object; the second meets that parent
-    // and must continue into it instead of being kept as a literal key.
-    await execute({
-      action: "update",
-      jobId: "job-dotted-siblings",
-      "job.payload.message": "after",
-      "job.payload.kind": "agentTurn",
-    });
-
-    const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> };
-    expect(params.patch).toEqual({ payload: { kind: "agentTurn", message: "after" } });
+  it.each([
+    { "job.payload.message": "after", "job.payload.kind": "agentTurn" },
+    { '"job.payload.message"': "after" },
+  ])("recovers sibling or quoted dotted keys: %j (#120616)", async (params) => {
+    await update(params);
+    expect(updatePatch()).toEqual({ payload: { kind: "agentTurn", message: "after" } });
   });
 
   it("keeps the explicit structured value authoritative over a conflicting dotted key (#120616)", async () => {
-    // The explicit payload is a valid update on its own. Forwarding the extra
-    // dotted key as well made the whole update fail a strict gateway patch, so
-    // the canonical value stands and the redundant key is dropped.
-    await execute({
-      action: "update",
-      jobId: "job-dotted-conflict",
+    await update({
       payload: { kind: "agentTurn", message: "before" },
       "job.payload.message": "after",
     });
 
-    const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> };
-    expect(params.patch).toHaveProperty("payload.message", "before");
-    expect(params.patch).not.toHaveProperty("job.payload.message");
+    expect(updatePatch()).toHaveProperty("payload.message", "before");
+    expect(updatePatch()).not.toHaveProperty("job.payload.message");
   });
 
-  it("recovers quoted dotted job keys (#120616)", async () => {
-    // The report includes literal quote characters around the dotted name.
-    await execute({
-      action: "update",
-      jobId: "job-dotted-quoted",
-      '"job.payload.message"': "after",
-    });
-
-    const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> };
-    expect(params.patch).toEqual({ payload: { kind: "agentTurn", message: "after" } });
-  });
-
-  it("does not nest dotted keys rooted at a scalar cron field (#120616)", async () => {
-    // Only object-typed cron fields are containers in the gateway schema, so a
-    // dot inside a scalar such as a job name stays a plain unrecognized key
-    // instead of being reshaped into a path.
-    await expect(
-      execute({
-        action: "update",
-        jobId: "job-dotted-name",
-        "job.name": "nightly.report",
-      }),
-    ).rejects.toThrow("job required");
-    expect(gateway).not.toHaveBeenCalled();
-  });
-
-  it("does not nest dotted keys that would reach Object.prototype (#120616)", async () => {
-    await expect(
-      execute({
-        action: "update",
-        jobId: "job-dotted-proto",
-        "job.payload.__proto__.polluted": "yes",
-      }),
-    ).rejects.toThrow("job required");
+  it.each([
+    ["job.name", "nightly.report"],
+    ["job.payload.__proto__.polluted", "yes"],
+  ])("does not nest scalar or prototype paths: %s (#120616)", async (key, value) => {
+    await expect(update({ [key]: value })).rejects.toThrow("job required");
     expect(gateway).not.toHaveBeenCalled();
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
@@ -230,18 +351,11 @@ describe("cron schedule updates", () => {
       expr: "0 8 * * *",
       scheduleKind: "cron",
     });
-    expect(gateway.mock.calls).toEqual([
-      ["cron.get", expect.anything(), { id: "job-kind" }],
-      [
-        "cron.update",
-        expect.anything(),
-        {
-          id: "job-kind",
-          expectedConfigRevision: "sha256:test",
-          patch: { schedule: { expr: "0 8 * * *", kind: "cron", tz: "Asia/Shanghai" } },
-        },
-      ],
-    ]);
+    expectUpdate(
+      "job-kind",
+      { schedule: { expr: "0 8 * * *", kind: "cron", tz: "Asia/Shanghai" } },
+      "sha256:test",
+    );
   });
 
   it.each([
@@ -252,10 +366,7 @@ describe("cron schedule updates", () => {
     "updates explicit timezones and unrelated fields without reading the job: %j",
     async (patch) => {
       await execute({ action: "update", id: "job-fast-path", job: patch });
-      expect(gateway).toHaveBeenCalledExactlyOnceWith("cron.update", expect.anything(), {
-        id: "job-fast-path",
-        patch,
-      });
+      expectUpdate("job-fast-path", patch);
     },
   );
 
@@ -266,13 +377,6 @@ describe("cron schedule updates", () => {
     gateway.mockResolvedValueOnce({ id: "job-no-tz", configRevision: "sha256:test", schedule });
     const patch = { schedule: { kind: "cron", expr: "0 8 * * *" } };
     await execute({ action: "update", id: "job-no-tz", job: patch });
-    expect(gateway.mock.calls).toEqual([
-      ["cron.get", expect.anything(), { id: "job-no-tz" }],
-      [
-        "cron.update",
-        expect.anything(),
-        { id: "job-no-tz", expectedConfigRevision: "sha256:test", patch },
-      ],
-    ]);
+    expectUpdate("job-no-tz", patch, "sha256:test");
   });
 });

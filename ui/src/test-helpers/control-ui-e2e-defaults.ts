@@ -4,6 +4,7 @@ import type {
   UserProfile,
   ProjectsCheckoutOptionsResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type { SystemAgentChatHistoryResult } from "../../../packages/gateway-protocol/src/schema/openclaw.ts";
 import type {
   PluginsCatalogBrowseResult,
   PluginsCatalogCategoriesResult,
@@ -14,6 +15,7 @@ import type { ChannelsPairingListResult } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-e2e-contract.ts";
 
 export const defaultControlUiFeatureMethods = [
+  "agents.create",
   "chat.abort",
   "chat.history",
   "chat.send",
@@ -99,6 +101,7 @@ export function createControlUiDefaultResponses(scenario: {
     current: { id: "claw", mode: "system", scope: "gateway", overrides: {} },
   };
   return {
+    "openclaw.chat.history": { turns: [] } satisfies SystemAgentChatHistoryResult,
     "environments.list": {
       environments: [],
       profiles: [],

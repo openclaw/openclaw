@@ -2,23 +2,39 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { onAgentEvent } from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  registerAgentRunContext,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { makeRuntime } from "./agent-bundle-mcp-harness.test-support.js";
 import {
   acquireRequesterScopedMcpRuntime,
   acquireSessionMcpRuntime,
 } from "./agent-bundle-mcp-manager-api.js";
-import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
+import {
+  createSessionMcpRuntimeManager,
+  makeManagerRuntime,
+} from "./agent-bundle-mcp-manager.test-support.js";
 import type { SessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
+import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import {
   SESSION_MCP_RUNTIME_MANAGER_KEY,
   type CreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
-import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type {
+  RequesterScopedMcpRuntimeHandle,
+  SessionMcpRuntime,
+  SessionMcpRuntimeLease,
+} from "./agent-bundle-mcp-types.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
@@ -36,47 +52,30 @@ const params = {
   cfg: { mcp: { servers: {} } },
   manifestRegistry: { plugins: [] },
 };
+const idleParams = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
+const nextTurn = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 
-function createRuntimeFixture(input: Parameters<CreateSessionMcpRuntime>[0]): SessionMcpRuntime {
-  let lastUsedAt = Date.now();
-  let activeLeases = 0;
-  return {
-    sessionId: input.sessionId,
-    sessionKey: input.sessionKey,
-    workspaceDir: input.workspaceDir,
-    agentDir: input.agentDir,
-    requesterScope: input.requesterScope,
-    configFingerprint: input.configFingerprint ?? "fixture",
-    createdAt: lastUsedAt,
-    get lastUsedAt() {
-      return lastUsedAt;
-    },
-    get activeLeases() {
-      return activeLeases;
-    },
-    acquireLease() {
-      activeLeases += 1;
-      let released = false;
-      return () => {
-        if (!released) {
-          released = true;
-          activeLeases -= 1;
-        }
-      };
-    },
-    markUsed: () => {
-      lastUsedAt = Date.now();
-    },
-    getCatalog: async () => ({ version: 1, generatedAt: 0, servers: {}, tools: [] }),
-    peekCatalog: () => null,
-    callTool: async () => ({ content: [] }),
-    joinCleanup: async () => {},
-    dispose: vi.fn(async () => {}),
-  };
+function bindManager(manager: SessionMcpRuntimeManager) {
+  const key = SESSION_MCP_RUNTIME_MANAGER_KEY;
+  const previous = Reflect.get(globalThis, key);
+  const hadManager = Reflect.has(globalThis, key);
+  Reflect.set(globalThis, key, manager);
+  return () =>
+    hadManager ? Reflect.set(globalThis, key, previous) : Reflect.deleteProperty(globalThis, key);
 }
 
-function createManager(createRuntime?: CreateSessionMcpRuntime) {
-  const manager = createSessionMcpRuntimeManager({ createRuntime });
+function createRuntimeFixture(input: Parameters<CreateSessionMcpRuntime>[0]): SessionMcpRuntime {
+  return makeManagerRuntime(input, undefined, { callTool: async () => ({ content: [] }) });
+}
+
+function createManager(
+  createRuntime?: CreateSessionMcpRuntime,
+  scheduler?: ReturnType<typeof createTestGatewayScheduler>,
+) {
+  const manager = createSessionMcpRuntimeManager({ createRuntime, scheduler });
   managers.push(manager);
   return manager;
 }
@@ -89,13 +88,15 @@ function requesterParams(requesterSenderId: string) {
   };
 }
 
-function withRequesterResolver(run: () => Promise<void>) {
+function withRequesterResolver(
+  run: () => Promise<void>,
+  resolve = async () => ({ url: "https://mcp.example.test/scoped" }),
+) {
   const resolverRegistry = createMcpProofPluginRegistry();
   return withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
-    resolverRegistry.apiFor("test-plugin").registerMcpServerConnectionResolver({
-      serverName: "scoped",
-      resolve: async () => ({ url: "https://mcp.example.test/scoped" }),
-    });
+    resolverRegistry
+      .apiFor("test-plugin")
+      .registerMcpServerConnectionResolver({ serverName: "scoped", resolve });
     await run();
   });
 }
@@ -132,63 +133,327 @@ afterEach(async () => {
 });
 
 describe("MCP manager creation ownership", () => {
-  it("keeps serverless sessions available beyond the MCP limit and while it is full", async () => {
-    const manager = createManager(createRuntimeFixture);
-    for (let index = 0; index < 300; index += 1) {
-      await manager.getOrCreate({ ...params, sessionId: `serverless-${index}` });
-    }
-    const configured = { mcp: { servers: { fixture: { command: "true" } } } };
-    for (let index = 0; index < 256; index += 1) {
-      await manager.getOrCreate({ ...params, sessionId: `connected-${index}`, cfg: configured });
-    }
-    await manager.getOrCreate({ ...params, sessionId: "serverless-at-capacity" });
-    await expect(
-      manager.getOrCreate({ ...params, sessionId: "connected-overflow", cfg: configured }),
-    ).rejects.toThrow("live runtime limit (256)");
-    await expect(
-      manager.getOrCreate({ ...params, sessionId: "serverless-0", cfg: configured }),
-    ).rejects.toThrow("live runtime limit (256)");
-    await manager.getOrCreate({ ...params, sessionId: "connected-0" });
-    await manager.getOrCreate({ ...params, sessionId: "serverless-0", cfg: configured });
-  });
-
-  it("bounds requester runtimes across sessions, creation, and cleanup", async () => {
-    const held = holdFactory();
+  it("evicts the idle LRU at capacity and reconnects its session on reuse", async () => {
+    let now = 1_000;
+    const time = vi.spyOn(Date, "now").mockImplementation(() => now);
     const factory = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
     const manager = createManager(factory);
+    const cfg = { mcp: { servers: { fixture: { command: "true" } } } };
     const acquire = (sessionId: string) =>
-      manager.getOrCreateRequesterScoped({ ...requesterParams("sender"), sessionId });
+      manager.getOrCreate({ ...params, sessionId, sessionKey: `agent:test:${sessionId}`, cfg });
+    try {
+      for (let index = 0; index < 300; index += 1) {
+        await manager.getOrCreate({ ...params, sessionId: `serverless-${index}` });
+      }
+      const first = await acquire("connected-0");
+      now++;
+      const lru = await acquire("connected-1");
+      registerAgentRunContext("completed-display", {
+        sessionKey: "agent:test:connected-1",
+        sessionId: "connected-1",
+      });
+      for (let index = 2; index < 256; index += 1) {
+        now++;
+        await acquire(`connected-${index}`);
+      }
+      now++;
+      expect(await acquire("connected-0")).toBe(first);
+      await acquire("overflow");
+      expect(lru.dispose).toHaveBeenCalledOnce();
+      expect(first.dispose).not.toHaveBeenCalled();
+      expect(manager.resolveSessionId("agent:test:connected-1")).toBeUndefined();
+      const reconnected = await acquire("connected-1");
+      expect(reconnected).not.toBe(lru);
+      expect(
+        factory.mock.calls.filter(([input]) => input.sessionId === "connected-1"),
+      ).toHaveLength(2);
+      await manager.getOrCreate({ ...params, sessionId: "serverless-at-capacity" });
+    } finally {
+      clearAgentRunContext("completed-display");
+      time.mockRestore();
+    }
+  });
+
+  it("preserves active runs, leases, views, and pending requester acquisition at capacity", async () => {
+    const factory = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
+    const manager = createManager(factory);
+    const cfg = { mcp: { servers: { fixture: { command: "true" } } } };
+    const activeRun = await manager.getOrCreate({
+      ...params,
+      sessionId: "running",
+      sessionKey: undefined,
+      cfg,
+    });
+    const runClaim = claimAgentRunContext(
+      "mcp-running",
+      { sessionId: "running" },
+      { trackOwner: true, ownsContext: true },
+    );
+    const lease = await manager.acquire({ ...params, sessionId: "leased", cfg });
+    const viewed = await manager.getOrCreate({ ...params, sessionId: "viewed", cfg });
+    const releaseView = viewed.acquireLease!();
+    try {
+      await withRequesterResolver(async () => {
+        const pendingRuntime = (await manager.getOrCreateRequesterScoped({
+          ...requesterParams("sender"),
+          sessionId: "pending",
+        }))!.runtime;
+        const held = holdFactory();
+        factory.mockImplementationOnce(held.createRuntime);
+        const pending = manager.acquireRequesterScoped({
+          ...requesterParams("sender"),
+          sessionId: "pending",
+          workspaceDir: "/changed",
+        });
+        await held.started;
+        for (let index = 4; index < 256; index += 1) {
+          await manager.getOrCreate({ ...params, sessionId: `idle-${index}`, cfg });
+        }
+        const idle = manager.peekSession({ sessionId: "idle-4" })!;
+        await manager.getOrCreate({ ...params, sessionId: "overflow", cfg });
+        expect(idle.dispose).toHaveBeenCalledOnce();
+        expect(activeRun.dispose).not.toHaveBeenCalled();
+        expect(lease.runtime.dispose).not.toHaveBeenCalled();
+        expect(viewed.dispose).not.toHaveBeenCalled();
+        // Replacement owns cleanup of the predecessor, but capacity cannot retire the admitted successor.
+        held.release();
+        const acquired = (await pending)!;
+        expect(
+          manager.peekSession({
+            sessionId: manager
+              .listRuntimeKeys()
+              .find((key) => key.includes('"sessionId":"pending"'))!,
+          }),
+        ).toBe(acquired.runtime);
+        expect(acquired.runtime.dispose).not.toHaveBeenCalled();
+        expect(pendingRuntime.dispose).toHaveBeenCalledOnce();
+        acquired.releaseLease();
+      });
+    } finally {
+      releaseAgentRunContext("mcp-running", runClaim);
+      lease.releaseLease();
+      releaseView();
+    }
+  });
+
+  it("continues without tools when all slots are busy and warns once per capacity episode", async () => {
+    const factory = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
+    const manager = createManager(factory);
+    const cfg = { mcp: { servers: { fixture: { command: "true" } } } };
+    const leases = [];
+    for (let index = 0; index < 256; index += 1) {
+      leases.push(await manager.acquire({ ...params, sessionId: `busy-${index}`, cfg }));
+    }
+    const notices: string[] = [];
+    const stop = onAgentEvent((event) => {
+      if (event.stream === "notice") {
+        notices.push(String(event.data.message));
+      }
+    });
+    const overflowClaim = claimAgentRunContext(
+      "mcp-overflow",
+      {
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+      },
+      { trackOwner: true, ownsContext: true },
+    );
+    try {
+      for (let index = 0; index < 2; index += 1) {
+        const tools = await materializeBundleMcpToolsForRun(
+          await manager.acquire({ ...params, cfg }),
+        );
+        expect(tools.tools).toEqual([]);
+        expect(tools.diagnostics?.[0]?.message).toContain(
+          "This turn will continue without MCP tools",
+        );
+        await tools.dispose();
+      }
+      expect(notices).toHaveLength(1);
+      expect(factory).toHaveBeenCalledTimes(256);
+      leases[0]!.releaseLease();
+      const admitted = await manager.acquire({ ...params, sessionId: "after-idle", cfg });
+      leases.push(admitted);
+      expect(factory).toHaveBeenCalledTimes(257);
+      const next = await manager.acquire({ ...params, cfg });
+      next.releaseLease();
+      expect(notices).toHaveLength(2);
+    } finally {
+      stop();
+      releaseAgentRunContext("mcp-overflow", overflowClaim);
+      leases.forEach((lease) => lease.releaseLease());
+    }
+  });
+
+  it("bounds capacity cleanup waiting across consecutive idle owners", async () => {
+    const factory = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
+    const manager = createManager(factory);
+    const cfg = { mcp: { servers: { fixture: { command: "true" } } } };
+    const first = await manager.getOrCreate({ ...params, sessionId: "slow-first", cfg });
+    const second = await manager.getOrCreate({ ...params, sessionId: "slow-second", cfg });
+    const firstClosing = holdDisposal(first);
+    const secondClosing = holdDisposal(second);
+    first.joinCleanup = async () => {
+      throw new Error("first cleanup could not confirm closure");
+    };
+    const leases: SessionMcpRuntimeLease[] = [];
+    for (let index = 0; index < 254; index += 1) {
+      leases.push(await manager.acquire({ ...params, sessionId: `busy-${index}`, cfg }));
+    }
+    let fallback: SessionMcpRuntimeLease | undefined;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const admission = manager.acquire({ ...params, sessionId: "overflow", cfg }).then((lease) => {
+      fallback = lease;
+    });
+    try {
+      await firstClosing.started;
+      setTimeout(firstClosing.release, 3_000);
+      await vi.advanceTimersByTimeAsync(3_000);
+      await secondClosing.started;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(fallback, "admission must not wait for a second full cleanup deadline").toBeDefined();
+      expect((await fallback!.runtime.getCatalog()).diagnostics?.[0]?.message).toContain(
+        "This turn will continue without MCP tools",
+      );
+      expect(factory).toHaveBeenCalledTimes(256);
+
+      secondClosing.release();
+      await manager.disposeSession("slow-second");
+      leases.push(await manager.acquire({ ...params, sessionId: "after-cleanup", cfg }));
+      expect(factory).toHaveBeenCalledTimes(257);
+    } finally {
+      firstClosing.release();
+      secondClosing.release();
+      await Promise.allSettled([admission]);
+      fallback?.releaseLease();
+      leases.forEach((lease) => lease.releaseLease());
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for an evicted process to close before reacquiring its session", async () => {
+    const factory = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
+    const manager = createManager(factory);
+    const cfg = { mcp: { servers: { fixture: { command: "true" } } } };
+    const input = (sessionId: string) => ({ ...params, sessionId, cfg });
+    const original = await manager.getOrCreate(input("slow-owner"));
+    const closing = holdDisposal(original);
+    await manager.getOrCreate(input("fast-owner"));
+    const leases: SessionMcpRuntimeLease[] = [];
+    for (let index = 0; index < 254; index++) {
+      leases.push(await manager.acquire(input(`busy-${index}`)));
+    }
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    let reacquiring: Promise<SessionMcpRuntimeLease> | undefined;
+    try {
+      const overflow = manager.acquire(input("overflow"));
+      await closing.started;
+      await vi.advanceTimersByTimeAsync(5_000);
+      leases.push(await overflow);
+      expect(manager.peekSession({ sessionId: "slow-owner" })).toBeUndefined();
+      reacquiring = manager.acquire(input("slow-owner"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(factory.mock.calls.filter(([entry]) => entry.sessionId === "slow-owner")).toHaveLength(
+        1,
+      );
+      closing.release();
+      const replacement = await reacquiring;
+      leases.push(replacement);
+      expect(replacement.runtime).not.toBe(original);
+      expect(factory.mock.calls.filter(([entry]) => entry.sessionId === "slow-owner")).toHaveLength(
+        2,
+      );
+    } finally {
+      closing.release();
+      if (reacquiring) {
+        (await reacquiring).releaseLease();
+      }
+      leases.forEach((lease) => lease.releaseLease());
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts requester creation and physical cleanup until closure completes", async () => {
+    const held = holdFactory();
+    const catalog = await makeRuntime({
+      sessionId: "bounded-0",
+      requesterSenderId: "sender",
+    }).getCatalog();
+    const factory = vi.fn<CreateSessionMcpRuntime>((input) =>
+      Object.assign(createRuntimeFixture(input), { getCatalog: async () => catalog }),
+    );
+    const manager = createManager(factory);
+    const leases: RequesterScopedMcpRuntimeHandle[] = [];
     await withRequesterResolver(async () => {
       for (let index = 0; index < 255; index += 1) {
-        await acquire(`bounded-${index}`);
+        leases.push(
+          (await manager.acquireRequesterScoped({
+            ...requesterParams("sender"),
+            sessionId: `bounded-${index}`,
+          }))!,
+        );
       }
+      manager.rememberAdvertisedScopedCatalog(leases[0]!, await leases[0]!.runtime.getCatalog());
       factory.mockImplementationOnce(held.createRuntime);
-      const last = acquire("last-slot");
+      const pending = manager.acquireRequesterScoped({
+        ...requesterParams("sender"),
+        sessionId: "last",
+      });
       await held.started;
-      await expect(acquire("overflow")).rejects.toThrow("live runtime limit (256)");
+      const overflow = (await manager.acquireRequesterScoped({
+        ...requesterParams("other-sender"),
+        sessionId: "bounded-0",
+      }))!;
+      expect((await overflow.runtime.getCatalog()).tools).toEqual([]);
+      expect(manager.getAdvertisedScopedCatalog("bounded-0")?.tools).toEqual(catalog.tools);
+      overflow.releaseLease();
       held.release();
-      await last;
-      const firstKey = expectDefined(
-        manager
-          .listRuntimeKeys()
-          .find((key) => key === "bounded-0" || key.includes('"sessionId":"bounded-0"')),
-        "first runtime key",
-      );
-      const first = expectDefined(manager.peekSession({ sessionId: firstKey }), "first runtime");
-      await acquire("bounded-0");
-      expect(first.dispose).not.toHaveBeenCalled();
-      const closing = holdDisposal(first);
-      const disposal = manager.disposeSession("bounded-0");
+      const last = (await pending)!;
+      leases.push(last);
+      const closing = holdDisposal(leases[0]!.runtime);
+      leases[0]!.releaseLease();
+      const admission = manager.acquireRequesterScoped({
+        ...requesterParams("sender"),
+        sessionId: "admitted",
+      });
       await closing.started;
-      await expect(acquire("overflow")).rejects.toThrow("live runtime limit (256)");
+      expect(factory).toHaveBeenCalledTimes(256);
       closing.release();
-      await disposal;
-      await acquire("overflow");
-      expect(manager.listRuntimeKeys()).toHaveLength(256);
-      await manager.disposeAll();
-      await acquire("after-shutdown");
-      expect(manager.listSessionIds()).toEqual(["after-shutdown"]);
+      leases.push((await admission)!);
+      expect(factory).toHaveBeenCalledTimes(257);
+      expect(manager.getAdvertisedScopedCatalog("bounded-0")?.tools).toEqual(catalog.tools);
+      leases.forEach((lease) => lease.releaseLease());
     });
+  });
+
+  it("tries the next idle runtime when LRU cleanup cannot confirm closure", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const manager = createManager(createRuntimeFixture);
+    const cfg = { mcp: { servers: { fixture: { command: "true" } } } };
+    const input = (sessionId: string) => ({ ...params, sessionId, cfg });
+    const leases = [];
+    try {
+      const uncertain = await manager.getOrCreate(input("uncertain"));
+      uncertain.joinCleanup = async () => {
+        throw new Error("child cleanup uncertain");
+      };
+      const healthy = await manager.getOrCreate(input("healthy"));
+      for (let index = 0; index < 254; index += 1) {
+        leases.push(await manager.acquire(input(`busy-${index}`)));
+      }
+      const admitted = await manager.acquire(input("admitted"));
+      leases.push(admitted);
+      expect(uncertain.dispose).toHaveBeenCalledOnce();
+      expect(healthy.dispose).toHaveBeenCalledOnce();
+      expect(manager.peekSession({ sessionId: "admitted" })).toBe(admitted.runtime);
+      const blocked = await manager.getOrCreate(input("blocked"));
+      expect((await blocked.getCatalog()).diagnostics?.[0]?.message).toContain(
+        "all 256 Gateway MCP runtimes are in use",
+      );
+    } finally {
+      leases.forEach((lease) => lease.releaseLease());
+      clock.mockRestore();
+    }
   });
 
   it("joins an unpublished disposal and reports its failure in the joining caller", async () => {
@@ -207,9 +472,7 @@ describe("MCP manager creation ownership", () => {
         joined = true;
       }),
     );
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
     expect(joined).toBe(false);
     closing.release();
     await Promise.all([first, second]);
@@ -308,47 +571,34 @@ describe("MCP manager creation ownership", () => {
       const factoryContexts: ReturnType<typeof readContext>[] = [];
       const clock = createGatewaySchedulerClock(Date.now());
       const previousClock = createGatewaySchedulerClock(clock.clock.now());
-      const manager = createSessionMcpRuntimeManager({
-        scheduler: createTestGatewayScheduler(previousClock.clock),
-        createRuntime(input) {
-          factoryContexts.push(readContext());
-          const runtime = createRuntimeFixture(input);
-          runtime.dispose = vi.fn(async () => {
-            sweepContexts.push(readContext());
-          });
-          return runtime;
-        },
-      });
-      managers.push(manager);
+      const manager = createManager((input) => {
+        factoryContexts.push(readContext());
+        const runtime = createRuntimeFixture(input);
+        runtime.dispose = vi.fn(async () => {
+          sweepContexts.push(readContext());
+        });
+        return runtime;
+      }, createTestGatewayScheduler(previousClock.clock));
 
-      try {
-        for (const turn of ["first turn", "later turn"]) {
-          const pendingInput = `${turn} input`;
-          await turnContext.run(turn, () =>
-            pendingInputContext.run(pendingInput, async () => {
-              await manager.getOrCreateRequesterScoped({
-                ...params,
-                requesterSenderId: "sender",
-                cfg: {
-                  mcp: {
-                    sessionIdleTtlMs: 600_000,
-                    servers: { scoped: { transport: "streamable-http" } },
-                  },
-                },
-              });
-              await manager.setScheduler(createTestGatewayScheduler(clock.clock));
-              expect(readContext()).toEqual({ turn, pendingInput });
-            }),
-          );
-          expect(factoryContexts.splice(0)).toEqual([{ turn, pendingInput }]);
-          expect(previousClock.armedAtMs).toBeNull();
-          await clock.advanceBy(1_200_000);
-          expect(sweepContexts.splice(0)).toEqual([{ turn: undefined, pendingInput: undefined }]);
-          expect(manager.listRuntimeKeys()).toEqual([]);
-          expect(clock.armedAtMs).toBeNull();
-          await manager.disposeAll();
-        }
-      } finally {
+      for (const turn of ["first turn", "later turn"]) {
+        const pendingInput = `${turn} input`;
+        await turnContext.run(turn, () =>
+          pendingInputContext.run(pendingInput, async () => {
+            const input = requesterParams("sender");
+            await manager.getOrCreateRequesterScoped({
+              ...input,
+              cfg: { mcp: { ...input.cfg.mcp, sessionIdleTtlMs: 600_000 } },
+            });
+            await manager.setScheduler(createTestGatewayScheduler(clock.clock));
+            expect(readContext()).toEqual({ turn, pendingInput });
+          }),
+        );
+        expect(factoryContexts.splice(0)).toEqual([{ turn, pendingInput }]);
+        expect(previousClock.armedAtMs).toBeNull();
+        await clock.advanceBy(1_200_000);
+        expect(sweepContexts.splice(0)).toEqual([{ turn: undefined, pendingInput: undefined }]);
+        expect(manager.listRuntimeKeys()).toEqual([]);
+        expect(clock.armedAtMs).toBeNull();
         await manager.disposeAll();
       }
     });
@@ -359,12 +609,8 @@ describe("MCP manager creation ownership", () => {
     const gatewayClock = createGatewaySchedulerClock(standaloneClock.clock.now());
     const standaloneScheduler = createTestGatewayScheduler(standaloneClock.clock);
     const gatewayScheduler = createTestGatewayScheduler(gatewayClock.clock);
-    const manager = createSessionMcpRuntimeManager({
-      scheduler: gatewayScheduler,
-      createRuntime: createRuntimeFixture,
-    });
-    managers.push(manager);
-    const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
+    const manager = createManager(createRuntimeFixture, gatewayScheduler);
+    const input = idleParams;
     try {
       await manager.setScheduler(gatewayScheduler);
       const gatewayRuntime = await manager.getOrCreate(input);
@@ -389,12 +635,8 @@ describe("MCP manager creation ownership", () => {
     const secondClock = createGatewaySchedulerClock(firstClock.clock.now());
     const firstScheduler = createTestGatewayScheduler(firstClock.clock);
     const secondScheduler = createTestGatewayScheduler(secondClock.clock);
-    const manager = createSessionMcpRuntimeManager({
-      scheduler: firstScheduler,
-      createRuntime: createRuntimeFixture,
-    });
-    managers.push(manager);
-    const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
+    const manager = createManager(createRuntimeFixture, firstScheduler);
+    const input = idleParams;
     const runtime = await manager.getOrCreate(input);
     const cleanup = holdDisposal(runtime);
     const sweep = firstClock.advanceBy(120_000);
@@ -429,19 +671,13 @@ describe("MCP manager creation ownership", () => {
     const firstClock = createGatewaySchedulerClock(Date.now());
     const firstScheduler = createTestGatewayScheduler(firstClock.clock);
     const nextScheduler = createTestGatewayScheduler();
-    const manager = createSessionMcpRuntimeManager({
-      scheduler: firstScheduler,
-      createRuntime: createRuntimeFixture,
-    });
-    managers.push(manager);
-    const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
+    const manager = createManager(createRuntimeFixture, firstScheduler);
+    const input = idleParams;
     const runtime = await manager.getOrCreate(input);
     const cleanup = holdDisposal(runtime);
     const sweep = firstClock.advanceBy(120_000);
     await cleanup.started;
-    const previous = Reflect.get(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
-    const hadManager = Reflect.has(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
-    Reflect.set(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, manager);
+    const restoreManager = bindManager(manager);
     const host = new LegacyPluginSdkResourceHost();
     host.bindScheduler(nextScheduler);
     if (boundary === "already-stopped") {
@@ -469,11 +705,7 @@ describe("MCP manager creation ownership", () => {
       await Promise.allSettled([sweep, acquisition]);
       await host.close();
       await Promise.all([firstScheduler.stop(), nextScheduler.stop()]);
-      if (hadManager) {
-        Reflect.set(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, previous);
-      } else {
-        Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
-      }
+      restoreManager();
     }
   });
 
@@ -493,14 +725,8 @@ describe("MCP manager creation ownership", () => {
       const originHost = new LegacyPluginSdkResourceHost();
       originHost.bindScheduler(originScheduler);
       const held = holdFactory();
-      const manager = createSessionMcpRuntimeManager({
-        scheduler: survivorScheduler,
-        createRuntime: held.createRuntime,
-      });
-      managers.push(manager);
-      const previous = Reflect.get(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
-      const hadManager = Reflect.has(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
-      Reflect.set(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, manager);
+      const manager = createManager(held.createRuntime, survivorScheduler);
+      const restoreManager = bindManager(manager);
       const input =
         acquire === acquireRequesterScopedMcpRuntime ? requesterParams("sender") : params;
       const acquisition =
@@ -554,64 +780,86 @@ describe("MCP manager creation ownership", () => {
         peer?.releaseLease();
         await Promise.all([originHost.close(), survivorHost.close()]);
         await Promise.all([originScheduler.stop(), survivorScheduler.stop()]);
-        if (hadManager) {
-          Reflect.set(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, previous);
-        } else {
-          Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
-        }
+        restoreManager();
       }
     });
   });
 
   it.each([
-    { scope: "session", kind: "static" },
-    { scope: "all", kind: "static" },
-    { scope: "all", kind: "requester" },
+    { scope: "session", kind: "static", replacement: undefined },
+    { scope: "all", kind: "static", replacement: undefined },
+    { scope: "all", kind: "requester", replacement: undefined },
+    { scope: undefined, kind: "static", replacement: "config" },
+    { scope: undefined, kind: "static", replacement: "workspace" },
   ] as const)(
-    "drains late $kind creation during $scope disposal before admitting a successor",
-    async ({ scope, kind }) => {
+    "serializes $kind successors after $scope teardown / $replacement replacement",
+    async ({ scope, kind, replacement }) => {
       await withRequesterResolver(async () => {
         const first = holdFactory();
         const next = holdFactory();
         const createRuntime = vi
           .fn<CreateSessionMcpRuntime>(createRuntimeFixture)
-          .mockImplementationOnce(first.createRuntime)
+          .mockImplementationOnce(
+            replacement === "config" ? createRuntimeFixture : first.createRuntime,
+          )
           .mockImplementationOnce(next.createRuntime);
         const manager = createManager(createRuntime);
-        const acquire = async () =>
-          kind === "static"
-            ? manager.getOrCreate(params)
-            : expectDefined(
+        const changed =
+          replacement === "config"
+            ? { ...params, cfg: { mcp: { apps: { enabled: true }, servers: {} } } }
+            : { ...params, workspaceDir: "/replacement-workspace" };
+        const acquire = async (updated = false) =>
+          kind === "requester"
+            ? expectDefined(
                 await manager.getOrCreateRequesterScoped(requesterParams("sender")),
                 "requester runtime",
-              ).runtime;
+              ).runtime
+            : manager.getOrCreate(updated && replacement ? changed : params);
         const oldRequest = acquire();
-        const oldRuntime = await first.started;
-        const closing = holdDisposal(oldRuntime);
+        const oldRuntime = await (replacement === "config" ? oldRequest : first.started);
+        const closing = replacement === "workspace" ? undefined : holdDisposal(oldRuntime);
         let drained = false;
-        const disposal = (
-          scope === "session" ? manager.disposeSession(params.sessionId) : manager.disposeAll()
-        ).then(() => {
-          drained = true;
-        });
-        const nextRequest = acquire();
+        const disposal = scope
+          ? (scope === "session"
+              ? manager.disposeSession(params.sessionId)
+              : manager.disposeAll()
+            ).then(() => {
+              drained = true;
+            })
+          : undefined;
+        const nextRequest = acquire(true);
+        if (replacement === "config") {
+          await closing!.started;
+        }
+        const earlyConcurrent = replacement ? acquire(true) : undefined;
+        if (replacement) {
+          await manager.sweepIdleRuntimes();
+          expect(createRuntime).toHaveBeenCalledOnce();
+        }
         first.release();
-        await closing.started;
-        expect(drained).toBe(false);
-        expect(createRuntime).toHaveBeenCalledOnce();
-        expect(manager.peekSession({ sessionId: params.sessionId })).toBeUndefined();
-        closing.release();
+        if (scope) {
+          await closing!.started;
+          expect(drained).toBe(false);
+          expect(createRuntime).toHaveBeenCalledOnce();
+          expect(manager.peekSession({ sessionId: params.sessionId })).toBeUndefined();
+        }
+        closing?.release();
         await disposal;
+        const nextRuntime = await next.started;
         expect(await oldRequest).toBe(oldRuntime);
         expect(oldRuntime.dispose).toHaveBeenCalledOnce();
-
-        const nextRuntime = await next.started;
-        const concurrentRequest = acquire();
+        if (replacement) {
+          expect(manager.peekSession({ sessionId: params.sessionId })).toBeUndefined();
+        }
+        const concurrentRequest = earlyConcurrent ?? acquire();
         next.release();
         const [created, concurrent] = await Promise.all([nextRequest, concurrentRequest]);
         expect(created).toBe(nextRuntime);
         expect(concurrent).toBe(nextRuntime);
         expect(createRuntime).toHaveBeenCalledTimes(2);
+        if (!scope) {
+          return;
+        }
         if (kind === "static") {
           expect(manager.peekSession({ sessionKey: params.sessionKey })).toBe(nextRuntime);
         }
@@ -619,7 +867,6 @@ describe("MCP manager creation ownership", () => {
         expect(manager.listSessionIds()).toEqual([params.sessionId]);
         expect(manager.resolveSessionId(params.sessionKey)).toBe(params.sessionId);
         await expect(acquire()).resolves.toBe(nextRuntime);
-
         await manager.disposeAll();
         expect(nextRuntime.dispose).toHaveBeenCalledOnce();
         const subsequent = await acquire();
@@ -631,102 +878,52 @@ describe("MCP manager creation ownership", () => {
     },
   );
 
-  it.each([
-    {
-      label: "config",
-      pending: false,
-      update: { cfg: { mcp: { apps: { enabled: true }, servers: {} } } },
-    },
-    {
-      label: "pending workspace",
-      pending: true,
-      update: { workspaceDir: "/replacement-workspace" },
-    },
-  ])(
-    "serializes a $label replacement and joins its concurrent callers",
-    async ({ update, pending }) => {
-      const first = holdFactory();
-      const next = holdFactory();
-      const createRuntime = vi
-        .fn<CreateSessionMcpRuntime>(createRuntimeFixture)
-        .mockImplementationOnce(pending ? first.createRuntime : createRuntimeFixture)
-        .mockImplementationOnce(next.createRuntime);
-      const manager = createManager(createRuntime);
-      const oldRequest = manager.getOrCreate(params);
-      const oldRuntime = await (pending ? first.started : oldRequest);
-      const closing = pending ? undefined : holdDisposal(oldRuntime);
-      const changed = { ...params, ...update };
-      const replacement = manager.getOrCreate(changed);
-      if (closing) {
-        await closing.started;
-      }
-      const concurrent = manager.getOrCreate(changed);
-      await manager.sweepIdleRuntimes();
-      expect(createRuntime).toHaveBeenCalledOnce();
-      first.release();
-      closing?.release();
-      const nextRuntime = await next.started;
-      expect(await oldRequest).toBe(oldRuntime);
-      expect(oldRuntime.dispose).toHaveBeenCalledOnce();
-      expect(manager.peekSession({ sessionId: params.sessionId })).toBeUndefined();
-      next.release();
-      await expect(replacement).resolves.toBe(nextRuntime);
-      await expect(concurrent).resolves.toBe(nextRuntime);
-      expect(createRuntime).toHaveBeenCalledTimes(2);
-    },
-  );
-
   it.each(["session", "all"] as const)(
     "drains the requester partition of a pending full acquisition during %s disposal",
     async (scope) => {
-      const resolverRegistry = createMcpProofPluginRegistry();
-      await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
-        const first = holdFactory();
-        const resolutionStarted = createDeferred();
-        const releaseResolution = createDeferred();
-        releaseHeldWork.push(() => releaseResolution.resolve());
-        const resolverApi = resolverRegistry.apiFor("test-plugin");
-        resolverApi.registerMcpServerConnectionResolver({
-          serverName: "scoped",
-          resolve: async () => {
-            resolutionStarted.resolve();
-            await releaseResolution.promise;
-            return { url: "https://mcp.example.test/scoped" };
-          },
-        });
-        const created: SessionMcpRuntime[] = [];
-        const manager = createManager(async (input) => {
-          const runtime = created.length
-            ? createRuntimeFixture(input)
-            : await first.createRuntime(input);
-          created.push(runtime);
-          return runtime;
-        });
-        const pending = manager.acquire(requesterParams("sender"));
-        await first.started;
-        let drained = false;
-        const disposal = (
-          scope === "session" ? manager.disposeSession(params.sessionId) : manager.disposeAll()
-        ).then(() => {
-          drained = true;
-        });
-        first.release();
-        await resolutionStarted.promise;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(drained).toBe(false);
-        releaseResolution.resolve();
-        const acquired = await pending;
-        acquired.releaseLease();
-        await disposal;
-        expect(created).toHaveLength(2);
-        for (const runtime of created) {
-          expect(runtime.dispose).toHaveBeenCalledOnce();
-        }
-        expect(manager.listRuntimeKeys()).toEqual([]);
-        expect(manager.resolveSessionId(params.sessionKey)).toBeUndefined();
-      });
+      const resolutionStarted = createDeferred();
+      const releaseResolution = createDeferred();
+      releaseHeldWork.push(() => releaseResolution.resolve());
+      await withRequesterResolver(
+        async () => {
+          const first = holdFactory();
+          const created: SessionMcpRuntime[] = [];
+          const manager = createManager(async (input) => {
+            const runtime = created.length
+              ? createRuntimeFixture(input)
+              : await first.createRuntime(input);
+            created.push(runtime);
+            return runtime;
+          });
+          const pending = manager.acquire(requesterParams("sender"));
+          await first.started;
+          let drained = false;
+          const disposal = (
+            scope === "session" ? manager.disposeSession(params.sessionId) : manager.disposeAll()
+          ).then(() => {
+            drained = true;
+          });
+          first.release();
+          await resolutionStarted.promise;
+          await nextTurn();
+          expect(drained).toBe(false);
+          releaseResolution.resolve();
+          const acquired = await pending;
+          acquired.releaseLease();
+          await disposal;
+          expect(created).toHaveLength(2);
+          for (const runtime of created) {
+            expect(runtime.dispose).toHaveBeenCalledOnce();
+          }
+          expect(manager.listRuntimeKeys()).toEqual([]);
+          expect(manager.resolveSessionId(params.sessionKey)).toBeUndefined();
+        },
+        async () => {
+          resolutionStarted.resolve();
+          await releaseResolution.promise;
+          return { url: "https://mcp.example.test/scoped" };
+        },
+      );
     },
   );
 
@@ -749,9 +946,7 @@ describe("MCP manager creation ownership", () => {
           ...requesterParams("next"),
           ...(scope === "all" ? { sessionId: "another-session", sessionKey: "another-key" } : {}),
         });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
         expect(createRuntime).toHaveBeenCalledOnce();
         closing.release();
         await disposal;

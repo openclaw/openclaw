@@ -144,10 +144,12 @@ export async function buildWorkspaceStageInput(
     parseWorkerWorkspaceManifest(
       bufferView(source.baseManifestRaw).toString("utf8"),
       source.baseManifestRef,
+      params.buildCacheInputs,
     ),
     parseWorkerWorkspaceManifest(
       bufferView(source.currentManifestRaw).toString("utf8"),
       source.currentManifestRef,
+      params.buildCacheInputs,
     ),
   );
   // Deletions are represented by the authenticated manifests and need no blob.

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -19,8 +19,58 @@ import {
 } from "./session-capability.test-support.ts";
 
 const requireRecord = createRequireRecord("object", "expected-label");
+type Sessions = ReturnType<typeof createSubscriptionHydrationHarness>["sessions"];
+
+function row(key: string, updatedAt = 1, fields: Partial<GatewaySessionRow> = {}) {
+  return { key, kind: "direct" as const, updatedAt, ...fields };
+}
+
+function listRequest(
+  list: (params?: Record<string, unknown>) => SessionsListResult | Promise<SessionsListResult>,
+) {
+  return vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    if (method === "sessions.subscribe") {
+      return { subscribed: true };
+    }
+    if (method === "sessions.list") {
+      return list(params);
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+}
+
+function writerHarness(archived = false, savedAgentId: string | null = null) {
+  const result = sessionsResult(
+    [row(`agent:writer:${archived ? "draft" : "dashboard:one"}`, 1, archived ? { archived } : {})],
+    1,
+  );
+  const request = listRequest((params) =>
+    params?.agentId === "writer" ? result : sessionsResult([], 1),
+  );
+  const h = createSubscriptionHydrationHarness(request, savedAgentId);
+  onTestFinished(() => h.sessions.dispose());
+  return { ...h, request, result };
+}
+
+function expectRoster(sessions: Sessions, agentId: string, result: SessionsListResult) {
+  expect(sessions.state.agentId).toBe(agentId);
+  expect(sessions.state.result?.sessions).toEqual(result.sessions);
+}
+
+function recordAgents(sessions: Sessions) {
+  const agents: Array<string | null> = [];
+  const stop = sessions.subscribe(({ result, agentId }) => {
+    if (result) {
+      agents.push(agentId);
+    }
+  });
+  onTestFinished(stop);
+  return agents;
+}
 
 describe("session selection hydration", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
   it.each([
     { finalAgent: "main" },
     { finalAgent: "research" },
@@ -33,12 +83,11 @@ describe("session selection hydration", () => {
   ])(
     "retires a slow intermediate agent when automatic selection moves main to writer to $finalAgent (queued explicit: $queuedExplicit, observer recovery: $recover, remembered refresh: $remembered)",
     async ({ finalAgent, queuedExplicit, recover, direct, remembered }) => {
-      vi.useFakeTimers();
       const writer = createDeferred<SessionsListResult>();
       const subscription = createDeferred<{ subscribed: boolean }>();
       let subscriptions = 0;
       const result = (agentId: string, ts: number) =>
-        sessionsResult([{ key: `agent:${agentId}:main`, kind: "direct", updatedAt: ts }], ts);
+        sessionsResult([row(`agent:${agentId}:main`, ts)], ts);
       const reads: string[] = [];
       const client = createTestGatewayClient(async (method, params) => {
         if (method === "sessions.subscribe") {
@@ -84,12 +133,7 @@ describe("session selection hydration", () => {
       const sessions = createSessionCapability(gateway, automaticSelection, {
         connectionBootstrap: coordinator,
       });
-      const publishedAgents: Array<string | null> = [];
-      const stop = sessions.subscribe((state) => {
-        if (state.result) {
-          publishedAgents.push(state.agentId);
-        }
-      });
+      const publishedAgents = recordAgents(sessions);
       let superseded: Promise<void> | undefined;
       try {
         publish(true);
@@ -143,69 +187,47 @@ describe("session selection hydration", () => {
       } finally {
         writer.resolve(result("writer", 2));
         subscription.resolve({ subscribed: true });
-        stop();
         sessions.dispose();
         await superseded;
         selection.dispose();
         coordinator.reset();
-        vi.useRealTimers();
       }
     },
   );
 
   it.each([
-    {
-      name: "different owners with the same SID",
-      agentId: "writer",
-      preview: undefined,
-    },
+    { name: "different owners with the same SID", agentId: "writer", preview: undefined },
     { name: "the same owner and SID", agentId: "main", preview: undefined },
     { name: "a present Work preview", agentId: "writer", preview: "Work preview" },
   ])("keeps presentation with its owner across $name", async ({ agentId, preview }) => {
-    vi.useFakeTimers();
-    const sharedSid = "00000000-0000-4000-8000-000000000101";
     const main: GatewaySessionRow = {
       key: "global",
       agentId: "main",
-      sessionId: sharedSid,
+      sessionId: "00000000-0000-4000-8000-000000000101",
       kind: "global",
       derivedTitle: "Main conversation",
       lastMessagePreview: "Main preview",
       updatedAt: 10,
     };
-    const mainWithoutPreview: GatewaySessionRow = {
-      key: main.key,
-      agentId: main.agentId,
-      sessionId: main.sessionId,
-      kind: main.kind,
-      derivedTitle: main.derivedTitle,
-      updatedAt: 20,
-    };
+    const { lastMessagePreview: _preview, ...mainFields } = main;
+    const mainWithoutPreview = { ...mainFields, updatedAt: 20 };
     const incoming: GatewaySessionRow = {
-      key: "global",
+      ...mainFields,
       agentId,
-      sessionId: sharedSid,
-      kind: "global",
       derivedTitle: agentId === "main" ? "Main current title" : "Work current title",
       ...(preview === undefined ? {} : { lastMessagePreview: preview }),
       updatedAt: 30,
     };
     const replacement = createDeferred<SessionsListResult>();
     let replacing = false;
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
+    const request = listRequest((params) => {
+      if (params?.includeLastMessage) {
+        expect(params.agentId).toBe("main");
+        return sessionsResult([main], 10);
       }
-      if (method === "sessions.list") {
-        if (params?.includeLastMessage) {
-          expect(params.agentId).toBe("main");
-          return sessionsResult([main], 10);
-        }
-        expect(params?.includeLastMessage).toBeUndefined();
-        expect(params?.agentId).toBe(replacing ? agentId : "main");
-        return replacing ? replacement.promise : sessionsResult([mainWithoutPreview], 20);
-      }
-      throw new Error(`Unexpected request: ${method}`);
+      expect(params?.includeLastMessage).toBeUndefined();
+      expect(params?.agentId).toBe(replacing ? agentId : "main");
+      return replacing ? replacement.promise : sessionsResult([mainWithoutPreview], 20);
     });
     const { gateway, selection, sessions, connect } = createSubscriptionHydrationHarness(request);
     let sameOwnerRefresh: ReturnType<typeof sessions.refreshReplacement> | undefined;
@@ -226,9 +248,8 @@ describe("session selection hydration", () => {
       }
       await vi.advanceTimersByTimeAsync(0);
       expect(selection.state.selectedId).toBe(agentId);
-      expect(sessions.state.loading).toBe(true);
       expect(sessions.state.result).toBe(heldMain);
-      expect(sessions.state.agentId).toBe("main");
+      expect(sessions.state).toMatchObject({ loading: true, agentId: "main" });
       expect(request).toHaveBeenLastCalledWith(
         "sessions.list",
         expect.objectContaining({ agentId, includeGlobal: true, includeDerivedTitles: true }),
@@ -237,50 +258,36 @@ describe("session selection hydration", () => {
       replacement.resolve(sessionsResult([incoming], 30));
       await vi.advanceTimersByTimeAsync(0);
       await sameOwnerRefresh;
-      expect(sessions.state.agentId).toBe(agentId);
-      expect(sessions.state.loading).toBe(false);
-      expect(sessions.state.result).toMatchObject({ ts: 30, count: 1, sessions: [incoming] });
+      expect(sessions.state).toMatchObject({
+        agentId,
+        loading: false,
+        result: { ts: 30, count: 1, sessions: [incoming] },
+      });
       const current = sessions.state.result?.sessions[0];
-      expect(current?.derivedTitle).toBe(incoming.derivedTitle);
-      expect(current?.lastMessagePreview).toBe(
-        preview ?? (agentId === "main" ? main.lastMessagePreview : undefined),
-      );
+      expect({ title: current?.derivedTitle, preview: current?.lastMessagePreview }).toEqual({
+        title: incoming.derivedTitle,
+        preview: preview ?? (agentId === "main" ? main.lastMessagePreview : undefined),
+      });
     } finally {
       sessions.dispose();
       replacement.resolve(sessionsResult([incoming], 30));
       await vi.advanceTimersByTimeAsync(0);
       await sameOwnerRefresh;
-      vi.useRealTimers();
     }
   });
 
   it("discards a delayed default-agent bootstrap after the route selects another agent", async () => {
-    vi.useFakeTimers();
     const bootstrap = createDeferred<SessionsListResult>();
     const writerList = createDeferred<SessionsListResult>();
     const writerResult = sessionsResult(
-      [
-        { key: "agent:writer:dashboard:one", kind: "direct", updatedAt: 2 },
-        { key: "agent:writer:dashboard:two", kind: "direct", updatedAt: 1 },
-      ],
+      [row("agent:writer:dashboard:one", 2), row("agent:writer:dashboard:two")],
       1,
     );
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return params?.agentId === "writer" ? writerList.promise : bootstrap.promise;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
+    const request = listRequest((params) =>
+      params?.agentId === "writer" ? writerList.promise : bootstrap.promise,
+    );
     const { gateway, selection, sessions, connect } = createSubscriptionHydrationHarness(request);
-    const publishedAgents: Array<string | null> = [];
-    const stop = sessions.subscribe((next) => {
-      if (next.result) {
-        publishedAgents.push(next.agentId);
-      }
-    });
+    const publishedAgents = recordAgents(sessions);
     try {
       connect();
       await vi.advanceTimersByTimeAsync(0);
@@ -294,11 +301,7 @@ describe("session selection hydration", () => {
         expect.objectContaining({ agentId: "main" }),
       );
 
-      selectApplicationSession({
-        selection,
-        gateway,
-        sessionKey: "agent:writer:dashboard:one",
-      });
+      selectApplicationSession({ selection, gateway, sessionKey: "agent:writer:dashboard:one" });
       bootstrap.resolve(runningSessionsResult());
       await vi.advanceTimersByTimeAsync(0);
 
@@ -311,87 +314,28 @@ describe("session selection hydration", () => {
       writerList.resolve(writerResult);
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(sessions.state.agentId).toBe("writer");
-      expect(sessions.state.result?.sessions).toEqual(writerResult.sessions);
+      expectRoster(sessions, "writer", writerResult);
       expect(new Set(publishedAgents)).toEqual(new Set(["writer"]));
     } finally {
-      stop();
       sessions.dispose();
       bootstrap.resolve(runningSessionsResult());
       writerList.resolve(writerResult);
-      vi.useRealTimers();
     }
   });
 
-  it("hydrates the saved agent before hello and retains its roster when page scope widens", async () => {
-    vi.useFakeTimers();
-    const writerResult = sessionsResult(
-      [{ key: "agent:writer:dashboard:one", kind: "direct", updatedAt: 1 }],
-      1,
+  it.each([false, true])("retains the writer roster across reconnect=%s", async (reconnect) => {
+    const { gateway, selection, sessions, connect, disconnect, request, result } = writerHarness(
+      reconnect,
+      reconnect ? null : "writer",
     );
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      const list = params?.agentId === "writer" ? writerResult : sessionsResult([], 1);
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return list;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const { gateway, selection, sessions, connect } = createSubscriptionHydrationHarness(
-      request,
-      "writer",
-    );
-    try {
+    const writerQuery = { agentId: "writer", search: "draft", archived: true, limit: 25 };
+    if (!reconnect) {
       expect(gateway.snapshot.assistantAgentId).toBeNull();
       expect(selection.state.selectedId).toBe("writer");
-      connect();
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(request).toHaveBeenCalledWith(
-        "sessions.list",
-        expect.objectContaining({ agentId: "writer" }),
-      );
-      expect(sessions.state.agentId).toBe("writer");
-      expect(sessions.state.result?.sessions).toEqual(writerResult.sessions);
-      const requestsBeforeScopeChange = request.mock.calls.length;
-
-      selection.setScope(null);
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      expect(selection.state).toEqual({ selectedId: "writer", scopeId: null });
-      expect(sessions.state.agentId).toBe("writer");
-      expect(sessions.state.result?.sessions).toEqual(writerResult.sessions);
-      expect(request).toHaveBeenCalledTimes(requestsBeforeScopeChange);
-    } finally {
-      sessions.dispose();
-      vi.useRealTimers();
     }
-  });
-
-  it("retains an offline agent selection and list filters through reconnect refreshes", async () => {
-    vi.useFakeTimers();
-    const writerResult = sessionsResult(
-      [{ key: "agent:writer:draft", kind: "direct", updatedAt: 1, archived: true }],
-      1,
-    );
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      const list = params?.agentId === "writer" ? writerResult : sessionsResult([], 1);
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return list;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const { selection, sessions, connect, disconnect } =
-      createSubscriptionHydrationHarness(request);
-    const writerQuery = { agentId: "writer", search: "draft", archived: true, limit: 25 };
-    try {
-      connect();
-      await vi.advanceTimersByTimeAsync(0);
+    connect();
+    await vi.advanceTimersByTimeAsync(0);
+    if (reconnect) {
       expect(sessions.state.agentId).toBe("main");
       await sessions.refresh({
         agentId: "main",
@@ -400,30 +344,34 @@ describe("session selection hydration", () => {
         limit: 25,
         force: true,
       });
-
       disconnect();
       selection.set("writer");
       connect();
       await vi.advanceTimersByTimeAsync(0);
-
       expect(request).toHaveBeenLastCalledWith(
         "sessions.list",
         expect.objectContaining(writerQuery),
       );
-      expect(sessions.state.agentId).toBe("writer");
-      expect(sessions.state.result?.sessions).toEqual(writerResult.sessions);
-
-      await sessions.refreshReplacement();
-
-      expect(request).toHaveBeenLastCalledWith(
+    } else {
+      expect(request).toHaveBeenCalledWith(
         "sessions.list",
-        expect.objectContaining(writerQuery),
+        expect.objectContaining({ agentId: "writer" }),
       );
-      expect(sessions.state.agentId).toBe("writer");
-      expect(sessions.state.result?.sessions).toEqual(writerResult.sessions);
-    } finally {
-      sessions.dispose();
-      vi.useRealTimers();
     }
+    expectRoster(sessions, "writer", result);
+    const requestsBeforeScopeChange = request.mock.calls.length;
+    if (reconnect) {
+      await sessions.refreshReplacement();
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining(writerQuery),
+      );
+    } else {
+      selection.setScope(null);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(selection.state).toEqual({ selectedId: "writer", scopeId: null });
+      expect(request).toHaveBeenCalledTimes(requestsBeforeScopeChange);
+    }
+    expectRoster(sessions, "writer", result);
   });
 });

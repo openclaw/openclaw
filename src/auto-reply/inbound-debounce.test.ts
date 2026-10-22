@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
+import {
+  GatewayDrainingError,
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import { createInboundDebouncer, type InboundDebounceCreateParams } from "./inbound-debounce.js";
 
 describe("createInboundDebouncer", () => {
@@ -11,13 +20,56 @@ describe("createInboundDebouncer", () => {
 
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+  afterEach(resetGatewayWorkAdmission);
 
   type Message = { key: string; id: string };
-  type RecordingOptions<T> = Omit<InboundDebounceCreateParams<T>, "buildKey" | "onFlush">;
+  type RecordingOptions<T> = Omit<
+    InboundDebounceCreateParams<T>,
+    "buildKey" | "onFlush" | "debounceMs"
+  > & { debounceMs?: number };
+  type KeyedOptions = Omit<InboundDebounceCreateParams<Message>, "buildKey" | "debounceMs"> & {
+    debounceMs?: number;
+  };
+  const keyedDebouncer = (options: KeyedOptions) =>
+    createInboundDebouncer<Message>({ debounceMs: 0, buildKey: (item) => item.key, ...options });
+  async function tick<T>(ms: number, calls: T[], expected: T[]) {
+    await vi.advanceTimersByTimeAsync(ms);
+    expect(calls).toStrictEqual(expected);
+  }
+  type FlushOptions = Parameters<Parameters<KeyedOptions["onFlush"]>[1]>[0];
+  function lifecycleDebouncer(
+    dispatch: (id: string, lifecycle: Parameters<FlushOptions["dispatch"]>[0]) => Promise<void>,
+    options: Omit<KeyedOptions, "onFlush"> & Pick<FlushOptions, "lifecycle"> = {},
+  ) {
+    const { lifecycle, ...debounce } = options;
+    return keyedDebouncer({
+      ...debounce,
+      onFlush: (items, createFlush) =>
+        createFlush({ lifecycle, dispatch: (turn) => dispatch(items[0]?.id ?? "", turn) }),
+    });
+  }
+  function numberDebouncer(
+    options: RecordingOptions<number>,
+    onBatch: (items: number[]) => void | Promise<void> = () => {},
+  ) {
+    const calls: number[][] = [];
+    const debouncer = createInboundDebouncer({
+      debounceMs: 0,
+      ...options,
+      buildKey: () => "sender",
+      onFlush: (items: number[]) =>
+        flushOnCompletion(() => {
+          calls.push(items);
+          return onBatch(items);
+        }),
+    });
+    return { calls, debouncer };
+  }
 
   function createRecordingDebouncer<T extends Message = Message>(options: RecordingOptions<T>) {
     const calls: string[][] = [];
     const debouncer = createInboundDebouncer<T>({
+      debounceMs: 50,
       ...options,
       buildKey: (item) => item.key,
       onFlush: (items) =>
@@ -37,6 +89,7 @@ describe("createInboundDebouncer", () => {
     const entered = createDeferred();
     const release = createDeferred();
     const debouncer = createInboundDebouncer<T>({
+      debounceMs: 50,
       ...options,
       buildKey: (item) => item.key,
       onFlush: (items) =>
@@ -53,27 +106,94 @@ describe("createInboundDebouncer", () => {
     return { debouncer, started, finished, entered, release };
   }
 
+  it.each([false, true])(
+    "waits for shipped flush callbacks when ordering and draining (thenable: %s)",
+    async (thenable) => {
+      const started: string[] = [];
+      const finished: string[] = [];
+      const firstCompletion = createDeferred();
+      const debouncer = keyedDebouncer({
+        serializeImmediate: true,
+        // @ts-expect-error Released plugins return promises instead of the current lifecycle shape.
+        onFlush: (items) => {
+          const id = items[0]?.id ?? "";
+          started.push(id);
+          const completion = (id === "first" ? firstCompletion.promise : Promise.resolve()).then(
+            () => {
+              finished.push(id);
+            },
+          );
+          // oxlint-disable-next-line unicorn/no-thenable -- Exercise a shipped structural PromiseLike callback.
+          return thenable ? { then: completion.then.bind(completion) } : completion;
+        },
+      });
+      const first = debouncer.enqueue({ key: "a", id: "first" });
+      const second = debouncer.enqueue({ key: "a", id: "second" });
+      const outcomes = Promise.allSettled([first, second]);
+      const onDrained = vi.fn();
+      const drain = debouncer.drain().then(onDrained);
+      let beforeRelease;
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        beforeRelease = { started: [...started], drained: onDrained.mock.calls.length };
+      } finally {
+        firstCompletion.resolve();
+        await Promise.all([outcomes, drain]);
+      }
+
+      expect(await outcomes).toEqual([
+        { status: "fulfilled", value: undefined },
+        { status: "fulfilled", value: undefined },
+      ]);
+      expect(beforeRelease).toEqual({ started: ["first"], drained: 0 });
+      expect(finished).toEqual(["first", "second"]);
+      expect(onDrained).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "reports a shipped flush rejection once and releases its key (thenable: %s)",
+    async (thenable) => {
+      const failure = new Error("legacy flush failed");
+      const onError = vi.fn();
+      const calls: string[] = [];
+      const debouncer = keyedDebouncer({
+        serializeImmediate: true,
+        // @ts-expect-error Released plugins return promises instead of the current lifecycle shape.
+        onFlush: (items) => {
+          const id = items[0]?.id ?? "";
+          calls.push(id);
+          const completion = id === "first" ? Promise.reject(failure) : Promise.resolve();
+          // oxlint-disable-next-line unicorn/no-thenable -- Exercise a shipped structural PromiseLike callback.
+          return thenable ? { then: completion.then.bind(completion) } : completion;
+        },
+        onError,
+      });
+
+      await expect(debouncer.enqueue({ key: "a", id: "first" })).resolves.toBeUndefined();
+      await expect(debouncer.enqueue({ key: "a", id: "second" })).resolves.toBeUndefined();
+      await debouncer.drain();
+
+      expect(onError).toHaveBeenCalledExactlyOnceWith(failure, [{ key: "a", id: "first" }]);
+      expect(calls).toEqual(["first", "second"]);
+    },
+  );
+
   it("seals bounded batches without blocking collection behind an active flush", async () => {
     const firstGate = createDeferred();
-    const calls: number[][] = [];
-    const debouncer = createInboundDebouncer<number>({
-      debounceMs: 10,
-      buildKey: () => "sender",
-      canAppend: (_item, pending) => pending.length < 2,
-      onFlush: (items) =>
-        flushOnCompletion(async () => {
-          calls.push(items);
-          if (items[0] === 1) {
-            await firstGate.promise;
-          }
-        }),
-    });
+    const { calls, debouncer } = numberDebouncer(
+      { debounceMs: 10, canAppend: (_item, pending) => pending.length < 2 },
+      async (items) => {
+        if (items[0] === 1) {
+          await firstGate.promise;
+        }
+      },
+    );
     try {
       for (const item of [1, 2, 3, 4, 5]) {
         await debouncer.enqueue(item);
       }
-      await vi.advanceTimersByTimeAsync(10);
-      expect(calls).toEqual([[1, 2]]);
+      await tick(10, calls, [[1, 2]]);
       firstGate.resolve();
       await debouncer.drain();
       expect(calls).toEqual([[1, 2], [3, 4], [5]]);
@@ -84,16 +204,10 @@ describe("createInboundDebouncer", () => {
   });
 
   it("uses pending contents for continuation timing without carrying them into a full batch", async () => {
-    const calls: number[][] = [];
-    const debouncer = createInboundDebouncer<number>({
+    const { calls, debouncer } = numberDebouncer({
       debounceMs: 0,
-      buildKey: () => "sender",
       resolveDebounceMs: (item, pending) => (item === 1 || pending?.includes(1) ? 20 : 0),
       canAppend: (_item, pending) => pending.length < 2,
-      onFlush: (items) =>
-        flushOnCompletion(() => {
-          calls.push(items);
-        }),
     });
     expect(debouncer.shouldBuffer(1)).toBe(true);
     await debouncer.enqueue(1);
@@ -115,16 +229,14 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "a", id: "first", windowMs: 50 });
     await vi.advanceTimersByTimeAsync(40);
     await debouncer.enqueue({ key: "a", id: "later", windowMs: 1_000 });
-    await vi.advanceTimersByTimeAsync((maxWaitMs ?? 250) - 41);
-    expect(calls).toStrictEqual([]);
+    await tick((maxWaitMs ?? 250) - 41, calls, []);
 
-    await vi.advanceTimersByTimeAsync(1);
-    expect(calls).toEqual([["first", "later"]]);
+    await tick(1, calls, [["first", "later"]]);
     await debouncer.drain();
   });
 
   it("flushes sustained messages even when the system clock moves backward", async () => {
-    const { calls, debouncer } = createRecordingDebouncer({ debounceMs: 50 });
+    const { calls, debouncer } = createRecordingDebouncer({});
 
     await debouncer.enqueue({ key: "a", id: "0" });
     for (let index = 1; index < 13; index += 1) {
@@ -136,8 +248,7 @@ describe("createInboundDebouncer", () => {
     }
     expect(calls).toStrictEqual([]);
 
-    await vi.advanceTimersByTimeAsync(10);
-    expect(calls).toEqual([Array.from({ length: 13 }, (_, index) => String(index))]);
+    await tick(10, calls, [Array.from({ length: 13 }, (_, index) => String(index))]);
     await debouncer.drain();
   });
 
@@ -146,13 +257,10 @@ describe("createInboundDebouncer", () => {
     const { calls, debouncer } = createRecordingDebouncer({ debounceMs: 10, shouldHoldFlush });
 
     await debouncer.enqueue({ key: "a", id: "1" });
-    await vi.advanceTimersByTimeAsync(10);
-    expect(calls).toEqual([]);
+    await tick(10, calls, []);
 
-    await vi.advanceTimersByTimeAsync(9);
-    expect(calls).toEqual([]);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(calls).toEqual([["1"]]);
+    await tick(9, calls, []);
+    await tick(1, calls, [["1"]]);
     await debouncer.drain();
   });
 
@@ -168,97 +276,65 @@ describe("createInboundDebouncer", () => {
       });
 
       await debouncer.enqueue({ key: "a", id: "1" });
-      await vi.advanceTimersByTimeAsync(20);
-      expect(calls).toEqual([]);
+      await tick(20, calls, []);
 
-      await vi.advanceTimersByTimeAsync(10);
-      expect(calls).toEqual([["1"]]);
+      await tick(10, calls, [["1"]]);
       expect(shouldHoldFlush).toHaveBeenCalledTimes(pending ? 1 : 2);
       check.resolve(false);
       await debouncer.drain();
     },
   );
 
-  it("cancels a released flush still waiting behind active same-key work", async () => {
-    const calls: Array<string[]> = [];
-    const canceled: Array<string[]> = [];
-    const firstGate = createDeferred();
-    const firstStarted = createDeferred();
-    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
-      debounceMs: 50,
-      buildKey: (item) => item.key,
-      onFlush: (items) =>
-        flushOnCompletion(async () => {
-          const ids = items.map((entry) => entry.id);
-          calls.push(ids);
-          if (ids[0] === "1") {
-            firstStarted.resolve();
-            await firstGate.promise;
-          }
-        }),
-      onCancel: (items) => {
-        canceled.push(items.map((entry) => entry.id));
-      },
-    });
-
-    await debouncer.enqueue({ key: "a", id: "1" });
-    const firstFlush = debouncer.flushKey("a");
-    await firstStarted.promise;
-    expect(calls).toEqual([["1"]]);
-
-    await debouncer.enqueue({ key: "a", id: "2" });
-    const secondFlush = debouncer.flushKey("a");
-    expect(debouncer.cancelKey("a")).toBe(true);
-    expect(canceled).toEqual([["2"]]);
-
-    await debouncer.enqueue({ key: "a", id: "3" });
-    const thirdFlush = debouncer.flushKey("a");
-    firstGate.resolve();
-    await Promise.all([firstFlush, secondFlush, thirdFlush]);
-
-    expect(canceled).toEqual([["2"]]);
-    expect(calls).toEqual([["1"], ["3"]]);
-  });
-
-  it("cancels immediate work waiting behind an active flush without canceling later arrivals", async () => {
-    const canceled: string[][] = [];
-    const { debouncer, started, finished, entered, release } = createBlockedDebouncer({
-      debounceMs: 50,
-      shouldDebounce: (item) => item.id === "1",
-      onCancel: (items) => canceled.push(items.map((item) => item.id)),
-    });
-    await debouncer.enqueue({ key: "a", id: "1" });
-    const first = debouncer.flushKey("a");
-    await entered.promise;
-    const second = debouncer.enqueue({ key: "a", id: "2" });
-    expect(debouncer.cancelKey("a")).toBe(true);
-    const third = debouncer.enqueue({ key: "a", id: "3" });
-    release.resolve();
-    await Promise.all([first, second, third, debouncer.drain()]);
-    expect(canceled).toEqual([["2"]]);
-    expect(started).toEqual(["1", "3"]);
-    expect(finished).toEqual(["1", "3"]);
-  });
+  it.each([false, true])(
+    "cancels queued work but preserves later arrivals (immediate: %s)",
+    async (immediate) => {
+      const canceled: string[][] = [];
+      const { debouncer, started, finished, entered, release } = createBlockedDebouncer({
+        shouldDebounce: (item) => !immediate || item.id === "1",
+        onCancel: (items) => canceled.push(items.map((item) => item.id)),
+      });
+      await debouncer.enqueue({ key: "a", id: "1" });
+      const first = debouncer.flushKey("a");
+      await entered.promise;
+      expect(started).toEqual(["1"]);
+      const secondEnqueue = debouncer.enqueue({ key: "a", id: "2" });
+      if (!immediate) {
+        await secondEnqueue;
+      }
+      const second = immediate ? secondEnqueue : debouncer.flushKey("a");
+      expect(debouncer.cancelKey("a")).toBe(true);
+      expect(canceled).toEqual([["2"]]);
+      const thirdEnqueue = debouncer.enqueue({ key: "a", id: "3" });
+      if (!immediate) {
+        await thirdEnqueue;
+      }
+      const third = immediate ? thirdEnqueue : debouncer.flushKey("a");
+      release.resolve();
+      await Promise.all([first, second, third, debouncer.drain()]);
+      expect(canceled).toEqual([["2"]]);
+      expect({ started, finished }).toStrictEqual({ started: ["1", "3"], finished: ["1", "3"] });
+    },
+  );
 
   it("keeps fire-and-forget keyed work ahead of a later buffered item", async () => {
     const { debouncer, started, finished, release } = createBlockedDebouncer<
       Message & { debounce: boolean }
-    >({ debounceMs: 50, shouldDebounce: (item) => item.debounce });
+    >({ shouldDebounce: (item) => item.debounce });
     await debouncer.enqueue({ key: "a", id: "1", debounce: true });
-    await vi.advanceTimersByTimeAsync(50);
-    expect(started).toEqual(["1"]);
+    await tick(50, started, ["1"]);
 
     const second = debouncer.enqueue({ key: "a", id: "2", debounce: false });
     const third = debouncer.enqueue({ key: "a", id: "3", debounce: true });
     expect(vi.getTimerCount()).toBe(1);
     await vi.advanceTimersByTimeAsync(50);
-    expect(started).toEqual(["1"]);
-    expect(finished).toStrictEqual([]);
+    expect({ started, finished }).toStrictEqual({ started: ["1"], finished: [] });
 
     release.resolve();
     await Promise.all([second, third, debouncer.drain()]);
-    expect(started).toEqual(["1", "2", "3"]);
-    expect(finished).toEqual(["1", "2", "3"]);
+    expect({ started, finished }).toStrictEqual({
+      started: ["1", "2", "3"],
+      finished: ["1", "2", "3"],
+    });
   });
 
   it.each([undefined, true])(
@@ -284,22 +360,17 @@ describe("createInboundDebouncer", () => {
     const started: string[] = [];
     const completed: string[] = [];
     const firstCompletion = createDeferred();
-    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
-      debounceMs: 50,
-      buildKey: (item) => item.key,
-      onFlush: (items, createFlush) =>
-        createFlush({
-          dispatch: async (lifecycle) => {
-            const id = items[0]?.id ?? "";
-            started.push(id);
-            await lifecycle.onAdopted();
-            if (id === "1") {
-              await firstCompletion.promise;
-            }
-            completed.push(id);
-          },
-        }),
-    });
+    const debouncer = lifecycleDebouncer(
+      async (id, lifecycle) => {
+        started.push(id);
+        await lifecycle.onAdopted();
+        if (id === "1") {
+          await firstCompletion.promise;
+        }
+        completed.push(id);
+      },
+      { debounceMs: 50 },
+    );
 
     await debouncer.enqueue({ key: "a", id: "1" });
     await debouncer.flushKey("a");
@@ -309,51 +380,88 @@ describe("createInboundDebouncer", () => {
     expect(started).toEqual(["1", "2"]);
     expect(completed).toEqual(["2"]);
 
-    let drained = false;
-    const drain = debouncer.drain().then(() => {
-      drained = true;
-    });
+    const onDrained = vi.fn();
+    const drain = debouncer.drain().then(onDrained);
     await Promise.resolve();
-    expect(drained).toBe(false);
+    expect(onDrained).not.toHaveBeenCalled();
 
     firstCompletion.resolve();
     await drain;
     expect(completed).toEqual(["2", "1"]);
   });
 
+  it.each(["accepting", "suspended", "restarting"] as const)(
+    "keeps adopted immediate dispatch owned after HTTP request release (%s)",
+    async (phase) => {
+      const execute = createDeferred();
+      const reply = vi.fn(async () => {});
+      const onError = vi.fn();
+      const debouncer = lifecycleDebouncer(
+        async (_id, lifecycle) => {
+          await lifecycle.onAdopted();
+          await execute.promise;
+          await enqueueCommandInLane("inbound-adopted-turn", reply);
+        },
+        { onError },
+      );
+      const request = tryBeginGatewayRootWorkAdmission("http:request");
+      if (!request) {
+        throw new Error("Expected HTTP request admission");
+      }
+      try {
+        await request.run(() => debouncer.enqueue({ key: "a", id: "1" }));
+        request.release();
+        expect(reply).not.toHaveBeenCalled();
+        if (phase === "suspended") {
+          const suspension = tryBeginGatewaySuspendAdmission(() => {});
+          expect(suspension).not.toBeNull();
+          // New requests are refused while this already-adopted turn finishes.
+          expect(tryBeginGatewayRootWorkAdmission("http:request")).toBeNull();
+        } else if (phase === "restarting") {
+          markGatewayRestartDraining();
+        }
+        execute.resolve();
+        await debouncer.drain();
+        if (phase === "restarting") {
+          expect(reply).not.toHaveBeenCalled();
+          expect(onError).toHaveBeenCalledExactlyOnceWith(expect.any(GatewayDrainingError), [
+            { key: "a", id: "1" },
+          ]);
+        } else {
+          expect(onError).not.toHaveBeenCalled();
+          expect(reply).toHaveBeenCalledOnce();
+        }
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        request.release();
+        execute.resolve();
+        await debouncer.drain();
+      }
+    },
+  );
+
   it("hands pre-admission completion failures to the source lifecycle once", async () => {
     const sessionError = new Error("Session changed while starting work. Retry.");
     const onFailed = vi.fn(async () => {});
     const onError = vi.fn();
     let attempt = 0;
-    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
-      debounceMs: 0,
-      buildKey: (item) => item.key,
-      onFlush: (_items, createFlush) =>
-        createFlush({
-          lifecycle: { onFailed },
-          dispatch: async (lifecycle) => {
-            attempt += 1;
-            if (attempt === 1) {
-              throw sessionError;
-            }
-            await lifecycle.onAdopted();
-            throw new Error("post-adoption failure");
-          },
-        }),
-      onError,
-    });
+    const debouncer = lifecycleDebouncer(
+      async (_id, lifecycle) => {
+        attempt += 1;
+        if (attempt === 1) {
+          throw sessionError;
+        }
+        await lifecycle.onAdopted();
+        throw new Error("post-adoption failure");
+      },
+      { lifecycle: { onFailed }, onError },
+    );
 
-    await expect(debouncer.enqueue({ key: "a", id: "failed-before-admission" })).resolves.toBe(
-      undefined,
-    );
-    await expect(debouncer.enqueue({ key: "a", id: "failed-after-admission" })).resolves.toBe(
-      undefined,
-    );
+    await expect(debouncer.enqueue({ key: "a", id: "before" })).resolves.toBeUndefined();
+    await expect(debouncer.enqueue({ key: "a", id: "after" })).resolves.toBeUndefined();
     await debouncer.drain();
 
-    expect(onFailed).toHaveBeenCalledOnce();
-    expect(onFailed).toHaveBeenCalledWith(sessionError);
+    expect(onFailed).toHaveBeenCalledExactlyOnceWith(sessionError);
     expect(onError).toHaveBeenCalledTimes(2);
     expect(onError.mock.calls[0]?.[0]).toBe(sessionError);
   });
@@ -364,19 +472,14 @@ describe("createInboundDebouncer", () => {
     const secondCompletion = createDeferred();
     const firstStarted = createDeferred();
     const secondStarted = createDeferred();
-    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
-      debounceMs: 50,
-      buildKey: (item) => item.key,
-      onFlush: (items, createFlush) =>
-        createFlush({
-          dispatch: async () => {
-            const id = items[0]?.id ?? "";
-            started.push(id);
-            (id === "1" ? firstStarted : secondStarted).resolve();
-            await (id === "1" ? firstCompletion : secondCompletion).promise;
-          },
-        }),
-    });
+    const debouncer = lifecycleDebouncer(
+      async (id) => {
+        started.push(id);
+        (id === "1" ? firstStarted : secondStarted).resolve();
+        await (id === "1" ? firstCompletion : secondCompletion).promise;
+      },
+      { debounceMs: 50 },
+    );
 
     await debouncer.enqueue({ key: "a", id: "1" });
     const firstFlush = debouncer.flushKey("a");
@@ -385,19 +488,17 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "a", id: "2" });
     const secondFlush = debouncer.flushKey("a");
 
-    let drained = false;
-    const drain = debouncer.drain().then(() => {
-      drained = true;
-    });
+    const onDrained = vi.fn();
+    const drain = debouncer.drain().then(onDrained);
     firstCompletion.resolve();
     await secondStarted.promise;
     await vi.advanceTimersByTimeAsync(0);
     expect(started).toEqual(["1", "2"]);
-    expect(drained).toBe(false);
+    expect(onDrained).not.toHaveBeenCalled();
 
     secondCompletion.resolve();
     await Promise.all([firstFlush, secondFlush, drain]);
-    expect(drained).toBe(true);
+    expect(onDrained).toHaveBeenCalledOnce();
   });
 
   it("releases serialized keys when custom completion rejects before admission", async () => {
@@ -405,10 +506,8 @@ describe("createInboundDebouncer", () => {
     const calls: string[] = [];
     const reported: unknown[] = [];
     const pendingAdmission = new Promise<void>(() => {});
-    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
-      debounceMs: 0,
+    const debouncer = keyedDebouncer({
       serializeImmediate: true,
-      buildKey: (item) => item.key,
       onFlush: (items) => {
         const id = items[0]?.id ?? "";
         calls.push(id);
@@ -434,9 +533,7 @@ describe("createInboundDebouncer", () => {
 
   it("does not leak unhandled rejections when a keyed flush failure is awaited", async () => {
     vi.useRealTimers();
-    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
-      debounceMs: 0,
-      buildKey: (item) => item.key,
+    const debouncer = keyedDebouncer({
       onFlush: () =>
         flushOnCompletion(() => {
           throw new Error("flush failed");
@@ -461,7 +558,7 @@ describe("createInboundDebouncer", () => {
 
   it("keeps same-key overflow work ordered after falling back to immediate flushes", async () => {
     const { debouncer, started, finished, entered, release } = createBlockedDebouncer(
-      { debounceMs: 50, maxTrackedKeys: 1 },
+      { maxTrackedKeys: 1 },
       "2",
     );
     await debouncer.enqueue({ key: "a", id: "1" });
@@ -473,18 +570,16 @@ describe("createInboundDebouncer", () => {
     // Cancel the unrelated key so advancing the clock isolates the overflow chain.
     debouncer.cancelKey("a");
     await vi.advanceTimersByTimeAsync(50);
-    expect(started).toEqual(["2"]);
-    expect(finished).toStrictEqual([]);
+    expect({ started, finished }).toStrictEqual({ started: ["2"], finished: [] });
 
     release.resolve();
     await Promise.all([overflow, buffered, debouncer.drain()]);
-    expect(started).toEqual(["2", "3"]);
-    expect(finished).toEqual(["2", "3"]);
+    expect({ started, finished }).toStrictEqual({ started: ["2", "3"], finished: ["2", "3"] });
   });
 
   it("counts tracked debounce keys by union of buffers and active chains", async () => {
     const { debouncer, started, finished, entered, release } = createBlockedDebouncer(
-      { debounceMs: 50, maxTrackedKeys: 3 },
+      { maxTrackedKeys: 3 },
       "2",
     );
     await debouncer.enqueue({ key: "a", id: "1" });
@@ -497,8 +592,7 @@ describe("createInboundDebouncer", () => {
 
     await debouncer.enqueue({ key: "d", id: "4" });
     expect(vi.getTimerCount()).toBe(2);
-    expect(started).toEqual(["2", "4"]);
-    expect(finished).toEqual(["4"]);
+    expect({ started, finished }).toStrictEqual({ started: ["2", "4"], finished: ["4"] });
 
     release.resolve();
     await secondFlush;

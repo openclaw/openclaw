@@ -85,8 +85,22 @@ describe.skipIf(!connection)("PostgreSQL memory forget transaction", () => {
       },
     );
   };
+  const query = (sql: string) => pg().prepare(sql).all();
   const rows = (table: "memory_index_chunks" | "memory_index_chunks_vec") =>
-    pg().prepare(`SELECT id FROM ${table} ORDER BY id`).all();
+    query(`SELECT id FROM ${table} ORDER BY id`);
+  const revision = () =>
+    Number(pg().prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()!.revision);
+  const expectProjection = (ids: string[], cached: boolean) => {
+    for (const table of ["memory_index_chunks", "memory_index_chunks_vec"] as const) {
+      expect(rows(table)).toEqual(ids.map((id) => ({ id })));
+    }
+    expect(query("SELECT path FROM memory_index_sources ORDER BY path")).toEqual(
+      ids.map((id) => ({ path: id })),
+    );
+    expect(query("SELECT hash FROM memory_embedding_cache")).toEqual(
+      cached ? [{ hash: "cached" }] : [],
+    );
+  };
 
   beforeAll(() => {
     expect(threadId, "Forget conformance uses one in-process admission descriptor").toBe(0);
@@ -155,7 +169,9 @@ describe.skipIf(!connection)("PostgreSQL memory forget transaction", () => {
         entryKeys: ["target"],
         identity: '[["target","target"]]',
       };
+      const beforeRevision = revision();
       expect(backend.execute({ type: "forget.mark", input: lineage })).toEqual({ current: true });
+      expect(revision()).toBe(beforeRevision + 1);
       const purge = {
         type: "forget.purge" as const,
         input: {
@@ -167,31 +183,18 @@ describe.skipIf(!connection)("PostgreSQL memory forget transaction", () => {
       };
       denyCommit = true;
       expect(() => backend.execute(purge)).toThrow("forget authority revoked");
-      expect(rows("memory_index_chunks")).toEqual([{ id: "survivor" }, { id: "target" }]);
-      expect(rows("memory_index_chunks_vec")).toEqual([{ id: "survivor" }, { id: "target" }]);
-      expect(pg().prepare("SELECT path FROM memory_index_sources ORDER BY path").all()).toEqual([
-        { path: "survivor" },
-        { path: "target" },
-      ]);
-      expect(pg().prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([
-        { hash: "cached" },
-      ]);
+      expect(revision()).toBe(beforeRevision + 1);
+      expectProjection(["survivor", "target"], true);
       expect(hasMemorySessionTombstone(database, "main", "target")).toBe(true);
 
       denyCommit = false;
       expect(backend.execute(purge)).toEqual({ current: true });
-      expect(rows("memory_index_chunks")).toEqual([{ id: "survivor" }]);
-      expect(rows("memory_index_chunks_vec")).toEqual([{ id: "survivor" }]);
-      expect(pg().prepare("SELECT path FROM memory_index_sources").all()).toEqual([
-        { path: "survivor" },
-      ]);
-      expect(pg().prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
+      expect(revision()).toBe(beforeRevision + 2);
+      expectProjection(["survivor"], false);
       expect(
-        pg()
-          .prepare(
-            "SELECT id FROM memory_index_chunks WHERE openclaw_search @@ plainto_tsquery('simple', 'target')",
-          )
-          .all(),
+        query(
+          "SELECT id FROM memory_index_chunks WHERE openclaw_search @@ plainto_tsquery('simple', 'target')",
+        ),
       ).toEqual([]);
       expect(
         backend.execute({
@@ -202,6 +205,7 @@ describe.skipIf(!connection)("PostgreSQL memory forget transaction", () => {
       backend.close();
       database.close();
       open();
+      expect(revision()).toBe(beforeRevision + 2);
       expect(hasMemorySessionTombstone(database, "main", "target")).toBe(true);
       expect(readMemoryEntryOriginsInDatabase(database, { agentId: "main" })).toMatchObject([
         { entryKey: "survivor", sessionId: "survivor" },

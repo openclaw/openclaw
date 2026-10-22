@@ -22,7 +22,7 @@ import { waitForFast } from "../test-helpers/wait-for.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import { cronPage } from "./sidebar-attention-store.test-support.ts";
-import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
+import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 import { inboxMention } from "./sidebar-inbox.test-support.ts";
 import "./sidebar-attention.tsx";
@@ -43,12 +43,6 @@ function cronResponse(id?: string, nextRunAtMs?: number) {
 }
 
 const mentionItem = (id: string) => ({ ...inboxMention(id), sessionKey: "agent:writer:review" });
-
-type SidebarAttentionElement = HTMLElement & {
-  context: ApplicationContext;
-  dismissPanel: () => boolean;
-  onNavigate?: ApplicationContext["navigate"];
-};
 
 function authStatus(ts: number, status: "missing" | "ok" = "missing"): ModelAuthStatusResult {
   return { ts, providers: [{ provider: "openai", displayName: "OpenAI", status, profiles: [] }] };
@@ -207,13 +201,13 @@ describe("sidebar attention refresh ownership", () => {
       agents: { state: { agentsList: null }, subscribe: () => () => undefined },
     } as unknown as Parameters<typeof createSidebarAttentionStore>[0];
     const store = createSidebarAttentionStore(sources);
-    store.activate(SidebarAttentionStoreController);
+    store.activate(SidebarAttentionStoreOwner);
     stores.add(store);
     const provider = createApplicationContextProvider({
       ...sources,
       sidebarAttention: store,
     } as unknown as ApplicationContext);
-    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    const element = document.createElement("openclaw-sidebar-attention");
     provider.append(element);
     document.body.append(provider);
 
@@ -222,8 +216,14 @@ describe("sidebar attention refresh ownership", () => {
     return { element, provider, store, trigger };
   }
 
-  it("keeps the plain attention panel inside its top-layer menu surface", async () => {
+  it("prewarms without opening and keeps the attention panel inside its top-layer menu surface", async () => {
     const { element, trigger } = await mountAttention();
+    trigger.focus();
+    await vi.dynamicImportSettled();
+    flush();
+    expect(issues(element, "panel")).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
     trigger.click();
     await vi.dynamicImportSettled();
     flush();
@@ -235,6 +235,128 @@ describe("sidebar attention refresh ownership", () => {
     flush();
     expect(issues(element, "panel")).toBeNull();
     await waitForFast(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("resamples Inbox overflow after resizing while preserving the two-pixel scroll threshold", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    const resized = new Map<Element, () => void>();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class implements ResizeObserver {
+        constructor(private readonly callback: ResizeObserverCallback) {}
+        observe(target: Element) {
+          resized.set(target, () =>
+            this.callback(
+              [
+                {
+                  target,
+                  contentRect: new DOMRectReadOnly(),
+                  borderBoxSize: [],
+                  contentBoxSize: [],
+                  devicePixelContentBoxSize: [],
+                },
+              ],
+              this,
+            ),
+          );
+        }
+        unobserve(target: Element) {
+          resized.delete(target);
+        }
+        disconnect() {
+          resized.clear();
+        }
+      },
+    );
+    const { element, trigger } = await mountAttention();
+    trigger.click();
+    await vi.dynamicImportSettled();
+    flush();
+    const list = issues(element, "panel__list")!;
+    const above = issues(element, "panel__overflow-cue--top")!;
+    const below = issues(element, "panel__overflow-cue--bottom")!;
+    let viewport = 100;
+    Object.defineProperties(list, {
+      scrollHeight: { get: () => 304 },
+      clientHeight: { get: () => viewport },
+    });
+    list.focus();
+    list.scrollTop = 2;
+    list.dispatchEvent(new Event("scroll"));
+    vi.advanceTimersToNextFrame();
+    flush();
+    expect(above.hidden).toBe(true);
+    expect(below.hidden).toBe(false);
+
+    viewport = 302;
+    resized.get(list)?.();
+    vi.advanceTimersToNextFrame();
+    flush();
+    expect(below.hidden).toBe(true);
+    expect(document.activeElement).toBe(list);
+
+    viewport = 100;
+    list.scrollTop = 3;
+    list.dispatchEvent(new Event("scroll"));
+    vi.advanceTimersToNextFrame();
+    flush();
+    expect(above.hidden).toBe(false);
+    element.querySelector<HTMLButtonElement>("#sidebar-issues-tab-mentions")!.click();
+    flush();
+    await Promise.resolve();
+    vi.advanceTimersToNextFrame();
+    flush();
+    expect(list.scrollTop).toBe(0);
+    expect(above.hidden).toBe(true);
+  });
+
+  it("wraps panel focus across collapsed details, expanded actions and an empty tab", async () => {
+    const request = respond({
+      "cron.list": cronResponse(),
+      "cron.status": cronStatus(0),
+      "models.authStatus": authStatus(1),
+    });
+    const harness = createGatewayHarness(mockClient(request));
+    harness.update({ selfUser: { id: "alice", name: "Alice" } });
+    const { element, trigger } = await mountAttention({
+      gateway: harness.gateway,
+      agentSelection: selection("main", null),
+    });
+    await waitForFast(() => expect(issues(element, "button__count")?.textContent).toBe("1"));
+    await openPanel(element, trigger);
+    const details = attention(element, "modelAuthExpired") as HTMLDetailsElement;
+    const first = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")!;
+    const summary = details.querySelector("summary")!;
+    const dismiss = summary.querySelector<HTMLButtonElement>("button")!;
+    const wrap = (from: HTMLElement, shiftKey = false) => {
+      from.focus();
+      const event = new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey,
+        bubbles: true,
+        cancelable: true,
+      });
+      from.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+    };
+
+    expect(details.open).toBe(false);
+    wrap(first, true);
+    expect(document.activeElement).toBe(dismiss);
+
+    summary.click();
+    expect(details.open).toBe(true);
+    const ask = details.querySelector<HTMLButtonElement>(
+      ".sidebar-issues-panel__body .sidebar-issues-panel__action:not(.sidebar-issues-panel__action--primary)",
+    )!;
+    wrap(ask);
+    expect(document.activeElement).toBe(first);
+
+    element.querySelector<HTMLButtonElement>("#sidebar-issues-tab-mentions")!.click();
+    flush();
+    expect(attention(element, "modelAuthExpired")).toBeNull();
+    wrap(issues(element, "panel__list")!);
+    expect(document.activeElement).toBe(element.querySelector(".sidebar-brand__icon[href]"));
   });
 
   it.each([false, true])(
@@ -297,6 +419,24 @@ describe("sidebar attention refresh ownership", () => {
     element.onNavigate = onNavigate;
     issues(element, "button")!.click();
     await waitForFast(() => expect(element.querySelector(".sidebar-mention-row a")).not.toBeNull());
+    const connected = harness.gateway.snapshot;
+    harness.update({ phase: "reconnecting", hello: null, selfUser: null });
+    flush();
+    expect(element.querySelectorAll(".sidebar-mention-row")).toHaveLength(2);
+    expect(
+      element.querySelector<HTMLButtonElement>(
+        ".sidebar-mention-row .sidebar-issues-panel__dismiss",
+      )?.disabled,
+    ).toBe(true);
+    expect(
+      element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")?.disabled,
+    ).toBe(true);
+    harness.update(connected);
+    await waitForFast(() =>
+      expect(
+        element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")?.disabled,
+      ).toBe(false),
+    );
     element.querySelector<HTMLAnchorElement>(".sidebar-mention-row a")!.click();
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith(
       "chat",

@@ -4,14 +4,17 @@ import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import {
   executeExistingOpenClawStateRead,
+  getActiveOpenClawStateDatabaseReadSnapshotAsync,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
   prepareConfigHealthPatch,
+  readConfigHealthReceipt,
   readConfigHealthStateInDatabase,
   writeConfigHealthPatchInDatabase,
 } from "./io.health-state.kernel.js";
@@ -24,6 +27,13 @@ import { setBoundedConfigIoWarningEntry } from "./io.state.js";
 
 // Fresh config snapshots share a database; retain failures until a write recovers.
 const loggedHealthWriteFailures = new Map<string, string>();
+const healthSnapshots = new WeakMap<
+  OpenClawStateWorkerContext["admission"],
+  Map<
+    OpenClawStateWorkerContext["databaseEngineSelection"],
+    { receipt: object; snapshot: ConfigHealthSnapshot }
+  >
+>();
 
 type ConfigHealthStateDeps = {
   env: NodeJS.ProcessEnv;
@@ -145,16 +155,32 @@ export function captureConfigHealthStateStore(
           throw captured.error;
         }
         assertCurrent();
+        const context = captured.context;
+        const options = { path: databasePath, env: context.environment };
+        const receipt =
+          !context.maintenanceScope &&
+          !context.existingSchemaPath &&
+          !(await getActiveOpenClawStateDatabaseReadSnapshotAsync(options))
+            ? readConfigHealthReceipt(databasePath)
+            : undefined;
+        const snapshots = healthSnapshots.get(context.admission) ?? new Map();
+        const cached = snapshots.get(context.databaseEngineSelection);
+        if (receipt && cached?.receipt === receipt) {
+          return cached.snapshot;
+        }
         const reply = await executeExistingOpenClawStateRead(
-          { path: databasePath, env: captured.context.environment },
+          options,
           { type: "config.health.read", input: undefined },
           { context: captured.context },
         );
         assertCurrent();
-        if (reply && (!reply.ok || reply.type !== "config.health.read")) {
-          throw new Error("Unexpected config health read reply");
+        const snapshot = reply?.snapshot ?? { state: {}, basis: {} };
+        if (receipt) {
+          // A concurrent committed write replaces the receipt, retiring this observation.
+          snapshots.set(context.databaseEngineSelection, { receipt, snapshot });
+          healthSnapshots.set(context.admission, snapshots);
         }
-        return reply?.snapshot ?? { state: {}, basis: {} };
+        return snapshot;
       } catch (error) {
         assertCurrent();
         const state = handleHealthReadFailure(error);

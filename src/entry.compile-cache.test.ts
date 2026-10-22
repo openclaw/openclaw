@@ -1,20 +1,12 @@
 // Tests compile-cache child-process spawning and environment propagation.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import fs from "node:fs/promises";
+import { constants } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type Mock,
-  type MockInstance,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Mock, MockInstance } from "vitest";
 import { CLI_PARENT_BOUND_PRELOAD } from "../cli-parent-lifetime.mjs";
 import { awaitGateBeforeSettlement } from "../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
@@ -23,7 +15,6 @@ import {
   WINDOWS_TASK_SUPERVISOR_FLAG,
 } from "./daemon/windows-task-supervisor-contract.js";
 import { createDeferredCore } from "./shared/deferred.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "./test-utils/env.js";
 import { withMockedPlatform } from "./test-utils/vitest-spies.js";
 
 type Spawn = (...args: Parameters<typeof import("node:child_process").spawn>) => ChildProcess;
@@ -53,6 +44,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   return mockNodeBuiltinModule<{ spawn: Spawn }>(
     () => importOriginal<typeof import("node:child_process")>(),
     { spawn },
+    { mirrorToDefault: true },
   );
 });
 vi.mock("./process/child-process-bridge.js", () => ({ attachChildProcessBridge }));
@@ -76,22 +68,13 @@ describe("entry compile cache", () => {
   let spawned: ReturnType<typeof createDeferredCore<void>>;
   const pending: Array<Promise<boolean>> = [];
   let writeStderr: MockInstance<typeof process.stderr.write>;
-  let envSnapshot: ReturnType<typeof captureEnv>;
-
-  beforeEach(async () => {
-    const { constants } = await import("node:module");
+  beforeEach(() => {
     root = tempDirs.make("openclaw-compile-cache-");
     entryFile = path.join(root, "dist", "entry.js");
     argv = [process.execPath, entryFile, "status", "--json"];
-    envSnapshot = captureEnv([
-      "NODE_COMPILE_CACHE",
-      "NODE_DISABLE_COMPILE_CACHE",
-      "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED",
-      "OPENCLAW_PROFILE",
-    ]);
-    setTestEnvValue("NODE_COMPILE_CACHE", path.join(root, ".node-cache"));
-    deleteTestEnvValue("NODE_DISABLE_COMPILE_CACHE");
-    deleteTestEnvValue("OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED");
+    vi.stubEnv("NODE_COMPILE_CACHE", path.join(root, ".node-cache"));
+    vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", undefined);
+    vi.stubEnv("OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED", undefined);
     enableCompileCache.mockReset().mockReturnValue({
       status: constants.compileCacheStatus.ALREADY_ENABLED,
       directory: path.join(root, ".node-cache"),
@@ -116,24 +99,23 @@ describe("entry compile cache", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     child.emit("close", 0, null);
     await Promise.allSettled(pending.splice(0));
     process.exitCode = originalExitCode;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    envSnapshot.restore();
+    vi.unstubAllEnvs();
   });
 
-  function respawnWithoutOpenClawCompileCacheIfNeeded(
-    params: Parameters<typeof respawnCompileCache>[0],
-  ) {
-    const completion = respawnCompileCache(params);
+  function respawn(options: Omit<Parameters<typeof respawnCompileCache>[0], "currentFile"> = {}) {
+    const completion = respawnCompileCache({ currentFile: entryFile, ...options });
     pending.push(completion);
     return completion;
   }
 
-  async function startRespawn(params: Parameters<typeof respawnCompileCache>[0]) {
-    const completion = respawnWithoutOpenClawCompileCacheIfNeeded(params);
+  async function startRespawn() {
+    const completion = respawn();
     await awaitGateBeforeSettlement(
       spawned.promise,
       completion,
@@ -142,11 +124,14 @@ describe("entry compile cache", () => {
     return { completion };
   }
 
-  async function markSourceCheckout() {
-    await fs.mkdir(path.join(root, "src"), { recursive: true });
+  function useSourceEntry() {
+    // The respawn policy classifies the entry extension; it never reads this file.
     entryFile = path.join(root, "src", "entry.ts");
     argv[1] = entryFile;
-    await fs.writeFile(entryFile, "export {};\n", "utf8");
+  }
+
+  function enableCache(env: NodeJS.ProcessEnv = {}) {
+    enableOpenClawCompileCache({ currentFile: entryFile, env, installRoot: root });
   }
 
   it("resolves install roots from source and dist entry paths", () => {
@@ -155,47 +140,30 @@ describe("entry compile cache", () => {
     expect(resolveEntryInstallRoot("/pkg/openclaw/entry.js")).toBe("/pkg/openclaw");
   });
 
-  it.each(["git", "source", "package"])(
-    "activates compiled worker cache for an enabled %s install",
-    async (kind) => {
-      argv = [process.execPath, entryFile, "gateway", "run"];
-      if (kind === "git") {
-        await fs.writeFile(path.join(root, ".git"), "gitdir: .git/worktrees/openclaw\n", "utf8");
-      } else if (kind === "source") {
-        await fs.mkdir(path.join(root, "src"));
-        await fs.writeFile(path.join(root, "src", "entry.ts"), "export {};\n");
-      }
-      enableOpenClawCompileCache({ currentFile: entryFile, env: {}, installRoot: root });
-      expect(enableCompileCache).toHaveBeenCalledTimes(1);
-      enableOpenClawCompileCache({
-        currentFile: entryFile,
-        env: { NODE_DISABLE_COMPILE_CACHE: "1" },
-        installRoot: root,
-      });
-      setTestEnvValue("NODE_DISABLE_COMPILE_CACHE", "1");
-      enableOpenClawCompileCache({ currentFile: entryFile, installRoot: root });
-      expect(enableCompileCache).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("activates compiled worker cache unless explicitly disabled", () => {
+    argv = [process.execPath, entryFile, "gateway", "run"];
+    enableCache();
+    expect(enableCompileCache).toHaveBeenCalledTimes(1);
+    enableCache({ NODE_DISABLE_COMPILE_CACHE: "1" });
+    vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", "1");
+    enableOpenClawCompileCache({ currentFile: entryFile, installRoot: root });
+    expect(enableCompileCache).toHaveBeenCalledTimes(1);
+  });
 
   it.each([
     ["gateway", WINDOWS_TASK_SUPERVISOR_FLAG],
     ["gateway", "run", `${WINDOWS_TASK_SUPERVISOR_CHILD_FLAG}=65536`],
   ])("keeps worker caching for Windows service arguments: %j", (...args) => {
     argv = [process.execPath, entryFile, ...args];
-    enableOpenClawCompileCache({ currentFile: entryFile, env: {}, installRoot: root });
+    enableCache();
     expect(enableCompileCache).toHaveBeenCalledTimes(1);
   });
 
   it("keeps compiled one-shot commands free of automatic exit-time cache work", () => {
     argv = [process.execPath, entryFile, "config", "set", "gateway.mode", "local"];
-    enableOpenClawCompileCache({ currentFile: entryFile, env: {}, installRoot: root });
+    enableCache();
     expect(enableCompileCache).not.toHaveBeenCalled();
-    enableOpenClawCompileCache({
-      currentFile: entryFile,
-      env: { NODE_COMPILE_CACHE: path.join(root, ".requested-cache") },
-      installRoot: root,
-    });
+    enableCache({ NODE_COMPILE_CACHE: path.join(root, ".requested-cache") });
     expect(enableCompileCache).toHaveBeenCalledOnce();
   });
 
@@ -203,7 +171,7 @@ describe("entry compile cache", () => {
     argv = [process.execPath, entryFile, "gateway", "run"];
     vi.spyOn(os, "tmpdir").mockReturnValue(path.join(root, "x".repeat(200)));
     withMockedPlatform("win32", () => {
-      enableOpenClawCompileCache({ currentFile: entryFile, env: {}, installRoot: root });
+      enableCache();
     });
     expect(enableCompileCache).not.toHaveBeenCalled();
     expect(writeStderr).toHaveBeenCalledExactlyOnceWith(
@@ -227,55 +195,51 @@ describe("entry compile cache", () => {
     expect(env.NODE_COMPILE_CACHE).toBe(directory);
   });
 
-  it.each(["inherited", "active"])(
-    "runs a one-shot no-cache respawn for an %s cache",
-    async (cache) => {
-      await markSourceCheckout();
-      if (cache === "active") {
-        deleteTestEnvValue("NODE_COMPILE_CACHE");
-        getCompileCacheDir.mockReturnValue(path.join(root, ".active-cache"));
-      }
-      const { completion } = await startRespawn({ currentFile: entryFile });
-      expect(spawn).toHaveBeenCalledOnce();
-      const [command, args, options] = expectDefined(spawn.mock.calls[0], "respawn call");
-      expect(command).toBe(process.execPath);
-      expect(args).toEqual([
-        "--import",
-        CLI_PARENT_BOUND_PRELOAD,
-        "--no-warnings",
-        entryFile,
-        "status",
-        "--json",
-      ]);
-      expect(options?.env?.NODE_DISABLE_COMPILE_CACHE).toBe("1");
-      expect(options?.env?.OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED).toBe("1");
-      expect(options?.env?.NODE_COMPILE_CACHE).toBeUndefined();
-      expect(options?.stdio).toEqual(["inherit", "inherit", "inherit", "ipc"]);
-      expect(options?.detached).toBe(
-        process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
-      );
-      expect(attachChildProcessBridge).toHaveBeenCalledWith(child, {
-        onSignal: expect.any(Function),
-      });
-      child.emit("exit", 0, null);
-      expect(process.exitCode).toBe(17);
-      child.emit("close", 0, null);
-      await expect(completion).resolves.toBe(true);
-      expect(process.exitCode).toBe(0);
-      expect(writeStderr).not.toHaveBeenCalled();
-    },
-  );
-
-  it("passes only CLI args and the parent marker through a standalone cache respawn", async () => {
-    await markSourceCheckout();
-    vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${root}/`).href);
-    const { completion } = await startRespawn({ currentFile: entryFile });
-    const [command, args, options] = expectDefined(spawn.mock.calls[0], "standalone cache respawn");
-    expect(command).toBe(process.execPath);
-    expect(args).toEqual(["status", "--json"]);
-    expect(options?.env?.OPENCLAW_CLI_RESPAWN_PARENT).toBe(String(process.pid));
+  it.each([
+    { mode: "inherited", cli: ["status", "--json"] },
+    { mode: "active", cli: ["status", "--json"] },
+    { mode: "standalone", cli: ["status", "--json"] },
+    { mode: "interactive", cli: [] },
+    { mode: "interactive", cli: ["tui"] },
+  ])("respawns $mode without caching: $cli", async ({ mode, cli }) => {
+    useSourceEntry();
+    argv = [process.execPath, entryFile, ...cli];
+    if (mode === "active") {
+      vi.stubEnv("NODE_COMPILE_CACHE", undefined);
+      getCompileCacheDir.mockReturnValue(path.join(root, ".active-cache"));
+    }
+    const standalone = mode === "standalone";
+    if (standalone) {
+      vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${root}/`).href);
+    }
+    const { completion } = await startRespawn();
+    expect(spawn).toHaveBeenCalledOnce();
+    const [command, args, options] = expectDefined(spawn.mock.calls[0], "respawn call");
+    expect({ command, args, options }).toMatchObject({
+      command: process.execPath,
+      args: standalone
+        ? cli
+        : ["--import", CLI_PARENT_BOUND_PRELOAD, "--no-warnings", entryFile, ...cli],
+      options: {
+        env: { NODE_DISABLE_COMPILE_CACHE: "1", OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1" },
+        stdio: ["inherit", "inherit", "inherit", "ipc"],
+        detached:
+          mode !== "interactive" &&
+          process.platform !== "win32" &&
+          !(process.stdin.isTTY || process.stdout.isTTY),
+      },
+    });
+    expect(options?.env?.NODE_COMPILE_CACHE).toBeUndefined();
+    if (standalone) {
+      expect(options?.env?.OPENCLAW_CLI_RESPAWN_PARENT).toBe(String(process.pid));
+    }
+    expect(attachChildProcessBridge).toHaveBeenCalledWith(child, expect.any(Function));
+    child.emit("exit", 0, null);
+    expect(process.exitCode).toBe(17);
     child.emit("close", 0, null);
     await expect(completion).resolves.toBe(true);
+    expect(process.exitCode).toBe(0);
+    expect(writeStderr).not.toHaveBeenCalled();
   });
 
   const commands = {
@@ -291,27 +255,19 @@ describe("entry compile cache", () => {
     ["gmail", "win32", "source", false],
     ["gateway", "linux", "source", false],
     ["status", "linux", "package", false],
-    ["status", "linux", "compiled", false],
     ["status", "linux", "respawned", false],
   ] as const)(
     "respects %s/%s respawn policy for %s",
     async (command, platform, install, respawns) => {
-      if (install === "compiled") {
-        await fs.writeFile(path.join(root, ".git"), "gitdir: fixture\n");
-      } else if (install !== "package") {
-        await markSourceCheckout();
+      if (install !== "package") {
+        useSourceEntry();
       }
       if (install === "respawned") {
-        setTestEnvValue("OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED", "1");
-      }
-      if (command === "hooks" || command === "gmail") {
-        entryFile = path.join(root, "src", "entry.ts");
+        vi.stubEnv("OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED", "1");
       }
       argv = [process.execPath, entryFile, ...commands[command]];
       await withMockedPlatform(platform, async () => {
-        const completion = respawnWithoutOpenClawCompileCacheIfNeeded({
-          currentFile: entryFile,
-        });
+        const completion = respawn();
         if (respawns) {
           await spawned.promise;
           child.emit("close", 0, null);
@@ -322,67 +278,49 @@ describe("entry compile cache", () => {
     },
   );
 
-  it.each([[], ["tui"]])("keeps interactive no-cache respawns attached: %j", async (...command) => {
-    await markSourceCheckout();
-    argv = [process.execPath, entryFile, ...command];
-    const { completion } = await startRespawn({ currentFile: entryFile });
-    expect(expectDefined(spawn.mock.calls[0], "respawn call")[2]?.detached).toBe(false);
-    child.emit("close", 0, null);
-    await completion;
-  });
-
   it.each(["linux", "win32"] as const)(
     "waits for a signaled compile-cache respawn child after force-killing it on %s",
     async (platform) => {
-      await markSourceCheckout();
+      useSourceEntry();
       argv = [process.execPath, entryFile, "tui"];
       vi.useFakeTimers();
-      try {
-        await withMockedPlatform(platform, async () => {
-          const { completion } = await startRespawn({
-            currentFile: entryFile,
-          });
-          const [, options] = expectDefined(attachChildProcessBridge.mock.calls[0], "bridge call");
-          expectDefined(options?.onSignal, "signal handler")("SIGTERM");
-          vi.advanceTimersByTime(1_000);
-          expect(kill).toHaveBeenCalledWith("SIGTERM");
-          expect(process.exitCode).toBe(17);
-          vi.advanceTimersByTime(1_000);
-          expect(kill).toHaveBeenCalledWith(platform === "win32" ? "SIGTERM" : "SIGKILL");
-          expect(process.exitCode).toBe(17);
+      await withMockedPlatform(platform, async () => {
+        const { completion } = await startRespawn();
+        const [, onSignal] = expectDefined(attachChildProcessBridge.mock.calls[0], "bridge call");
+        expectDefined(onSignal, "signal handler")("SIGTERM");
+        vi.advanceTimersByTime(1_000);
+        expect(kill).toHaveBeenCalledWith("SIGTERM");
+        expect(process.exitCode).toBe(17);
+        vi.advanceTimersByTime(1_000);
+        expect(kill).toHaveBeenCalledWith(platform === "win32" ? "SIGTERM" : "SIGKILL");
+        expect(process.exitCode).toBe(17);
+        expect(processKill).not.toHaveBeenCalled();
+        child.emit("exit", null, "SIGKILL");
+        expect(process.exitCode).toBe(17);
+        expect(processKill).not.toHaveBeenCalled();
+        child.emit("close", null, "SIGKILL");
+        await expect(completion).resolves.toBe(true);
+        expect(process.exitCode).toBe(platform === "win32" ? 1 : 137);
+        if (platform === "win32") {
           expect(processKill).not.toHaveBeenCalled();
-          child.emit("exit", null, "SIGKILL");
-          expect(process.exitCode).toBe(17);
-          expect(processKill).not.toHaveBeenCalled();
-          child.emit("close", null, "SIGKILL");
-          await expect(completion).resolves.toBe(true);
-          expect(process.exitCode).toBe(platform === "win32" ? 1 : 137);
-          if (platform === "win32") {
-            expect(processKill).not.toHaveBeenCalled();
-          } else {
-            expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, "SIGKILL");
-          }
-        });
-      } finally {
-        vi.useRealTimers();
-      }
+        } else {
+          expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, "SIGKILL");
+        }
+      });
     },
   );
 
   it("awaits diagnostic setup while preserving the child environment snapshot", async () => {
-    await markSourceCheckout();
-    setTestEnvValue("OPENCLAW_PROFILE", "before-diagnostics");
+    useSourceEntry();
+    vi.stubEnv("OPENCLAW_PROFILE", "before-diagnostics");
     const writer = createDeferredCore<(message: string) => void>();
     const writeError = vi.fn();
     const prepareWriteError = vi.fn(() => writer.promise);
-    const diagnosticCompletion = respawnWithoutOpenClawCompileCacheIfNeeded({
-      currentFile: entryFile,
-      prepareWriteError,
-    });
+    const diagnosticCompletion = respawn({ prepareWriteError });
     try {
       expect(prepareWriteError).toHaveBeenCalledOnce();
       expect(spawn).not.toHaveBeenCalled();
-      setTestEnvValue("OPENCLAW_PROFILE", "after-diagnostics");
+      vi.stubEnv("OPENCLAW_PROFILE", "after-diagnostics");
     } finally {
       writer.resolve(writeError);
       await spawned.promise;

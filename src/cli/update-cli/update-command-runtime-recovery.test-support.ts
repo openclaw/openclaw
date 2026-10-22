@@ -53,16 +53,6 @@ export function mockNonContainerSystemRuntime(): void {
   vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
 }
 
-export const alreadyCurrentConvergenceCases = [
-  { restart: true, running: true, failure: undefined },
-  { restart: false, running: true, failure: undefined },
-  { restart: true, running: false, failure: undefined },
-  { restart: true, running: true, failure: "doctor" },
-  { restart: true, running: true, failure: "stop" },
-  { restart: true, running: true, failure: undefined, platform: "linux" as const },
-  { restart: true, running: true, failure: "changed owner" },
-];
-
 export function expectedRuntimeSelectionCommand(manager: "nvm" | "fnm", version: string): string {
   return process.platform === "win32"
     ? `${manager} install ${version}; if ($LASTEXITCODE -eq 0) { ${manager} use ${version} }`

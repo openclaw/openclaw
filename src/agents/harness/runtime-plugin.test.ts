@@ -116,7 +116,7 @@ function harnessManifests(
 const mocks = vi.hoisted(() => ({
   resolveActivatableProviderOwnerPluginIds: vi.fn(),
   resolveBundledProviderCompatPluginIds: vi.fn(),
-  resolveManifestActivationPlan: vi.fn(),
+  resolveManifestActivationPluginIds: vi.fn(),
   resolveOwningPluginIdsForProvider: vi.fn(),
 }));
 
@@ -178,8 +178,9 @@ vi.mock("../../plugins/providers.js", () => ({
   resolveOwningPluginIdsForProviderRef: mocks.resolveOwningPluginIdsForProvider,
 }));
 
-vi.mock("../../plugins/activation-planner.js", () => ({
-  resolveManifestActivationPlan: mocks.resolveManifestActivationPlan,
+vi.mock("../../plugins/activation-planner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/activation-planner.js")>()),
+  resolveManifestActivationPluginIds: mocks.resolveManifestActivationPluginIds,
 }));
 
 describe("harness runtime plugins", () => {
@@ -187,9 +188,7 @@ describe("harness runtime plugins", () => {
     mocks.resolveActivatableProviderOwnerPluginIds.mockReset().mockReturnValue([]);
     mocks.resolveBundledProviderCompatPluginIds.mockReset().mockReturnValue([]);
     mocks.resolveOwningPluginIdsForProvider.mockReset().mockReturnValue(undefined);
-    mocks.resolveManifestActivationPlan.mockReset().mockReturnValue({
-      entries: [{ pluginId: "codex", origin: "bundled" }],
-    });
+    mocks.resolveManifestActivationPluginIds.mockReset().mockReturnValue(["codex"]);
   });
 
   it.each([
@@ -381,7 +380,7 @@ describe("harness runtime plugins", () => {
   it("includes the selected provider owner when policy selects an omitted harness", () => {
     mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(["openai"]);
     mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce(["openai"]);
-    mocks.resolveManifestActivationPlan.mockReturnValueOnce({ entries: [] });
+    mocks.resolveManifestActivationPluginIds.mockReturnValueOnce([]);
     const plan = runtimePlan({
       config: { plugins: { allow: ["openai"] } },
       selections: [{ provider: "openai", modelId: "gpt-5" }],
@@ -501,9 +500,7 @@ describe("harness runtime plugins", () => {
   });
 
   it("checks restrictive allowlists against the selected harness owner plugin id", () => {
-    mocks.resolveManifestActivationPlan.mockReturnValueOnce({
-      entries: [{ pluginId: "custom-harness-plugin", origin: "workspace" }],
-    });
+    mocks.resolveManifestActivationPluginIds.mockReturnValueOnce(["custom-harness-plugin"]);
     const plan = loadPlan({
       metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { allow: ["custom-harness-plugin"] } },
@@ -549,7 +546,7 @@ describe("harness runtime plugins", () => {
   });
 
   it("reports a harness unavailable when no enabled owner plugin can activate", () => {
-    mocks.resolveManifestActivationPlan.mockReturnValueOnce({ entries: [] });
+    mocks.resolveManifestActivationPluginIds.mockReturnValueOnce([]);
     expect(availability()).toEqual({
       status: "unavailable",
       ownerPluginIds: [],

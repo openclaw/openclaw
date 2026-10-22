@@ -13,40 +13,51 @@ import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { tryRunDoctorResultBridge } from "./run-main-doctor-result.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+const resultEnv = "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH";
+const warning = "conditional fixture warning";
+const stopped = expect.stringContaining("every tracked process group stopped");
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   process.exitCode = undefined;
 });
 
-it
-  .skipIf(process.platform === "win32")
-  .each([
-    "normal",
-    "interrupted",
+it.skipIf(process.platform === "win32").each([
+  ["normal", { status: "ok", warnings: [warning] }, undefined],
+  ["interrupted", undefined, 1],
+  [
     "unsettled",
-    "completed-cleanup",
-    "plain-nonzero",
-    "required-refusal",
-    "required-error",
-  ])("joins the real stdout Doctor IPC parent and child (%s)", async (mode) => {
-  const root = fs.realpathSync(directories.make("doctor-stdout-"));
-  const privateTmp = path.join(root, "private-tmp");
-  fs.mkdirSync(privateTmp, { mode: 0o700 });
-  const { databasePath } = installPrivateUpdateHandoffStore(privateTmp);
-  const childGuard = writePrivateUpdateHandoffChildGuard(databasePath, privateTmp);
-  const source = path.resolve("src");
-  const fixture = path.join(root, "doctor.mjs");
-  const identity = path.join(root, "writer-pid");
-  const stale = path.join(root, "-.processes");
-  const staleBytes =
-    '{"nonce":"previous-fixture","pid":123,"runId":"previous-interrupted-doctor","slots":[]}';
-  fs.writeFileSync(stale, staleBytes);
-  const moduleUrl = (relative: string) => pathToFileURL(path.join(source, relative)).href;
-  fs.writeFileSync(
-    fixture,
-    `
+    {
+      status: "error",
+      failureFacts: [expect.objectContaining({ code: "doctor-processes-unsettled" })],
+    },
+    undefined,
+  ],
+  ["completed-cleanup", { status: "ok", warnings: expect.arrayContaining([warning, stopped]) }, 0],
+  ["plain-nonzero", undefined, 1],
+  ["required-refusal", { maintenanceRefusal: { reason: "agent-database-in-use" } }, 1],
+  ["required-error", { status: "error" }, 1],
+] as const)(
+  "joins the real stdout Doctor IPC parent and child (%s)",
+  async (mode, result, exitCode) => {
+    const root = fs.realpathSync(directories.make("doctor-stdout-"));
+    const privateTmp = path.join(root, "private-tmp");
+    fs.mkdirSync(privateTmp, { mode: 0o700 });
+    const { databasePath } = installPrivateUpdateHandoffStore(privateTmp);
+    const childGuard = writePrivateUpdateHandoffChildGuard(databasePath, privateTmp);
+    const source = path.resolve("src");
+    const fixture = path.join(root, "doctor.mjs");
+    const identity = path.join(root, "writer-pid");
+    const stale = path.join(root, "-.processes");
+    const staleBytes =
+      '{"nonce":"previous-fixture","pid":123,"runId":"previous-interrupted-doctor","slots":[]}';
+    fs.writeFileSync(stale, staleBytes);
+    const moduleUrl = (relative: string) => pathToFileURL(path.join(source, relative)).href;
+    fs.writeFileSync(
+      fixture,
+      `
       import fs from 'node:fs';
+      import assert from 'node:assert/strict';
       const mode = ${JSON.stringify(mode)};
       const resultPath = process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
       let custody;
@@ -56,13 +67,11 @@ it
         ({withCommandProcessScope,spawnCommand}=await import(${JSON.stringify(moduleUrl("process/exec-spawn.ts"))}));
         if (mode === 'normal') {
           process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = '-';
-          let refused = false;
-          try { await owner.retainUpdateDoctorProcesses(); }
-          catch (error) {
-            if (error.message !== 'Doctor process custody does not match its delegated invocation.') throw error;
-            refused = true;
+          try {
+            await assert.rejects(owner.retainUpdateDoctorProcesses(), {
+              message: 'Doctor process custody does not match its delegated invocation.',
+            });
           } finally { process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = resultPath; }
-          if (!refused) throw new Error('Legacy stdout custody unexpectedly accepted the stale receipt');
           process.stdout.write('fixture-legacy-refusal\\n');
         }
         custody = await owner.retainUpdateDoctorProcesses();
@@ -73,10 +82,10 @@ it
         fs.writeFileSync(resultPath+'.processes',JSON.stringify(receipt));
       }
       const writeResult = (result) => fs.writeFileSync(resultPath, JSON.stringify(result), {flag:'wx', mode:0o600});
-      if (${JSON.stringify(mode)} === 'unsettled') {
+      if (mode === 'unsettled') {
         custody.reserve([process.execPath, '-e', 'process.stdin.resume()']);
         writeResult({status:'ok'});
-      } else if (${JSON.stringify(mode)} === 'interrupted') {
+      } else if (mode === 'interrupted') {
         await withCommandProcessScope(async () => {
           const writer = spawnCommand([process.execPath, '-e', 'process.stdin.resume()'], {stdio:['pipe','ignore','ignore']});
           await new Promise((resolve, reject) => { writer.nodeChildProcess.once('spawn',resolve); writer.nodeChildProcess.once('error',reject); });
@@ -98,91 +107,59 @@ it
       }
       custody?.[Symbol.dispose]();
       `,
-  );
-  let childEnv = childGuard({ ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") });
-  childEnv = withRuntimePreload(childEnv, path.resolve("scripts/tsx.mjs"));
-  for (const key of ["NODE_OPTIONS", "BUN_OPTIONS", "OPENCLAW_STATE_DIR"]) {
-    vi.stubEnv(key, childEnv[key]);
-  }
-  vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", "-");
-  const controller = new AbortController();
-  let output = "";
-  vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-    output += String(chunk);
-    if (mode === "interrupted" && output.includes("fixture-writer-ready")) {
-      controller.abort();
-    }
-    return true;
-  });
-  let stderr = "";
-  vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-    stderr += String(chunk);
-    return true;
-  });
-  vi.spyOn(process, "cwd").mockReturnValue(root);
-  await withCommandProcessScope(
-    () =>
-      tryRunDoctorResultBridge([process.execPath, fixture, "doctor", "--fix", "--non-interactive"]),
-    controller.signal,
-  ).catch((error: unknown) => {
-    if (mode === "unsettled") {
-      expect(error).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
-    } else if (mode !== "interrupted") {
-      throw error;
-    }
-  });
-  const line = output
-    .split("\n")
-    .findLast((item) => item.startsWith("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH="));
-  if (mode === "plain-nonzero" || mode === "interrupted") {
-    expect(line, output).toBeUndefined();
-    expect(process.exitCode).toBe(1);
-    expect(fs.readFileSync(stale, "utf8")).toBe(staleBytes);
-    expect(fs.readdirSync(privateTmp).filter((name) => name.endsWith(".json.processes"))).toEqual(
-      [],
     );
-    if (mode === "interrupted") {
-      expect(fs.existsSync(identity), stderr).toBe(true);
-      expect(isChildProcessTreeAlive({ pid: Number(fs.readFileSync(identity, "utf8")) })).toBe(
-        false,
-      );
+    let childEnv = childGuard({ ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") });
+    childEnv = withRuntimePreload(childEnv, path.resolve("scripts/tsx.mjs"));
+    for (const key of ["NODE_OPTIONS", "BUN_OPTIONS", "OPENCLAW_STATE_DIR"]) {
+      vi.stubEnv(key, childEnv[key]);
     }
-    return;
-  }
-  expect(line, output).toBeDefined();
-  const result = JSON.parse(line!.slice("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH=".length));
-  expect(fs.readFileSync(stale, "utf8")).toBe(staleBytes);
-  const receipts = fs.readdirSync(privateTmp).filter((name) => name.endsWith(".json.processes"));
-  if (mode === "normal") {
-    expect(output).toContain("fixture-legacy-refusal");
-    expect(result, stderr).toMatchObject({
-      status: "ok",
-      warnings: ["conditional fixture warning"],
-    });
-    expect(receipts).toEqual([]);
-  } else if (mode === "unsettled") {
-    expect(result).toMatchObject({
-      status: "error",
-      failureFacts: [expect.objectContaining({ code: "doctor-processes-unsettled" })],
-    });
-    expect(receipts).toHaveLength(1);
-  } else if (mode === "completed-cleanup") {
-    expect(result).toMatchObject({
-      status: "ok",
-      warnings: expect.arrayContaining([
-        "conditional fixture warning",
-        expect.stringContaining("every tracked process group stopped"),
-      ]),
-    });
-    expect(process.exitCode).toBe(0);
-    expect(receipts).toEqual([]);
-  } else if (mode === "required-error") {
-    expect(result.status).toBe("error");
-    expect(process.exitCode).toBe(1);
-    expect(receipts).toEqual([]);
-  } else if (mode === "required-refusal") {
-    expect(result.maintenanceRefusal).toMatchObject({ reason: "agent-database-in-use" });
-    expect(process.exitCode).toBe(1);
-    expect(receipts).toEqual([]);
-  }
-});
+    vi.stubEnv(resultEnv, "-");
+    const controller = new AbortController();
+    const captured = { stdout: "", stderr: "" };
+    for (const stream of ["stdout", "stderr"] as const) {
+      vi.spyOn(process[stream], "write").mockImplementation((chunk) => {
+        captured[stream] += String(chunk);
+        if (mode === "interrupted" && captured.stdout.includes("fixture-writer-ready")) {
+          controller.abort();
+        }
+        // Backpressure must not cancel an owned Doctor process.
+        return stream !== "stdout" || mode !== "normal";
+      });
+    }
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    const argv = [process.execPath, fixture, "doctor", "--fix", "--non-interactive"];
+    await withCommandProcessScope(() => tryRunDoctorResultBridge(argv), controller.signal).catch(
+      (error: unknown) => {
+        if (mode === "unsettled") {
+          expect(error).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+        } else if (mode !== "interrupted") {
+          throw error;
+        }
+      },
+    );
+    const { stdout: output, stderr } = captured;
+    const line = output.split("\n").findLast((item) => item.startsWith(`${resultEnv}=`));
+    expect(fs.readFileSync(stale, "utf8")).toBe(staleBytes);
+    expect(
+      fs.readdirSync(privateTmp).filter((name) => name.endsWith(".json.processes")),
+    ).toHaveLength(mode === "unsettled" ? 1 : 0);
+    if (exitCode !== undefined) {
+      expect(process.exitCode).toBe(exitCode);
+    }
+    if (!result) {
+      expect(line, output).toBeUndefined();
+      if (mode === "interrupted") {
+        expect(fs.existsSync(identity), stderr).toBe(true);
+        expect(isChildProcessTreeAlive({ pid: Number(fs.readFileSync(identity, "utf8")) })).toBe(
+          false,
+        );
+      }
+      return;
+    }
+    expect(line, output).toBeDefined();
+    expect(JSON.parse(line!.slice(resultEnv.length + 1)), stderr).toMatchObject(result);
+    if (mode === "normal") {
+      expect(output).toContain("fixture-legacy-refusal");
+    }
+  },
+);

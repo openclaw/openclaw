@@ -26,6 +26,30 @@ beforeAll(async () => {
 
 installMinimaxProviderHttpMockCleanup();
 
+const requestOverrides = {
+  allowPrivateNetwork: true,
+  headers: { "X-MiniMax-Video-Policy": "enabled" },
+};
+
+function videoConfig(provider = "minimax", baseUrl = "https://api.minimax.io") {
+  return {
+    models: { providers: { [provider]: { baseUrl, models: [], request: requestOverrides } } },
+  };
+}
+
+function mockVideoDownload(mimeType = "video/mp4", bytes = "mp4-bytes") {
+  fetchWithTimeoutMock.mockResolvedValueOnce({
+    headers: new Headers({ "content-type": mimeType }),
+    arrayBuffer: async () => Buffer.from(bytes),
+  });
+}
+
+function expectPolicyFetch(index: number, url: string) {
+  const call = expectMinimaxGuardedFetchCall(index, url);
+  expect((call.init.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
+  expectAllowPrivateNetworkPolicy(call.options);
+}
+
 function videoRequest(overrides: Partial<VideoGenerationRequest> = {}): VideoGenerationRequest {
   return {
     provider: "minimax",
@@ -111,12 +135,25 @@ describe("minimax video generation provider", () => {
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
+  it.each(["constructor", "__proto__", "hasOwnProperty", "unknown-model"])(
+    "preserves requested options for unknown model %s without inherited constraints",
+    async (model) => {
+      mockVideoTask("unknown-model-task", { video_url: "https://example.com/out.mp4" });
+      mockVideoDownload("video/mp4", "synthetic-video");
+      await buildMinimaxVideoGenerationProvider().generateVideo(
+        videoRequest({ model, durationSeconds: 5, resolution: "720P" }),
+      );
+      expect(mockCallArg(postJsonRequestMock).body).toMatchObject({
+        model,
+        duration: 5,
+        resolution: "720P",
+      });
+    },
+  );
+
   it("creates a task, polls status, and downloads the generated video", async () => {
     mockVideoTask("task-123", { video_url: "https://example.com/out.mp4", file_id: "file-1" });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      headers: new Headers({ "content-type": "video/webm" }),
-      arrayBuffer: async () => Buffer.from("webm-bytes"),
-    });
+    mockVideoDownload("video/webm", "webm-bytes");
 
     const provider = buildMinimaxVideoGenerationProvider();
     const result = await provider.generateVideo(
@@ -125,70 +162,35 @@ describe("minimax video generation provider", () => {
 
     const request = mockCallArg(postJsonRequestMock);
     expect(request.url).toBe("https://api.minimax.io/v1/video_generation");
-    const body = request.body as Record<string, unknown>;
-    expect(body.duration).toBe(6);
-    expect(body.resolution).toBe("768P");
+    expect(request.body).toMatchObject({ duration: 6, resolution: "768P" });
     expect(result.videos).toHaveLength(1);
     expect(result.videos[0]?.fileName).toBe("video-1.webm");
-    expect(result.metadata?.taskId).toBe("task-123");
-    expect(result.metadata?.fileId).toBe("file-1");
+    expect(result.metadata).toMatchObject({ taskId: "task-123", fileId: "file-1" });
   });
 
   it.each([{ name: "missing", filename: undefined, expectedFileName: "video-1.webm" }])(
     "downloads via file_id with a $name filename when status omits video_url",
     async ({ filename, expectedFileName }) => {
-      const requestOverrides = {
-        allowPrivateNetwork: true,
-        headers: { "X-MiniMax-Video-Policy": "enabled" },
-      };
       mockVideoTask("task-456", { file_id: "file-9" });
-      fetchWithTimeoutMock
-        .mockResolvedValueOnce(
-          jsonResponse({
-            file: {
-              file_id: "file-9",
-              filename,
-              download_url: "https://example.com/download.mp4",
-            },
-            base_resp: { status_code: 0 },
-          }),
-        )
-        .mockResolvedValueOnce({
-          headers: new Headers({ "content-type": "video/webm" }),
-          arrayBuffer: async () => Buffer.from("webm-bytes"),
-        });
-
-      const provider = buildMinimaxVideoGenerationProvider();
-      const result = await provider.generateVideo(
-        videoRequest({
-          cfg: {
-            models: {
-              providers: {
-                minimax: {
-                  baseUrl: "https://api.minimax.io",
-                  models: [],
-                  request: requestOverrides,
-                },
-              },
-            },
+      fetchWithTimeoutMock.mockResolvedValueOnce(
+        jsonResponse({
+          file: {
+            file_id: "file-9",
+            filename,
+            download_url: "https://example.com/download.mp4",
           },
+          base_resp: { status_code: 0 },
         }),
       );
+      mockVideoDownload("video/webm", "webm-bytes");
+
+      const provider = buildMinimaxVideoGenerationProvider();
+      const result = await provider.generateVideo(videoRequest({ cfg: videoConfig() }));
 
       expectMinimaxFetchCall(1, "https://api.minimax.io/v1/files/retrieve?file_id=file-9");
       expectMinimaxFetchCall(2, "https://example.com/download.mp4");
-      const statusFetch = expectMinimaxGuardedFetchCall(
-        0,
-        "https://api.minimax.io/v1/query/video_generation?task_id=task-456",
-      );
-      expect((statusFetch.init.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
-      expectAllowPrivateNetworkPolicy(statusFetch.options);
-      const metadataFetch = expectMinimaxGuardedFetchCall(
-        1,
-        "https://api.minimax.io/v1/files/retrieve?file_id=file-9",
-      );
-      expect((metadataFetch.init.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
-      expectAllowPrivateNetworkPolicy(metadataFetch.options);
+      expectPolicyFetch(0, "https://api.minimax.io/v1/query/video_generation?task_id=task-456");
+      expectPolicyFetch(1, "https://api.minimax.io/v1/files/retrieve?file_id=file-9");
       expectAllowPrivateNetworkPolicy(
         expectMinimaxGuardedFetchCall(2, "https://example.com/download.mp4").options,
       );
@@ -198,68 +200,21 @@ describe("minimax video generation provider", () => {
         mimeType: "video/webm",
         fileName: expectedFileName,
       });
-      expect(result.metadata?.taskId).toBe("task-456");
-      expect(result.metadata?.fileId).toBe("file-9");
+      expect(result.metadata).toMatchObject({ taskId: "task-456", fileId: "file-9" });
       expect(result.metadata?.videoUrl).toBeUndefined();
     },
   );
 
   it("retries guarded video status polling while preserving request policy", async () => {
-    const requestOverrides = {
-      allowPrivateNetwork: true,
-      headers: { "X-MiniMax-Video-Policy": "enabled" },
-    };
-    postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
-        task_id: "task-retry",
-        base_resp: { status_code: 0 },
-      }),
-      release: vi.fn(async () => {}),
-    });
-    fetchWithTimeoutMock
-      .mockRejectedValueOnce(new Error("request timeout"))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          task_id: "task-retry",
-          status: "Success",
-          video_url: "https://example.com/retry.mp4",
-          base_resp: { status_code: 0 },
-        }),
-      )
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+    fetchWithTimeoutMock.mockRejectedValueOnce(new Error("request timeout"));
+    mockVideoTask("task-retry", { video_url: "https://example.com/retry.mp4" });
+    mockVideoDownload();
 
     const provider = buildMinimaxVideoGenerationProvider();
-    const result = await provider.generateVideo(
-      videoRequest({
-        cfg: {
-          models: {
-            providers: {
-              minimax: {
-                baseUrl: "https://api.minimax.io",
-                models: [],
-                request: requestOverrides,
-              },
-            },
-          },
-        },
-      }),
-    );
+    const result = await provider.generateVideo(videoRequest({ cfg: videoConfig() }));
 
-    const firstPoll = expectMinimaxGuardedFetchCall(
-      0,
-      "https://api.minimax.io/v1/query/video_generation?task_id=task-retry",
-    );
-    expect((firstPoll.init.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
-    expectAllowPrivateNetworkPolicy(firstPoll.options);
-    const secondPoll = expectMinimaxGuardedFetchCall(
-      1,
-      "https://api.minimax.io/v1/query/video_generation?task_id=task-retry",
-    );
-    expect((secondPoll.init.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
-    expectAllowPrivateNetworkPolicy(secondPoll.options);
+    expectPolicyFetch(0, "https://api.minimax.io/v1/query/video_generation?task_id=task-retry");
+    expectPolicyFetch(1, "https://api.minimax.io/v1/query/video_generation?task_id=task-retry");
     expect(result.videos).toHaveLength(1);
     expect(
       executeProviderOperationWithRetryMock.mock.calls.map(
@@ -269,27 +224,8 @@ describe("minimax video generation provider", () => {
   });
 
   it("rejects oversized file_id metadata JSON before downloading", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          task_id: "task-metadata-too-large",
-          base_resp: { status_code: 0 },
-        }),
-      ),
-      release: vi.fn(async () => {}),
-    });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            task_id: "task-metadata-too-large",
-            status: "Success",
-            file_id: "file-too-large",
-            base_resp: { status_code: 0 },
-          }),
-        ),
-      )
-      .mockResolvedValueOnce(oversizedJsonResponse());
+    mockVideoTask("task-metadata-too-large", { file_id: "file-too-large" });
+    fetchWithTimeoutMock.mockResolvedValueOnce(oversizedJsonResponse());
 
     const provider = buildMinimaxVideoGenerationProvider();
     await expect(provider.generateVideo(videoRequest())).rejects.toThrow(
@@ -301,15 +237,8 @@ describe("minimax video generation provider", () => {
   });
 
   it("routes portal video generation through minimax-portal auth and HTTP config", async () => {
-    const requestOverrides = {
-      allowPrivateNetwork: true,
-      headers: { "X-MiniMax-Video-Policy": "enabled" },
-    };
     mockVideoTask("task-portal", { video_url: "https://example.com/portal.mp4" });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      headers: new Headers({ "content-type": "video/mp4" }),
-      arrayBuffer: async () => Buffer.from("mp4-bytes"),
-    });
+    mockVideoDownload();
 
     const provider = buildMinimaxVideoGenerationProvider("minimax-portal");
     await provider.generateVideo(
@@ -319,15 +248,9 @@ describe("minimax video generation provider", () => {
         cfg: {
           models: {
             providers: {
-              minimax: {
-                baseUrl: "https://wrong.example/anthropic",
-                models: [],
-              },
-              "minimax-portal": {
-                baseUrl: "https://api.minimaxi.com/anthropic",
-                models: [],
-                request: requestOverrides,
-              },
+              minimax: { baseUrl: "https://wrong.example/anthropic", models: [] },
+              ...videoConfig("minimax-portal", "https://api.minimaxi.com/anthropic").models
+                .providers,
             },
           },
         },
@@ -336,21 +259,18 @@ describe("minimax video generation provider", () => {
 
     expect(mockCallArg(resolveApiKeyForProviderMock).provider).toBe("minimax-portal");
     const httpConfigParams = mockCallArg(resolveProviderHttpRequestConfigMock);
-    expect(httpConfigParams.baseUrl).toBe("https://api.minimaxi.com");
-    expect(httpConfigParams.provider).toBe("minimax-portal");
-    expect(httpConfigParams.capability).toBe("video");
-    expect(httpConfigParams.transport).toBe("http");
+    expect(httpConfigParams).toMatchObject({
+      baseUrl: "https://api.minimaxi.com",
+      provider: "minimax-portal",
+      capability: "video",
+      transport: "http",
+    });
     expect(httpConfigParams.request).toEqual(requestOverrides);
     const postParams = mockCallArg(postJsonRequestMock);
     expect(postParams.allowPrivateNetwork).toBe(true);
     expect((postParams.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
     expect(postParams.url).toBe("https://api.minimaxi.com/v1/video_generation");
-    const statusFetch = expectMinimaxGuardedFetchCall(
-      0,
-      "https://api.minimaxi.com/v1/query/video_generation?task_id=task-portal",
-    );
-    expect((statusFetch.init.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
-    expectAllowPrivateNetworkPolicy(statusFetch.options);
+    expectPolicyFetch(0, "https://api.minimaxi.com/v1/query/video_generation?task_id=task-portal");
     expectAllowPrivateNetworkPolicy(
       expectMinimaxGuardedFetchCall(1, "https://example.com/portal.mp4").options,
     );

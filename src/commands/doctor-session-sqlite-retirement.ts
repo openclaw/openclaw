@@ -19,7 +19,9 @@ import {
   hasSymbolicLinkInDirectoryPath,
   writeSessionSqliteMigrationManifest,
   type ActiveSessionSqliteMigrationRun,
+  type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetInput,
+  type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import { collectHistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
@@ -104,6 +106,12 @@ export async function settleDuplicateSessionSqliteArchives(params: {
   };
   const survivors = new Map<string, RecoveryArtifactReference[]>();
   const selected: RecoveryCleanupReport["artifacts"] = [];
+  const artifactsByPath = new Map<string, (typeof artifacts)[number]>();
+  for (const item of artifacts) {
+    if (!artifactsByPath.has(item.path)) {
+      artifactsByPath.set(item.path, item);
+    }
+  }
   const replacements = new Map<string, RecoveryArtifactReference["move"]>();
   const assertSurvivor = (refs: RecoveryArtifactReference[]) => {
     const move = survivors.get(refs[0]!.move.archivePath)![0]!.move;
@@ -131,7 +139,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
       continue;
     }
     for (const refs of group.filter((candidate) => candidate !== survivor)) {
-      const item = artifacts.find((candidate) => candidate.path === refs[0]!.move.archivePath)!;
+      const item = artifactsByPath.get(refs[0]!.move.archivePath)!;
       survivors.set(item.path, survivor);
       try {
         assertSurvivor(refs);
@@ -160,7 +168,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
       assertSurvivor(refs);
     } else {
       replacements.delete(archivePath);
-      const item = selected.find((candidate) => candidate.path === archivePath)!;
+      const item = artifactsByPath.get(archivePath)!;
       recordFailure(refs[0]!.target, `${archivePath}: ${item.detail ?? item.reason}`);
     }
   }
@@ -390,6 +398,25 @@ async function disposeRecoveryArtifacts({
   onProgress?: (progress: RecoveryCleanupProgress) => void;
 }): Promise<void> {
   const runs = new Set<ActiveSessionSqliteMigrationRun>();
+  const movesByTarget = new Map<
+    SessionSqliteMigrationTargetManifest,
+    Map<string, SessionSqliteMigrationMove[]>
+  >();
+  const movesFor = (ref: RecoveryArtifactReference, archivePath: string) => {
+    let byPath = movesByTarget.get(ref.target);
+    if (!byPath) {
+      byPath = new Map();
+      for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
+        if (move.artifact) {
+          const moves = byPath.get(move.archivePath) ?? [];
+          moves.push(move);
+          byPath.set(move.archivePath, moves);
+        }
+      }
+      movesByTarget.set(ref.target, byPath);
+    }
+    return byPath.get(archivePath) ?? [];
+  };
   for (const item of selected) {
     const refs = references.get(item.path)!;
     const pending = refs
@@ -402,10 +429,8 @@ async function disposeRecoveryArtifacts({
       claimPath: path.join(path.dirname(item.path), `.cleanup-${randomUUID()}`),
     };
     for (const ref of refs) {
-      for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
-        if (move.archivePath === item.path && move.artifact) {
-          move.artifact.disposal = disposal;
-        }
+      for (const move of movesFor(ref, item.path)) {
+        move.artifact!.disposal = disposal;
       }
       runs.add(ref.run);
     }
@@ -515,13 +540,11 @@ async function disposeRecoveryArtifacts({
       assertCurrent?.();
       assertDestinations(refs);
       for (const ref of refs) {
-        for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
-          if (move.archivePath === item.path && move.artifact) {
-            move.artifact.disposal = {
-              state: "disposed",
-              disposedAt: new Date().toISOString(),
-            };
-          }
+        for (const move of movesFor(ref, item.path)) {
+          move.artifact!.disposal = {
+            state: "disposed",
+            disposedAt: new Date().toISOString(),
+          };
         }
       }
     }

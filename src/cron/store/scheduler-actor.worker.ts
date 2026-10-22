@@ -79,6 +79,7 @@ function emptyResult(): CronSchedulerResult {
     accepted: [],
     rejected: [],
     launches: [],
+    preparing: [],
     skipped: [],
     notifications: [],
     logs: [],
@@ -255,7 +256,7 @@ function isAgentWork(job: CronJob): boolean {
     job.payload.kind === "agentTurn" ||
     job.payload.kind === "heartbeat" ||
     isHeartbeatTaskCronJob(job) ||
-    (job.sessionTarget === "main" && job.payload.kind === "systemEvent" && job.wakeMode === "now")
+    job.payload.kind === "systemEvent"
   );
 }
 
@@ -548,12 +549,14 @@ export function runCronSchedulerInWorker(
           requests: input.requests ?? [],
           maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
           schedulingPaused: input.paused,
+          preparingAgentIds: snapshot.config.preparingAgentIds,
         },
         jobs,
       );
       result.accepted.push(...requested.accepted);
       result.rejected.push(...requested.rejected);
       result.launches.push(...requested.launches);
+      result.preparing.push(...requested.preparing);
       result.skipped.push(...requested.skipped);
       result.jobs.push(...requested.accepted.map((entry) => entry.job));
       result.jobs.push(...requested.launches.map((entry) => entry.job));

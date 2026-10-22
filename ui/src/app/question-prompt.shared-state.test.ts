@@ -99,6 +99,30 @@ afterEach(() => {
 });
 
 describe("Gateway-client question outcome ownership", () => {
+  it("publishes in-place prompt changes synchronously and releases subscribers", () => {
+    const state = createQuestionPromptState();
+    states.push(state);
+    const observed: Array<{ status: string; revision: number }> = [];
+    const stop = state.subscribe(() => {
+      const prompt = state.prompts.get("question-1");
+      if (prompt) {
+        observed.push({ status: prompt.status, revision: prompt.revision });
+      }
+    });
+    requestQuestion(state);
+    const prompt = state.prompts.get("question-1");
+    handleQuestionPromptEvent(state, {
+      event: "question.resolved",
+      payload: { id: "question-1", status: "cancelled" },
+    });
+    expect(state.prompts.get("question-1")).toBe(prompt);
+    expect(observed.map(({ status }) => status)).toEqual(["pending", "cancelled"]);
+    expect(observed[1]!.revision).toBeGreaterThan(observed[0]!.revision);
+    stop();
+    requestQuestion(state, "question-2");
+    expect(observed).toHaveLength(2);
+  });
+
   it("shares connection hydration across sidebar, favicon, and later chat mounts", async () => {
     vi.useFakeTimers();
     const client: QuestionClient = { request: vi.fn(async () => ({ questions: [] })) };

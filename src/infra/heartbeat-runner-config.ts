@@ -121,6 +121,5 @@ export function isHeartbeatTypingEnabled(params: {
 }
 
 export function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
-  const configured = cfg.agents?.defaults?.typingIntervalSeconds;
-  return typeof configured === "number" && configured > 0 ? configured : undefined;
+  return cfg.agents?.defaults?.typingIntervalSeconds;
 }

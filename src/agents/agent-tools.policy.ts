@@ -37,8 +37,8 @@ import {
   resolveProviderToolPolicyEntry,
 } from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
-import type { SandboxToolPolicy } from "./sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
   isVisibleSpawnedSession,
   resolveSubagentCapabilityStore,
@@ -493,20 +493,14 @@ export function resolveEffectiveToolPolicy(params: {
   return { ...effectivePolicy, gatewayConfigReadAllowed };
 }
 
-type GroupToolPolicyOutcome =
-  | { kind: "resolved"; policy?: SandboxToolPolicy }
-  | { kind: "account-unavailable"; accountId: string; message: string };
-
-function unavailableScheduledAccount(accountId: string): GroupToolPolicyOutcome {
-  return {
-    kind: "account-unavailable",
-    accountId,
-    message: `Scheduled account "${accountId}" is unavailable. Re-add it to the channel configuration, or recreate this automation from the intended account.`,
-  };
+function throwUnavailableScheduledAccount(accountId: string): never {
+  throw new Error(
+    `Scheduled account "${accountId}" is unavailable. Re-add it to the channel configuration, or recreate this automation from the intended account.`,
+  );
 }
 
-/** Resolve policy without conflating unavailable scheduled authority with intentional denial. */
-export function resolveGroupToolPolicyOutcome(params: {
+/** Tool-building callers must stop before exposing a surface with unavailable authority. */
+export function resolveGroupToolPolicy(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   spawnedBy?: string | null;
@@ -522,9 +516,9 @@ export function resolveGroupToolPolicyOutcome(params: {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
-}): GroupToolPolicyOutcome {
+}): SandboxToolPolicy | undefined {
   if (!params.config) {
-    return { kind: "resolved" };
+    return undefined;
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
@@ -545,8 +539,8 @@ export function resolveGroupToolPolicyOutcome(params: {
   const accountId = normalizeAccountId(params.accountId);
   if (!channel) {
     return params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID
-      ? unavailableScheduledAccount(accountId)
-      : { kind: "resolved" };
+      ? throwUnavailableScheduledAccount(accountId)
+      : undefined;
   }
   let plugin;
   try {
@@ -567,11 +561,11 @@ export function resolveGroupToolPolicyOutcome(params: {
       configured = false;
     }
     if (!configured) {
-      return unavailableScheduledAccount(accountId);
+      throwUnavailableScheduledAccount(accountId);
     }
   }
   if (groupIds.length === 0) {
-    return { kind: "resolved" };
+    return undefined;
   }
   for (const groupId of groupIds) {
     const toolsConfig = plugin?.groups?.resolveToolPolicy?.({
@@ -588,7 +582,7 @@ export function resolveGroupToolPolicyOutcome(params: {
     });
     const policy = pickSandboxToolPolicy(toolsConfig);
     if (policy) {
-      return { kind: "resolved", policy };
+      return policy;
     }
   }
   const configTools = resolveChannelGroupToolsPolicy({
@@ -604,16 +598,5 @@ export function resolveGroupToolPolicyOutcome(params: {
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
   });
-  return { kind: "resolved", policy: pickSandboxToolPolicy(configTools) };
-}
-
-/** Tool-building callers must stop before exposing a surface with unavailable authority. */
-export function resolveGroupToolPolicy(
-  params: Parameters<typeof resolveGroupToolPolicyOutcome>[0],
-): SandboxToolPolicy | undefined {
-  const outcome = resolveGroupToolPolicyOutcome(params);
-  if (outcome.kind === "account-unavailable") {
-    throw new Error(outcome.message);
-  }
-  return outcome.policy;
+  return pickSandboxToolPolicy(configTools);
 }

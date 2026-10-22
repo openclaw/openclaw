@@ -16,7 +16,10 @@ import {
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  observeHostDataSql,
+  useSessionStoreTempDirs,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackListenerWriteClient } from "../../client.js";
 import { appendSlackStream, markSlackStreamsStopped, startSlackStream } from "../../streaming.js";
@@ -457,6 +460,42 @@ describe("registerSlackAgentEvents", () => {
       }
     },
   );
+
+  it("does not apply a title after another session wins the recorded conversation", async () => {
+    const harness = createSessionEventHarness("mpim");
+    const sessionKey = "agent:main:slack:group:g123";
+    const competitor = `${sessionKey}:thread:${threadTs}`;
+    const updatedAt = Date.now();
+    await harness.recordSession({ sessionKey, peerId: "G123", threadId: threadTs, updatedAt });
+    let hostQueries: string[] | undefined;
+    prepareSessionEntryPatch.mockImplementationOnce(async (params) => {
+      // Routing captured its real source; only the competing row changes before the writer.
+      await harness.recordSession({
+        sessionKey: competitor,
+        peerId: "G123",
+        threadId: threadTs,
+        updatedAt: updatedAt + 1000,
+      });
+      const observed = observeHostDataSql();
+      try {
+        return await prepareStoredSessionEntryPatch(params);
+      } finally {
+        hostQueries = [...observed.queries];
+        observed.restore();
+      }
+    });
+    await harness.emit("agent_session_title_changed", {
+      channel: "G123",
+      title: "Title for the previous conversation owner",
+    });
+    expect(harness.ctx.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Slack conversation owner changed before the title update"),
+    );
+    expect(harness.stored(sessionKey)).not.toHaveProperty("displayName");
+    expect(harness.stored(competitor)).not.toHaveProperty("displayName");
+    expect(harness.recordSlackSessionTitle).not.toHaveBeenCalled();
+    expect(hostQueries).toEqual([]);
+  });
 
   it.each(["moved", "reset", "live"] as const)(
     "revalidates a title owner after waiting for a %s session writer",

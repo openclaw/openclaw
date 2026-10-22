@@ -19,6 +19,7 @@ import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
 } from "../../state/openclaw-state-db-cache.js";
+import { isStatePostgres } from "../../state/openclaw-state-db-engine.js";
 import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { cronStoreKey } from "./key.js";
@@ -43,7 +44,7 @@ function emptyLoadedCronStore(): LoadedCronStore {
   };
 }
 
-/** Loads cron jobs from existing SQLite state without creating or migrating it. */
+/** Loads cron jobs from existing state without creating or migrating it. */
 export async function loadCronJobsStoreWithConfigJobsReadOnly(
   storePath: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -75,7 +76,8 @@ async function readCronState({
     return { ok: true };
   }
   // Doctor's all-partition inventory must not create WAL/SHM files beside the source.
-  const preserveArtifacts = storeKey === undefined || isArtifactPreservingStateRead();
+  const preserveArtifacts =
+    !isStatePostgres() && (storeKey === undefined || isArtifactPreservingStateRead());
   const admission = captureOpenClawStateDatabaseReadAdmission(statePath);
   const identity = admission.identity;
   const canonicalPath = identity.canonicalPath;

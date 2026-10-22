@@ -6,8 +6,9 @@ import type {
   SessionsCatalogListResult,
   SystemInfoResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import type * as Push from "../../../../packages/gateway-protocol/src/schema/push.js";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelCatalogEntry } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
@@ -41,8 +42,8 @@ import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.t
 import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
@@ -52,84 +53,39 @@ import {
   readSystemInfo,
   SYSTEM_INFO_POLL_INTERVAL_MS,
 } from "../../lib/system-info.ts";
-import {
-  discoverRealtimeTalkCameras,
-  discoverRealtimeTalkInputs,
-  observeRealtimeTalkDevices,
-  realtimeTalkDeviceIssueMessage,
-} from "../chat/talk/input.ts";
+import { observeRealtimeTalkDevices } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
+import { createConfigPageModels } from "./config-page-models.ts";
 import {
   configSectionKeysForPage,
   configSelectionFromSearch,
   defaultConfigSelection,
   normalizeConfigSelection,
   type ConfigSelection,
-  SCOPED_CONFIG_SECTION_KEYS,
+  ADVANCED_EXCLUDED_SECTIONS,
   type ConfigPageId,
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
-import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
-import type { SecurityOverview } from "./security.tsx";
+import { refreshMediaDevice } from "./media-device-discovery.ts";
+import { admitMemoryRoute } from "./memory-route-admission.ts";
+import {
+  configTargetIdFromHash,
+  type ConfigRouteData,
+  type ConfigRouteSource,
+} from "./route-data.ts";
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
+  type SessionObserverModelSelection,
 } from "./session-observer-settings.ts";
-import { createConfigViewState } from "./view-state.ts";
-import type { ConfigProps, ConfigViewState } from "./view-types.ts";
+import { createConfigUpdatesPresentation } from "./updates-page-presentation.ts";
+import { createConfigViewState, createMediaDeviceState } from "./view-state.ts";
+import type * as View from "./view-state.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
-
-function createMediaDeviceState(): Omit<
-  NonNullable<ConfigProps["microphone"]>,
-  "selectedDeviceId"
-> & {
-  loaded: boolean;
-  requestsPermission: boolean;
-} {
-  return {
-    devices: [],
-    permissionRequired: true,
-    loading: false,
-    error: null,
-    loaded: false,
-    requestsPermission: false,
-  };
-}
-
-export function extractQuickSettingsSecurity(root: Record<string, unknown>): SecurityOverview {
-  const gateway = asConfigRecord(root.gateway);
-  const auth = asConfigRecord(gateway?.auth);
-  const tools = asConfigRecord(root.tools);
-  const exec = asConfigRecord(tools?.exec) ?? {};
-  const browser = asConfigRecord(root.browser);
-  let gatewayAuth = "unknown";
-  if (auth) {
-    const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
-    gatewayAuth = mode
-      ? mode
-      : auth.password
-        ? "password"
-        : auth.token
-          ? "token"
-          : auth.trustedProxy
-            ? "trusted-proxy"
-            : "none";
-  }
-  const profile = tools?.profile;
-  const security = exec.security;
-  return {
-    gatewayAuth,
-    execPolicy: typeof security === "string" && security.trim() ? security.trim() : "allowlist",
-    browserEnabled: browser?.enabled !== false,
-    browserEnabledOverridden: browser !== null && Object.hasOwn(browser, "enabled"),
-    toolProfile: typeof profile === "string" ? profile.trim() : "",
-    toolProfileOverridden: tools !== null && Object.hasOwn(tools, "profile"),
-  };
-}
 
 /** Coordinates page-local drafts and requests; config and preference writes stay with their owners. */
 export function createConfigPage(
@@ -151,47 +107,73 @@ export function createConfigPage(
     : null;
   // Imperative owner notifications can arrive while a descendant is rendering.
   const [revision, publish] = createSignal(0, { ownedWrite: true });
-  const invalidate = () => publish((value) => value + 1);
+  const invalidate = () => {
+    publish((value) => value + 1);
+    onSettled(afterCommit);
+  };
   const [presentation, setPresentation] = createStore<{
-    formModes: Partial<Record<ConfigPageId, ConfigProps["formMode"]>>;
+    formModes: Partial<Record<ConfigPageId, View.ConfigFormMode>>;
     selections: Partial<Record<ConfigPageId, ConfigSelection>>;
   }>({ formModes: {}, selections: {} });
   let pageId: ConfigPageId = "advanced";
   let routeData: ConfigRouteData | null = null;
+  const routeListeners = createChangeListeners();
+  const admittedRoute: ConfigRouteSource = {
+    read: () => routeData,
+    subscribe: routeListeners.subscribe,
+  };
   let connected = false;
   let settings = loadSettings();
   let hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
   let systemInfo: SystemInfoResult | null = null;
   let systemInfoUnavailable = false;
-  let sessionObserverModels: ModelCatalogEntry[] = [];
-  let sessionObserverModelsUnavailable = false;
-  let hiddenSessionCatalogLabels: ReadonlyMap<string, string> = EMPTY_SESSION_CATALOG_LABELS;
-  let installedSessionSourcePluginIds: Set<string> | null = null;
-  let sessionSourcePluginsLoading = false;
+  const observerModels = createConfigPageModels({
+    invalidate,
+    requestClient: systemInfoRequestClient,
+    hasSystemInfo: () => systemInfo !== null,
+    selectedAgent: () => context.settingsAgentSelection.state.selectedId,
+  });
+  let acceptedPluginCatalog: PluginsListResult | null = null;
+  let acceptedLabelsCatalog: SessionsCatalogListResult | null = null;
+  // Retained receipts serve cancellation; only the issued read enters async rendering.
+  const [pluginsRead, setPluginsRead] = createSignal<
+    PluginsListResult | Promise<PluginsListResult> | null
+  >(null, { ownedWrite: true });
+  const sessionSourcePlugins = createMemo(async () => {
+    const catalog = await pluginsRead();
+    return catalog
+      ? new Set(catalog.plugins.filter((plugin) => plugin.installed).map((plugin) => plugin.id))
+      : null;
+  });
+  const [labelsRead, setLabelsRead] = createSignal<
+    SessionsCatalogListResult | Promise<SessionsCatalogListResult> | null
+  >(null, { ownedWrite: true });
+  const sessionCatalogLabels = createMemo(async () => {
+    const catalog = await labelsRead();
+    return catalog
+      ? new Map(catalog.catalogs.map((entry) => [entry.id, entry.label]))
+      : EMPTY_SESSION_CATALOG_LABELS;
+  });
   const customThemeImportOwner = new themeImport.CustomThemeImportOwner(invalidate);
-  let configViewState: ConfigViewState = createConfigViewState();
+  let configViewState: View.ConfigViewState = createConfigViewState();
   let runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
-  let updateStatusClient: GatewayBrowserClient | null = null;
+  const updates = createConfigUpdatesPresentation(context);
   let mediaDeviceWatch: (() => void) | null = null;
   const mediaDevices = {
     microphone: createMediaDeviceState(),
     camera: createMediaDeviceState(),
   };
   let cameraSelectionRequest = 0;
-  let systemInfoAbort: AbortController | null = null;
-  let modelsAbort: AbortController | null = null;
-  let pluginsAbort: AbortController | null = null;
-  let labelsAbort: AbortController | null = null;
   let previousGateway: ApplicationContext["gateway"] | null = null;
   let previousClient: GatewayBrowserClient | null = null;
   let previousHello: unknown;
   let previousPhase: string | null = null;
-  let modelsAgent: string | null = null;
   let requestedPluginsClient: GatewayBrowserClient | null = null;
   let labelsKey = "";
   let poll: ReturnType<typeof setInterval> | undefined;
   let countdown: ReturnType<typeof setInterval> | undefined;
   let routeInitialized = false;
+  let normalizedMemoryLocation = "";
   let targetBlockId: string | null = null;
   let scrollFrame: number | null = null;
 
@@ -205,6 +187,7 @@ export function createConfigPage(
     const state = context.runtimeConfig.state;
     return asConfigRecord(state.configForm ?? state.configSnapshot?.config) ?? {};
   }
+
   function mutationDisabled() {
     revision();
     return isCuratedConfigMutationDisabled();
@@ -226,6 +209,9 @@ export function createConfigPage(
     abortRequests();
     pageId = nextPageId;
     routeData = nextRouteData;
+    admitMemoryRoute(context, pageId, routeData, normalizedMemoryLocation, (location) => {
+      normalizedMemoryLocation = location;
+    });
     const selection = routeData
       ? normalizeConfigSelection(pageId, routeData.section, null)
       : configSelectionFromSearch(pageId, globalThis.location?.search ?? "");
@@ -240,6 +226,7 @@ export function createConfigPage(
       routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
     synchronize();
     invalidate();
+    routeListeners.publish();
   }
 
   const hiddenSessionCatalogsChanged = () => {
@@ -254,15 +241,10 @@ export function createConfigPage(
   }
 
   function abortRequests() {
-    systemInfoAbort?.abort();
-    systemInfoAbort = null;
-    modelsAbort?.abort();
-    modelsAbort = null;
-    pluginsAbort?.abort();
-    pluginsAbort = null;
-    labelsAbort?.abort();
-    labelsAbort = null;
-    modelsAgent = null;
+    systemInfoTask.cancel();
+    observerModels.retire();
+    cancelPlugins();
+    cancelLabels();
     requestedPluginsClient = null;
     labelsKey = "";
   }
@@ -283,10 +265,9 @@ export function createConfigPage(
       abortRequests();
       systemInfo = null;
       systemInfoUnavailable = false;
-      sessionObserverModels = [];
-      sessionObserverModelsUnavailable = false;
+      observerModels.reset();
       resetConfigViewState();
-      updateStatusClient = null;
+      updates.reset();
       previousGateway = gateway;
       previousClient = snapshot.client;
       previousHello = snapshot.hello;
@@ -299,27 +280,16 @@ export function createConfigPage(
     if (!client) {
       clearInterval(poll);
       poll = undefined;
-      systemInfoAbort?.abort();
-      systemInfoAbort = null;
-      modelsAbort?.abort();
-      modelsAbort = null;
+      systemInfoTask.cancel();
+      observerModels.cancel();
     } else if (connectionChanged || !systemInfo || !poll) {
       startSystemInfoPolling();
       void refreshSystemInfo();
     } else {
-      void refreshSessionObserverModels();
+      observerModels.refresh();
     }
     syncAppearanceRequests();
-    const updateClient =
-      pageId === "updates" && canCallGatewayMethod(snapshot, "update.status", "operator.admin")
-        ? snapshot.client
-        : null;
-    if (updateClient !== updateStatusClient) {
-      updateStatusClient = updateClient;
-      if (updateClient) {
-        void context.overlays.refreshUpdateStatus();
-      }
-    }
+    updates.synchronize(pageId);
     const campaign = context.overlays.snapshot.updateSchedule?.campaign;
     const ticking =
       pageId === "updates" &&
@@ -335,7 +305,7 @@ export function createConfigPage(
       for (const kind of ["microphone", "camera"] as const) {
         if (!mediaDevices[kind].loaded) {
           mediaDevices[kind].loaded = true;
-          void refreshMediaDevices(kind, false);
+          void refreshMediaDevice(mediaDevices[kind], kind, false, invalidate);
         }
       }
       if (snapshot.phase === "connected") {
@@ -345,15 +315,14 @@ export function createConfigPage(
   }
 
   function afterCommit() {
-    if (!targetBlockId || scrollFrame !== null) {
+    if (!connected || !targetBlockId || scrollFrame !== null) {
       return;
     }
     scrollFrame = requestAnimationFrame(() => {
       scrollFrame = null;
-      const target = [...(host().querySelectorAll<HTMLElement>("[id]") ?? [])].find(
-        (element) => element.id === targetBlockId,
-      );
-      if (!target) {
+      // Settings routes share one live page; keep the document's ID lookup scoped to it.
+      const target = targetBlockId ? host().ownerDocument.getElementById(targetBlockId) : null;
+      if (!target || !host().contains(target)) {
         return;
       }
       target.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "start" });
@@ -381,88 +350,69 @@ export function createConfigPage(
     return context.gateway.snapshot.client;
   }
 
-  async function refreshSystemInfo() {
-    const client = systemInfoRequestClient();
-    if (!client || systemInfoAbort) {
-      return;
-    }
-    const abort = new AbortController();
-    systemInfoAbort = abort;
-    try {
-      const sample = await readSystemInfo(context.gateway, abort.signal);
-      if (abort.signal.aborted || systemInfoRequestClient() !== client) {
-        return;
+  const systemInfoTask = createPageRequest(invalidate, {
+    task: async (client: GatewayBrowserClient, { signal }) => {
+      const sample = await readSystemInfo(context.gateway, signal);
+      return systemInfoRequestClient() === client ? sample : null;
+    },
+    onComplete: (sample) => {
+      if (sample) {
+        systemInfo = sample.value;
+        startSystemInfoPolling();
+        observerModels.refresh(true);
       }
-      systemInfo = sample.value;
-      startSystemInfoPolling();
-      void refreshSessionObserverModels(true);
-    } catch (error) {
-      if (abort.signal.aborted) {
-        return;
-      }
+    },
+    onError: (error) => {
       if (isMissingOperatorReadScopeError(error)) {
         systemInfo = null;
         systemInfoUnavailable = true;
       }
-    } finally {
-      if (systemInfoAbort === abort) {
-        systemInfoAbort = null;
-      }
-      if (!abort.signal.aborted) {
-        invalidate();
-      }
-    }
+    },
+  });
+  const pluginsTask = createPageRequest(invalidate, {
+    task: (client: GatewayBrowserClient, { signal }) => {
+      const read = client.request<PluginsListResult>("plugins.list", {}, { signal });
+      void setPluginsRead(read);
+      return read;
+    },
+    onComplete: (catalog) => {
+      acceptedPluginCatalog = catalog;
+    },
+    onError: () => {},
+  });
+  const labelsTask = createPageRequest(invalidate, {
+    task: (
+      { client, agentId }: { client: GatewayBrowserClient; agentId: string | null },
+      { signal },
+    ) => {
+      const read = client.request<SessionsCatalogListResult>(
+        "sessions.catalog.list",
+        { ...(agentId ? { agentId } : {}), metadataOnly: true },
+        { signal },
+      );
+      void setLabelsRead(read);
+      return read;
+    },
+    onComplete: (catalog) => {
+      acceptedLabelsCatalog = catalog;
+    },
+    onError: () => {},
+  });
+
+  function cancelPlugins() {
+    pluginsTask.cancel();
+    setPluginsRead(acceptedPluginCatalog);
   }
 
-  async function refreshSessionObserverModels(force = false) {
-    const client = systemInfo ? systemInfoRequestClient() : null;
-    const agentId = context.settingsAgentSelection.state.selectedId;
-    if (!client || !agentId) {
-      modelsAbort?.abort();
-      modelsAbort = null;
-      sessionObserverModels = [];
-      sessionObserverModelsUnavailable = !agentId;
-      return;
-    }
-    if (modelsAgent === agentId && (modelsAbort || !force)) {
-      return;
-    }
-    const changed = modelsAgent !== agentId;
-    modelsAbort?.abort();
-    const abort = new AbortController();
-    modelsAbort = abort;
-    modelsAgent = agentId;
-    if (changed) {
-      sessionObserverModels = [];
-      sessionObserverModelsUnavailable = false;
-    }
-    try {
-      const { models } = await loadModelCatalog(client, {
-        agentId,
-        preparedOnly: true,
-        signal: abort.signal,
-      });
-      if (
-        abort.signal.aborted ||
-        systemInfoRequestClient() !== client ||
-        context.settingsAgentSelection.state.selectedId !== agentId
-      ) {
-        return;
-      }
-      sessionObserverModels = models;
-      sessionObserverModelsUnavailable = false;
-    } catch {
-      if (!abort.signal.aborted) {
-        sessionObserverModels = [];
-        sessionObserverModelsUnavailable = true;
-      }
-    } finally {
-      if (modelsAbort === abort) {
-        modelsAbort = null;
-      }
-      if (!abort.signal.aborted) {
-        invalidate();
-      }
+  function cancelLabels() {
+    labelsTask.cancel();
+    setLabelsRead(acceptedLabelsCatalog);
+  }
+
+  async function refreshSystemInfo() {
+    const client = systemInfoRequestClient();
+    if (client && !systemInfoTask.pending) {
+      await systemInfoTask.run(client);
     }
   }
 
@@ -474,30 +424,12 @@ export function createConfigPage(
         ? snapshot.client
         : null;
     if (pluginsClient !== requestedPluginsClient) {
-      pluginsAbort?.abort();
-      pluginsAbort = null;
+      cancelPlugins();
       requestedPluginsClient = pluginsClient;
-      installedSessionSourcePluginIds = null;
-      sessionSourcePluginsLoading = Boolean(pluginsClient);
+      acceptedPluginCatalog = null;
+      setPluginsRead(null);
       if (pluginsClient) {
-        const abort = new AbortController();
-        pluginsAbort = abort;
-        void pluginsClient
-          .request<PluginsListResult>("plugins.list", {}, { signal: abort.signal })
-          .then((result) => {
-            if (!abort.signal.aborted) {
-              installedSessionSourcePluginIds = new Set(
-                result.plugins.filter((plugin) => plugin.installed).map((plugin) => plugin.id),
-              );
-            }
-          })
-          .catch(() => undefined)
-          .finally(() => {
-            if (!abort.signal.aborted) {
-              sessionSourcePluginsLoading = false;
-              invalidate();
-            }
-          });
+        void pluginsTask.run(pluginsClient);
       }
     }
     const agentId = context.settingsAgentSelection.state.selectedId;
@@ -511,89 +443,13 @@ export function createConfigPage(
       ? `${agentId}\0${[...hiddenSessionCatalogIds].toSorted().join("\0")}`
       : "";
     if (key !== labelsKey) {
-      labelsAbort?.abort();
-      labelsAbort = null;
+      cancelLabels();
       labelsKey = key;
-      hiddenSessionCatalogLabels = EMPTY_SESSION_CATALOG_LABELS;
+      acceptedLabelsCatalog = null;
+      setLabelsRead(null);
       if (labelsClient) {
-        const abort = new AbortController();
-        labelsAbort = abort;
-        void labelsClient
-          .request<SessionsCatalogListResult>(
-            "sessions.catalog.list",
-            { ...(agentId ? { agentId } : {}), metadataOnly: true },
-            { signal: abort.signal },
-          )
-          .then((result) => {
-            if (!abort.signal.aborted) {
-              hiddenSessionCatalogLabels = new Map(
-                result.catalogs.map((catalog) => [catalog.id, catalog.label]),
-              );
-            }
-          })
-          .catch(() => undefined)
-          .finally(() => {
-            if (!abort.signal.aborted) {
-              invalidate();
-            }
-          });
+        void labelsTask.run({ client: labelsClient, agentId });
       }
-    }
-  }
-
-  function tabIconProps() {
-    const id = context.agentSelection.state.selectedId;
-    const agent = agents.read().agentsList?.agents.find((entry) => entry.id === id);
-    const unlocked = lobsterdex.read();
-    return {
-      tabIcon: settings.tabIcon,
-      lobsterdexEnabled: context.theme.branding.lobsterdex,
-      tabIconAgentAvatar: agent ? resolveAgentAvatarUrl(agent, identities.read().get(id)) : null,
-      tabIconLobsters: LOBSTER_PET_PALETTES.filter((palette) => unlocked.has(palette.id)),
-      setTabIconMode: (preference: NonNullable<UiSettings["tabIcon"]>) => {
-        if (
-          preference.startsWith("lobster:") &&
-          (!context.theme.branding.lobsterdex ||
-            !LOBSTER_PET_PALETTES.some((palette) => palette.id === preference.slice(8)) ||
-            !getLobsterdex().has(preference.slice(8)))
-        ) {
-          return;
-        }
-        applySettings({ tabIcon: preference });
-      },
-    };
-  }
-
-  async function refreshMediaDevices(kind: "microphone" | "camera", requestPermission: boolean) {
-    const device = mediaDevices[kind];
-    if (device.loading) {
-      device.requestsPermission ||= requestPermission;
-      return;
-    }
-    device.loading = true;
-    device.requestsPermission = requestPermission;
-    device.error = null;
-    invalidate();
-    try {
-      const discover =
-        kind === "microphone" ? discoverRealtimeTalkInputs : discoverRealtimeTalkCameras;
-      const result = await discover(() => device.requestsPermission);
-      device.devices = result.devices;
-      device.permissionRequired = result.permissionRequired;
-      device.error = result.issue
-        ? realtimeTalkDeviceIssueMessage(
-            result.issue,
-            kind === "microphone" ? "audioinput" : "videoinput",
-          )
-        : null;
-    } catch (error) {
-      // Discovery is best-effort in blocked/inactive contexts; a rejection
-      // must not wedge the picker in its loading state.
-      device.error = formatUiError(error);
-    } finally {
-      device.loading = false;
-      device.requestsPermission = false;
-      invalidate();
     }
   }
 
@@ -628,38 +484,11 @@ export function createConfigPage(
     invalidate();
   }
 
-  function setActiveSection(section: string | null) {
-    setPresentation((draft) => {
-      draft.selections[pageId] = { activeSection: section, activeSubsection: null };
-    });
-    invalidate();
-  }
-
-  function setActiveSubsection(section: string | null) {
-    setPresentation((draft) => {
-      draft.selections[pageId] = {
-        ...(draft.selections[pageId] ?? defaultConfigSelection(pageId)),
-        activeSubsection: section,
-      };
-    });
-    invalidate();
-  }
-
   function applySettings(patch: Partial<UiSettings>, selectedTheme?: ThemeName) {
     settings = selectedTheme ? selectThemeSettings(selectedTheme, patch) : patchSettings(patch);
     // theme.refresh() also republishes non-theme appearance prefs (text
     // scale, lobster pet visits/sounds) to app-host subscribers.
     context.theme.refresh();
-    invalidate();
-  }
-
-  function setLocale(locale: Locale | undefined) {
-    if (locale === undefined) {
-      resetSyncedPref("locale");
-      return;
-    }
-    settings = patchSettings({ locale });
-    void i18n.setLocale(locale);
     invalidate();
   }
 
@@ -705,29 +534,11 @@ export function createConfigPage(
     }
   }
 
-  function setTheme(theme: ThemeName) {
-    const preference = currentSyncedPref("theme");
-    const reset = preference.overridden && theme === preference.resetValue;
-    if (reset) {
-      resetSyncedPref("theme");
-    } else {
-      applySettings({}, theme);
-    }
-  }
-
-  function setThemeMode(mode: ThemeMode) {
-    const preference = currentSyncedPref("themeMode");
-    if (preference.overridden && mode === preference.resetValue) {
-      resetSyncedPref("themeMode");
-    } else {
-      context.theme.setMode(mode);
-    }
-  }
-
   async function selectCamera(deviceId: string) {
     const request = ++cameraSelectionRequest;
     const videoDeviceId = deviceId.trim() || undefined;
     mediaDevices.camera.error = null;
+    mediaDevices.camera.discovery = null;
     invalidate();
     try {
       await switchActiveRealtimeTalkCameras(videoDeviceId);
@@ -745,32 +556,6 @@ export function createConfigPage(
         invalidate();
       }
     }
-  }
-
-  async function importCustomTheme() {
-    await customThemeImportOwner.import({
-      config: context.runtimeConfig.state,
-      hasCustomTheme: Boolean(settings.customTheme),
-      readTheme: () => settings.theme,
-      load: importCustomThemeFromUrl,
-      apply: (customTheme, activate) =>
-        applySettings({ customTheme }, activate ? "custom" : settings.theme),
-      messages: {
-        blocked: (reason) => t(reason === "loading" ? "common.loading" : "common.unsavedChanges"),
-        imported: (label) => t("configPage.themeImported", { name: label }),
-      },
-    });
-  }
-
-  function clearCustomTheme() {
-    customThemeImportOwner.clear({
-      apply: () =>
-        applySettings(
-          { customTheme: undefined },
-          settings.theme === "custom" ? "claw" : settings.theme,
-        ),
-      message: t("configPage.themeRemoved"),
-    });
   }
 
   function isUpdateBusy(): boolean {
@@ -792,14 +577,14 @@ export function createConfigPage(
     );
   }
 
-  function configProps(): ConfigProps {
+  function configProps() {
     revision();
     const configObject = readConfigObject();
     const runtimeConfig = context.runtimeConfig;
     const configState = runtimeConfig.state;
     const includeSections = configSectionKeysForPage(pageId);
     // Advanced shows everything without a curated home elsewhere.
-    const excludeSections = pageId === "advanced" ? [...SCOPED_CONFIG_SECTION_KEYS] : undefined;
+    const excludeSections = pageId === "advanced" ? ADVANCED_EXCLUDED_SECTIONS : undefined;
     const currentSelection = presentation.selections[pageId] ?? defaultConfigSelection(pageId);
     const selection = normalizeConfigSelection(
       pageId,
@@ -812,6 +597,9 @@ export function createConfigPage(
     const controlUiConfig = asConfigRecord(gatewayConfig?.controlUi);
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const utilityModel = readModelSetting(agentsDefaults?.utilityModel);
+    const id = context.agentSelection.state.selectedId;
+    const agent = agents.read().agentsList?.agents.find((entry) => entry.id === id);
+    const unlocked = lobsterdex.read();
     const themePref = currentSyncedPref("theme");
     const themeModePref = currentSyncedPref("themeMode");
     const accentPref = currentSyncedPref("accent");
@@ -832,7 +620,7 @@ export function createConfigPage(
         mutate(...args);
       };
     return {
-      onAppearanceChange: (patch) => applySettings(patch),
+      onAppearanceChange: applySettings,
       raw: configState.configRaw,
       originalRaw: configState.configRawOriginal,
       valid: configState.configValid,
@@ -857,18 +645,35 @@ export function createConfigPage(
       formValue: configState.configForm,
       activeSection,
       activeSubsection,
-      onRawChange: withConfigMutation((next) => runtimeConfig.setRaw(next)),
-      onFormModeChange: (mode) => {
+      onRawChange: withConfigMutation((next: string) => runtimeConfig.setRaw(next)),
+      onFormModeChange: (mode: View.ConfigFormMode) => {
         setPresentation((draft) => {
           draft.formModes[pageId] = mode;
         });
         invalidate();
       },
       onViewStateChange: () => invalidate(),
-      onFormPatch: withConfigMutation((path, value) => runtimeConfig.patchForm(path, value)),
-      onFormRemove: withConfigMutation((path) => runtimeConfig.removeFormValue(path)),
-      onSectionChange: (section) => setActiveSection(section),
-      onSubsectionChange: (section) => setActiveSubsection(section),
+      onFormPatch: withConfigMutation((path: Array<string | number>, value: unknown) =>
+        runtimeConfig.patchForm(path, value),
+      ),
+      onFormRemove: withConfigMutation((path: Array<string | number>) =>
+        runtimeConfig.removeFormValue(path),
+      ),
+      onSectionChange: (section: string | null) => {
+        setPresentation((draft) => {
+          draft.selections[pageId] = { activeSection: section, activeSubsection: null };
+        });
+        invalidate();
+      },
+      onSubsectionChange: (section: string | null) => {
+        setPresentation((draft) => {
+          draft.selections[pageId] = {
+            ...(draft.selections[pageId] ?? defaultConfigSelection(pageId)),
+            activeSubsection: section,
+          };
+        });
+        invalidate();
+      },
       onSave: () => void runtimeConfig.save(),
       onRawDiscard: () => void runtimeConfig.discardDraft(),
       onOpenFile: () => void runtimeConfig.openFile(),
@@ -887,8 +692,8 @@ export function createConfigPage(
       fontChat: settings.fontChat,
       fontUiProvenance: currentSyncedPref("fontUi").provenance,
       fontChatProvenance: currentSyncedPref("fontChat").provenance,
-      setFontUi: (font) => setFont("fontUi", font),
-      setFontChat: (font) => setFont("fontChat", font),
+      setFontUi: (font: TypefaceId | undefined) => setFont("fontUi", font),
+      setFontChat: (font: TypefaceId | undefined) => setFont("fontChat", font),
       systemLocale: i18n.getSystemLocale(),
       localeOverride: isSupportedLocale(localePref.value) ? localePref.value : undefined,
       localeOverridden: localePref.overridden,
@@ -896,29 +701,86 @@ export function createConfigPage(
       localeResetValue: isSupportedLocale(localePref.resetValue)
         ? localePref.resetValue
         : undefined,
-      onLocaleChange: (locale) => setLocale(locale),
+      onLocaleChange: (locale: Locale | undefined) => {
+        if (locale === undefined) {
+          resetSyncedPref("locale");
+          return;
+        }
+        settings = patchSettings({ locale });
+        void i18n.setLocale(locale);
+        invalidate();
+      },
       themeCatalog: pageId === "appearance" ? context.theme.catalog : undefined,
       onRetryThemeCatalog: () => context.theme.retryCatalog?.(),
-      setTheme: (theme) => setTheme(theme),
-      setThemeMode: (mode) => setThemeMode(mode),
-      setAccent: (accent) =>
+      setTheme: (theme: ThemeName) => {
+        const preference = currentSyncedPref("theme");
+        if (preference.overridden && theme === preference.resetValue) {
+          resetSyncedPref("theme");
+        } else {
+          applySettings({}, theme);
+        }
+      },
+      setThemeMode: (mode: ThemeMode) => {
+        const preference = currentSyncedPref("themeMode");
+        if (preference.overridden && mode === preference.resetValue) {
+          resetSyncedPref("themeMode");
+        } else {
+          context.theme.setMode(mode);
+        }
+      },
+      setAccent: (accent: string | undefined) =>
         accent === undefined ? resetSyncedPref("accent") : applySettings({ accent }),
       hasCustomTheme: Boolean(settings.customTheme),
       customThemeLabel: settings.customTheme?.label ?? null,
       customThemeSourceUrl: settings.customTheme?.sourceUrl ?? null,
       customThemeImportUrl: customThemeImportOwner.snapshot.url,
-      customThemeImportBusy: customThemeImportOwner.snapshot.busy,
+      customThemeImportCompletion: customThemeImportOwner.completedImport,
       customThemeImportMessage: customThemeImportOwner.snapshot.message,
       customThemeImportExpanded: customThemeImportOwner.snapshot.expanded,
-      customThemeImportFocusToken: customThemeImportOwner.snapshot.focusToken,
-      onCustomThemeImportUrlChange: (next) => customThemeImportOwner.setUrl(next),
-      onImportCustomTheme: () => void importCustomTheme(),
-      onClearCustomTheme: () => clearCustomTheme(),
+      onCustomThemeImportUrlChange: (next: string) => customThemeImportOwner.setUrl(next),
+      onImportCustomTheme: () =>
+        customThemeImportOwner.import({
+          config: context.runtimeConfig.state,
+          hasCustomTheme: Boolean(settings.customTheme),
+          readTheme: () => settings.theme,
+          load: importCustomThemeFromUrl,
+          apply: (customTheme, activate) =>
+            applySettings({ customTheme }, activate ? "custom" : settings.theme),
+          messages: {
+            blocked: (reason) =>
+              t(reason === "loading" ? "common.loading" : "common.unsavedChanges"),
+            imported: (label) => t("configPage.themeImported", { name: label }),
+          },
+        }),
+      onClearCustomTheme: () => {
+        customThemeImportOwner.clear({
+          apply: () =>
+            applySettings(
+              { customTheme: undefined },
+              settings.theme === "custom" ? "claw" : settings.theme,
+            ),
+          message: t("configPage.themeRemoved"),
+        });
+      },
       onOpenCustomThemeImport: () => customThemeImportOwner.open(),
-      ...tabIconProps(),
+      tabIcon: settings.tabIcon,
+      lobsterdexEnabled: context.theme.branding.lobsterdex,
+      tabIconAgentAvatar: agent ? resolveAgentAvatarUrl(agent, identities.read().get(id)) : null,
+      tabIconLobsters: LOBSTER_PET_PALETTES.filter((palette) => unlocked.has(palette.id)),
+      setTabIconMode: (preference: NonNullable<UiSettings["tabIcon"]>) => {
+        if (
+          preference.startsWith("lobster:") &&
+          (!context.theme.branding.lobsterdex ||
+            !LOBSTER_PET_PALETTES.some((palette) => palette.id === preference.slice(8)) ||
+            !getLobsterdex().has(preference.slice(8)))
+        ) {
+          return;
+        }
+        applySettings({ tabIcon: preference });
+      },
       textScale: settings.textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
       textScaleOverridden: settings.textScale !== undefined,
-      setTextScale: (value) =>
+      setTextScale: (value: number) =>
         applySettings({
           textScale:
             value === UI_APPEARANCE_DEFAULTS.textScale ? undefined : normalizeTextScale(value),
@@ -926,10 +788,11 @@ export function createConfigPage(
       sidebarLiveActivity:
         settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
       hiddenSessionCatalogIds,
-      hiddenSessionCatalogLabels,
+      hiddenSessionCatalogLabels: { read: sessionCatalogLabels, scope: labelsRead() },
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
       terminalFontFamily: settings.terminalFontFamily,
-      setTerminalFontFamily: (value) => applySettings({ terminalFontFamily: value }),
+      setTerminalFontFamily: (value: string | undefined) =>
+        applySettings({ terminalFontFamily: value }),
       chatMessageMaxWidth: settings.chatMessageMaxWidth,
       chatShowTaskProgress:
         settings.chatShowTaskProgress ?? UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
@@ -944,15 +807,16 @@ export function createConfigPage(
       sessionObserverEnabled: controlUiConfig?.sessionObserver !== false,
       sessionObserverUtilityModel: modelSettingPrimary(utilityModel),
       sessionObserverResolvedModel: systemInfo?.defaultAgentUtilityModel,
-      sessionObserverModels,
-      sessionObserverModelsUnavailable,
+      sessionObserverModels: observerModels.models,
+      sessionObserverModelsScope: observerModels.scope,
+      sessionObserverModelsUnavailable: observerModels.unavailable,
       sessionObserverDisabled: sessionObserverBusy,
-      setSessionObserverEnabled: (enabled) =>
+      setSessionObserverEnabled: (enabled: boolean) =>
         void runtimeConfig.patch({
           raw: buildSessionObserverTogglePatch(enabled),
           note: t("configView.sessionObserver.toggleNote"),
         }),
-      setSessionObserverUtilityModel: (modelSelection) =>
+      setSessionObserverUtilityModel: (modelSelection: SessionObserverModelSelection) =>
         void runtimeConfig
           .patch({
             raw: buildSessionObserverUtilityModelPatch(modelSelection, utilityModel),
@@ -986,45 +850,47 @@ export function createConfigPage(
       resetChatFollowUpMode: () => resetSyncedPref("chatFollowUpMode"),
       catalogOpenTarget: normalizeCatalogOpenTarget(settings.catalogOpenTarget),
       pluginsHref: pathForRoute("plugin-settings", context.basePath),
-      installedSessionSourcePluginIds,
-      sessionSourcePluginsLoading,
+      sessionSourcePlugins: { read: sessionSourcePlugins, scope: pluginsRead() },
       microphone: {
         ...mediaDevices.microphone,
         selectedDeviceId: settings.realtimeTalkInputDeviceId ?? "",
       },
       composerHoldToRecord: settings.composerHoldToRecord !== false,
-      onMicrophoneRefresh: () => void refreshMediaDevices("microphone", true),
-      onMicrophoneSelect: (deviceId) =>
+      onMicrophoneRefresh: () =>
+        void refreshMediaDevice(mediaDevices.microphone, "microphone", true, invalidate),
+      onMicrophoneSelect: (deviceId: string) =>
         applySettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined }),
       camera: {
         ...mediaDevices.camera,
         selectedDeviceId: settings.realtimeTalkVideoDeviceId ?? "",
       },
-      onCameraRefresh: () => void refreshMediaDevices("camera", true),
-      onCameraSelect: (deviceId) => void selectCamera(deviceId),
+      onCameraRefresh: () =>
+        void refreshMediaDevice(mediaDevices.camera, "camera", true, invalidate),
+      onCameraSelect: (deviceId: string) => void selectCamera(deviceId),
       gatewayUrl: context.gateway.connection.gatewayUrl,
       assistantName: applicationConfig.read().assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: pageId === "advanced" ? undefined : titleForRoute(pageId),
       showSectionDocs: pageId !== "communications",
       showRootTab: !includeSections?.length,
-      includeSections: includeSections ? [...includeSections] : undefined,
+      includeSections,
       excludeSections,
       includeVirtualSections: pageId === "appearance" || pageId === "notifications",
-      settingsLayout: pageId === "advanced" ? "accordion" : undefined,
+      settingsLayout: pageId === "advanced" ? ("accordion" as const) : undefined,
       nativeNotifications: notifications?.read(),
       onNativeNotificationsRequestPermission: () =>
         context.nativeNotifications?.requestPermission(),
       onNativeNotificationsSendTest: () => context.nativeNotifications?.sendTest(),
-      webPush: webPush.read(),
-      onWebPushSubscribe: () => void context.webPush.run({ kind: "enable" }),
-      onWebPushUnsubscribe: () => void context.webPush.run({ kind: "disable" }),
-      onWebPushTest: () => void context.webPush.run({ kind: "test" }),
-      onWebPushSetUserPreferences: (preferences) =>
-        void context.webPush.run({ kind: "set", scope: "user", preferences }),
-      onWebPushSetDevicePreferences: (preferences) =>
-        void context.webPush.run({ kind: "set", scope: "device", preferences }),
-    } satisfies ConfigProps;
+      // Downstream equality checks need a new value for the mutable owner snapshot.
+      webPush: { ...webPush.read() },
+      onWebPushSubscribe: () => context.webPush.run({ kind: "enable" }),
+      onWebPushUnsubscribe: () => context.webPush.run({ kind: "disable" }),
+      onWebPushTest: () => context.webPush.run({ kind: "test" }),
+      onWebPushSetUserPreferences: (preferences: Push.WebPushNotificationPreferences) =>
+        context.webPush.run({ kind: "set", scope: "user", preferences }),
+      onWebPushSetDevicePreferences: (preferences: Push.WebPushDevicePreferences) =>
+        context.webPush.run({ kind: "set", scope: "device", preferences }),
+    };
   }
   const refresh = () => {
     synchronize();
@@ -1032,8 +898,6 @@ export function createConfigPage(
   };
   // Route changes synchronize the config owners, lazy requests, and polling.
   createEffect(route, (next) => updateRoute(next.pageId, next.routeData));
-  // Scroll the requested settings section after its DOM has committed.
-  createEffect(revision, () => afterCommit());
   onSettled(() => {
     // These notifications admit requests and retire connection-scoped work synchronously.
     const subscriptions = [
@@ -1055,8 +919,8 @@ export function createConfigPage(
     );
     customThemeImportOwner.connect(context.gateway.connection.gatewayUrl);
     mediaDeviceWatch = observeRealtimeTalkDevices(() => {
-      void refreshMediaDevices("microphone", false);
-      void refreshMediaDevices("camera", false);
+      void refreshMediaDevice(mediaDevices.microphone, "microphone", false, invalidate);
+      void refreshMediaDevice(mediaDevices.camera, "camera", false, invalidate);
     });
     synchronize();
     return () => {
@@ -1078,6 +942,7 @@ export function createConfigPage(
     };
   });
   return {
+    admittedRoute,
     application() {
       revision();
       return context;
@@ -1087,5 +952,6 @@ export function createConfigPage(
     nowMs,
     mutationDisabled,
     updateBusy,
+    updates,
   };
 }

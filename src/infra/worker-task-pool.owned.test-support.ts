@@ -1,10 +1,10 @@
-import type { EventEmitter } from "node:events";
-import type { MessagePort } from "node:worker_threads";
+import { EventEmitter } from "node:events";
+import type { MessagePort, WorkerOptions } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import type { vi } from "vitest";
+import { vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 
-export type PostedTask = {
+type PostedTask = {
   input?: string;
   taskId?: number;
   responseId?: number;
@@ -12,11 +12,36 @@ export type PostedTask = {
   resourcePort?: MessagePort;
 };
 
-export type FakeWorker = EventEmitter & {
-  posted: ReturnType<typeof vi.fn<(message: PostedTask) => void>>;
-  postMessage: (message: PostedTask) => void;
+export type MockWorker<Task> = EventEmitter & {
+  options?: WorkerOptions;
+  posted: ReturnType<typeof vi.fn<(message: Task) => void>>;
+  postMessage: (message: Task) => void;
   terminate: ReturnType<typeof vi.fn<() => Promise<number>>>;
 };
+export type FakeWorker = MockWorker<PostedTask>;
+
+export function createMockWorkerClass<Task>(
+  workers: MockWorker<Task>[],
+  onPost: (worker: MockWorker<Task>, message: Task) => void = () => {},
+) {
+  return class extends EventEmitter {
+    constructor(
+      _url: URL,
+      readonly options: WorkerOptions,
+    ) {
+      super();
+      workers.push(this);
+    }
+    posted = vi.fn((message: Task) => onPost(this, message));
+    postMessage = this.posted;
+    ref() {}
+    unref() {}
+    terminate = vi.fn(async () => {
+      this.emit("exit", 0);
+      return 0;
+    });
+  };
+}
 
 export function reply(worker: FakeWorker, input: string, value = input): void {
   const task = expectDefined(
@@ -34,7 +59,7 @@ export function request(worker: FakeWorker, input: string, id = 1): void {
   worker.emit("message", { status: "request", taskId: posted.taskId, id, value: id });
 }
 
-export function holdExit(worker: FakeWorker) {
+export function holdExit(worker: Pick<FakeWorker, "emit" | "terminate">) {
   const entered = createDeferredCore();
   const exit = createDeferredCore();
   worker.terminate.mockImplementationOnce(async () => {
@@ -43,5 +68,9 @@ export function holdExit(worker: FakeWorker) {
     worker.emit("exit", 0);
     return 0;
   });
-  return { entered: entered.promise, release: () => exit.resolve() };
+  return {
+    entered: entered.promise,
+    release: () => exit.resolve(),
+    reject: (error: Error) => exit.reject(error),
+  };
 }

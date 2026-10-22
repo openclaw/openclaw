@@ -1,9 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 type AgentDatabasePreparation = {
   waitForAgentPreparation(
     agentId: string,
-    options?: { env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+    options?: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; forWrite?: boolean },
   ): Promise<void> | undefined;
 };
 
@@ -22,4 +23,23 @@ export function waitForAgentDatabasePreparation(
   options?: { env?: NodeJS.ProcessEnv; signal?: AbortSignal },
 ): Promise<void> | undefined {
   return preparation.getStore()?.()?.waitForAgentPreparation(agentId, options);
+}
+
+/** Wait before acquiring write/session authority; startup alone owns the completion and budget. */
+export function waitForAgentDatabaseWriteAdmission(
+  agentId: string,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    owner?: AgentDatabasePreparation;
+  } = {},
+): Promise<void> | undefined {
+  const signals = [options.signal, getAsyncWorkSignal()].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  return (options.owner ?? preparation.getStore()?.())?.waitForAgentPreparation(agentId, {
+    env: options.env,
+    signal: signals.length ? AbortSignal.any(signals) : undefined,
+    forWrite: true,
+  });
 }

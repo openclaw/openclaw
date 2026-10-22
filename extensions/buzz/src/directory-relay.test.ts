@@ -7,7 +7,7 @@ type SubscriptionRecord = {
   filters: Filter[];
   handlers: {
     onevent: (event: Event) => void;
-    oneose: () => void;
+    oneose?: () => void;
     onclose: (reason: string) => void;
   };
   close: ReturnType<typeof vi.fn>;
@@ -51,6 +51,7 @@ function createProfileRelay(relayClose?: ReturnType<typeof vi.fn>) {
 function startDirectory(relay: Relay, onFatalError?: (error: Error) => void) {
   return startBuzzDirectoryRelay({
     ...directoryParams(relay),
+    subscribedRoomIds: new Set(),
     onFatalError,
   });
 }
@@ -64,7 +65,7 @@ function queryRooms(relay: Relay, signal?: AbortSignal) {
 }
 
 describe("Buzz directory relay", () => {
-  it("waits for EOSE and collapses queued profile replacements to the latest set", () => {
+  it("replaces unfinished profile reads with the latest member set", () => {
     const { relay, subscriptions } = createProfileRelay();
     const directory = startDirectory(relay);
 
@@ -72,31 +73,19 @@ describe("Buzz directory relay", () => {
     directory.replaceProfilePublicKeys([BOT_PUBLIC_KEY, SECOND_MEMBER_PUBLIC_KEY]);
     directory.replaceProfilePublicKeys([BOT_PUBLIC_KEY, LATEST_MEMBER_PUBLIC_KEY]);
 
-    expect(subscriptions).toHaveLength(1);
-    expect(subscriptions[0]?.close).not.toHaveBeenCalled();
-
-    subscriptions[0]?.handlers.oneose();
-
-    expect(subscriptions).toHaveLength(2);
+    expect(subscriptions).toHaveLength(3);
     expect(subscriptions[0]?.close).toHaveBeenCalledWith("directory profile subscription replaced");
-    expect(subscriptions[1]?.filters[0]?.authors).toEqual([
+    expect(subscriptions[1]?.close).toHaveBeenCalledWith("directory profile subscription replaced");
+    expect(subscriptions[2]?.filters[0]?.authors).toEqual([
       BOT_PUBLIC_KEY,
       LATEST_MEMBER_PUBLIC_KEY,
     ]);
 
     directory.close();
-    expect(subscriptions[1]?.close).toHaveBeenCalledWith("directory shutdown");
-  });
-
-  it("does not start a queued profile replacement after the relay closes", () => {
-    const { relay, subscriptions } = createProfileRelay();
-    const directory = startDirectory(relay);
-
-    directory.replaceProfilePublicKeys([BOT_PUBLIC_KEY, FIRST_MEMBER_PUBLIC_KEY]);
-    directory.replaceProfilePublicKeys([BOT_PUBLIC_KEY, SECOND_MEMBER_PUBLIC_KEY]);
-    subscriptions[0]?.handlers.onclose("relay connection closed");
-
-    expect(subscriptions).toHaveLength(1);
+    directory.replaceProfilePublicKeys([BOT_PUBLIC_KEY]);
+    expect(subscriptions).toHaveLength(3);
+    expect(subscriptions.map(({ close }) => close.mock.calls.length)).toEqual([1, 1, 1]);
+    expect(subscriptions[2]?.close).toHaveBeenCalledWith("directory shutdown");
   });
 
   it("closes sibling profile subscriptions when one chunk fails", () => {
@@ -115,7 +104,7 @@ describe("Buzz directory relay", () => {
     );
   });
 
-  it("recycles the owning relay when profile subscriptions never reach EOSE", async () => {
+  it("keeps the relay running when optional profile reads never reach EOSE", async () => {
     vi.useFakeTimers();
     const relayClose = vi.fn();
     const onFatalError = vi.fn();
@@ -123,18 +112,15 @@ describe("Buzz directory relay", () => {
     const directory = startDirectory(relay, onFatalError);
 
     directory.replaceProfilePublicKeys([BOT_PUBLIC_KEY, FIRST_MEMBER_PUBLIC_KEY]);
-    directory.replaceProfilePublicKeys([BOT_PUBLIC_KEY, SECOND_MEMBER_PUBLIC_KEY]);
     await vi.advanceTimersByTimeAsync(10_000);
 
-    expect(onFatalError).toHaveBeenCalledOnce();
-    expect(onFatalError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Timed out loading Buzz profile subscriptions" }),
-    );
+    expect(onFatalError).not.toHaveBeenCalled();
     expect(subscriptions).toHaveLength(1);
     expect(subscriptions[0]?.close).not.toHaveBeenCalled();
-    expect(relayClose).toHaveBeenCalledOnce();
+    expect(relayClose).not.toHaveBeenCalled();
 
     directory.close();
+    expect(subscriptions[0]?.close).toHaveBeenCalledExactlyOnceWith("directory shutdown");
     vi.useRealTimers();
   });
 
@@ -147,7 +133,7 @@ describe("Buzz directory relay", () => {
     await expect(query).rejects.toThrow("stop");
     expect(subscriptions[0]?.close).not.toHaveBeenCalled();
 
-    subscriptions[0]?.handlers.oneose();
+    subscriptions[0]?.handlers.oneose?.();
     expect(subscriptions[0]?.close).toHaveBeenCalledWith("directory query complete");
   });
 

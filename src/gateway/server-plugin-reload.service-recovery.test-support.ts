@@ -19,9 +19,48 @@ import {
   verifyOneWayDrainRecovery,
   verifyReversibleFenceRecovery,
 } from "./server-plugin-reload.suspension.test-support.js";
+import { startGatewayPluginServices } from "./server-startup-plugin-services.js";
 
 export function registerPluginServiceRecoveryTests(createRecoveryFixture: RecoveryFixtureFactory) {
   describe("Gateway plugin service recovery ownership", () => {
+    it("stops services published by deferred startup while reload prepares", async () => {
+      const fixture = await createRecoveryFixture({ abortOnCandidateStart: false });
+      await fixture.owner.currentServices()?.stop();
+      fixture.owner.setServices(null);
+      fixture.firstStop.mockClear();
+      fixture.siblingStop.mockClear();
+      let startupPending = true;
+      await fixture.reload(fixture.getConfig(), ["first"], [], {
+        checkpoint: async () => {
+          if (!startupPending) {
+            return;
+          }
+          startupPending = false;
+          await startGatewayPluginServices({
+            scheduler: fixture.runtime.scheduler,
+            cfg: fixture.getConfig(),
+            pluginRegistry: fixture.previousRegistry,
+            defaultWorkspaceDir: "",
+            onPluginServices: fixture.owner.setServices,
+            log: {
+              warn: (message) => {
+                throw new Error(message);
+              },
+            },
+          });
+          expect(fixture.firstStart).toHaveBeenCalledTimes(2);
+          expect(fixture.siblingStart).toHaveBeenCalledTimes(2);
+        },
+      });
+      expect(fixture.firstStop).toHaveBeenCalledOnce();
+      expect(fixture.siblingStop).not.toHaveBeenCalled();
+      expect(fixture.siblingStart).toHaveBeenCalledTimes(2);
+      await fixture.owner.currentServices()?.stop();
+      expect(fixture.firstStop).toHaveBeenCalledOnce();
+      expect(fixture.siblingStop).toHaveBeenCalledOnce();
+      expect(fixture.candidateStop).toHaveBeenCalledOnce();
+    });
+
     it.each(["settled", "rejected", "deadline"] as const)(
       "observes shared-deadline service cleanup before restoring channels: %s",
       async (outcome) => {
@@ -87,7 +126,6 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         await vi.waitFor(() => expect(starts).toEqual(["default"]));
         const original = getPluginInstance(fixture.previousRegistry.plugins[0]!);
         assert(original);
-        const generation = fixture.owner.currentClaim();
         vi.useFakeTimers();
         const pending = observeSettlement(fixture.reload().catch((error: unknown) => error));
         try {
@@ -128,7 +166,6 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           expect(await pending.promise).toMatchObject({
             details: { committed: false, phase: "drain" },
           });
-          expect(fixture.owner.currentClaim()).toEqual(generation);
           expect(fixture.firstStop).toHaveBeenCalledOnce();
           expect(laterStop).toHaveBeenCalledOnce();
           expect(fixture.siblingStop).not.toHaveBeenCalled();
@@ -197,7 +234,6 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           vi.spyOn(manager, "stopChannel").mockRejectedValueOnce(permanent);
         }
         const original = getPluginInstance(fixture.previousRegistry.plugins[0]!);
-        const generation = fixture.owner.currentClaim();
         vi.useFakeTimers();
         const pending = observeSettlement(fixture.reload().catch((error: unknown) => error));
         try {
@@ -214,7 +250,6 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           await vi.advanceTimersByTimeAsync(70_000);
           expect(fixture.owner.getReloadStatus()?.phase).toBe("failed");
           expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
-          expect(fixture.owner.currentClaim()).toEqual(generation);
           expect(fixture.candidates).toHaveLength(0);
           expect(registrations).toBe(1);
           expect(fixture.firstStart).toHaveBeenCalledOnce();

@@ -20,6 +20,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { FsSafeError, openLocalFileSafely, type OpenResult } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { buildRandomTempFilePath } from "../infra/temp-download.js";
+import { logWarn } from "../logger.js";
 import {
   readRemoteMediaBufferWithHeaders,
   type MediaFetchRetryOptions,
@@ -395,6 +396,9 @@ export class MediaAttachmentCache {
       await fs.unlink(tmpPath);
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT")) {
+        logWarn(
+          `media-understanding: could not remove staged attachment ${tmpPath}; remove it manually if it remains: ${String(error)}`,
+        );
         return;
       }
     }

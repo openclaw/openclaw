@@ -205,9 +205,6 @@ export function prepareComparisonClaimsFromStores(params: {
       }
       try {
         const result = await reader.read({ operation: "keys" });
-        if (result.operation !== "keys") {
-          throw new Error("Legacy key scan returned another retirement operation");
-        }
         const keys = result.keys.map((key) => {
           const canonicalKey = canonicalKeyFor(key, params.legacyAgentId, params.ownerAgentId);
           if (canonicalKey) {
@@ -228,9 +225,6 @@ export function prepareComparisonClaimsFromStores(params: {
       }
       try {
         const result = await reader.read({ operation: "comparison-claims", store, keys: targeted });
-        if (result.operation !== "comparison-claims") {
-          throw new Error("Legacy claim scan returned another retirement operation");
-        }
         claims.push(...result.claims.map((claim) => ({ store, claim })));
       } catch (error) {
         unreadable(store, error);
@@ -277,9 +271,6 @@ export async function storesHaveLegacyAgentSessionKey(params: {
   return withSessionRetirementReaders(readers, async () => {
     for (const reader of readers) {
       const result = await reader.read({ operation: "keys" });
-      if (result.operation !== "keys") {
-        throw new Error("Legacy key scan returned another retirement operation");
-      }
       if (result.keys.some((key) => legacyAgentKeyPrefix(key, params.legacyAgentId) !== null)) {
         return true;
       }

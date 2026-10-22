@@ -103,15 +103,16 @@ export async function loadPreparedModelRuntimeOwner<T>(
     input = rebindInputToCommittedConfiguredOwner(context.owners, input);
   }
   try {
-    return await projectPublishedModelRuntimeOwner(input, context, project);
+    return await projectNormalizedModelRuntimeOwner(input, context, project, assertLifetime);
   } catch (error) {
     if (!isPreparedModelRuntimeMissingOwnerError(error)) {
       throw error;
     }
   }
   await activateStandalone(input);
+  assertLifetime();
   // Concurrent reloads may make this request fail; the next request uses the new owner.
-  return await projectPublishedModelRuntimeOwner(input, context, project);
+  return await projectNormalizedModelRuntimeOwner(input, context, project, assertLifetime);
 }
 
 /** Bind passive reads and retained acquisitions to the same publication owner. */
@@ -132,7 +133,7 @@ export function createPublishedModelRuntimeAccess(
   };
 }
 
-/** Project or retain the exact published owner before its snapshot crosses an await. */
+/** Prepare raw read inputs once before projecting their published owner. */
 async function projectPublishedModelRuntimeOwner<T>(
   rawInput: PreparedModelRuntimeInput,
   context: PublishedModelRuntimeContext,
@@ -144,6 +145,28 @@ async function projectPublishedModelRuntimeOwner<T>(
   }
   assertLifetime();
   const input = normalizePreparedModelRuntimeInput(rawInput);
+  // Explicit empty raw fields constrain lookup even when normalization omits them.
+  return await projectNormalizedModelRuntimeOwner(
+    input,
+    context,
+    project,
+    assertLifetime,
+    rawInput.workspaceDir === undefined ||
+      rawInput.agentId === undefined ||
+      rawInput.runtimePluginSelections === undefined,
+  );
+}
+
+/** Retain normalized read facts, including their lifetime, across publication waits. */
+async function projectNormalizedModelRuntimeOwner<T>(
+  input: PreparedModelRuntimeInput,
+  context: PublishedModelRuntimeContext,
+  project: (owner: PreparedModelRuntimeOwner, snapshot: PreparedModelRuntimeSnapshot) => T,
+  assertLifetime: () => void,
+  allowConfiguredWorkspaceFallback = input.workspaceDir === undefined ||
+    input.agentId === undefined ||
+    input.runtimePluginSelections === undefined,
+): Promise<T> {
   const replacement = context.getPendingReplacement(input);
   if (replacement) {
     assertPreparedModelRuntimeAdmissionCanWait();
@@ -151,10 +174,7 @@ async function projectPublishedModelRuntimeOwner<T>(
     assertLifetime();
   }
   const existing = resolvePublishedOwner(context.owners, input, {
-    allowConfiguredWorkspaceFallback:
-      rawInput.workspaceDir === undefined ||
-      rawInput.agentId === undefined ||
-      rawInput.runtimePluginSelections === undefined,
+    allowConfiguredWorkspaceFallback,
   });
   if (
     input.readOnly &&

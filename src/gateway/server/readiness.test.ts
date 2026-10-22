@@ -7,7 +7,7 @@ import {
 } from "../../state/agent-database-admission.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
-import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 import { createReadinessChecker } from "./readiness.js";
 
@@ -89,11 +89,15 @@ function readySnapshot(
   uptimeMs = FIVE_MIN_MS,
   extra: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  return { ready: true, failing: [], uptimeMs, ...extra };
+  return { ready: true, coreReady: true, failing: [], uptimeMs, ...extra };
 }
 
-function failingSnapshot(failing: string[], uptimeMs = FIVE_MIN_MS): Record<string, unknown> {
-  return { ready: false, failing, uptimeMs };
+function failingSnapshot(
+  failing: string[],
+  uptimeMs = FIVE_MIN_MS,
+  coreReady = false,
+): Record<string, unknown> {
+  return { ready: false, coreReady, failing, uptimeMs };
 }
 
 describe("createReadinessChecker", () => {
@@ -109,7 +113,6 @@ describe("createReadinessChecker", () => {
     let pending = true;
     const { manager, readiness } = createReadinessHarness({
       [getter]: () => pending,
-      cacheTtlMs: 1_000,
     });
     expect(readiness()).toEqual(failingSnapshot([reason]));
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
@@ -122,7 +125,6 @@ describe("createReadinessChecker", () => {
     let failure: Error | undefined;
     const { manager, readiness } = createReadinessHarness({
       getStateDatabaseFailure: () => failure,
-      cacheTtlMs: 1_000,
     });
     expect(readiness()).toEqual(readySnapshot());
 
@@ -171,7 +173,7 @@ describe("createReadinessChecker", () => {
     });
 
     pluginReload = undefined;
-    expect(readiness()).toEqual(failingSnapshot(["discord"]));
+    expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS, true));
   });
 
   it.each([
@@ -195,11 +197,12 @@ describe("createReadinessChecker", () => {
       let refusals: AgentDatabaseAdmissionRefusal[] = [];
       const { readiness } = createReadinessHarness({
         accounts: channelFailed ? { discord: stoppedAccount({ connected: false }) } : {},
-        cacheTtlMs: 1_000,
         shouldSkipChannelReadiness: () => skipChannels,
         getAgentDatabaseAdmissionRefusals: () => refusals,
       });
-      const channelReadiness = channelFailed ? failingSnapshot(["discord"]) : readySnapshot();
+      const channelReadiness = channelFailed
+        ? failingSnapshot(["discord"], FIVE_MIN_MS, true)
+        : readySnapshot();
       expect(readiness()).toEqual(channelReadiness);
 
       refusals = [pending];
@@ -231,7 +234,7 @@ describe("createReadinessChecker", () => {
         { startedAgoMs: 30_000 },
       );
       expect(readiness()).toEqual(
-        lifecycle ? failingSnapshot(["discord"], 30_000) : readySnapshot(30_000),
+        lifecycle ? failingSnapshot(["discord"], 30_000, true) : readySnapshot(30_000),
       );
     },
   );
@@ -279,7 +282,7 @@ describe("createReadinessChecker", () => {
       ingressUnavailable: true,
       lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
     });
-    expect(readiness()).toEqual(failingSnapshot(["discord"]));
+    expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS, true));
   });
 
   it("treats stale-socket channels as ready to avoid pulling healthy idle pods", () => {
@@ -294,12 +297,9 @@ describe("createReadinessChecker", () => {
   });
 
   it("caches readiness snapshots briefly to keep repeated probes cheap", () => {
-    const { manager, readiness } = discordHarness(
-      {
-        lastTransportActivityAt: Date.now() - 1_000,
-      },
-      { cacheTtlMs: 1_000 },
-    );
+    const { manager, readiness } = discordHarness({
+      lastTransportActivityAt: Date.now() - 1_000,
+    });
     expect(readiness()).toEqual(readySnapshot());
     vi.advanceTimersByTime(500);
     expect(readiness()).toEqual(readySnapshot(300_500));
@@ -313,7 +313,6 @@ describe("createReadinessChecker", () => {
   it("refreshes stopped channels when the clock moves behind cached readiness", () => {
     const { manager, readiness } = createReadinessHarness({
       accounts: { discord: managedAccount({ lifecycle: "ready" }) },
-      cacheTtlMs: 1_000,
     });
 
     expect(readiness()).toEqual(readySnapshot());
@@ -322,7 +321,7 @@ describe("createReadinessChecker", () => {
     );
     vi.setSystemTime(Date.now() - 60_000);
 
-    expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS - 60_000));
+    expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS - 60_000, true));
     expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
   });
 

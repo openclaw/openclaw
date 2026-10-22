@@ -18,6 +18,10 @@ import {
   resolveExactCurrentConversationMatch,
   type CurrentConversationMatch,
 } from "./message-action-current-conversation.js";
+import {
+  resolveChannelMessageActionFacts,
+  type ChannelMessageActionReadPolicy,
+} from "./message-action-names.js";
 import { resolveChannelPluginRegistration } from "./registry.js";
 import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
@@ -49,91 +53,6 @@ type PreparedMessageActionReadContext = {
   assertAliasAuthorityCurrent: () => void;
 };
 
-type ChannelMessageActionReadPolicy =
-  | { readonly kind: "none" }
-  | {
-      readonly kind: "conversation-read";
-      readonly targetlessCache: "deny" | "bundled-current-context";
-    };
-
-const NO_CONVERSATION_READ = { kind: "none" } as const;
-const CONVERSATION_READ = { kind: "conversation-read", targetlessCache: "deny" } as const;
-const BUNDLED_CURRENT_CONTEXT_CACHE_READ = {
-  kind: "conversation-read",
-  targetlessCache: "bundled-current-context",
-} as const;
-
-// Exhaustive by design: every new core action must declare its read authority
-// before the dispatcher will compile.
-const CHANNEL_MESSAGE_ACTION_READ_POLICIES = {
-  send: NO_CONVERSATION_READ,
-  broadcast: NO_CONVERSATION_READ,
-  poll: NO_CONVERSATION_READ,
-  "poll-vote": CONVERSATION_READ,
-  react: CONVERSATION_READ,
-  reactions: CONVERSATION_READ,
-  read: CONVERSATION_READ,
-  edit: CONVERSATION_READ,
-  unsend: CONVERSATION_READ,
-  reply: NO_CONVERSATION_READ,
-  sendWithEffect: NO_CONVERSATION_READ,
-  renameGroup: NO_CONVERSATION_READ,
-  setGroupIcon: NO_CONVERSATION_READ,
-  addParticipant: NO_CONVERSATION_READ,
-  removeParticipant: NO_CONVERSATION_READ,
-  leaveGroup: NO_CONVERSATION_READ,
-  sendAttachment: NO_CONVERSATION_READ,
-  delete: CONVERSATION_READ,
-  pin: CONVERSATION_READ,
-  unpin: CONVERSATION_READ,
-  "list-pins": CONVERSATION_READ,
-  permissions: CONVERSATION_READ,
-  "thread-create": NO_CONVERSATION_READ,
-  "thread-list": CONVERSATION_READ,
-  "thread-reply": NO_CONVERSATION_READ,
-  search: CONVERSATION_READ,
-  sticker: NO_CONVERSATION_READ,
-  "sticker-search": BUNDLED_CURRENT_CONTEXT_CACHE_READ,
-  "member-info": CONVERSATION_READ,
-  "role-info": CONVERSATION_READ,
-  "emoji-list": CONVERSATION_READ,
-  "emoji-upload": NO_CONVERSATION_READ,
-  "sticker-upload": NO_CONVERSATION_READ,
-  "role-add": NO_CONVERSATION_READ,
-  "role-remove": NO_CONVERSATION_READ,
-  "channel-info": CONVERSATION_READ,
-  "channel-list": CONVERSATION_READ,
-  "channel-create": NO_CONVERSATION_READ,
-  "conversation-open": NO_CONVERSATION_READ,
-  "channel-edit": NO_CONVERSATION_READ,
-  "channel-delete": NO_CONVERSATION_READ,
-  "channel-move": NO_CONVERSATION_READ,
-  "category-create": NO_CONVERSATION_READ,
-  "category-edit": NO_CONVERSATION_READ,
-  "category-delete": NO_CONVERSATION_READ,
-  "topic-create": NO_CONVERSATION_READ,
-  "topic-edit": NO_CONVERSATION_READ,
-  "voice-status": CONVERSATION_READ,
-  "event-list": CONVERSATION_READ,
-  "event-create": NO_CONVERSATION_READ,
-  timeout: NO_CONVERSATION_READ,
-  kick: NO_CONVERSATION_READ,
-  ban: NO_CONVERSATION_READ,
-  "set-profile": NO_CONVERSATION_READ,
-  "set-presence": NO_CONVERSATION_READ,
-  "download-file": CONVERSATION_READ,
-  "upload-file": NO_CONVERSATION_READ,
-} as const satisfies Record<ChannelMessageActionName, ChannelMessageActionReadPolicy>;
-
-function resolveChannelMessageActionReadPolicy(
-  action: unknown,
-): ChannelMessageActionReadPolicy | undefined {
-  if (typeof action !== "string" || !Object.hasOwn(CHANNEL_MESSAGE_ACTION_READ_POLICIES, action)) {
-    return undefined;
-  }
-  return CHANNEL_MESSAGE_ACTION_READ_POLICIES[action as ChannelMessageActionName];
-}
-
 type MessageActionReadEnforcement =
   | { kind: "provider-owned"; pluginTrust: "bundled" | "external"; fenced: boolean }
   | {
@@ -141,42 +60,15 @@ type MessageActionReadEnforcement =
       pluginTrust: "bundled" | "external";
     };
 
-// Context retrieval only. The broader conversation-read class also contains mutations.
-const FENCED_PROVIDER_READ_ACTIONS: ReadonlySet<string> = new Set<ChannelMessageActionName>([
-  "read",
-  "search",
-  "reactions",
-  "list-pins",
-  "thread-list",
-  "channel-info",
-  "permissions",
-  "member-info",
-  "role-info",
-  "emoji-list",
-  "channel-list",
-  "voice-status",
-  "event-list",
-  "sticker-search",
-  "download-file",
-]);
-
 export function isFencedProviderReadAction(action: string): action is ChannelMessageActionName {
-  return FENCED_PROVIDER_READ_ACTIONS.has(action);
+  return resolveChannelMessageActionFacts(action)?.fencedRead === true;
 }
-
-const SCHEDULED_MESSAGE_WRITE_POLICIES = new Map<string, "operator" | "provider">([
-  ["channel-edit", "operator"],
-  ["delete", "provider"],
-  ["edit", "provider"],
-  ["pin", "provider"],
-  ["unpin", "provider"],
-]);
 
 /** Host admission stays action-specific; a plugin declaration never adds actions. */
 export function isScheduledMessageWriteAction(
   action: string,
 ): action is "channel-edit" | "delete" | "edit" | "pin" | "unpin" {
-  return SCHEDULED_MESSAGE_WRITE_POLICIES.has(action);
+  return resolveChannelMessageActionFacts(action)?.scheduledWrite !== undefined;
 }
 
 type ScheduledMessageActionAccess = {
@@ -312,7 +204,7 @@ function attachExternalCurrentTargetSibling(params: {
       (!requestedTarget.kind || !normalized.kind || normalized.kind === requestedTarget.kind)
     );
   });
-  if (typeof trustedCurrentTarget !== "string" || !trustedCurrentTarget.trim()) {
+  if (!trustedCurrentTarget) {
     return params.ctx;
   }
   return {
@@ -339,7 +231,7 @@ function canonicalizeExternalExactCurrentTarget(ctx: ChannelMessageActionContext
 function prepareMessageActionReadContext(
   ctx: ChannelMessageActionDispatchContext,
 ): PreparedMessageActionReadContext | undefined {
-  const actionPolicy = resolveChannelMessageActionReadPolicy(ctx.action);
+  const actionPolicy = resolveChannelMessageActionFacts(ctx.action)?.readPolicy;
   if (!actionPolicy) {
     return undefined;
   }
@@ -530,7 +422,7 @@ async function prepareScheduledMessageWriteContext(
   prepared: PreparedMessageActionReadContext,
 ): Promise<ChannelMessageActionContext | undefined> {
   const action = prepared.actionContext.action;
-  const policy = SCHEDULED_MESSAGE_WRITE_POLICIES.get(action);
+  const policy = resolveChannelMessageActionFacts(action)?.scheduledWrite;
   if (!policy || !ctx.messageActionAuthorization?.scheduled) {
     return undefined;
   }
@@ -657,7 +549,7 @@ export async function dispatchChannelMessageAction(
   }
   const scheduledWrite =
     ctx.messageActionAuthorization?.scheduled &&
-    SCHEDULED_MESSAGE_WRITE_POLICIES.has(prepared.actionContext.action)
+    isScheduledMessageWriteAction(prepared.actionContext.action)
       ? await prepareScheduledMessageWriteContext(ctx, prepared)
       : undefined;
   const run = (actionContext: ChannelMessageActionContext) =>
@@ -677,7 +569,8 @@ export async function dispatchChannelMessageAction(
       };
       // This writer passed the private job/account gate and declared provider target checks.
       const match =
-        scheduledWrite && SCHEDULED_MESSAGE_WRITE_POLICIES.get(actionContext.action) === "provider"
+        scheduledWrite &&
+        resolveChannelMessageActionFacts(actionContext.action)?.scheduledWrite === "provider"
           ? true
           : resolveMessageActionConversationReadGate(gateParams);
       let matches: boolean;

@@ -36,9 +36,6 @@ const deferredSessionSuspension = new AsyncLocalStorage<{
 }>();
 
 type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
-type SessionSuspensionTarget =
-  | { mode: "defer"; defer: (params: SessionSuspensionParams) => void }
-  | { mode: "suspend" };
 export type SessionSuspensionParams = {
   cfg: OpenClawConfig | undefined;
   agentId?: string;
@@ -68,15 +65,17 @@ export function runWithDeferredSessionSuspension<T>(
   return deferredSessionSuspension.run({ claimed: false, onDeferred }, run);
 }
 
-export function resolveSessionSuspensionTarget(): SessionSuspensionTarget {
+export function captureSessionSuspension(): (params: SessionSuspensionParams) => void {
   const scope = deferredSessionSuspension.getStore();
   if (!scope || scope.claimed) {
-    return { mode: "suspend" };
+    return (params) => {
+      void suspendSession(params);
+    };
   }
   // One candidate callback may launch nested direct embedded runs. Only its
   // first embedded run inherits the outer fallback's remaining-candidate fact.
   scope.claimed = true;
-  return { mode: "defer", defer: (params) => scope.onDeferred?.(params) };
+  return (params) => scope.onDeferred?.(params);
 }
 
 export function fenceSessionSuspensionWritesForGatewayShutdown(): void {

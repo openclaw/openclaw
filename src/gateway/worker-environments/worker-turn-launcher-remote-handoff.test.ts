@@ -2,10 +2,10 @@ import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Value } from "typebox/value";
-import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WorkerConnectRequestFrameSchema } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
-import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import {
   installSessionPlacementAdmissionProvider,
   withSessionPlacementTurnAdmission,
@@ -27,8 +27,8 @@ import {
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
+import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   buildWorkerConnectParams,
   type WorkerLaunchDescriptor,
@@ -38,6 +38,8 @@ import { verifyAgentRuntimeIdentityToken } from "../agent-runtime-identity-token
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   completeTurn,
+  createLauncher,
+  installLauncherTest,
   environmentForTunnel,
   launchDescriptor,
   localResult,
@@ -51,8 +53,6 @@ import {
   OWNER_EPOCH,
   SESSION_ID,
   browserEnvironment,
-  cleanupWorkerTurnLauncherTest,
-  createWorkerSessionTurnPlacementProvider,
   openSessionManager,
   placements,
   root,
@@ -60,11 +60,8 @@ import {
   sessionTarget,
   setWorkerTurnAdmissionCleanup,
   setWorkerTurnSessionTarget,
-  setupWorkerTurnLauncherTest,
   turn,
 } from "./worker-turn-launcher.test-support.js";
-
-afterAll(closeStateDatabaseForTest);
 
 function wireUser(text: string, timestamp: number) {
   return { role: "user", content: [{ type: "text", text }], timestamp };
@@ -85,8 +82,7 @@ async function verifyIdentity(assignment: WorkerLaunchDescriptor["assignment"]) 
 }
 
 describe("worker turn launcher remote handoff", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+  installLauncherTest();
   afterEach(() => setActiveNodeContexts([]));
 
   it("settles a delegated worker reply and conflict without borrowing its parent transcript", async () => {
@@ -216,10 +212,15 @@ describe("worker turn launcher remote handoff", () => {
       acknowledgeCredentialDelivery,
       startTunnel: vi.fn(async () => tunnel),
     });
-    const resolveWorkspace = vi.fn(async () => ({ kind: "local" as const, path: root }));
-    const provider = createWorkerSessionTurnPlacementProvider({
+    const preparingWorkspace = createDeferred();
+    const resumePreparation = createDeferred();
+    const resolveWorkspace = vi.fn(async () => {
+      preparingWorkspace.resolve();
+      await resumePreparation.promise;
+      return { kind: "local" as const, path: root };
+    });
+    const provider = createLauncher({
       environments,
-      placements,
       resolveWorkspace,
       reconcileActivePlacement: async () => {},
     });
@@ -249,7 +250,10 @@ describe("worker turn launcher remote handoff", () => {
     const parent = await SessionManager.openAsync(parentTarget);
     await parent.appendMessageAsync(makeAgentUserMessage({ content: "Delegate this task" }));
     const parentEntries = parent.getPersistedEntries();
-    const result = await withOwnedSessionTranscriptWrites(
+    const preparationStartedAtMs = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(preparationStartedAtMs);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const execution = withOwnedSessionTranscriptWrites(
       {
         sessionTarget: { ...parentTarget, expectedWriterRunId: "parent-run" },
         assertCommitAllowed: () => {},
@@ -271,12 +275,30 @@ describe("worker turn launcher remote handoff", () => {
           runLocal,
         ),
     );
+    let result: Awaited<typeof execution>;
+    try {
+      await awaitGateBeforeSettlement(
+        preparingWorkspace.promise,
+        execution,
+        "Worker settled before workspace preparation",
+      );
+      // Descriptor timeout belongs to worker execution, not host preparation.
+      clock.mockReturnValue(preparationStartedAtMs + 6_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      resumePreparation.resolve();
+      vi.useRealTimers();
+      result = await execution;
+    } finally {
+      resumePreparation.resolve();
+      vi.useRealTimers();
+      await execution.catch(() => {});
+      clock.mockRestore();
+    }
     expect(result.payloads).toEqual([{ text: "Worker reply" }]);
-    await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
+    await waitForSessionRunEnd(SESSION_ID, null);
     expect((await SessionManager.openAsync(parentTarget)).getPersistedEntries()).toEqual(
       parentEntries,
     );
-
     expect(runLocal).not.toHaveBeenCalled();
     expect(resolveWorkspace).toHaveBeenCalledWith({
       sessionId: SESSION_ID,
@@ -435,7 +457,7 @@ describe("worker turn launcher remote handoff", () => {
       get: vi.fn(() => browserEnvironment()),
       startTunnel: vi.fn(async () => tunnel),
     });
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const provider = createLauncher({ environments });
 
     await provider.executeTurn(
       runIdentity("run-persisted-user"),

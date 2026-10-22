@@ -46,7 +46,7 @@ export async function inspectDoctorDatabaseEngines(
     workerOptions: { workerData: { doctorDatabaseEngines: true } },
   });
   try {
-    return await pool.run(input, {});
+    return await pool.run({ ...input, env: { ...input.env } }, {});
   } finally {
     await pool.close();
   }

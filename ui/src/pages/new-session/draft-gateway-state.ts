@@ -160,8 +160,8 @@ export class DraftGatewayState {
     const request = {};
     this.cloudProfileRequest = request;
     this.cloudProfileStatus = client && policy ? "pending" : "initial";
-    this.callbacks.changed();
     if (!client || !policy) {
+      this.callbacks.changed();
       return Promise.resolve();
     }
     const required = policy.requiredProfile;
@@ -204,6 +204,7 @@ export class DraftGatewayState {
           this.callbacks.changed();
         }
       });
+    this.callbacks.changed();
     return this.cloudProfileComplete;
   }
 
@@ -281,6 +282,10 @@ export class DraftGatewayState {
     return this.cloudProfilesReadyValue;
   }
 
+  get cloudProfilesRead(): Promise<void> | undefined {
+    return this.cloudProfileStatus === "initial" ? undefined : this.cloudProfileComplete;
+  }
+
   get cloudProfilesPending(): boolean {
     return this.cloudProfileStatus === "pending";
   }
@@ -323,16 +328,6 @@ export class DraftGatewayState {
 
   get preferenceLoading(): boolean {
     return this.preferences.loading || this.identityPreferences?.mode === "loading";
-  }
-
-  resolvedGroupCategory(): string | undefined {
-    const snapshot = this.read();
-    return isGatewayMethodAdvertised(
-      snapshot.context?.gateway.snapshot ?? {},
-      "sessions.groups.defaults",
-    ) === true
-      ? catalog.resolvedGroupName(snapshot.data, snapshot.context?.sessions)
-      : undefined;
   }
 
   refreshCloudProfiles(): Promise<void> {
@@ -719,6 +714,7 @@ export class DraftGatewayState {
       }
       this.callbacks.changed();
     };
+    // The preference lease requires this live-authority predicate when publishing results.
     this.stopPreferences = preferences.subscribe(
       notify,
       () =>

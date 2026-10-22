@@ -1,6 +1,3 @@
-/**
- * Tests approval client helper filters and target recipient matching.
- */
 import { describe, expect, it } from "vitest";
 import {
   createChannelExecApprovalProfile,
@@ -11,59 +8,31 @@ import {
 import type { OpenClawConfig } from "./config-contracts.js";
 
 describe("isChannelExecApprovalTargetRecipient", () => {
+  function matches(
+    targets: NonNullable<NonNullable<OpenClawConfig["approvals"]>["exec"]>["targets"],
+    accountId?: string,
+    channel = "matrix",
+  ) {
+    return isChannelExecApprovalTargetRecipient({
+      cfg: { approvals: { exec: { enabled: true, mode: "targets", targets } } },
+      senderId: "@owner:example.org",
+      accountId,
+      channel,
+      matchTarget: ({ target, normalizedSenderId }) => target.to === `user:${normalizedSenderId}`,
+    });
+  }
   it("matches targets by channel and account", () => {
-    const cfg: OpenClawConfig = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [
-            { channel: "matrix", to: "user:@owner:example.org", accountId: "ops" },
-            { channel: "matrix", to: "user:@other:example.org", accountId: "other" },
-          ],
-        },
-      },
-    };
-
-    expect(
-      isChannelExecApprovalTargetRecipient({
-        cfg,
-        senderId: "@owner:example.org",
-        accountId: "ops",
-        channel: "matrix",
-        matchTarget: ({ target, normalizedSenderId }) => target.to === `user:${normalizedSenderId}`,
-      }),
-    ).toBe(true);
-
-    expect(
-      isChannelExecApprovalTargetRecipient({
-        cfg,
-        senderId: "@owner:example.org",
-        accountId: "other",
-        channel: "matrix",
-        matchTarget: ({ target, normalizedSenderId }) => target.to === `user:${normalizedSenderId}`,
-      }),
-    ).toBe(false);
+    const targets = [
+      { channel: "matrix", to: "user:@owner:example.org", accountId: "ops" },
+      { channel: "matrix", to: "user:@other:example.org", accountId: "other" },
+    ];
+    expect(matches(targets, "ops")).toBe(true);
+    expect(matches(targets, "other")).toBe(false);
   });
 
   it("normalizes the requested channel id before matching targets", () => {
-    const cfg: OpenClawConfig = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "matrix", to: "user:@owner:example.org" }],
-        },
-      },
-    };
-
     expect(
-      isChannelExecApprovalTargetRecipient({
-        cfg,
-        senderId: "@owner:example.org",
-        channel: " Matrix ",
-        matchTarget: ({ target, normalizedSenderId }) => target.to === `user:${normalizedSenderId}`,
-      }),
+      matches([{ channel: "matrix", to: "user:@owner:example.org" }], undefined, " Matrix "),
     ).toBe(true);
   });
 });
@@ -82,34 +51,12 @@ describe("createChannelExecApprovalProfile", () => {
   });
 
   it("requires explicit enablement when approvers exist", () => {
-    expect(
-      isChannelExecApprovalClientEnabledFromConfig({
-        approverCount: 1,
-      }),
-    ).toBe(false);
-    expect(
-      isChannelExecApprovalClientEnabledFromConfig({
-        enabled: "auto",
-        approverCount: 1,
-      }),
-    ).toBe(true);
-    expect(
-      isChannelExecApprovalClientEnabledFromConfig({
-        enabled: true,
-        approverCount: 1,
-      }),
-    ).toBe(true);
-    expect(
-      isChannelExecApprovalClientEnabledFromConfig({
-        enabled: false,
-        approverCount: 1,
-      }),
-    ).toBe(false);
-    expect(
-      isChannelExecApprovalClientEnabledFromConfig({
-        approverCount: 0,
-      }),
-    ).toBe(false);
+    const enabled = isChannelExecApprovalClientEnabledFromConfig;
+    expect(enabled({ approverCount: 1 })).toBe(false);
+    expect(enabled({ enabled: "auto", approverCount: 1 })).toBe(true);
+    expect(enabled({ enabled: true, approverCount: 1 })).toBe(true);
+    expect(enabled({ enabled: false, approverCount: 1 })).toBe(false);
+    expect(enabled({ approverCount: 0 })).toBe(false);
   });
 
   it("reuses shared client, auth, and request-filter logic", () => {
@@ -118,39 +65,18 @@ describe("createChannelExecApprovalProfile", () => {
     expect(profile.isAuthorizedSender({ cfg: {}, senderId: "target" })).toBe(true);
     expect(profile.resolveTarget({ cfg: {} })).toBe("channel");
 
-    expect(
-      profile.shouldHandleRequest({
-        cfg: {},
-        accountId: "ops",
-        request: {
-          id: "req-1",
-          request: {
-            command: "echo hi",
-            agentId: "ops",
-            sessionKey: "agent:ops:telegram:direct:owner:tail",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toBe(true);
-
-    expect(
-      profile.shouldHandleRequest({
-        cfg: {},
-        accountId: "other",
-        request: {
-          id: "req-1",
-          request: {
-            command: "echo hi",
-            agentId: "ops",
-            sessionKey: "agent:ops:telegram:direct:owner:tail",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toBe(false);
+    const request = {
+      id: "req-1",
+      request: {
+        command: "echo hi",
+        agentId: "ops",
+        sessionKey: "agent:ops:telegram:direct:owner:tail",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+    expect(profile.shouldHandleRequest({ cfg: {}, accountId: "ops", request })).toBe(true);
+    expect(profile.shouldHandleRequest({ cfg: {}, accountId: "other", request })).toBe(false);
   });
 
   it("supports local prompt suppression without requiring the client to be enabled", () => {

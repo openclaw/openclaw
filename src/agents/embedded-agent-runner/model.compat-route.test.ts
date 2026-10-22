@@ -65,10 +65,13 @@ function createCatalogFixture(
 function createResolutionOptions(
   config: OpenClawConfig,
   { route, catalogModel, metadataSnapshot }: ReturnType<typeof createCatalogFixture>,
+  providerId = provider,
 ) {
   const stores = createEmptyAgentDiscoveryStores();
-  stores.modelRegistry.registerProvider(provider, { ...route, models: [catalogModel] });
-  const configuredRuntimeModels = [{ provider, modelId: catalogModel.id, model: catalogModel }];
+  stores.modelRegistry.registerProvider(providerId, { ...route, models: [catalogModel] });
+  const configuredRuntimeModels = [
+    { provider: providerId, modelId: catalogModel.id, model: catalogModel },
+  ];
   const preparedModelRuntime: PreparedModelRuntimeSnapshot = {
     catalogOwner: undefined,
     agentDir: "/tmp/route-compat-fixture",
@@ -93,11 +96,11 @@ function createResolutionOptions(
 
 describe("model route compatibility", () => {
   it("retains prepared OpenRouter reasoning capabilities on the catalog route", async () => {
-    const baseUrl = "https://openrouter.ai/api/v1";
     const reasoning = true;
     const providerId = "openrouter";
     const id = "anthropic/claude-opus-5.5";
-    const route = { api: "openai-completions" as const, baseUrl: "https://openrouter.ai/api/v1" };
+    const baseUrl = "https://openrouter.ai/api/v1";
+    const route = { api: "openai-completions" as const, baseUrl };
     const catalogModel = {
       ...makeProviderModelFixture({ provider: providerId, id, ...route }),
       reasoning: true,
@@ -126,11 +129,10 @@ describe("model route compatibility", () => {
             baseUrl,
             models: [
               {
+                ...configuredModel,
                 id,
                 name: id,
                 reasoning,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextTokens: 520_000,
                 maxTokens: 128_000,
               },
@@ -140,32 +142,11 @@ describe("model route compatibility", () => {
       },
     };
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
-    const configuredRuntimeModels = [{ provider: providerId, modelId: id, model: configured }];
-    const stores = createEmptyAgentDiscoveryStores();
-    stores.modelRegistry.registerProvider(providerId, {
-      api: route.api,
-      baseUrl,
-      models: [configured],
-    });
-    const preparedModelRuntime: PreparedModelRuntimeSnapshot = {
-      catalogOwner: undefined,
-      agentDir: "/tmp/prepared-openrouter-reasoning",
-      activeProjectKeys: [],
-      allowGatewaySubagentBinding: false,
+    const { preparedModelRuntime } = createResolutionOptions(
       config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
-      metadataSnapshot,
-      modelCatalog: { entries: [], routeVariants: [] },
-      configuredRuntimeModels,
-      findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
-        configuredRuntimeModels,
-        metadataSnapshot,
-      ),
-      inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}),
-      createStores: () => stores,
-    };
+      { route, catalogModel: configured, metadataSnapshot },
+      providerId,
+    );
     const resolved = await resolveModelAsync(providerId, id, undefined, config, {
       preparedModelRuntime,
       skipAgentDiscovery: true,

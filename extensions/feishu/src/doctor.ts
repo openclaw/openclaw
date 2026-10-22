@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { safeStatSync } from "@openclaw/fs-safe/path";
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorSequenceResult,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { readDirectoryEntriesSync, safeStatSync } from "openclaw/plugin-sdk/path-existence-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   isValidAgentHarnessSessionStoreEntry,
@@ -76,42 +76,16 @@ type FeishuDoctorSessionEntry = {
 type FeishuDoctorInspection = Awaited<ReturnType<typeof inspectFeishuDoctorState>>;
 type FeishuDoctorRepairReport = Awaited<ReturnType<typeof repairFeishuDoctorState>>;
 
-function timestampForPath(now = new Date()): string {
+function timestampForPath(now: Date): string {
   return now.toISOString().replaceAll(":", "-");
-}
-
-function toFeishuSessionEntry(value: unknown): FeishuSessionEntry {
-  if (!isRecord(value)) {
-    return {};
-  }
-  return {
-    sessionId: value.sessionId,
-    sessionFile: value.sessionFile,
-  };
 }
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function existsDir(dir: string): boolean {
-  return safeStatSync(dir)?.isDirectory() ?? false;
-}
-
-function existsFile(filePath: string): boolean {
-  return safeStatSync(filePath)?.isFile() ?? false;
-}
-
 function resolveFeishuAgentSessionsDir(agentId: string): string {
   return path.join(resolveStateDir(), "agents", normalizeAgentId(agentId), "sessions");
-}
-
-function safeReadDir(dir: string): fs.Dirent[] {
-  try {
-    return fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
 }
 
 function formatDisplayPath(filePath: string): string {
@@ -216,13 +190,13 @@ function collectFeishuSessionTargets(params: {
   }
 
   const agentsDir = path.join(params.stateDir, "agents");
-  for (const agentDir of safeReadDir(agentsDir)) {
+  for (const agentDir of readDirectoryEntriesSync(agentsDir)) {
     if (!agentDir.isDirectory()) {
       continue;
     }
     const agentId = normalizeAgentId(agentDir.name);
     const storePath = path.join(agentsDir, agentDir.name, "sessions", "sessions.json");
-    if (existsFile(storePath)) {
+    if (safeStatSync(storePath)?.isFile()) {
       addTarget({ agentId, storePath });
     }
   }
@@ -232,13 +206,13 @@ function collectFeishuSessionTargets(params: {
   );
 }
 
-function collectJsonFiles(rootDir: string, limit = 200): string[] {
+function collectJsonFiles(rootDir: string): string[] {
   const files: string[] = [];
   const visit = (dir: string) => {
-    if (files.length >= limit) {
+    if (files.length >= 200) {
       return;
     }
-    for (const entry of safeReadDir(dir).toSorted((left, right) =>
+    for (const entry of readDirectoryEntriesSync(dir).toSorted((left, right) =>
       left.name.localeCompare(right.name),
     )) {
       const fullPath = path.join(dir, entry.name);
@@ -249,12 +223,12 @@ function collectJsonFiles(rootDir: string, limit = 200): string[] {
       if (entry.isFile() && entry.name.endsWith(".json")) {
         files.push(fullPath);
       }
-      if (files.length >= limit) {
+      if (files.length >= 200) {
         return;
       }
     }
   };
-  if (existsDir(rootDir)) {
+  if (safeStatSync(rootDir)?.isDirectory()) {
     visit(rootDir);
   }
   return files;
@@ -476,7 +450,7 @@ async function collectFeishuSessionFindings(params: {
   if (!transcriptPath) {
     return [];
   }
-  if (!existsFile(transcriptPath)) {
+  if (!safeStatSync(transcriptPath)?.isFile()) {
     return [
       {
         kind: "missing-session-transcript",
@@ -548,19 +522,18 @@ async function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: Nod
           isFeishuSessionEntry(sessionKey, sessionEntry),
       )
       .toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey))) {
-      const sessionEntry = toFeishuSessionEntry(entry);
       sessionEntries.push({
         key,
         storePath: target.storePath,
         agentId: target.agentId,
-        entry: sessionEntry,
+        entry,
       });
       findings.push(
         ...(await collectFeishuSessionFindings({
           sessionKey: key,
           storePath: target.storePath,
           agentId: target.agentId,
-          entry: sessionEntry,
+          entry,
         })),
       );
     }
@@ -636,7 +609,7 @@ function archiveSessionArtifacts(params: {
       agentId: entry.agentId,
       entry: entry.entry,
     })) {
-      if (seen.has(artifactPath) || !existsFile(artifactPath)) {
+      if (seen.has(artifactPath) || !safeStatSync(artifactPath)?.isFile()) {
         continue;
       }
       seen.add(artifactPath);
@@ -648,16 +621,8 @@ function archiveSessionArtifacts(params: {
   return archived;
 }
 
-async function repairFeishuDoctorState(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  now?: Date;
-  inspection?: FeishuDoctorInspection;
-}) {
-  const env = params.env ?? process.env;
-  const now = params.now ?? new Date();
-  const inspection =
-    params.inspection ?? (await inspectFeishuDoctorState({ cfg: params.cfg, env }));
+async function repairFeishuDoctorState(inspection: FeishuDoctorInspection) {
+  const now = new Date();
   const backupDir = ensureBackupDir(inspection.stateDir, now);
   const archiveTimestamp = timestampForPath(now);
   const warnings: string[] = [];
@@ -815,11 +780,7 @@ async function runFeishuDoctorSequence(params: {
     };
   }
 
-  const report = await repairFeishuDoctorState({
-    cfg: params.cfg,
-    env: params.env,
-    inspection,
-  });
+  const report = await repairFeishuDoctorState(inspection);
   return {
     changeNotes: [formatRepairChange(report)],
     ...notes,

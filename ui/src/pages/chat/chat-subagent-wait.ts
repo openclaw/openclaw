@@ -1,6 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   areUiSessionKeysEquivalent,
   isDashboardSessionKey,
@@ -91,7 +91,7 @@ function toActivity(
 }
 
 function unfinishedStatus(row: GatewaySessionRow): ChatSubagentActivity["status"] {
-  return row.status === "queued" ? "queued" : isSessionRunActive(row) ? "running" : "waiting";
+  return row.status === "queued" ? "queued" : isSessionRunStateActive(row) ? "running" : "waiting";
 }
 
 /**
@@ -138,7 +138,7 @@ export function projectSubagentStatus(
   // belong to a session that has never executed. Every settled parent turn has
   // a lifecycle end; a partial row must not invent that boundary from transcript text.
   const parentIdle =
-    eligible && !input.runActive && !input.runWorking && !isSessionRunActive(session);
+    eligible && !input.runActive && !input.runWorking && !isSessionRunStateActive(session);
   const endedAt = session?.endedAt;
   const waitStartedAt =
     parentIdle &&

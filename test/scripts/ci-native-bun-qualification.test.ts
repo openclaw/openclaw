@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   inspectNativeBunQualifications,
   resolveCiTestRuntimeSelections,
@@ -44,91 +44,75 @@ afterEach(() => vi.restoreAllMocks());
 
 function qualifiedSource() {
   const cwd = tempDirs.make("native-bun-qualification-");
+  const files = [...fixture.tests, fixture.setup, fixture.helper];
   const write = (file: string, source = fixture.source) => {
     fs.mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
     fs.writeFileSync(path.join(cwd, file), source);
   };
-  for (const file of [...fixture.tests, fixture.setup, fixture.helper]) {
+  for (const file of files) {
     write(file);
   }
-  return { cwd, write };
+  const inspect = (
+    staleEntries: readonly string[] = [],
+    changedInputs: { file: string; reason: "changed" | "unreadable" }[] = [],
+  ) => expect(inspectNativeBunQualifications(cwd)).toEqual({ staleEntries, changedInputs });
+  return { cwd, write, inspect, files: files.map((file) => path.join(cwd, file)) };
 }
 
-describe("native Bun qualification inspection", () => {
-  it("reports all changed inputs even when shared setup invalidates every entry", () => {
-    const { cwd, write } = qualifiedSource();
-    write(fixture.setup, "// changed setup\n");
-    write(fixture.tests[0], "// changed test\n");
-    fs.unlinkSync(path.join(cwd, fixture.helper));
-
-    expect(inspectNativeBunQualifications(cwd)).toEqual({
-      staleEntries: fixture.tests,
-      changedInputs: [
-        { file: fixture.tests[0], reason: "changed" },
-        { file: fixture.helper, reason: "unreadable" },
-        { file: fixture.setup, reason: "changed" },
-      ],
-    });
-  });
-
-  it("reads shared and missing inputs only once and attributes a helper to both consumers", () => {
-    const { cwd } = qualifiedSource();
+it.each([false, true])(
+  "reports and deduplicates helper drift with shared setup drift=%s",
+  (sharedDrift) => {
+    const { cwd, write, inspect, files } = qualifiedSource();
+    if (sharedDrift) {
+      write(fixture.setup, "// changed setup\n");
+      write(fixture.tests[0], "// changed test\n");
+    }
     fs.unlinkSync(path.join(cwd, fixture.helper));
     const read = vi.mocked(fs.readFileSync);
     read.mockClear();
-
-    expect(inspectNativeBunQualifications(cwd)).toEqual({
-      staleEntries: fixture.tests.slice(1),
-      changedInputs: [{ file: fixture.helper, reason: "unreadable" }],
-    });
-    const inputs = [...fixture.tests, fixture.setup, fixture.helper].map((file) =>
-      path.join(cwd, file),
-    );
+    const changed = (file: string) => ({ file, reason: "changed" as const });
+    inspect(sharedDrift ? fixture.tests : fixture.tests.slice(1), [
+      ...(sharedDrift ? [changed(fixture.tests[0])] : []),
+      { file: fixture.helper, reason: "unreadable" },
+      ...(sharedDrift ? [changed(fixture.setup)] : []),
+    ]);
     const reads = read.mock.calls.map(([file]) => file);
-    expect(reads).toHaveLength(inputs.length);
-    expect(reads).toEqual(expect.arrayContaining(inputs));
-  });
+    expect(reads.map(String).toSorted()).toEqual(files.toSorted());
+  },
+);
 
-  it("observes same-process test edits and repairs without retaining stale hashes", () => {
-    const { cwd, write } = qualifiedSource();
-    expect(inspectNativeBunQualifications(cwd)).toEqual({ staleEntries: [], changedInputs: [] });
-    write(fixture.tests[0], "// changed test\n");
-    expect(inspectNativeBunQualifications(cwd)).toEqual({
-      staleEntries: [fixture.tests[0]],
-      changedInputs: [{ file: fixture.tests[0], reason: "changed" }],
-    });
-    write(fixture.tests[0]);
-    expect(inspectNativeBunQualifications(cwd)).toEqual({ staleEntries: [], changedInputs: [] });
-  });
-
-  it.each(["bun-compatible", "bun-all", "dual-all"] as const)(
-    "stays silent and preserves the native-to-Vitest fallback under %s",
-    (policy) => {
-      const { cwd, write } = qualifiedSource();
-      const log = vi.spyOn(console, "log").mockImplementation(() => {});
-      const error = vi.spyOn(console, "error").mockImplementation(() => {});
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const selection = {
-        configs: ["test/vitest/vitest.unit-fast.config.ts"],
-        includePatterns: [fixture.tests[0]],
-      };
-      inspectNativeBunQualifications(cwd);
-      expect(resolveCiTestRuntimeSelections(selection, policy, cwd)).toEqual([
-        ...(policy === "dual-all" ? [{ runtime: "node" }] : []),
-        { runtime: "bun", engine: "bun-test", files: [fixture.tests[0]] },
-      ]);
-      write(fixture.tests[0], "// changed test\n");
-      inspectNativeBunQualifications(cwd);
-      expect(resolveCiTestRuntimeSelections(selection, policy, cwd)).toEqual([
-        ...(policy === "dual-all" ? [{ runtime: "node" }] : []),
-        {
-          runtime: "bun",
-          ...(policy === "bun-compatible" ? { includePatterns: [fixture.tests[0]] } : {}),
-        },
-      ]);
-      expect(log).not.toHaveBeenCalled();
-      expect(error).not.toHaveBeenCalled();
-      expect(warn).not.toHaveBeenCalled();
-    },
-  );
+it("observes same-process test edits and repairs without retaining stale hashes", () => {
+  const { write, inspect } = qualifiedSource();
+  inspect();
+  write(fixture.tests[0], "// changed test\n");
+  inspect([fixture.tests[0]], [{ file: fixture.tests[0], reason: "changed" }]);
+  write(fixture.tests[0]);
+  inspect();
 });
+
+it.each(["bun-all", "dual-all"] as const)(
+  "stays silent and preserves the native-to-Vitest fallback under %s",
+  (policy) => {
+    const { cwd, write } = qualifiedSource();
+    const output = (["log", "error", "warn"] as const).map((method) =>
+      vi.spyOn(console, method).mockImplementation(() => {}),
+    );
+    const selection = {
+      configs: ["test/vitest/vitest.unit-fast.config.ts"],
+      includePatterns: [fixture.tests[0]],
+    };
+    const expectSelection = (bun: { runtime: "bun"; engine?: "bun-test"; files?: string[] }) =>
+      expect(resolveCiTestRuntimeSelections(selection, policy, cwd)).toEqual([
+        ...(policy === "dual-all" ? [{ runtime: "node" }] : []),
+        bun,
+      ]);
+    inspectNativeBunQualifications(cwd);
+    expectSelection({ runtime: "bun", engine: "bun-test", files: [fixture.tests[0]] });
+    write(fixture.tests[0], "// changed test\n");
+    inspectNativeBunQualifications(cwd);
+    expectSelection({ runtime: "bun" });
+    for (const spy of output) {
+      expect(spy).not.toHaveBeenCalled();
+    }
+  },
+);

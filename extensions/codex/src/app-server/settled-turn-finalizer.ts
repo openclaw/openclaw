@@ -1,5 +1,6 @@
 import {
   prepareAgentRunTerminalReply,
+  projectAgentHarnessTranscriptMessageForDisplay,
   type AgentHarnessV2,
   type AgentHarnessSettledTurnFinalizationResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -105,10 +106,14 @@ export async function runCodexSettledTurnFinalization(
   });
   const text = bounded.text;
   const preparedTerminalReply = prepareAgentRunTerminalReply({ rawText: text });
-  const assistant = createAttributedCodexAssistantMessage(attribution, text, {
-    tokenUsage: bounded.usage,
-    aborted: false,
-    promptError: null,
+  const assistant = projectAgentHarnessTranscriptMessageForDisplay({
+    hidden: attempt.privateCompletion === true || attempt.trigger === "memory",
+    inputProvenance: attempt.inputProvenance,
+    message: createAttributedCodexAssistantMessage(attribution, text, {
+      tokenUsage: bounded.usage,
+      aborted: false,
+      promptError: null,
+    }),
   });
   if (preparedTerminalReply.terminalReply.disposition !== "visible") {
     return { assistant, preparedTerminalReply, ...(bounded.usage ? { usage: bounded.usage } : {}) };

@@ -1,4 +1,4 @@
-import { For, Show, untrack } from "solid-js";
+import { For, Show } from "solid-js";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import {
   SettingsEmpty,
@@ -11,10 +11,10 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
@@ -27,16 +27,14 @@ const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees"
 
 export function WorktreesPage() {
   const context = useApplication();
-  return (
-    <openclaw-worktrees-page>
-      <WorktreesView model={new WorktreesModel(() => context)} />
-    </openclaw-worktrees-page>
+  const { owner, view } = projectCallbackOwner(
+    (notify) => new WorktreesModel(() => context, notify),
+    (model) => model,
   );
+  return <openclaw-worktrees-page>{renderWorktreesView(owner, view.read)}</openclaw-worktrees-page>;
 }
 
-export function WorktreesView(props: { model: WorktreesModel }) {
-  // One model owns this mounted view; its Gateway context remains live.
-  const model = untrack(() => props.model);
+export function renderWorktreesView(model: WorktreesModel, view: () => WorktreesModel) {
   model.gateway = useGatewayPage({
     getGateway: () => model.context.gateway,
     onIdentityChange: () => model.update({ records: [], error: null }),
@@ -44,7 +42,6 @@ export function WorktreesView(props: { model: WorktreesModel }) {
     ensureInitialData: () => void model.load(),
     onSnapshot: () => model.update(model.operatorAccess.canAdmin ? {} : { createOpen: false }),
   });
-  const view = projectOwner(model, (source) => source).read;
 
   const owner = (record: WorktreesModel["records"][number]) => {
     if (record.ownerKind === "session" && record.ownerId) {
@@ -81,21 +78,23 @@ export function WorktreesView(props: { model: WorktreesModel }) {
   return (
     <>
       <HubPageHeader<"sessions" | "worktrees">
-        id="sessions"
         active="worktrees"
-        tabs={[
-          { value: "sessions", label: t("tabs.sessions") },
-          { value: "worktrees", label: t("tabs.worktrees") },
-        ]}
-        ariaLabel={t("sessionsPage.hubTablistLabel")}
-        panelId="sessions-hub-panel"
+        tabs={{
+          id: "sessions",
+          items: [
+            { value: "sessions", label: t("tabs.sessions") },
+            { value: "worktrees", label: t("tabs.worktrees") },
+          ],
+          ariaLabel: t("sessionsPage.hubTablistLabel"),
+          panelId: "sessions-hub-panel",
+          onSelect: (value) => {
+            if (value === "sessions") {
+              model.context.navigate("sessions");
+            }
+          },
+        }}
         docsUrl={WORKTREES_DOCS_URL}
         class="sessions-hub-header"
-        onSelect={(value) => {
-          if (value === "sessions") {
-            model.context.navigate("sessions");
-          }
-        }}
       />
       <SettingsWorkspace id="sessions-hub-panel">
         <SettingsPage wide>
@@ -126,7 +125,11 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                 <button
                   class="btn"
                   title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")}
-                  disabled={!view().operatorAccess.canAdmin || view().operationPending}
+                  disabled={
+                    !model.gateway.connected ||
+                    !view().operatorAccess.canAdmin ||
+                    view().operationPending
+                  }
                   onClick={() => void model.gc()}
                 >
                   {view().loading ? t("common.loading") : t("worktrees.cleanNow")}
@@ -196,7 +199,11 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                 control={
                   <button
                     class="btn btn--sm"
-                    disabled={view().operationPending || !view().createRepoRoot.trim()}
+                    disabled={
+                      !model.gateway.connected ||
+                      view().operationPending ||
+                      !view().createRepoRoot.trim()
+                    }
                     onClick={() => void model.createWorktree()}
                   >
                     {view().operation === "create" ? t("common.loading") : t("common.create")}
@@ -234,7 +241,12 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                         <button
                           class={["btn btn--sm", { danger: !record().removedAt }]}
                           title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")}
-                          disabled={!view().operatorAccess.canAdmin || view().operationPending}
+                          aria-label={`${record().removedAt ? t("worktrees.restore") : t("common.delete")}: ${record().name}`}
+                          disabled={
+                            !model.gateway.connected ||
+                            !view().operatorAccess.canAdmin ||
+                            view().operationPending
+                          }
                           onClick={() =>
                             void (record().removedAt
                               ? model.restore(record())

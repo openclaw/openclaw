@@ -24,6 +24,7 @@ import {
   getModelProviderRequestTransport,
   inheritModelProviderRequestRouteFacts,
 } from "../../provider-request-config.js";
+import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 import { providerUsesCredentialScopedModelMetadata } from "../../runtime-plan/credential-scoped-model.js";
 import { log } from "../logger.js";
 import { prepareEmbeddedRunTransport } from "./runtime-preparation.js";
@@ -41,6 +42,14 @@ export async function prepareEmbeddedRunRuntime(
   let transportConfig = params.config;
   let publication = input.preparedModelRuntime;
   const leases: PreparedModelRuntimeLease[] = [];
+  const disposeLease = (lease: PreparedModelRuntimeLease) =>
+    runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step: "transport-lease-dispose",
+      log,
+      cleanup: async () => await lease[Symbol.asyncDispose](),
+    });
   const admittedRunContext = await resolvePreparedRunAdmission({
     runId: params.runId,
     runtimeKind: initialSnapshot.pluginHarnessOwnsTransport ? "plugin-harness" : "embedded",
@@ -242,14 +251,16 @@ export async function prepareEmbeddedRunRuntime(
       } finally {
         if (candidate !== transport) {
           candidate?.stopRuntimeAuthRefreshTimer();
-          await lease?.[Symbol.asyncDispose]();
+          if (lease) {
+            await disposeLease(lease);
+          }
         }
       }
     },
     stopRuntimeAuthRefreshTimer: () => transport.stopRuntimeAuthRefreshTimer(),
     releaseTransport: async () => {
       transport.stopRuntimeAuthRefreshTimer();
-      await Promise.all(leases.splice(0).map((lease) => lease[Symbol.asyncDispose]()));
+      await Promise.all(leases.splice(0).map(disposeLease));
     },
   };
 }

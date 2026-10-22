@@ -1,63 +1,44 @@
 import { text as readText } from "node:stream/consumers";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
-import { assert, describe, expect, it } from "vitest";
-import type { Model } from "../llm/types.js";
+import { assert, expect, it } from "vitest";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import "./ai-transport-runtime-host.js";
 import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-describe("custom simple completion thinking controls", () => {
-  it.each([
-    {
-      provider: "zhipu",
-      id: "glm-5.3-flash",
-      baseUrl: "https://api.z.ai/api/paas/v4",
-      control: undefined,
-    },
-    {
-      provider: "zhipu",
-      id: "glm-5.3-flash",
-      baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-      control: undefined,
-    },
-    {
-      provider: "custom",
-      id: "deepseek-model",
-      baseUrl: "https://api.deepseek.com",
-      control: { thinking: { type: "disabled" } },
-    },
-    {
-      provider: "custom",
-      id: "together-model",
-      baseUrl: "https://api.together.ai/v1",
-      control: { reasoning: { enabled: false } },
-    },
-    {
-      provider: "custom",
-      id: "qwen-model",
-      baseUrl: "https://proxy.example.com/v1",
-      compat: { thinkingFormat: "qwen" as const },
-      control: { enable_thinking: false },
-    },
-    {
-      provider: "vllm",
-      id: "qwen-chat-template-model",
-      baseUrl: "http://localhost:8000/v1",
-      compat: { thinkingFormat: "qwen-chat-template" as const },
-      control: { chat_template_kwargs: { enable_thinking: false } },
-    },
-  ])("preserves the off contract for $id at $baseUrl", async ({ control, ...route }) => {
+const successResponse =
+  'data: {"id":"custom-title","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Custom provider title"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
+const thinkingError =
+  '{"error":{"code":"1210","message":"This model always engages in thinking and cannot be disabled"}}';
+const deepseekOff = { thinking: { type: "disabled" } };
+const togetherOff = { reasoning: { enabled: false } };
+const templateOff = { chat_template_kwargs: { enable_thinking: false } };
+
+it.each([
+  ["https://api.z.ai/api/paas/v4", "glm-5.3-flash", "zhipu", undefined, undefined],
+  ["https://open.bigmodel.cn/api/paas/v4", "glm-5.3-flash", "zhipu", undefined, undefined],
+  ["https://api.deepseek.com", "deepseek-model", "custom", deepseekOff, undefined],
+  ["https://api.together.ai/v1", "together-model", "custom", togetherOff, undefined],
+  ["https://proxy.example.com/v1", "qwen-model", "custom", { enable_thinking: false }, "qwen"],
+  [
+    "http://localhost:8000/v1",
+    "qwen-chat-template-model",
+    "vllm",
+    templateOff,
+    "qwen-chat-template",
+  ],
+] as const)(
+  "preserves the off contract at %s",
+  async (baseUrl, id, provider, control, thinkingFormat) => {
     const requests: Record<string, unknown>[] = [];
-    const model: Model = {
-      ...route,
-      name: "Custom model",
+    const model = makeProviderModelFixture({
+      baseUrl,
+      id,
+      provider,
+      ...(thinkingFormat ? { compat: { thinkingFormat } } : {}),
       api: "openai-completions",
       reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 8192,
-    };
+    });
     await withServer(
       (request, response) => {
         void readText(request).then((raw) => {
@@ -70,30 +51,11 @@ describe("custom simple completion thinking controls", () => {
               body.reasoning_effort === "none")
           ) {
             response.writeHead(400, { "content-type": "application/json" });
-            response.end(
-              JSON.stringify({
-                error: {
-                  code: "1210",
-                  message: "This model always engages in thinking and cannot be disabled",
-                },
-              }),
-            );
+            response.end(thinkingError);
             return;
           }
           response.writeHead(200, { "content-type": "text/event-stream" });
-          response.end(
-            `data: ${JSON.stringify({
-              id: "custom-title",
-              object: "chat.completion.chunk",
-              choices: [
-                {
-                  index: 0,
-                  delta: { role: "assistant", content: "Custom provider title" },
-                  finish_reason: "stop",
-                },
-              ],
-            })}\n\ndata: [DONE]\n\n`,
-          );
+          response.end(successResponse);
         });
       },
       async (serverUrl) => {
@@ -104,7 +66,7 @@ describe("custom simple completion thinking controls", () => {
           buildModelFetch: () => async (input, init) => {
             const url =
               typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-            expect(url).toBe(`${route.baseUrl}/chat/completions`);
+            expect(url).toBe(`${baseUrl}/chat/completions`);
             return await fetch(`${serverUrl}/chat/completions`, init);
           },
         });
@@ -144,5 +106,5 @@ describe("custom simple completion thinking controls", () => {
         }
       },
     );
-  });
-});
+  },
+);

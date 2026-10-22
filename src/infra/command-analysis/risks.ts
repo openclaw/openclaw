@@ -50,9 +50,7 @@ export function buildCommandPayloadArgvCandidates(
   }
   seenArgv.add(key);
   const assignmentStrippedArgv = stripLeadingEnvAssignments(argv);
-  const carriedArgv = resolveCarrierCommandArgv(assignmentStrippedArgv, 0, {
-    includeExec: true,
-  });
+  const carriedArgv = resolveCarrierCommandArgv(assignmentStrippedArgv);
   const executableArgv = carriedArgv ?? assignmentStrippedArgv;
   const carriedCandidates = carriedArgv
     ? buildCommandPayloadArgvCandidates(carriedArgv, seenArgv)
@@ -217,7 +215,7 @@ function detectCarrierInlineEvalArgvInternal(
   if (!isCommandCarrierExecutable(executable)) {
     return null;
   }
-  const carriedArgv = resolveCarrierCommandArgv(executableArgv, 0, { includeExec: true });
+  const carriedArgv = resolveCarrierCommandArgv(executableArgv);
   if (!carriedArgv) {
     return null;
   }
@@ -331,7 +329,7 @@ export function detectShellWrapperThroughCarrierArgv(
   if (!isCommandCarrierExecutable(executable)) {
     return null;
   }
-  const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
+  const carriedArgv = resolveCarrierCommandArgv(argv);
   if (!carriedArgv) {
     return null;
   }
@@ -346,7 +344,7 @@ export function detectCarriedShellBuiltinArgv(argv: string[]): CarriedShellBuilt
   if (!isCommandCarrierExecutable(executable)) {
     return null;
   }
-  const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
+  const carriedArgv = resolveCarrierCommandArgv(argv);
   if (!carriedArgv) {
     return null;
   }

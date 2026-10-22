@@ -13,8 +13,16 @@ export function useCloudWorkerConfig(reset: () => void) {
   const save = new CloudWorkerConfigSave(() => setRevision((value) => value + 1));
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
+    onIdentityChange: reset,
+    onSnapshot: ({ snapshot }) => {
+      if (
+        snapshot.phase === "connected" &&
+        !canCallGatewayMethod(snapshot, "config.patch", "operator.admin")
+      ) {
+        reset();
+      }
+    },
     invalidateRequests: () => {
-      reset();
       save.update({ busy: false, error: null, notice: null });
     },
   });

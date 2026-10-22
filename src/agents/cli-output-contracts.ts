@@ -96,12 +96,6 @@ export type CliStreamingDelta = {
   usage?: CliUsage;
 };
 
-export type CliStreamJsonOutputLimits = {
-  maxTurnRawChars: number;
-  maxPendingLineChars: number;
-  maxTurnLines: number;
-};
-
 /** Incremental thinking text emitted while parsing a streaming CLI response. */
 export type CliThinkingDelta = {
   text: string;

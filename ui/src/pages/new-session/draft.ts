@@ -263,6 +263,7 @@ export class NewSessionDraft {
       this.stopGateway = undefined;
       this.boundGateway = gateway;
       if (gateway) {
+        // Connection receipts synchronously retire stale discovery and submission authority.
         const stopStore = gateway.subscribe(() => {
           if (this.read().context?.gateway === gateway) {
             this.gateway.synchronize(gateway);
@@ -300,6 +301,8 @@ export class NewSessionDraft {
       this.gateway.connected &&
       this.gateway.client &&
       agents?.connected &&
+      !agents.agentsLoading &&
+      !agents.agentsError &&
       agents.client === this.gateway.client &&
       this.place.agents().length > 0,
     );

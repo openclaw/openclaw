@@ -276,8 +276,17 @@ signal. That check also supplies failure diagnostics and is bounded by
 `plugins.entries.acpx.config.timeoutSeconds`; an unhealthy result does not
 launch a second check. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
 `OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1` only for scripts or environments that
-intentionally keep the startup check disabled. Run `/acp doctor` for an explicit
-on-demand check.
+intentionally keep the startup check disabled.
+
+Health checks run from the plugin-owned `<state>/acpx` directory, which the
+service creates before probing. They do not require the default agent workspace
+to exist. Sessions still launch in their requested `cwd`, falling back to the
+configured plugin or service workspace when no session directory is supplied.
+
+A failed check makes the backend unavailable for ACP spawns across the Gateway.
+After correcting the cause, run `/acp doctor` to check again; a successful check
+restores availability without restarting. Spawn attempts do not automatically
+retry the health check.
 
 Override an individual ACP agent command with structured arguments when a path
 or flag value should remain one argv token:

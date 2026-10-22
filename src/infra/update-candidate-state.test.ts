@@ -13,6 +13,11 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import {
+  generateStoredDeviceIdentity,
+  insertStoredDeviceIdentityIfAbsent,
+  readStoredDeviceIdentityReadOnly,
+} from "./device-identity-store.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import {
@@ -40,14 +45,53 @@ afterEach(async () => {
 
 async function createDatabase(file: string, sql = ""): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const db = openNodeSqliteDatabase(file);
+  using db = openNodeSqliteDatabase(file);
+  db.exec(
+    `PRAGMA user_version = 3; CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('preserved'); ${sql}`,
+  );
+}
+
+async function writePackage(directory: string, manifest: object, code: string) {
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, "package.json"), JSON.stringify(manifest));
+  await fs.writeFile(path.join(directory, "index.js"), code);
+}
+
+async function rehearse(
+  config: OpenClawConfig,
+  stateDir = path.join(root, "source-state"),
+  candidateRoot = root,
+) {
+  const rehearsal = await prepareUpdateCandidateRehearsal({ config, stateDir, candidateRoot });
   try {
-    db.exec(
-      `PRAGMA user_version = 3; CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('preserved'); ${sql}`,
-    );
-  } finally {
-    db.close();
+    const copied: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+    return { ...rehearsal, copied };
+  } catch (error) {
+    await rehearsal.cleanup();
+    throw error;
   }
+}
+
+async function readDefault(entry: string) {
+  const result = await runCommandBuffered(
+    [
+      process.execPath,
+      "--input-type=module",
+      "-e",
+      `console.log((await import(${JSON.stringify(pathToFileURL(entry).href)})).default)`,
+    ],
+    { timeoutMs: 10_000 },
+  );
+  expect(result.code, result.stderr.toString()).toBe(0);
+  return result.stdout.toString().trim();
+}
+
+async function readEntry(directory: string) {
+  const result = await runCommandBuffered([process.execPath, path.join(directory, "index.js")], {
+    timeoutMs: 10_000,
+  });
+  expect(result.code, result.stderr.toString()).toBe(0);
+  return result.stdout.toString().trim();
 }
 
 function runSnapshotWorker(
@@ -67,9 +111,13 @@ it.each(["DELETE"])(
     const shared = path.join(source, "state", "openclaw.sqlite");
     const canonical = path.join(source, "agents", "main", "agent", "openclaw-agent.sqlite");
     const external = path.join(root, "external", "openclaw-agent.sqlite");
+    const credentialPath = path.join(source, "client", "credentials.sqlite");
     await createDatabase(canonical);
     await createDatabase(external);
     const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
+    const identity = insertStoredDeviceIdentityIfAbsent(generateStoredDeviceIdentity(17), {
+      env: { OPENCLAW_STATE_DIR: source },
+    });
     const insert = registry.prepare(
       "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
     );
@@ -102,7 +150,7 @@ it.each(["DELETE"])(
         now,
       );
     await closeOpenClawStateDatabaseByPathAsync(shared);
-    const sources = [shared, canonical, external];
+    const sources = [shared, canonical, external, credentialPath];
     for (const file of sources) {
       const database = openNodeSqliteDatabase(file);
       database.exec(`PRAGMA journal_mode = ${journalMode};`);
@@ -133,6 +181,9 @@ it.each(["DELETE"])(
       config: {},
     });
     expect(versions).toEqual(inspected);
+    expect(readStoredDeviceIdentityReadOnly({ env: { OPENCLAW_STATE_DIR: target } })).toEqual(
+      identity,
+    );
     await expect(
       withAgentDatabaseMaintenanceLease(
         {
@@ -337,28 +388,21 @@ it.each([
       [candidateHost, "openclaw", "candidate"],
       [dependency, "dependency", "preserved"],
     ]) {
-      await fs.mkdir(directory!);
-      await fs.writeFile(
-        path.join(directory!, "package.json"),
-        JSON.stringify({ name, type: "module", exports: "./index.js" }),
-      );
-      await fs.writeFile(
-        path.join(directory!, "index.js"),
+      await writePackage(
+        directory!,
+        { name, type: "module", exports: "./index.js" },
         `export default ${JSON.stringify(value)};`,
       );
     }
     await fs.symlink(dependency, path.join(modulesDir, "dependency"), "junction");
-    await fs.writeFile(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
+    await writePackage(
+      packageDir,
+      {
         name: "demo",
         version: "1.0.0",
         type: "module",
         peerDependencies: { openclaw: "*" },
-      }),
-    );
-    await fs.writeFile(
-      path.join(packageDir, "index.js"),
+      },
       'import host from "openclaw"; import dependency from "dependency"; export default {host, dependency};',
     );
     await fs.symlink(liveHost, path.join(packageDir, "node_modules", "openclaw"), "junction");
@@ -443,12 +487,11 @@ it.each([
     await fs.writeFile(path.join(external, "package.json"), '{"type":"module"}');
     await fs.writeFile(path.join(external, "adjacent.js"), 'export default "adjacent survived";');
     const dependency = path.join(external, "node_modules", "dependency");
-    await fs.mkdir(dependency, { recursive: true });
-    await fs.writeFile(
-      path.join(dependency, "package.json"),
-      '{"type":"module","exports":"./index.js"}',
+    await writePackage(
+      dependency,
+      { type: "module", exports: "./index.js" },
+      'export default "dependency survived";',
     );
-    await fs.writeFile(path.join(dependency, "index.js"), 'export default "dependency survived";');
     await fs.mkdir(path.join(external, "dist"));
     const realEntry = path.join(external, "dist", `plugin.${extension}`);
     let entry = realEntry;
@@ -488,27 +531,13 @@ it.each([
         installs: { demo: { source: "path", installPath: install, sourcePath: sourcePackage } },
       },
     };
-    const rehearsal = await prepareUpdateCandidateRehearsal({
-      config,
-      stateDir: source,
-      candidateRoot: root,
-    });
+    const rehearsal = await rehearse(config, source);
     try {
-      const copied: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+      const copied = rehearsal.copied;
       const copiedEntry = copied.plugins!.load!.paths![0]!;
       expect(path.basename(copiedEntry)).toBe(path.basename(entry));
       expect(copiedEntry.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
-      const result = await runCommandBuffered(
-        [
-          process.execPath,
-          "--input-type=module",
-          "-e",
-          `console.log((await import(${JSON.stringify(pathToFileURL(copiedEntry).href)})).default)`,
-        ],
-        { timeoutMs: 10_000 },
-      );
-      expect(result.code, result.stderr.toString()).toBe(0);
-      expect(result.stdout.toString().trim()).toBe("adjacent survived:dependency survived");
+      expect(await readDefault(copiedEntry)).toBe("adjacent survived:dependency survived");
       const record = copied.plugins!.installs!.demo!;
       expect(await fs.readFile(path.join(record.installPath!, "marker"), "utf8")).toBe(
         "installed payload",
@@ -548,26 +577,11 @@ it("preserves an existing copied file behind a case-equivalent entry name", asyn
   if (upperReal !== (await fs.realpath(lower))) {
     context.skip("Requires a case-insensitive fixture volume with canonical filename casing");
   }
-  const rehearsal = await prepareUpdateCandidateRehearsal({
-    config: { plugins: { load: { paths: [upper] } } },
-    stateDir: path.join(root, "source-state"),
-    candidateRoot: root,
-  });
+  const rehearsal = await rehearse({ plugins: { load: { paths: [upper] } } });
   try {
-    const copied: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
-    const entry = copied.plugins!.load!.paths![0]!;
+    const entry = rehearsal.copied.plugins!.load!.paths![0]!;
     expect(path.basename(entry)).toBe("ENTRY.js");
-    const result = await runCommandBuffered(
-      [
-        process.execPath,
-        "--input-type=module",
-        "-e",
-        `console.log((await import(${JSON.stringify(pathToFileURL(entry).href)})).default)`,
-      ],
-      { timeoutMs: 10_000 },
-    );
-    expect(result.code, result.stderr.toString()).toBe(0);
-    expect(result.stdout.toString().trim()).toBe("case alias survived");
+    expect(await readDefault(entry)).toBe("case alias survived");
     expect((await fs.lstat(entry)).isFile()).toBe(true);
     expect(await fs.readFile(lower, "utf8")).toBe(payload);
     expect(await fs.readFile(upper, "utf8")).toBe(payload);
@@ -590,12 +604,7 @@ it.each(["external-store", "cycle"] as const)(
       [foo, "foo", 'import value from "bar"; export default `foo:${value}`;'],
       [bar, "bar", 'export default "bar";'],
     ]) {
-      await fs.mkdir(directory!, { recursive: true });
-      await fs.writeFile(
-        path.join(directory!, "package.json"),
-        JSON.stringify({ name, type: "module", exports: "./index.js" }),
-      );
-      await fs.writeFile(path.join(directory!, "index.js"), code!);
+      await writePackage(directory!, { name, type: "module", exports: "./index.js" }, code!);
     }
     await fs.mkdir(modules, { recursive: true });
     if (layout === "external-store") {
@@ -629,28 +638,11 @@ it.each(["external-store", "cycle"] as const)(
       `#!/bin/sh\nbasedir=$(dirname "$0")\nexec "${process.execPath}" "$basedir/../foo/cli.js"\n`,
     );
     const originalLinks = await Promise.all(links.map(([link]) => fs.readlink(link)));
-    const readPlugin = async (directory: string) => {
-      const result = await runCommandBuffered(
-        [
-          process.execPath,
-          "--input-type=module",
-          "-e",
-          `console.log((await import(${JSON.stringify(pathToFileURL(path.join(directory, "index.js")).href)})).default)`,
-        ],
-        { timeoutMs: 10_000 },
-      );
-      expect(result.code, result.stderr.toString()).toBe(0);
-      return result.stdout.toString().trim();
-    };
+    const readPlugin = (directory: string) => readDefault(path.join(directory, "index.js"));
     expect(await readPlugin(plugin)).toBe("foo:bar");
-    const rehearsal = await prepareUpdateCandidateRehearsal({
-      config: { plugins: { load: { paths: [plugin] } } },
-      stateDir: path.join(root, "source-state"),
-      candidateRoot: root,
-    });
+    const rehearsal = await rehearse({ plugins: { load: { paths: [plugin] } } });
     try {
-      const config: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
-      const copiedPlugin = config.plugins!.load!.paths![0]!;
+      const copiedPlugin = rehearsal.copied.plugins!.load!.paths![0]!;
       expect(await readPlugin(copiedPlugin)).toBe("foo:bar");
       if (process.platform !== "win32") {
         const result = await runCommandBuffered(
@@ -685,14 +677,9 @@ it.skipIf(process.platform === "win32")(
     await fs.writeFile(source, "preserved");
     await fs.symlink(path.join(root, "missing-unrelated-target"), path.join(assets, "unrelated"));
     await fs.symlink(source, path.join(plugin, "config.txt"));
-    const rehearsal = await prepareUpdateCandidateRehearsal({
-      config: { plugins: { load: { paths: [plugin] } } },
-      stateDir: path.join(root, "source-state"),
-      candidateRoot: root,
-    });
+    const rehearsal = await rehearse({ plugins: { load: { paths: [plugin] } } });
     try {
-      const config: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
-      const copied = path.join(config.plugins!.load!.paths![0]!, "config.txt");
+      const copied = path.join(rehearsal.copied.plugins!.load!.paths![0]!, "config.txt");
       expect(await fs.readFile(copied, "utf8")).toBe("preserved");
       await fs.writeFile(copied, "private");
       expect(await fs.readFile(source, "utf8")).toBe("preserved");
@@ -745,13 +732,9 @@ it.each([
       [liveHost, "serving"],
       [candidateHost, "candidate"],
     ] as const) {
-      await fs.mkdir(directory);
-      await fs.writeFile(
-        path.join(directory, "package.json"),
-        JSON.stringify({ name: "openclaw", type: "module", exports: "./index.js" }),
-      );
-      await fs.writeFile(
-        path.join(directory, "index.js"),
+      await writePackage(
+        directory,
+        { name: "openclaw", type: "module", exports: "./index.js" },
         `export default ${JSON.stringify(value)};`,
       );
     }
@@ -763,31 +746,28 @@ it.each([
       JSON.stringify({ private: true, workspaces: ["packages/*"] }),
     );
     await fs.writeFile(path.join(repo, "unrelated.txt"), "do not copy repository files");
-    await fs.writeFile(
-      path.join(plugin, "package.json"),
-      JSON.stringify({
+    await writePackage(
+      plugin,
+      {
         name: "demo",
         version: "1.0.0",
         type: "module",
         dependencies: { "@demo/dependency": "1.0.0" },
         optionalDependencies: { absent: "1.0.0" },
         peerDependencies: { openclaw: "*" },
-      }),
-    );
-    await fs.writeFile(
-      path.join(plugin, "index.js"),
+      },
       'import value from "@demo/dependency"; import host from "openclaw"; console.log(JSON.stringify({value, host, dependency: import.meta.resolve("@demo/dependency")}));',
     );
-    await fs.writeFile(
-      path.join(dependency, "package.json"),
-      JSON.stringify({
+    await writePackage(
+      dependency,
+      {
         name: "@demo/dependency",
         version: "1.0.0",
         type: "module",
         exports: "./index.js",
-      }),
+      },
+      'export default "hoisted";',
     );
-    await fs.writeFile(path.join(dependency, "index.js"), 'export default "hoisted";');
     if (shadow) {
       const nearest = path.join(plugin, "node_modules", "@demo", "dependency");
       await fs.cp(dependency, nearest, { recursive: true });
@@ -798,12 +778,7 @@ it.each([
       await fs.symlink(plugin, locator, "junction");
     }
     const readPlugin = async (directory: string) => {
-      const result = await runCommandBuffered(
-        [process.execPath, path.join(directory, "index.js")],
-        { timeoutMs: 10_000 },
-      );
-      expect(result.code, result.stderr.toString()).toBe(0);
-      return JSON.parse(result.stdout.toString()) as {
+      return JSON.parse(await readEntry(directory)) as {
         value: string;
         dependency: string;
         host: string;
@@ -819,13 +794,9 @@ it.each([
       expect((await readPlugin(sharedOwner)).value).toBe("owner");
     }
     await materializeUpdateCandidateStateWorker(candidateHost);
-    const rehearsal = await prepareUpdateCandidateRehearsal({
-      config: { plugins: { load: { paths } } },
-      stateDir: path.join(root, "source-state"),
-      candidateRoot: candidateHost,
-    });
+    const rehearsal = await rehearse({ plugins: { load: { paths } } }, undefined, candidateHost);
     try {
-      const config: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+      const config = rehearsal.copied;
       const copied = config.plugins!.load!.paths![paths.indexOf(locator)]!;
       if (shared) {
         expect(
@@ -892,29 +863,17 @@ it("keeps an optional-only linked node_modules copy bounded to its module owner"
   await fs.mkdir(modules);
   await fs.writeFile(path.join(repo, "package.json"), '{"private":true}');
   await fs.writeFile(path.join(repo, "unrelated.txt"), "repository data");
-  await fs.writeFile(
-    path.join(plugin, "package.json"),
-    JSON.stringify({ name: "demo", type: "module", optionalDependencies: { missing: "1.0.0" } }),
+  await writePackage(
+    plugin,
+    { name: "demo", type: "module", optionalDependencies: { missing: "1.0.0" } },
+    'console.log("optional plugin ready");',
   );
-  await fs.writeFile(path.join(plugin, "index.js"), 'console.log("optional plugin ready");');
   await fs.writeFile(path.join(modules, "marker.txt"), "source");
   await fs.symlink(modules, path.join(plugin, "node_modules"), "junction");
-  const readEntry = async (directory: string) => {
-    const result = await runCommandBuffered([process.execPath, path.join(directory, "index.js")], {
-      timeoutMs: 10_000,
-    });
-    expect(result.code, result.stderr.toString()).toBe(0);
-    return result.stdout.toString().trim();
-  };
   expect(await readEntry(plugin)).toBe("optional plugin ready");
-  const rehearsal = await prepareUpdateCandidateRehearsal({
-    config: { plugins: { load: { paths: [plugin] } } },
-    stateDir: path.join(root, "source-state"),
-    candidateRoot: root,
-  });
+  const rehearsal = await rehearse({ plugins: { load: { paths: [plugin] } } });
   try {
-    const config: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
-    const copied = config.plugins!.load!.paths![0]!;
+    const copied = rehearsal.copied.plugins!.load!.paths![0]!;
     expect(await readEntry(copied)).toBe("optional plugin ready");
     expect(
       (await fs.readdir(rehearsal.stateDir, { recursive: true })).some(
@@ -938,18 +897,15 @@ it("rejects an ordinary link that would repeatedly copy an immutable host packag
   await fs.mkdir(path.join(plugin, "node_modules"), { recursive: true });
   await fs.mkdir(path.join(host, "docs"), { recursive: true });
   await fs.mkdir(candidate);
-  await fs.writeFile(
-    path.join(plugin, "package.json"),
-    JSON.stringify({ name: "demo", type: "module", peerDependencies: { openclaw: "*" } }),
-  );
-  await fs.writeFile(
-    path.join(host, "package.json"),
-    JSON.stringify({ name: "openclaw", type: "module", exports: "./index.js" }),
-  );
-  await fs.writeFile(path.join(host, "index.js"), 'export default "serving";');
-  await fs.writeFile(
-    path.join(plugin, "index.js"),
+  await writePackage(
+    plugin,
+    { name: "demo", type: "module", peerDependencies: { openclaw: "*" } },
     'import host from "openclaw"; console.log(host);',
+  );
+  await writePackage(
+    host,
+    { name: "openclaw", type: "module", exports: "./index.js" },
+    'export default "serving";',
   );
   await fs.writeFile(path.join(host, "docs", "marker.txt"), "source");
   await fs.symlink(host, path.join(plugin, "node_modules", "openclaw"), "junction");

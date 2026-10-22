@@ -20,8 +20,8 @@ export type PersistedClawWorkspaceFile = {
   updatedAtMs: number;
 };
 
-export type WorkspaceDatabase = Pick<DB, "claw_workspace_files">;
-export type WorkspaceFileRow = Selectable<DB["claw_workspace_files"]>;
+type WorkspaceDatabase = Pick<DB, "claw_workspace_files">;
+type WorkspaceFileRow = Selectable<DB["claw_workspace_files"]>;
 
 function selectWorkspaceFiles(db: EngineConnection) {
   return getNodeSqliteKysely<WorkspaceDatabase>(db)
@@ -41,7 +41,7 @@ function selectWorkspaceFiles(db: EngineConnection) {
 
 function rowToWorkspaceFile(
   row: WorkspaceFileRow,
-  schemaVersion: PersistedClawWorkspaceFile["schemaVersion"] = CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
+  schemaVersion: PersistedClawWorkspaceFile["schemaVersion"],
 ): PersistedClawWorkspaceFile {
   return {
     schemaVersion,
@@ -50,24 +50,10 @@ function rowToWorkspaceFile(
     path: row.target_path,
     sourcePath: row.source_path,
     contentDigest: row.content_digest,
-    // SAFETY: Inventory keeps its unchecked status contract; the retry reader validates it first.
+    // SAFETY: Legacy inventory preserves the stored status for its caller to inspect.
     status: row.status as PersistedClawWorkspaceFile["status"],
     createdAtMs: sqliteNumber(row.created_at_ms),
     updatedAtMs: sqliteNumber(row.updated_at_ms),
-  };
-}
-
-export function workspaceFileToRow(record: PersistedClawWorkspaceFile): WorkspaceFileRow {
-  return {
-    agent_id: record.agentId,
-    target_path: record.path,
-    schema_version: record.schemaVersion,
-    workspace: record.workspace,
-    source_path: record.sourcePath,
-    content_digest: record.contentDigest,
-    status: record.status,
-    created_at_ms: record.createdAtMs,
-    updated_at_ms: record.updatedAtMs,
   };
 }
 

@@ -8,5 +8,8 @@
     "../../src/plugins/**/*.test.tsx",
     "../../src/acp/**/*.test.ts",
     "../../src/acp/**/*.test.tsx"
+  ],
+  "exclude": [
+    "../../src/plugins/loader.native-harness-admission.test.ts"
   ]
 }

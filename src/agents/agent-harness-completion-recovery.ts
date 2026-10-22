@@ -35,6 +35,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
+  retainSqliteDatabaseWriteScopesForPath,
   sqliteSessionIdWriteScope,
 } from "../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
@@ -438,8 +439,16 @@ export function createHarnessCompletionSourceAssertion(params: {
       databaseBirthtime: identity.birthtime,
     };
     const retained = retainSessionHistoryWorkerDatabase({ ...options, path });
+    let releaseWriteScopes: (() => void) | undefined;
+    const resources = [retained, { release: () => releaseWriteScopes?.() }];
     try {
       const writeScopes = [target.sessionKey, sqliteSessionIdWriteScope(preparedClaim.sessionId)];
+      if (checkWriteToken) {
+        releaseWriteScopes = retainSqliteDatabaseWriteScopesForPath(path, writeScopes);
+        if (!releaseWriteScopes) {
+          refuse();
+        }
+      }
       const snapshot = await retained.owner.readHarnessCompletionSource({
         env,
         claim: preparedClaim,
@@ -465,10 +474,10 @@ export function createHarnessCompletionSourceAssertion(params: {
             refuse();
           }
         },
-        retained.release,
+        () => releaseSessionSourceAuthorities(resources),
       );
     } catch (error) {
-      await releaseSessionSourceAuthorities([retained], [error]);
+      await releaseSessionSourceAuthorities(resources, [error]);
       throw error;
     }
   };

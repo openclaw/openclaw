@@ -76,7 +76,6 @@ export function hasRegisteredOpenClawAgentDatabasePath(
 ): boolean {
   const { identity } = readOpenClawAgentDatabaseIdentity(database);
   return (
-    typeof identity === "string" &&
     getOrLoadSqliteDatabaseAdmissionForPath(
       resolveDatabasePath(options),
       registeredPathKey({ ...database, identity: `file:${identity}` }),
@@ -461,6 +460,10 @@ class AgentDatabaseRegistryChangedError extends Error {
   }
 }
 
+export function isAgentDatabaseRegistryChangedError(error: unknown): boolean {
+  return error instanceof AgentDatabaseRegistryChangedError;
+}
+
 export function readRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions,
   artifactPreserving: false,
@@ -658,7 +661,6 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
       async read(signal) {
         for (;;) {
           signal?.throwIfAborted();
-          assertAdmissionCurrent();
           const witness = scopedWitness ?? captureWitness();
           const { memo, assertCurrent, followRegistration } = witness;
           const assertReadCurrent = scopedWitness ? assertCurrent : assertAdmissionCurrent;
@@ -674,11 +676,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
                 { signal, current: options.fresh },
               ),
             );
-            if (reply && (!reply.ok || reply.type !== "agentDatabaseRegistry.read")) {
-              throw new Error("Unexpected agent database registry read result");
-            }
             const result = reply?.result;
-            assertAdmissionCurrent();
             // Only a newer owner publication warrants another read; scoped witnesses keep their fence.
             if (!scopedWitness && memo.next) {
               continue;
@@ -695,7 +693,6 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
               ? (result?.entries ?? [])
               : (memo.entries ??= result?.entries ?? []);
           }
-          assertReadCurrent();
           return {
             result: {
               status: "available",

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
@@ -8,7 +8,7 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import "../../lib/toast-host.ts";
+import "../../lib/toast-host.tsx";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -22,39 +22,34 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createContext, createGateway, createPage } from "./sessions-page.test-support.ts";
 
 async function setup(childCount: number, active = false) {
-  const root: GatewaySessionRow = {
-    key: "agent:main:tree-outcome",
-    sessionId: "captured-root-session",
-    kind: "direct",
-    label: "Tree outcome",
-    sharingRole: "owner",
-    hasActiveRun: active,
-  };
-  const children: GatewaySessionRow[] = Array.from({ length: childCount }, (_, index) => ({
-    key: "agent:main:tree-child-" + index,
-    sessionId: "captured-child-session-" + index,
-    parentSessionKey: root.key,
+  const modal = createModalDialogTestFixture();
+  const makeRow = (name: string, extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
+    key: `agent:main:${name}`,
+    sessionId: `captured-${name}-session`,
     kind: "direct",
     sharingRole: "owner",
-  }));
-  const rows = [root, ...children];
+    ...extra,
+  });
+  const root = makeRow("tree-outcome", { hasActiveRun: active });
+  const rows = [
+    root,
+    ...Array.from({ length: childCount }, (_, index) =>
+      makeRow(`tree-child-${index}`, { parentSessionKey: root.key }),
+    ),
+  ];
   const serverRows = structuredClone(rows);
-  const failed = children[0]!;
+  const failed = rows[1]!;
   const failureMessage = "Child placement changed after confirmation";
+  const error = { code: "INVALID_REQUEST" as const, message: failureMessage };
   const pending = createDeferred<SessionsPatchManyResult>();
   const dispatched = createDeferred<SessionsPatchManyParams>();
   const restored = createDeferred<SessionsPatchManyParams>();
   const batches: SessionsPatchManyParams[] = [];
   const batchResult = (params: SessionsPatchManyParams): SessionsPatchManyResult => ({
-    outcomes: params.targets.map((target) =>
-      params.patch.archived === true && target.key === failed.key
-        ? {
-            ok: false,
-            key: target.key,
-            agentId: target.agentId,
-            error: { code: "INVALID_REQUEST", message: failureMessage },
-          }
-        : { ok: true, key: target.key, agentId: target.agentId },
+    outcomes: params.targets.map(({ key, agentId }) =>
+      params.patch.archived === true && key === failed.key
+        ? { ok: false, key, agentId, error }
+        : { ok: true, key, agentId },
     ),
   });
   const request = vi.fn(async (method: string, raw?: unknown) => {
@@ -112,142 +107,106 @@ async function setup(childCount: number, active = false) {
   const page = await createPage(createContext(gateway.gateway, sessions));
   const toast = document.createElement("openclaw-toast-host");
   document.body.append(toast);
+  onTestFinished(async () => {
+    pending.resolve({ outcomes: [] });
+    page.remove();
+    await modal.cleanup();
+    sessions.dispose();
+    toast.remove();
+  });
   await sessions.refresh();
+  const archive = () => modal.track(page.archive(root, true));
+  const undo = () => toast.querySelector<HTMLButtonElement>(".app-toast__action");
+  const confirmTree = async (size: number) => {
+    const operation = archive();
+    const actions = await waitForConfirmDialogActions();
+    expect(batches).toHaveLength(0);
+    answerConfirmDialog(actions, "alternative");
+    const first = await dispatched.promise;
+    expect(first.targets).toHaveLength(size);
+    page.remove();
+    pending.resolve(batchResult(first));
+    await operation;
+    // Partial failure stays readable before the successful-only Undo appears.
+    await waitForSolid(() => expect(toast.textContent).toContain(failureMessage));
+    if (!undo()) {
+      const dismiss = toast.querySelector<HTMLButtonElement>(".app-toast__dismiss");
+      expect(dismiss).not.toBeNull();
+      dismiss!.click();
+    }
+    await waitForSolid(() => {
+      expect(toast.textContent).toContain("Archived " + (rows.length - 1) + " sessions");
+      expect(undo()).not.toBeNull();
+    });
+  };
   return {
     root,
     rows,
     failed,
-    failureMessage,
-    pending,
-    dispatched,
     restored,
     batches,
-    request,
-    batchResult,
     client,
     gateway,
-    sessions,
     page,
     toast,
-    undo: () => toast.querySelector<HTMLButtonElement>(".app-toast__action"),
+    archive,
+    confirmTree,
+    patches: () => request.mock.calls.filter(([method]) => method === "sessions.patch"),
+    undo,
   };
-}
-
-async function revealUndoAfterPartialError(fixture: Awaited<ReturnType<typeof setup>>) {
-  // A success notification must not replace a partial failure before the operator can read it.
-  await waitForSolid(() => expect(fixture.toast.textContent).toContain(fixture.failureMessage));
-  if (!fixture.undo()) {
-    const dismiss = fixture.toast.querySelector<HTMLButtonElement>(".app-toast__dismiss");
-    expect(dismiss).not.toBeNull();
-    dismiss!.click();
-  }
-  await waitForSolid(() => {
-    expect(fixture.toast.textContent).toContain(
-      "Archived " + (fixture.rows.length - 1) + " sessions",
-    );
-    expect(fixture.undo()).not.toBeNull();
-  });
 }
 
 describe("Sessions page confirmed tree archive outcomes", () => {
   it("archives only the running parent without a second confirmation", async () => {
-    const modal = createModalDialogTestFixture();
-    const fixture = await setup(1, true);
-    try {
-      const operation = modal.track(fixture.page.archive(fixture.root, true));
-      const actions = await waitForConfirmDialogActions();
-      expect(document.body.textContent).toContain("This selection contains active work.");
-      answerConfirmDialog(actions, "confirm");
-      await waitForSolid(() =>
-        expect(
-          fixture.request.mock.calls.filter(([method]) => method === "sessions.patch"),
-        ).toHaveLength(1),
-      );
-      await operation;
-      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-      expect(fixture.batches).toEqual([]);
-      expect(
-        fixture.request.mock.calls.find(([method]) => method === "sessions.patch")?.[1],
-      ).toMatchObject({
-        key: fixture.root.key,
-        expectedSessionId: fixture.root.sessionId,
-        archived: true,
-      });
-    } finally {
-      fixture.page.remove();
-      await modal.cleanup();
-      fixture.sessions.dispose();
-      fixture.toast.remove();
-    }
+    const { archive, patches, batches, root } = await setup(1, true);
+    const operation = archive();
+    const actions = await waitForConfirmDialogActions();
+    expect(document.body.textContent).toContain("This selection contains active work.");
+    answerConfirmDialog(actions, "confirm");
+    await waitForSolid(() => expect(patches()).toHaveLength(1));
+    await operation;
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(batches).toEqual([]);
+    expect(patches()[0]?.[1]).toMatchObject({
+      key: root.key,
+      expectedSessionId: root.sessionId,
+      archived: true,
+    });
   });
 
   it("finishes remaining chunks after navigation and exposes partial errors plus successful-only Undo", async () => {
-    const modal = createModalDialogTestFixture();
-    // One more than the protocol batch maximum exercises a second confirmed chunk.
     const fixture = await setup(100);
-    try {
-      const operation = modal.track(fixture.page.archive(fixture.root, true));
-      const actions = await waitForConfirmDialogActions();
-      expect(fixture.batches).toHaveLength(0);
-      answerConfirmDialog(actions, "alternative");
-      const first = await fixture.dispatched.promise;
-      expect(first.targets).toHaveLength(100);
-      fixture.page.remove();
-      fixture.pending.resolve(fixture.batchResult(first));
-      await operation;
+    await fixture.confirmTree(100);
 
-      expect(fixture.batches.map((batch) => batch.targets.length)).toEqual([100, 1]);
-      expect(fixture.batches[1]?.targets[0]?.key).toBe(fixture.root.key);
-      expect(fixture.page.error).toBeNull();
-      await revealUndoAfterPartialError(fixture);
-      fixture.undo()!.click();
-      await fixture.restored.promise;
-      expect(fixture.batches).toHaveLength(3);
-      expect(fixture.batches[2]).toEqual({
-        targets: fixture.rows
-          .toReversed()
-          .filter((row) => row !== fixture.failed)
-          .map((row) => ({
-            key: row.key,
-            agentId: "main",
-            expectedSessionId: row.sessionId,
-          })),
-        patch: { archived: false },
-      });
-      expect(fixture.gateway.setSessionKey).not.toHaveBeenCalled();
-    } finally {
-      fixture.pending.resolve({ outcomes: [] });
-      fixture.page.remove();
-      await modal.cleanup();
-      fixture.sessions.dispose();
-      fixture.toast.remove();
-    }
+    expect(fixture.batches.map((batch) => batch.targets.length)).toEqual([100, 1]);
+    expect(fixture.batches[1]?.targets[0]?.key).toBe(fixture.root.key);
+    expect(fixture.page.error).toBeNull();
+    fixture.undo()!.click();
+    await fixture.restored.promise;
+    expect(fixture.batches).toHaveLength(3);
+    expect(fixture.batches[2]).toEqual({
+      targets: fixture.rows
+        .toReversed()
+        .filter((row) => row !== fixture.failed)
+        .map((row) => ({
+          key: row.key,
+          agentId: "main",
+          expectedSessionId: row.sessionId,
+        })),
+      patch: { archived: false },
+    });
+    expect(fixture.gateway.setSessionKey).not.toHaveBeenCalled();
   });
 
   it("retires the confirmed tree Undo on a same-client reconnect after navigation", async () => {
-    const modal = createModalDialogTestFixture();
     const fixture = await setup(2);
-    try {
-      const operation = modal.track(fixture.page.archive(fixture.root, true));
-      answerConfirmDialog(await waitForConfirmDialogActions(), "alternative");
-      const first = await fixture.dispatched.promise;
-      fixture.page.remove();
-      fixture.pending.resolve(fixture.batchResult(first));
-      await operation;
-      await revealUndoAfterPartialError(fixture);
+    await fixture.confirmTree(3);
 
-      fixture.gateway.emit({ phase: "reconnecting", client: null });
-      fixture.gateway.emit({ phase: "connected", client: fixture.client });
-      fixture.undo()!.click();
-      await fixture.toast.updateComplete;
-      expect(fixture.batches).toHaveLength(1);
-      expect(fixture.gateway.setSessionKey).not.toHaveBeenCalled();
-    } finally {
-      fixture.pending.resolve({ outcomes: [] });
-      fixture.page.remove();
-      await modal.cleanup();
-      fixture.sessions.dispose();
-      fixture.toast.remove();
-    }
+    fixture.gateway.emit({ phase: "reconnecting", client: null });
+    fixture.gateway.emit({ phase: "connected", client: fixture.client });
+    fixture.undo()!.click();
+    await fixture.toast.updateComplete;
+    expect(fixture.batches).toHaveLength(1);
+    expect(fixture.gateway.setSessionKey).not.toHaveBeenCalled();
   });
 });

@@ -22,6 +22,7 @@ import type {
   DeleteSessionEntryLifecycleParams,
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
+import { retainConversationWorkerPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import { prepareSessionDeletionInDatabase } from "./session-accessor.sqlite-deletion-plan.js";
 import { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
 import { publishSessionEntryWorkerInvalidations } from "./session-accessor.sqlite-entry-worker-publication.js";
@@ -68,6 +69,13 @@ function hasNativeReclamationOwner(): boolean {
   );
 }
 
+export function runSessionDeletionPlanning<Planning extends SessionDeletionPlanningOperation>(
+  resolved: ReturnType<typeof resolveSqliteStoreScope>,
+  params: DeleteSessionEntryLifecycleParams,
+  planning: Planning,
+  assertCurrent: () => void,
+  diagnostics?: SqliteSessionReclamationDiagnostics,
+): Promise<Extract<SessionDeletionPlanningResult, { operation: Planning["operation"] }>>;
 export async function runSessionDeletionPlanning(
   resolved: ReturnType<typeof resolveSqliteStoreScope>,
   params: DeleteSessionEntryLifecycleParams,
@@ -113,7 +121,7 @@ export async function runSessionDeletionPlanning(
   );
 }
 
-export async function runSqliteSessionReclamation(params: {
+type SqliteSessionReclamationParams = {
   diagnostics?: SqliteSessionReclamationDiagnostics;
   assertCommitAllowed?: () => void;
   refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
@@ -124,7 +132,23 @@ export async function runSqliteSessionReclamation(params: {
     databaseIdentity: string | symbol,
   ) => void;
   plan: SqliteSessionReclamationPlan;
-}): Promise<SqliteSessionReclamationResult> {
+};
+
+type SqliteSessionReclamationReply<Kind extends SqliteSessionReclamationPlan["kind"]> = Extract<
+  SqliteSessionReclamationResult,
+  {
+    kind:
+      | Kind
+      | (Kind extends "maintenance-plan" | "maintenance-age" ? "maintenance-plan-stale" : never);
+  }
+>;
+
+export function runSqliteSessionReclamation<Plan extends SqliteSessionReclamationPlan>(
+  params: Omit<SqliteSessionReclamationParams, "plan"> & { plan: Plan },
+): Promise<SqliteSessionReclamationReply<Plan["kind"]>>;
+export async function runSqliteSessionReclamation(
+  params: SqliteSessionReclamationParams,
+): Promise<SqliteSessionReclamationResult> {
   if (params.diagnostics) {
     params.diagnostics.kind = params.plan.kind;
   }
@@ -457,15 +481,38 @@ async function runPreparedSqliteSessionReclamation(
       await runExclusiveSqliteSessionWrite(
         plan.databaseOptions,
         async () => {
+          const conversations = retainConversationWorkerPublication(
+            identity,
+            plan.databaseOptions.path,
+          );
           let refusal: { error: unknown } | undefined;
           let publishCommitted: (() => void) | undefined;
           try {
             assertCommitAllowed();
             publishCommitted = prepareReclamationPublication(plan, identity);
+            if (
+              ![
+                "lifecycle-projection-plan",
+                "archive-publish-prepare",
+                "maintenance-pages",
+              ].includes(plan.kind)
+            ) {
+              conversations.begin();
+            }
           } catch (error) {
             refusal = { error };
           }
-          const completed = await run(refusal);
+          let completed: SqliteSessionReclamationResult | undefined;
+          try {
+            completed = await run(refusal);
+          } finally {
+            conversations.settle(
+              completed?.conversationPublication,
+              completed === undefined &&
+                refusal === undefined &&
+                reclamationAdmission.releaseCause !== "preliminary-release",
+            );
+          }
           if (completed) {
             // Publish captured identities after transaction settlement, before releasing the writer.
             const publishRemoval =

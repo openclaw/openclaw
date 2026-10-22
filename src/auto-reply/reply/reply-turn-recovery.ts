@@ -1,32 +1,21 @@
 import { raceWithTimeout } from "@openclaw/retry";
-import {
-  releaseMainSessionRecoveryOwner,
-  type MainSessionRecoveryOwnerLease,
-} from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { DEFAULT_RECOVERY_DELAY_MS } from "../../agents/main-session-recovery/main-session-restart-recovery-shared.js";
+import { SessionWorkStartChangedError } from "../../config/sessions/lifecycle.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import {
+  captureSessionTarget,
+  getCompetingSessionWorkAdmissionRelease,
+} from "../../sessions/session-controller.lifecycle.js";
+import { reserveSessionControllerClaimPredecessor } from "../../sessions/session-controller.mailbox-predecessor.js";
+import {
+  retireSessionControllerInput,
+  type SessionControllerMailboxClaim,
+} from "../../sessions/session-controller.mailbox.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-
-const log = createSubsystemLogger("auto-reply/reply-turn-admission");
-
-export async function releaseReplyRecoveryOwner(lease: MainSessionRecoveryOwnerLease | undefined) {
-  try {
-    return await releaseMainSessionRecoveryOwner(lease);
-  } catch (error) {
-    log.warn(`failed to release main-session recovery reply owner: ${formatErrorMessage(error)}`);
-    // The durable owner schedules exact-token retries. A completed reply must
-    // not keep its successor barrier and lifecycle admission until that
-    // background repair wins a contested SQLite write.
-    return undefined;
-  }
-}
 
 /** Retained recovery is busy work; only the Gateway owner may reclaim it. */
 export async function reconcileOrWaitForReplyRecovery(params: {
@@ -37,34 +26,71 @@ export async function reconcileOrWaitForReplyRecovery(params: {
   gatewayContext: GatewayRequestContext;
   signal?: AbortSignal;
   assertCurrent: () => void;
+  claim?: SessionControllerMailboxClaim;
 }): Promise<void> {
   const { reconcileOrphanedGatewaySessionRecovery } =
-    await import("../../gateway/session-recovery-service.js");
+    await import("../../gateway/session-recovery-source.js");
   const { resolveSessionWorkerPlacementContext } =
     await import("../../gateway/session-worker-placement-context.js");
-  const recovered = await reconcileOrphanedGatewaySessionRecovery({
-    cfg: params.gatewayContext.getRuntimeConfig(),
-    entry: params.entry,
-    target: {
-      agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-      storePath: params.storePath,
-      canonicalKey: params.sessionKey,
-      storeKeys: [params.sessionKey],
-    },
-    authorizedPluginId: getPluginRuntimeGatewayRequestScope()?.pluginId,
-    commitGuard: params.assertCurrent,
-    workerPlacementContext: resolveSessionWorkerPlacementContext(params.gatewayContext),
-  });
-  if (!recovered) {
-    await waitForRestartRecoveryProgress({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      signal: params.signal,
-      ownerRelease: getSessionWorkAdmissionRelease({
-        scope: params.storePath,
-        identities: [params.sessionKey, params.entry.sessionId],
-      }),
+  const signal =
+    params.claim && params.signal
+      ? AbortSignal.any([params.claim.abortController.signal, params.signal])
+      : (params.claim?.abortController.signal ?? params.signal);
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    params.assertCurrent();
+  };
+  assertCurrent();
+  // Yield only this pre-execution input. The unbound predecessor keeps later
+  // input queued while the Gateway owner decides whether recovery is orphaned.
+  const handoff = params.claim
+    ? reserveSessionControllerClaimPredecessor(params.claim, {
+        policy: { mode: "followup" },
+        target: captureSessionTarget({
+          storeScope: params.storePath,
+          sessionKey: params.sessionKey,
+          incarnation: params.entry.sessionId,
+          agentId: params.agentId,
+        }),
+        adapter: { signal },
+      })
+    : undefined;
+  let restored = true;
+  try {
+    const recovered = await reconcileOrphanedGatewaySessionRecovery({
+      cfg: params.gatewayContext.getRuntimeConfig(),
+      entry: params.entry,
+      target: {
+        agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+        storePath: params.storePath,
+        canonicalKey: params.sessionKey,
+        storeKeys: [params.sessionKey],
+      },
+      authorizedPluginId: getPluginRuntimeGatewayRequestScope()?.pluginId,
+      commitGuard: assertCurrent,
+      workerPlacementContext: resolveSessionWorkerPlacementContext(params.gatewayContext),
     });
+    if (!recovered) {
+      await waitForRestartRecoveryProgress({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        signal,
+        ownerRelease: getCompetingSessionWorkAdmissionRelease({
+          scope: params.storePath,
+          identities: [params.sessionKey, params.entry.sessionId],
+          beforeClaim: params.claim,
+        }),
+      });
+    }
+  } finally {
+    if (handoff) {
+      retireSessionControllerInput(handoff.input);
+      restored = await handoff.restored;
+    }
+  }
+  assertCurrent();
+  if (!restored) {
+    throw new SessionWorkStartChangedError("Session changed while waiting for recovery.");
   }
 }
 

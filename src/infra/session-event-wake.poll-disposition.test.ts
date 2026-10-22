@@ -6,12 +6,12 @@ import {
 } from "../process/gateway-work-admission.js";
 import {
   SESSION_EVENT_IDLE_RETRY_MS,
-  deferSessionEventWakePoll as deferPoll,
   getSessionEventWakeAbortSignal as getWakeSignal,
   isSessionEventWakePollDeferred as isDeferred,
   markSessionEventWakeWorkStarted as markStarted,
   requestSessionEventWake as requestWake,
   requestSessionEventWakeAndWait as requestAndWait,
+  retireRefusedSessionEventWakePoll,
   setSessionEventWakeHandler as setHandlerRuntime,
 } from "./session-event-wake.js";
 
@@ -20,7 +20,12 @@ describe("session event wake disposition and preemption", () => {
   type WakeHandler = NonNullable<Parameters<typeof setHandlerRuntime>[0]>;
   const cadenceMs = 5 * 60_000;
   const skipResult = (reason: string) => ({ status: "skipped" as const, reason });
-  const dispositionsNow = () => [isDeferred(), deferPoll(), isDeferred()];
+  // Heartbeat dispatch retires a refused poll; the scheduler reads the disposition.
+  function retireRefusedPoll(): boolean {
+    retireRefusedSessionEventWakePoll();
+    return isDeferred();
+  }
+  const dispositionsNow = () => [isDeferred(), retireRefusedPoll(), isDeferred()];
   const terminalFailure = { status: "failed" as const, reason: "test-terminal-failure" };
   const ran = { status: "ran" as const, durationMs: 1 };
   const noDisposition = [false, false, false];
@@ -54,10 +59,12 @@ describe("session event wake disposition and preemption", () => {
     }
     return handler;
   }
-  function ineligiblePoll(reason: string) {
+  function ineligiblePoll(retryMs = SESSION_EVENT_IDLE_RETRY_MS) {
     const handler = install(async () => {
       checkPoll(dispositionsNow(), noDisposition);
-      return handler.mock.calls.length === 1 ? skipResult(reason) : terminalFailure;
+      return handler.mock.calls.length === 1
+        ? { ...skipResult("requests-in-flight"), retryAtMs: Date.now() + retryMs }
+        : terminalFailure;
     });
     return handler;
   }
@@ -117,12 +124,12 @@ describe("session event wake disposition and preemption", () => {
       await bothStarted.promise;
       expect(getWakeSignal()).toBe(signal);
       if (!admitted) {
-        expect([deferPoll(), isDeferred()]).toEqual([true, true]);
+        expect([retireRefusedPoll(), isDeferred()]).toEqual([true, true]);
         pollDeferred.resolve();
         return skipped;
       }
       await pollDeferred.promise;
-      expect(dispositionsNow()).toEqual(noDisposition);
+      expect(isDeferred()).toBe(false);
       expect(getWakeSignal()).toBe(signal);
       return terminalFailure;
     });
@@ -154,8 +161,7 @@ describe("session event wake disposition and preemption", () => {
     async (name, overrides) => {
       const nativeFirst = name !== "global alias";
       const retryMs = nativeFirst ? 1_000 : SESSION_EVENT_IDLE_RETRY_MS;
-      const reason = nativeFirst ? "cron-in-progress" : "requests-in-flight";
-      const handler = ineligiblePoll(reason);
+      const handler = ineligiblePoll(retryMs);
       const invalid = nativePoll({ ...overrides, coalesceMs: 100 });
       const valid = nativePoll({ coalesceMs: 100 });
       const requests = nativeFirst ? [valid, invalid] : [invalid];
@@ -190,7 +196,7 @@ describe("session event wake disposition and preemption", () => {
     await advance(oldHandler, 1, 2);
     expect(oldHandler.mock.calls[1]?.[0]).toMatchObject({ ...target, retainedWork: true });
     expect(observed.settled).not.toHaveBeenCalled();
-    const replacement = ineligiblePoll("requests-in-flight");
+    const replacement = ineligiblePoll();
     await advance(replacement, 250, 1);
     expect(replacement.mock.calls[0]?.[0]).toMatchObject(target);
     expect(replacement.mock.calls[0]?.[0].retainedWork).toBeUndefined();
@@ -210,8 +216,10 @@ describe("session event wake disposition and preemption", () => {
           await finishFirst.promise;
           return skipResult("preempted");
         }
-        checkPoll([deferPoll()], [false]);
-        return handler.mock.calls.length === 2 ? skipResult("cron-in-progress") : terminalFailure;
+        checkPoll([retireRefusedPoll()], [false]);
+        return handler.mock.calls.length === 2
+          ? { ...skipResult("requests-in-flight"), retryAtMs: Date.now() + 1_000 }
+          : terminalFailure;
       });
       const { settled, result: original } = observe();
       const laterRequest = nativePoll({ scheduledEveryMs: 2 * cadenceMs });
@@ -238,37 +246,60 @@ describe("session event wake disposition and preemption", () => {
     },
   );
 
-  it.each(["work starts", "attempt throws"])(
-    "revokes a tentative poll disposition when %s",
-    async (outcome) => {
-      const throws = outcome === "attempt throws";
-      const handler = install(async (): ReturnType<WakeHandler> => {
-        if (throws) {
-          checkPoll([isDeferred()], [false]);
-        }
-        if (handler.mock.calls.length === 1) {
-          checkPoll([deferPoll()], [true]);
-          if (throws) {
-            throw new Error("test-attempt-interrupted");
-          }
-          markStarted();
-          checkPoll([isDeferred(), deferPoll()], [false, false]);
-          return skipResult("active-run");
-        }
-        if (!throws) {
-          checkPoll([deferPoll()], [false]);
-        }
-        return throws && handler.mock.calls.length === 2
-          ? skipResult("cron-in-progress")
-          : terminalFailure;
-      });
-      const observed = observe();
-      await advance(handler, throws ? 1_000 : 1, throws ? 2 : 1);
-      expect(observed.settled).not.toHaveBeenCalled();
-      await advance(handler, throws ? 1_000 : SESSION_EVENT_IDLE_RETRY_MS, throws ? 3 : 2);
-      await expectTerminal(observed);
+  it.each([
+    { name: "native poll", request: {}, startedBefore: false, retired: true },
+    { name: "native poll retry", request: {}, startedBefore: true, retired: false },
+    {
+      name: "task turn",
+      request: { intent: "task", tasks: [{ jobId: "job", name: "job", prompt: "job" }] },
+      startedBefore: false,
+      retired: false,
     },
-  );
+  ] as const)("retires a refused $name only before earlier work: $retired", async (params) => {
+    const skipped = skipResult("requests-in-flight");
+    const handler = install(async () => {
+      markStarted();
+      // The refused attempt follows one admitted attempt when earlier work started.
+      const refusal = handler.mock.calls.length - (params.startedBefore ? 1 : 0);
+      if (refusal === 0) {
+        return skipResult("preempted");
+      }
+      if (refusal > 1) {
+        return terminalFailure;
+      }
+      retireRefusedSessionEventWakePoll();
+      return skipped;
+    });
+    const result = requestAndWait(nativePoll(params.request));
+    await vi.advanceTimersByTimeAsync(2 * SESSION_EVENT_IDLE_RETRY_MS + 1);
+    const attempts = (params.startedBefore ? 1 : 0) + (params.retired ? 1 : 2);
+    expect(handler).toHaveBeenCalledTimes(attempts);
+    expect(await result).toBe(params.retired ? skipped : terminalFailure);
+  });
+
+  it("does not carry a failed occurrence's poll disposition into a fresh wake", async () => {
+    const handler = install(async (): ReturnType<WakeHandler> => {
+      checkPoll([isDeferred()], [false]);
+      if (handler.mock.calls.length === 1) {
+        checkPoll([retireRefusedPoll()], [true]);
+        throw new Error("test-attempt-interrupted");
+      }
+      return handler.mock.calls.length === 2
+        ? { ...skipResult("requests-in-flight"), retryAtMs: Date.now() + 1_000 }
+        : terminalFailure;
+    });
+    const observed = observe();
+    await advance(handler, 1, 1);
+    await expect(observed.result).resolves.toEqual({
+      status: "failed",
+      reason: "test-attempt-interrupted",
+    });
+    const fresh = observe();
+    await advance(handler, 1, 2);
+    expect(fresh.settled).not.toHaveBeenCalled();
+    await advance(handler, 1_000, 3);
+    await expectTerminal(fresh);
+  });
 
   it("cancels only the exact waiter without aborting its coalesced native poll", async () => {
     const finish = createDeferred();
@@ -277,7 +308,7 @@ describe("session event wake disposition and preemption", () => {
     const cancelledResult = { status: "failed", reason: "heartbeat wake cancelled" };
     const handler = install(async () => {
       await finish.promise;
-      checkPoll([deferPoll()], [true]);
+      checkPoll([retireRefusedPoll()], [true]);
       return skipped;
     });
     const first = requestAndWait(nativePoll({ coalesceMs: 100 }), {

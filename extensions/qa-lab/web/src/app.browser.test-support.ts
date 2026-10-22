@@ -8,7 +8,6 @@ const httpMock = vi.hoisted(() => {
   class QaLabHttpError extends Error {
     constructor(
       message: string,
-      readonly status: number,
       readonly payload: unknown,
     ) {
       super(message);

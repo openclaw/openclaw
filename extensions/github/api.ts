@@ -33,7 +33,7 @@ export type {
   ControlUiGitHubPreviewIdentity,
 } from "./src/preview-contract.js";
 export { loadSessionGitHubDetail, loadGitHubDetail } from "./src/detail.js";
-export { parseGitHubTarget } from "./src/targets.js";
+export { parseGitHubTarget, parseGitHubReadTarget } from "./src/targets.js";
 
 export { searchPublicGitHubItems } from "./src/search.js";
 export { parseGitHubSearchParams } from "./src/search-params.js";

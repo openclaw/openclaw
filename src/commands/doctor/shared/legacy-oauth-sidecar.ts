@@ -1,4 +1,5 @@
-// Legacy OAuth sidecar reader for migrating encrypted auth-profile secret material.
+// Temporary #174343 OAuth upgrade dead-end repair; remove after 2026-11-29 with
+// Doctor compat record doctor-pre-july-retired-state.
 import * as childProcess from "node:child_process";
 import { createDecipheriv, hash } from "node:crypto";
 import fs from "node:fs";
@@ -51,7 +52,6 @@ type LegacyOAuthEncryptedPayload = {
   ciphertext: string;
 };
 
-/** Resolve the legacy OAuth sidecar JSON path for an auth profile ref. */
 function resolveLegacyOAuthSidecarPath(
   ref: LegacyOAuthRef,
   env: NodeJS.ProcessEnv = process.env,

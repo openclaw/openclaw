@@ -14,7 +14,12 @@ import {
   getAiTransportHost,
   type AiInlineContentBlock,
 } from "../host.js";
-import { anthropicServerSideFallbackCases } from "../providers/anthropic-server-fallback.test-support.js";
+import {
+  anthropicServerSideFallbackCases,
+  anthropicTerminalFallbackCases,
+  anthropicTerminalFallbackRequestedModel,
+  createAnthropicTerminalFallbackEvents,
+} from "../providers/anthropic-server-fallback.test-support.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import type { AnthropicTransportOptions } from "./anthropic-transport-options.js";
@@ -471,6 +476,48 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequestHeaders().get("anthropic-beta") ?? "").not.toContain(
       "server-side-fallback",
     );
+  });
+
+  it.each(anthropicTerminalFallbackCases)("terminal fallback: $name", async (testCase) => {
+    mockSse(createAnthropicTerminalFallbackEvents(testCase));
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(anthropicTerminalFallbackRequestedModel),
+    );
+    const fallback = testCase.fallback;
+    const failed = Boolean(testCase.failure);
+
+    expect(result.model).toBe("claude-fable-5");
+    expect(result.stopReason).toBe(failed ? "error" : "toolUse");
+    expect(result.responseModel).toBe(testCase.unknown ? "claude-future-9" : "claude-opus-4-8");
+    expect
+      .soft(result.diagnostics?.filter(({ type }) => type === "provider_fallback") ?? [])
+      .toEqual(
+        fallback
+          ? [
+              expect.objectContaining({
+                details: {
+                  provider: "anthropic",
+                  fromModel: "claude-fable-5",
+                  toModel: testCase.model,
+                },
+              }),
+            ]
+          : [],
+      );
+    if (failed) {
+      expect(result.errorMessage).toContain(
+        testCase.failure === "incomplete" ? "before message_stop" : "synthetic stream failure",
+      );
+      expect(result.usage.cost.total).toBeCloseTo(0.000552, 10);
+      return;
+    }
+    expect(result.content.map(({ type }) => type)).toEqual(["thinking", "text", "toolCall"]);
+    expect(result.usage).toMatchObject({ input: 5, output: 9, cacheRead: 2, cacheWrite: 4 });
+    expect(result.usage.cost.total).toBeCloseTo(
+      fallback && !testCase.unknown ? 0.000276 : 0.000552,
+      10,
+    );
+    expect(result.usage.cost).not.toHaveProperty("totalOrigin");
   });
 
   it("rebuilds Fable output at a mid-stream server-side fallback boundary", async () => {
@@ -1275,18 +1322,16 @@ describe("anthropic transport stream", () => {
     );
   });
 
-  it.each([false, true])("quarantines malformed tools (valid sibling=%s)", async (withValid) => {
+  it.each([false, true])("quarantines malformed schemas (valid sibling=%s)", async (withValid) => {
     const result = await runTransportStream(
       makeAnthropicTransportModel(),
       {
         messages: [{ role: "user", content: "hello" }],
         tools: [
           {
-            name: "unreadable_plugin_tool",
-            description: "unreadable schema",
-            get parameters() {
-              throw new Error("fuzz parameters getter exploded");
-            },
+            name: "invalid_required_tool",
+            description: "invalid required",
+            parameters: { type: "object", required: "query" },
           },
           ...(withValid
             ? [

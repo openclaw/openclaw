@@ -458,6 +458,7 @@ export async function tryReuseCodexLiveThread(
             params.params,
             options.hostSystemAgentActive,
             binding,
+            params,
           ))
     ) {
       // Refusal must leave the original ephemeral or protected owner available.
@@ -474,6 +475,7 @@ export async function tryReuseCodexLiveThread(
           resumeAuthProfileId,
           dynamicToolsFingerprint,
           binding,
+          params,
         );
     if (!incognito && retainedThread.configFingerprint !== liveThreadConfigFingerprint) {
       // Return the same owner first: cold-resume preparation must observe native teardown

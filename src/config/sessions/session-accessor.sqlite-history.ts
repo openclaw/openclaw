@@ -150,6 +150,7 @@ export function listTranscriptInstancesFromDatabase(params: {
     .select([
       "session_id",
       "session_key",
+      "previous_session_id",
       "created_at",
       "updated_at",
       "channel",
@@ -217,6 +218,7 @@ export function listTranscriptInstancesFromDatabase(params: {
         ...(currentIsExact && current ? structuredClone(current) : {}),
         sessionId: row.session_id,
         updatedAt: updatedAtMs,
+        ...(row.previous_session_id ? { previousSessionId: row.previous_session_id } : {}),
         ...(row.parent_session_key ? { parentSessionKey: row.parent_session_key } : {}),
         ...(row.spawned_by ? { spawnedBy: row.spawned_by, spawnDepth: 1 } : {}),
         ...(chatType ? { chatType } : {}),

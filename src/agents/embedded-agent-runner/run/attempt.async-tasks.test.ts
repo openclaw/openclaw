@@ -1,6 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   clearGeneratedMediaTaskActivity,
   createMediaGenerationOperation,
@@ -16,6 +15,10 @@ import {
 } from "./attempt-async-tasks.js";
 
 const sessionKey = "agent:main:cron:daily-media:run:run-123";
+const emptyResult = { timedOutRunIds: [] };
+function taskMeta(task: ReturnType<typeof startTask>): AsyncStartedToolMeta {
+  return { asyncStarted: true, asyncTaskRunId: task.runId, asyncTaskId: task.taskId };
+}
 function startTask(kind = "image", requesterSessionKey = sessionKey) {
   const runId = `tool:${kind}_generate:run-123`;
   const task = createMediaGenerationOperation({
@@ -25,9 +28,6 @@ function startTask(kind = "image", requesterSessionKey = sessionKey) {
     sourceId: `${kind}_generate:test`,
     requesterSessionKey,
     status: "running",
-    createdAt: 1,
-    startedAt: 1,
-    lastEventAt: 1,
   });
   if (!task) {
     throw new Error("expected native media task");
@@ -38,8 +38,6 @@ function completeTask(runId: string, endedAt: number) {
   updateMediaGenerationOperation(runId, {
     status: "succeeded",
     endedAt,
-    lastEventAt: endedAt,
-    terminalSummary: "Generated media.",
   });
   clearGeneratedMediaTaskActivity(runId);
 }
@@ -48,148 +46,108 @@ function wait(params: Partial<Parameters<typeof waitForCompletionRequiredAsyncTa
     sessionKey,
     getToolMetas: () => [],
     getDeadlineAtMs: () => undefined,
-    now: () => 0,
     pollIntervalMs: 500,
     ...params,
   });
 }
 
 describe("waitForCompletionRequiredAsyncTasks", () => {
-  beforeEach(() => resetGeneratedMediaTaskActivityForTests());
-  afterEach(() => resetGeneratedMediaTaskActivityForTests());
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetGeneratedMediaTaskActivityForTests();
+  });
+  afterEach(() => {
+    resetGeneratedMediaTaskActivityForTests();
+    vi.useRealTimers();
+  });
 
-  it("skips media task waiting after sessions_yield pauses the attempt", () => {
+  it.each([true, false])("waits before yieldDetected=%s", (yieldDetected) => {
     const task = startTask();
     expect(
       shouldWaitForCompletionRequiredAsyncTasks({
         sessionKey,
-        toolMetas: [{ asyncStarted: true, asyncTaskRunId: task.runId }],
-        yieldDetected: true,
+        toolMetas: yieldDetected ? [{ asyncStarted: true, asyncTaskRunId: task.runId }] : [],
+        yieldDetected,
       }),
-    ).toBe(false);
-    expect(
-      shouldWaitForCompletionRequiredAsyncTasks({
-        sessionKey,
-        toolMetas: [],
-        yieldDetected: false,
-      }),
-    ).toBe(true);
+    ).toBe(!yieldDetected);
   });
 
   it("waits for active cron tasks discovered from native media operations", async () => {
     const task = startTask();
-    await expect(wait({ sleep: async () => completeTask(task.taskId, 2) })).resolves.toMatchObject({
-      waitedRunIds: [task.runId],
-      timedOutRunIds: [],
-      terminalTasks: [
-        { taskId: task.taskId, status: "succeeded", terminalSummary: "Generated media." },
-      ],
-    });
+    const result = wait({});
+    const settled = vi.fn();
+    void result.then(settled);
+    await vi.advanceTimersByTimeAsync(499);
+    expect(settled).not.toHaveBeenCalled();
+    completeTask(task.taskId, Date.now());
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toEqual(emptyResult);
+    expect(findMediaGenerationOperation(task.taskId)?.status).toBe("succeeded");
   });
 
-  it.each(["image", "music", "video"])(
-    "releases the cron turn once %s completion is durably queued",
-    async (kind) => {
-      const task = startTask(kind);
-      const toolMetas = [{ asyncStarted: true, asyncTaskRunId: task.runId }];
-      await expect(
-        wait({
-          getToolMetas: () => toolMetas,
-          sleep: async () => {
-            updateMediaGenerationOperation(task.taskId, { completionDelivery: "queued" });
-          },
-        }),
-      ).resolves.toEqual({ waitedRunIds: [task.runId], timedOutRunIds: [], terminalTasks: [] });
-      expect(findMediaGenerationOperation(task.taskId)?.status).toBe("running");
-      expect(requiresCompletionRequiredAsyncTaskWait({ sessionKey, toolMetas })).toBe(false);
-      await expect(
-        wait({ getToolMetas: () => toolMetas, getDeadlineAtMs: () => 0 }),
-      ).resolves.toEqual({ waitedRunIds: [], timedOutRunIds: [], terminalTasks: [] });
-    },
-  );
+  it.each(["image", "music", "video"])("releases durably queued %s completion", async (kind) => {
+    const task = startTask(kind);
+    const toolMetas = [{ asyncStarted: true, asyncTaskRunId: task.runId }];
+    const result = wait({ getToolMetas: () => toolMetas });
+    updateMediaGenerationOperation(task.taskId, { completionDelivery: "queued" });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await result).toEqual(emptyResult);
+    expect(findMediaGenerationOperation(task.taskId)?.status).toBe("running");
+    expect(requiresCompletionRequiredAsyncTaskWait({ sessionKey, toolMetas })).toBe(false);
+    expect(await wait({ getToolMetas: () => toolMetas, getDeadlineAtMs: () => 0 })).toEqual(
+      emptyResult,
+    );
+  });
 
   it("ignores media operations owned by another requester", async () => {
     startTask("image", "agent:main:parent");
     expect(requiresCompletionRequiredAsyncTaskWait({ sessionKey, toolMetas: [] })).toBe(false);
-    await expect(wait({ getDeadlineAtMs: () => 0 })).resolves.toEqual({
-      waitedRunIds: [],
-      timedOutRunIds: [],
-      terminalTasks: [],
-    });
+    expect(await wait({ getDeadlineAtMs: () => 0 })).toEqual(emptyResult);
   });
 
   it("waits for async task ids discovered after an earlier async completion", async () => {
     const first = startTask();
-    const metas: AsyncStartedToolMeta[] = [
-      {
-        asyncStarted: true,
-        asyncTaskRunId: first.runId,
-        asyncTaskId: first.taskId,
-      },
-    ];
+    const metas = [taskMeta(first)];
     // Registry admission prunes completed records against the real epoch.
     const startedAt = Date.now();
-    let now = startedAt;
-    let polls = 0;
-    await expect(
-      wait({
-        sessionKey: undefined,
-        getToolMetas: () => metas,
-        getDeadlineAtMs: () => startedAt + 19,
-        now: () => now,
-        pollIntervalMs: 2,
-        sleep: async (ms) => {
-          now += ms;
-          if (++polls === 1) {
-            completeTask(first.taskId, now);
-            const next = startTask("music");
-            metas.push({
-              asyncStarted: true,
-              asyncTaskRunId: next.runId,
-              asyncTaskId: next.taskId,
-            });
-          } else {
-            completeTask("tool:music_generate:run-123", now);
-          }
-        },
-      }),
-    ).resolves.toMatchObject({
-      waitedRunIds: [first.runId, "tool:music_generate:run-123"],
-      timedOutRunIds: [],
-      terminalTasks: [
-        { taskId: first.taskId, status: "succeeded", terminalSummary: "Generated media." },
-        { taskId: "tool:music_generate:run-123", status: "succeeded" },
-      ],
+    setTimeout(() => {
+      completeTask(first.taskId, Date.now());
+      metas.push(taskMeta(startTask("music")));
+    }, 2);
+    setTimeout(() => completeTask("tool:music_generate:run-123", Date.now()), 4);
+    const result = wait({
+      sessionKey: undefined,
+      getToolMetas: () => metas,
+      getDeadlineAtMs: () => startedAt + 19,
+      pollIntervalMs: 2,
     });
-    expect(polls).toBe(2);
+    await vi.advanceTimersByTimeAsync(4);
+    expect(await result).toEqual(emptyResult);
+    expect(findMediaGenerationOperation(first.taskId)?.status).toBe("succeeded");
+    expect(findMediaGenerationOperation("tool:music_generate:run-123")?.status).toBe("succeeded");
+    expect(Date.now()).toBe(startedAt + 4);
   });
 
   it("rereads paused and resumed deadlines beyond the former finite sentinel", async () => {
     const task = startTask();
     const startedAt = MAX_TIMER_TIMEOUT_MS + 1;
-    let now = startedAt;
-    let deadlineAtMs: number | undefined = now + 750;
-    const expectedSleeps = [500, 500, 500, 250];
-    let polls = 0;
+    vi.setSystemTime(startedAt);
+    let deadlineAtMs: number | undefined = startedAt + 750;
+    setTimeout(() => {
+      deadlineAtMs = undefined;
+    }, 500);
+    setTimeout(() => {
+      deadlineAtMs = Date.now() + 250;
+    }, 1_500);
     const getDeadlineAtMs = vi.fn(() => deadlineAtMs);
-    await expect(
-      wait({
-        getDeadlineAtMs,
-        now: () => now,
-        sleep: async (ms) => {
-          expect(ms).toBe(expectedSleeps[polls]);
-          now += ms;
-          polls += 1;
-          if (polls === 1) {
-            deadlineAtMs = undefined;
-          } else if (polls === 3) {
-            deadlineAtMs = now + 250;
-          }
-        },
-      }),
-    ).resolves.toMatchObject({ waitedRunIds: [task.runId], timedOutRunIds: [task.runId] });
-    expect(now).toBe(startedAt + 1_750);
-    expect(polls).toBe(expectedSleeps.length);
+    const result = wait({
+      getDeadlineAtMs,
+    });
+    await vi.advanceTimersByTimeAsync(1_750);
+    expect(await result).toMatchObject({
+      timedOutRunIds: [task.runId],
+    });
+    expect(Date.now()).toBe(startedAt + 1_750);
     expect(getDeadlineAtMs).toHaveBeenCalledTimes(5);
   });
 
@@ -197,21 +155,9 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     startTask();
     const controller = new AbortController();
     const reason = new Error("run cancelled during task poll");
-    const sleeping = createDeferred();
-    try {
-      await expect(
-        wait({
-          abortSignal: controller.signal,
-          sleep: async (ms) => {
-            expect(ms).toBe(500);
-            controller.abort(reason);
-            await sleeping.promise;
-          },
-        }),
-      ).rejects.toMatchObject({ name: "AbortError", cause: reason });
-    } finally {
-      sleeping.resolve();
-      await sleeping.promise;
-    }
+    const result = wait({ abortSignal: controller.signal });
+    controller.abort(reason);
+    await expect(result).rejects.toMatchObject({ name: "AbortError", cause: reason });
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

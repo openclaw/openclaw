@@ -4,6 +4,65 @@ import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSpawnBrokerHost } from "./host.js";
 import { attachBrokerNativeResource } from "./resource-client.js";
+import type { BrokerResourceResponse } from "./resource-protocol.js";
+
+function resourceFixture() {
+  const host = createSpawnBrokerHost({ nativeResources: true });
+  const { port1, port2 } = new MessageChannel();
+  const failure = createDeferred<Error>();
+  const ownerFailures: Error[] = [];
+  const clientFailures: Error[] = [];
+  const responses: BrokerResourceResponse[] = [];
+  let client: ReturnType<typeof attachBrokerNativeResource> | undefined;
+  let lease: ReturnType<typeof host.captureNativeResource> | undefined;
+  return {
+    host,
+    send: (value: unknown) => port2.postMessage(value),
+    failure: failure.promise,
+    ownerFailures,
+    clientFailures,
+    responses,
+    async attach(
+      source: string,
+      ownerPort = false,
+      observe: (response: BrokerResourceResponse) => void = () => {},
+    ) {
+      await host.ready();
+      lease = host.captureNativeResource(
+        { moduleUrl: `data:text/javascript,${encodeURIComponent(source)}`, ownerPort },
+        { message() {}, failed: (error) => ownerFailures.push(error) },
+      );
+      client = attachBrokerNativeResource(
+        lease.attachment,
+        port1,
+        (response) => {
+          responses.push(response);
+          observe(response);
+        },
+        (error) => {
+          clientFailures.push(error);
+          failure.resolve(error);
+        },
+      );
+      return { client, lease };
+    },
+    async [Symbol.asyncDispose]() {
+      if (lease?.attachment.ownerPort) {
+        try {
+          lease.ownerMessage("permit-close");
+        } catch {
+          /* Already released. */
+        }
+      }
+      client?.dispose();
+      port1.close();
+      port2.close();
+      await lease?.close();
+      lease?.release();
+      await host.close();
+    },
+  };
+}
 
 it.skipIf(process.platform === "win32").each([
   ["import", 'throw new Error("synthetic resource import failure");'],
@@ -14,34 +73,14 @@ it.skipIf(process.platform === "win32").each([
 ])(
   "closes failed resource %s initialization without losing its original error",
   async (stage, source) => {
-    const host = createSpawnBrokerHost({ nativeResources: true });
-    const { port1, port2 } = new MessageChannel();
-    const failure = createDeferred<Error>();
-    const failures: Error[] = [];
-    let client: ReturnType<typeof attachBrokerNativeResource> | undefined;
-    let lease: ReturnType<typeof host.captureNativeResource> | undefined;
-    try {
-      await host.ready();
-      lease = host.captureNativeResource(
-        { moduleUrl: `data:text/javascript,${encodeURIComponent(source)}`, ownerPort: false },
-        { message() {}, failed: (error) => failures.push(error) },
-      );
-      client = attachBrokerNativeResource(lease.attachment, port1, () => {}, failure.resolve);
-      expect((await failure.promise).message).toContain(`synthetic resource ${stage} failure`);
-      await client.close();
-      await lease.close();
-      lease.release();
-      expect(
-        failures.some((error) => error.message.includes(`synthetic resource ${stage} failure`)),
-      ).toBe(true);
-    } finally {
-      client?.dispose();
-      port1.close();
-      port2.close();
-      await lease?.close();
-      lease?.release();
-      await host.close();
-    }
+    await using fixture = resourceFixture();
+    const { client, lease } = await fixture.attach(source);
+    const message = `synthetic resource ${stage} failure`;
+    expect((await fixture.failure).message).toContain(message);
+    await client.close();
+    await lease.close();
+    lease.release();
+    expect(fixture.ownerFailures.some((error) => error.message.includes(message))).toBe(true);
   },
   20_000,
 );
@@ -49,7 +88,10 @@ it.skipIf(process.platform === "win32").each([
 it.skipIf(process.platform === "win32")(
   "keeps owner cleanup replies usable after an admitted resource operation fails",
   async () => {
-    const moduleUrl = `data:text/javascript,${encodeURIComponent(`
+    await using fixture = resourceFixture();
+    const created = createDeferred();
+    const { client, lease } = await fixture.attach(
+      `
       export function createNativeWorkerResource(target, _input, owner) {
         let permit;
         const permitted = new Promise(resolve => { permit = resolve; });
@@ -57,51 +99,23 @@ it.skipIf(process.platform === "win32")(
         target.on("message", () => { throw new Error("synthetic resource operation failure"); });
         return { async close() { owner.postMessage("close-requested"); await permitted; } };
       }
-    `)}`;
-    const host = createSpawnBrokerHost({ nativeResources: true });
-    const { port1, port2 } = new MessageChannel();
-    const created = createDeferred();
-    const failure = createDeferred<Error>();
-    let client: ReturnType<typeof attachBrokerNativeResource> | undefined;
-    let lease: ReturnType<typeof host.captureNativeResource> | undefined;
-    try {
-      await host.ready();
-      lease = host.captureNativeResource(
-        { moduleUrl, ownerPort: true },
-        { message() {}, failed() {} },
-      );
-      client = attachBrokerNativeResource(
-        lease.attachment,
-        port1,
-        (response) => {
-          if (response.type === "resource-created") {
-            created.resolve();
-          } else if (response.type === "resource-owner") {
-            expect(response.value).toBe("close-requested");
-            client!.ownerMessage("permit-close", 1);
-          }
-        },
-        failure.resolve,
-      );
-      await created.promise;
-      port2.postMessage("fail-operation");
-      expect((await failure.promise).message).toContain("synthetic resource operation failure");
-      await client.close();
-      await lease.close();
-      lease.release();
-    } finally {
-      try {
-        void lease?.ownerMessage("permit-close").result.catch(() => {});
-      } catch {
-        // A successfully closed/released fixture needs no fallback permission.
-      }
-      client?.dispose();
-      port1.close();
-      port2.close();
-      await lease?.close();
-      lease?.release();
-      await host.close();
-    }
+    `,
+      true,
+      (response) => {
+        if (response.type === "resource-created") {
+          created.resolve();
+        } else if (response.type === "resource-owner") {
+          expect(response.value).toBe("close-requested");
+          client.ownerMessage("permit-close", 1);
+        }
+      },
+    );
+    await created.promise;
+    fixture.send("fail-operation");
+    expect((await fixture.failure).message).toContain("synthetic resource operation failure");
+    await client.close();
+    await lease.close();
+    lease.release();
   },
   20_000,
 );
@@ -109,8 +123,8 @@ it.skipIf(process.platform === "win32")(
 it.skipIf(process.platform === "win32")(
   "retains both disposal failures through the running native resource server and client",
   async () => {
-    // This module executes in the real broker process, not in the test's client.
-    const moduleUrl = `data:text/javascript,${encodeURIComponent(`
+    await using fixture = resourceFixture();
+    const { client, lease } = await fixture.attach(`
       export function createNativeWorkerResource() {
         let attempts = 0;
         return { async close() {
@@ -121,55 +135,21 @@ it.skipIf(process.platform === "win32")(
           throw new Error("resource operation failed");
         }};
       }
-    `)}`;
-    const host = createSpawnBrokerHost({ nativeResources: true });
-    const { port1, port2 } = new MessageChannel();
-    let client: ReturnType<typeof attachBrokerNativeResource> | undefined;
-    let lease: ReturnType<typeof host.captureNativeResource> | undefined;
-    const failures: Error[] = [];
-    const responses: { type: string; requestId?: number; separateProcess?: boolean }[] = [];
-    try {
-      await host.ready();
-      lease = host.captureNativeResource(
-        { moduleUrl, ownerPort: false },
-        { message() {}, failed: (error) => failures.push(error) },
-      );
-      client = attachBrokerNativeResource(
-        lease.attachment,
-        port1,
-        (response) => {
-          // Project only public protocol facts; never log attachment secrets, paths, or stacks.
-          responses.push({
-            type: response.type,
-            ...("requestId" in response ? { requestId: response.requestId } : {}),
-            ...(response.type === "resource-ready"
-              ? { separateProcess: response.pid === host.pid && response.pid !== process.pid }
-              : {}),
-          });
-        },
-        (error) => failures.push(error),
-      );
-      const failure: unknown = await client.close().catch((error: unknown) => error);
-      const diagnostic = formatErrorMessage(failure, { redact: (text) => text });
-      // A successful retry proves the real resource owner and transport remain usable.
-      await client.close();
-      await lease.close();
-      lease.release();
-      console.info(JSON.stringify({ responses, diagnostic, retryClosed: true }));
-      expect(failures).toEqual([]);
-      expect(responses).toEqual([
-        { type: "resource-ready", separateProcess: true },
-        { type: "resource-created" },
-        { type: "resource-close-error", requestId: 1 },
-        { type: "resource-closed", requestId: 2 },
-      ]);
-      expect(diagnostic).toContain("resource cleanup failed | resource operation failed");
-    } finally {
-      client?.dispose();
-      port1.close();
-      port2.close();
-      await host.close();
-    }
+    `);
+    const failure: unknown = await client.close().catch((error: unknown) => error);
+    const diagnostic = formatErrorMessage(failure, { redact: (text) => text });
+    await client.close();
+    await lease.close();
+    lease.release();
+    expect([fixture.ownerFailures, fixture.clientFailures]).toEqual([[], []]);
+    expect(fixture.responses).toMatchObject([
+      { type: "resource-ready", pid: fixture.host.pid },
+      { type: "resource-created" },
+      { type: "resource-close-error", requestId: 1 },
+      { type: "resource-closed", requestId: 2 },
+    ]);
+    expect(fixture.host.pid).not.toBe(process.pid);
+    expect(diagnostic).toContain("resource cleanup failed | resource operation failed");
   },
   20_000,
 );

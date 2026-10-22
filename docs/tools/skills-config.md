@@ -65,9 +65,9 @@ Most skills configuration lives under `skills` in
 </ParamField>
 
 <ParamField path="skills.load.watch" type="boolean" default="true">
-  Enable passive automatic skill discovery. One background worker checks local
-  skill roots about once per minute, including nested files under grouped roots.
-  Set to `false` to disable passive rescans. Explicit OpenClaw skill changes,
+  Enable automatic skill discovery from filesystem events, including nested files
+  under grouped roots. A safety rescan every 30 minutes catches missed events.
+  Set to `false` to disable automatic observation. Explicit OpenClaw skill changes,
   relevant configuration changes, and Gateway startup still request an immediate
   rescan. Existing sessions use changed snapshots on their next agent turn.
 </ParamField>
@@ -325,7 +325,6 @@ different visible skill set per agent.
     ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
-      heartbeat: { agentId: "writer" },
       systemAgent: { agentId: "writer" },
       authInheritance: { agentId: "writer" },
     },
@@ -368,8 +367,9 @@ different visible skill set per agent.
 <ParamField path="skills.workshop.autonomous.mode" type='"off" | "auto"' default='"auto"'>
   `auto` lets agents save and update Workshop skills: a background review runs
   after substantial work, and learned skills unused for 30 days are archived.
-  Review changes appear as a **Learned** row in the Control UI chat, and every
-  change can be undone. `off` disables the background review and unused-skill cleanup.
+  Review changes appear as a **Learned** row in the Control UI chat, separately
+  from the assistant’s answer and collapsed **Worked** activity. Older plain-text
+  review notices also stay separate. Every change can be undone. `off` disables the background review and unused-skill cleanup.
   User-prompted skill creation, `/learn`, and manual learning sessions work in
   both modes.
 </ParamField>

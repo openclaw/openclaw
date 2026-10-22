@@ -18,12 +18,19 @@ import { registerExecutionTimeoutTests } from "./update-command-execution-timeou
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { updateGitInstall } from "./update-command-git.js";
+import { updateStep } from "./update-command-maintenance-fixtures.test-support.js";
 import * as readiness from "./update-command-readiness.js";
 import { registerServiceCollectionTests } from "./update-command-service-collection.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
-const { bindExecutionGuards, executionParams, inspectOrStopService, mocks, successfulUpdate } =
-  await import("./update-command-execution.test-support.js");
+const {
+  bindExecutionGuards,
+  executionParams,
+  inspectOrStopService,
+  mocks,
+  packageCandidate,
+  successfulUpdate,
+} = await import("./update-command-execution.test-support.js");
 
 async function execute(params = executionParams("package")) {
   return executeMutableUpdate(await bindExecutionGuards(params));
@@ -84,8 +91,7 @@ describe("mutable update execution", () => {
     async ({ kind, outcome }) => {
       const options = executionParams(kind);
       options.opts.restart = options.shouldRestart = false;
-      const deferred = {
-        name: "post-install-verify",
+      const deferred = updateStep("post-install-verify", {
         command: "verify installed package",
         cwd: options.root,
         exitCode: outcome === "advisory" ? 0 : null,
@@ -94,7 +100,7 @@ describe("mutable update execution", () => {
           kind: "recoverable-maintenance" as const,
           message: "State verification deferred to the operator restart.",
         },
-      };
+      });
       const install = kind === "package" ? mocks.runPackageUpdate : mocks.runGitUpdate;
       const result = {
         ...successfulUpdate,
@@ -256,7 +262,7 @@ describe("mutable update execution", () => {
           serviceMutationSkipMessage: expect.stringContaining("rc.d or foreground process owner"),
         });
         expect(execution?.preManagedServiceStop?.serviceMutationSkipMessage).toContain(
-          "Restart the Gateway you launched manually",
+          "openclaw gateway stop",
         );
         expect(mocks.serviceStopped).toBe(false);
         expect(mocks.runPackageUpdate).toHaveBeenCalled();
@@ -272,11 +278,7 @@ describe("mutable update execution", () => {
       mocks.checkTargetSchemas.mockImplementation(async (versions) =>
         versions?.state === 15 ? schemaRefusal(15) : { incompatible: [], indeterminate: [] },
       );
-      mocks.runPackageUpdate.mockImplementation(async ({ validateCandidate, beforeActivate }) => {
-        await validateCandidate(stage);
-        await beforeActivate();
-        return successfulUpdate;
-      });
+      mocks.runPackageUpdate.mockImplementation(packageCandidate(stage));
 
       const execution = await execute({
         ...executionParams("package"),

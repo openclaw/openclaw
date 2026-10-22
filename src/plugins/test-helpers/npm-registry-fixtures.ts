@@ -1,39 +1,39 @@
-// Real npm package and loopback registry fixtures for plugin install tests.
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { clean as cleanSemver } from "semver";
+import { clean } from "semver";
 import type { Deferred } from "../../shared/deferred.js";
 
-type PackedVersion = {
-  archive: Buffer;
+type PackageMetadata = {
   dependencies?: Record<string, string>;
-  integrity: string;
   openclaw?: Record<string, unknown>;
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+};
+
+type PackedVersion = PackageMetadata & {
+  archive: Buffer;
+  integrity: string;
   shasum: string;
   tarballName: string;
   version: string;
 };
 
-type PackPluginParams = {
-  dependencies?: Record<string, string>;
+type PackPluginParams = PackageMetadata & {
   hookName?: string;
   indexJs?: string;
   manifest?: Record<string, unknown>;
-  openclaw?: Record<string, unknown>;
-  optionalDependencies?: Record<string, string>;
   packageName: string;
-  peerDependencies?: Record<string, string>;
-  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
   pluginId?: string;
   version?: string;
 };
+
+type RegistryInput = PackPluginParams & { latest?: string; omitIntegrity?: boolean };
+type DownloadBarrier = { requested: Deferred; released: Deferred };
 
 export type RegistryPackage = {
   latest: string;
@@ -41,6 +41,10 @@ export type RegistryPackage = {
   packageName: string;
   versions: PackedVersion[];
 };
+
+function writeJson(filePath: string, value: unknown) {
+  return fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
 
 export async function packPlugins(
   rootDir: string,
@@ -50,41 +54,28 @@ export async function packPlugins(
   for (const params of packages) {
     const version = params.version ?? "1.0.0";
     const packageDir = path.join(rootDir, `package-${params.packageName}-${version}`);
+    const distDir = path.join(packageDir, "dist");
     const peerDependenciesMeta = params.peerDependencies
       ? (params.peerDependenciesMeta ??
         Object.fromEntries(
           Object.keys(params.peerDependencies).map((name) => [name, { optional: true }]),
         ))
       : undefined;
-    await fs.mkdir(path.join(packageDir, "dist"), { recursive: true });
-    await fs.writeFile(
-      path.join(packageDir, "package.json"),
-      `${JSON.stringify(
-        {
-          name: params.packageName,
-          version,
-          type: "module",
-          openclaw:
-            params.openclaw ??
-            (params.hookName
-              ? { hooks: [`./hooks/${params.hookName}`] }
-              : { extensions: ["./dist/index.js"] }),
-          ...(params.dependencies ? { dependencies: params.dependencies } : {}),
-          ...(params.optionalDependencies
-            ? { optionalDependencies: params.optionalDependencies }
-            : {}),
-          ...(params.peerDependencies
-            ? {
-                peerDependencies: params.peerDependencies,
-                ...(peerDependenciesMeta ? { peerDependenciesMeta } : {}),
-              }
-            : {}),
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+    await fs.mkdir(distDir, { recursive: true });
+    await writeJson(path.join(packageDir, "package.json"), {
+      name: params.packageName,
+      version,
+      type: "module",
+      openclaw:
+        params.openclaw ??
+        (params.hookName
+          ? { hooks: [`./hooks/${params.hookName}`] }
+          : { extensions: ["./dist/index.js"] }),
+      dependencies: params.dependencies,
+      optionalDependencies: params.optionalDependencies,
+      peerDependencies: params.peerDependencies,
+      peerDependenciesMeta,
+    });
     if (params.hookName) {
       const hookDir = path.join(packageDir, "hooks", params.hookName);
       await fs.mkdir(hookDir, { recursive: true });
@@ -94,50 +85,29 @@ export async function packPlugins(
       );
       await fs.writeFile(path.join(hookDir, "handler.js"), "export default async () => {};\n");
     } else {
-      await fs.writeFile(
-        path.join(packageDir, "openclaw.plugin.json"),
-        `${JSON.stringify(
-          {
-            id: params.pluginId ?? params.packageName,
-            name: params.pluginId ?? params.packageName,
-            configSchema: { type: "object" },
-            ...params.manifest,
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
+      await writeJson(path.join(packageDir, "openclaw.plugin.json"), {
+        id: params.pluginId ?? params.packageName,
+        name: params.pluginId ?? params.packageName,
+        configSchema: { type: "object" },
+        ...params.manifest,
+      });
     }
-    await fs.writeFile(
-      path.join(packageDir, "dist", "index.js"),
-      params.indexJs ?? "export {};\n",
-      "utf8",
-    );
+    await fs.writeFile(path.join(distDir, "index.js"), params.indexJs ?? "export {};\n", "utf8");
     prepared.push({ params, packageDir, peerDependenciesMeta, version });
   }
 
-  execFileSync(
-    "npm",
-    [
-      "pack",
-      "--ignore-scripts",
-      "--pack-destination",
-      rootDir,
-      ...prepared.map(({ packageDir }) => packageDir),
-    ],
-    { cwd: rootDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
+  const packageDirs = prepared.map(({ packageDir }) => packageDir);
+  execFileSync("npm", ["pack", "--ignore-scripts", "--pack-destination", rootDir, ...packageDirs], {
+    cwd: rootDir,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   const versions: PackedVersion[] = [];
   const packedFiles = new Set(await fs.readdir(rootDir));
   for (const { params, peerDependenciesMeta, version } of prepared) {
-    // npm 12 keys JSON output by name, which collapses two versions of one package.
-    // Archive names can use the raw or normalized version depending on npm.
-    const packedVersion = expectDefined(
-      cleanSemver(version, { loose: true }),
-      "packed fixture version",
-    );
-    const tarballNames = [...new Set([version, packedVersion])]
+    // npm 12 collapses versions in JSON output; archive names may use raw or normalized versions.
+    const normalized = expectDefined(clean(version, { loose: true }), "packed fixture version");
+    const tarballNames = [...new Set([version, normalized])]
       .map((value) => `${params.packageName.replace(/^@/, "").replaceAll("/", "-")}-${value}.tgz`)
       .filter((name) => packedFiles.has(name));
     if (tarballNames.length !== 1) {
@@ -163,10 +133,7 @@ export async function packPlugins(
 
 export async function registryPackages(
   rootDir: string,
-  packages: [
-    PackPluginParams & { latest?: string; omitIntegrity?: boolean },
-    ...(PackPluginParams & { latest?: string; omitIntegrity?: boolean })[],
-  ],
+  packages: [RegistryInput, ...RegistryInput[]],
 ): Promise<RegistryPackage[]> {
   const versions = await packPlugins(rootDir, packages);
   return packages.map((params, index) => ({
@@ -180,8 +147,17 @@ export async function registryPackages(
 export async function startStaticRegistry(
   packages: RegistryPackage[],
   servers: http.Server[],
-  downloadBarrier?: { requested: Deferred; released: Deferred },
+  downloadBarrier?: DownloadBarrier,
 ): Promise<string> {
+  return startRegistry(packages, servers, { downloadBarrier });
+}
+
+async function startRegistry(
+  packages: RegistryPackage[],
+  servers: http.Server[],
+  options: { downloadBarrier?: DownloadBarrier; nextLatest?: string },
+): Promise<string> {
+  const { downloadBarrier, nextLatest } = options;
   const packageEntries = packages.map((pkg) => ({
     ...pkg,
     encodedPackageName: encodeURIComponent(pkg.packageName).replace("%40", "@"),
@@ -207,26 +183,28 @@ export async function startStaticRegistry(
 
     for (const pkg of packageEntries) {
       if (decodeURIComponent(url.pathname) === `/${pkg.packageName}`) {
+        const latest = pkg.latest;
+        if (nextLatest !== undefined) {
+          pkg.latest = nextLatest;
+        }
         response.writeHead(200, { "content-type": "application/json" });
         response.end(
           `${JSON.stringify({
             name: pkg.packageName,
-            "dist-tags": { latest: pkg.latest },
+            "dist-tags": { latest },
             versions: Object.fromEntries(
               [...pkg.versionsByVersion.entries()].map(([version, entry]) => [
                 version,
                 {
                   name: pkg.packageName,
                   version,
-                  ...(entry.openclaw ? { openclaw: entry.openclaw } : {}),
-                  ...(entry.dependencies ? { dependencies: entry.dependencies } : {}),
-                  ...(entry.optionalDependencies
-                    ? { optionalDependencies: entry.optionalDependencies }
-                    : {}),
-                  ...(entry.peerDependencies ? { peerDependencies: entry.peerDependencies } : {}),
-                  ...(entry.peerDependenciesMeta
-                    ? { peerDependenciesMeta: entry.peerDependenciesMeta }
-                    : {}),
+                  openclaw: entry.openclaw,
+                  // Preserve the mutable registry's narrower packument.
+                  dependencies: nextLatest === undefined ? entry.dependencies : undefined,
+                  optionalDependencies:
+                    nextLatest === undefined ? entry.optionalDependencies : undefined,
+                  peerDependencies: entry.peerDependencies,
+                  peerDependenciesMeta: entry.peerDependenciesMeta,
                   dist: {
                     ...(pkg.omitIntegrity ? {} : { integrity: entry.integrity }),
                     shasum: entry.shasum,
@@ -284,77 +262,9 @@ export async function startMutableRegistry(
   },
   servers: http.Server[],
 ): Promise<string> {
-  let latestVersion = params.initialLatest;
-  let metadataRequests = 0;
-  const versions = new Map(params.versions.map((entry) => [entry.version, entry]));
-  const encodedPackageName = encodeURIComponent(params.packageName).replace("%40", "@");
-
-  const server = http.createServer((request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-    if (request.method !== "GET") {
-      response.writeHead(405, { "content-type": "text/plain" });
-      response.end("method not allowed");
-      return;
-    }
-
-    if (decodeURIComponent(url.pathname) === `/${params.packageName}`) {
-      metadataRequests += 1;
-      const metadataLatest = latestVersion;
-      if (metadataRequests === 1) {
-        latestVersion = params.laterLatest;
-      }
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(
-        `${JSON.stringify({
-          name: params.packageName,
-          "dist-tags": { latest: metadataLatest },
-          versions: Object.fromEntries(
-            [...versions.entries()].map(([version, entry]) => [
-              version,
-              {
-                name: params.packageName,
-                version,
-                ...(entry.openclaw ? { openclaw: entry.openclaw } : {}),
-                ...(entry.peerDependencies ? { peerDependencies: entry.peerDependencies } : {}),
-                ...(entry.peerDependenciesMeta
-                  ? { peerDependenciesMeta: entry.peerDependenciesMeta }
-                  : {}),
-                dist: {
-                  integrity: entry.integrity,
-                  shasum: entry.shasum,
-                  tarball: `${baseUrl}/${encodedPackageName}/-/${entry.tarballName}`,
-                },
-              },
-            ]),
-          ),
-        })}\n`,
-      );
-      return;
-    }
-
-    const tarballPrefix = `/${encodedPackageName}/-/`;
-    if (url.pathname.startsWith(tarballPrefix)) {
-      const entry = [...versions.values()].find((candidate) =>
-        url.pathname.endsWith(`/${candidate.tarballName}`),
-      );
-      if (entry) {
-        response.writeHead(200, {
-          "content-length": String(entry.archive.length),
-          "content-type": "application/octet-stream",
-        });
-        response.end(entry.archive);
-        return;
-      }
-    }
-
-    response.writeHead(404, { "content-type": "text/plain" });
-    response.end(`not found: ${url.pathname}`);
-  });
-
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push(server);
-  return `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  return startRegistry(
+    [{ packageName: params.packageName, latest: params.initialLatest, versions: params.versions }],
+    servers,
+    { nextLatest: params.laterLatest },
+  );
 }

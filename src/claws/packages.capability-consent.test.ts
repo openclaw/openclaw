@@ -10,7 +10,6 @@ import type { preflightPluginInstall } from "../plugins/plugin-install-preflight
 import { installClawPackages } from "./packages.boundary.test-support.js";
 import { emptyPluginCapabilityEvidence, packageInstallPlan } from "./packages.test-support.js";
 import { projectClawPluginCapabilityReviews } from "./plugin-capability-review.js";
-import type { PersistedClawPackageRef } from "./provenance.js";
 
 const integrity = `sha256:${"a".repeat(64)}`;
 const pkg = {
@@ -55,7 +54,7 @@ const baseDeps = {
       key: "test-package",
       owner: "test-owner",
     },
-    heartbeat: vi.fn(),
+    assertCurrent: vi.fn(),
     release: vi.fn(),
   })),
 };
@@ -118,15 +117,12 @@ describe("Claw plugin install consent", () => {
         reviewToken: review.reviewToken,
       });
     });
-    const persistPackageRef = vi.fn(() => ({ status: "pending" }) as PersistedClawPackageRef);
 
     await installClawPackages(packageInstallPlan([pkg]), {
       pluginConsent: { onCapabilityConsent },
       deps: {
         ...baseDeps,
         installPlugin,
-        persistPackageRef,
-        completePackageRef: (ref, status) => ({ ...ref, status }),
       },
     });
 
@@ -144,14 +140,12 @@ describe("Claw plugin install consent", () => {
 
   it("stops Add before installer or record writes without Claw-owner consent", async () => {
     const installPlugin = vi.fn();
-    const persistPackageRef = vi.fn();
     await expect(
       installClawPackages(packageInstallPlan([pkg]), {
-        deps: { ...baseDeps, installPlugin, persistPackageRef },
+        deps: { ...baseDeps, installPlugin },
       }),
     ).rejects.toMatchObject({ code: "plugin_consent_required" });
     expect(installPlugin).not.toHaveBeenCalled();
-    expect(persistPackageRef).not.toHaveBeenCalled();
   });
 
   it("invalidates Add when an effective plugin grant is revoked after review", async () => {
@@ -163,17 +157,15 @@ describe("Claw plugin install consent", () => {
     }).grants;
     Object.assign(planned.actions[0]!.details!, { capabilityGrants: reviewedGrants });
     const installPlugin = vi.fn();
-    const persistPackageRef = vi.fn();
 
     await expect(
       installClawPackages(planned, {
         pluginConsent: {
           onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
         },
-        deps: { ...baseDeps, installPlugin, persistPackageRef },
+        deps: { ...baseDeps, installPlugin },
       }),
     ).rejects.toMatchObject({ code: "package_owner_state_changed" });
     expect(installPlugin).not.toHaveBeenCalled();
-    expect(persistPackageRef).not.toHaveBeenCalled();
   });
 });

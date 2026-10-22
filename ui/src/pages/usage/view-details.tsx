@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, For, Show } from "solid-js";
@@ -6,73 +5,15 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { createMsFormatter } from "../../lib/format.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { parseToolSummary } from "./helpers.ts";
+import { parseSessionLog, prepareUsageDateRange, type ParsedSessionLog } from "./helpers.ts";
 import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
-import type {
-  SessionLogEntry,
-  SessionLogRole,
-  TimeSeriesPoint,
-  UsageContextDetail,
-  UsageProps,
-  UsageSessionEntry,
-} from "./types.ts";
-import { USAGE_TOKEN_CATEGORIES } from "./view-chart.tsx";
+import type { SessionLogRole, UsageContextDetail, UsageProps, UsageSessionEntry } from "./types.ts";
 import { renderSessionSummary } from "./view-session-summary.tsx";
-import { TimeSeriesCompact } from "./view-timeseries.tsx";
+import { deriveTimeSeries, TimeSeriesCompact } from "./view-timeseries.tsx";
 
 function pct(part: number, total: number): number {
   return total > 0 ? (part / total) * 100 : 0;
-}
-
-function isLogInRange(log: SessionLogEntry, rangeStart: number, rangeEnd: number): boolean {
-  // Keep undated entries visible; interval totals count dated entries separately.
-  if (!(log.timestamp > 0)) {
-    return true;
-  }
-  // Log timestamps can be seconds or milliseconds.
-  const timestamp = log.timestamp;
-  const ts = timestamp < 1e12 ? timestamp * 1000 : timestamp;
-  return ts >= Math.min(rangeStart, rangeEnd) && ts <= Math.max(rangeStart, rangeEnd);
-}
-
-function computeFilteredUsage(
-  baseUsage: NonNullable<UsageSessionEntry["usage"]>,
-  points: TimeSeriesPoint[],
-  rangeStart: number,
-  rangeEnd: number,
-): UsageSessionEntry["usage"] | undefined {
-  const lo = Math.min(rangeStart, rangeEnd);
-  const hi = Math.max(rangeStart, rangeEnd);
-  const filtered = points.filter((p) => p.timestamp >= lo && p.timestamp <= hi);
-  if (filtered.length === 0) {
-    return undefined;
-  }
-
-  let totalTokens = 0;
-  let totalCost = 0;
-  const tokenTotals = { output: 0, input: 0, cacheWrite: 0, cacheRead: 0 };
-
-  for (const p of filtered) {
-    totalTokens += p.totalTokens || 0;
-    totalCost += p.cost || 0;
-    for (const { key } of USAGE_TOKEN_CATEGORIES) {
-      tokenTotals[key] += p[key] || 0;
-    }
-  }
-  const first = expectDefined(filtered[0], "filtered usage first point");
-  const last = expectDefined(filtered.at(-1), "filtered usage last point");
-
-  return {
-    ...baseUsage,
-    ...tokenTotals,
-    totalTokens,
-    totalCost,
-    durationMs: last.timestamp - first.timestamp,
-    firstActivity: first.timestamp,
-    lastActivity: last.timestamp,
-    messageCounts: undefined,
-  };
 }
 
 export function SessionDetailPanel(props: {
@@ -83,6 +24,28 @@ export function SessionDetailPanel(props: {
   contextExpanded: boolean;
   onClose: () => void;
 }) {
+  const logsSource = createMemo(() => props.detail.sessionLogs);
+  const entries = createMemo(() => (logsSource() ?? []).map(parseSessionLog));
+  const range = createMemo(() => prepareUsageDateRange(props.range));
+  const series = createMemo(() => deriveTimeSeries(props.detail, range(), props.session.usage));
+  const intervalEntries = createMemo(() => {
+    const { timeSeriesCursorStart: start, timeSeriesCursorEnd: end } = props.detail;
+    if (start === null || end === null) {
+      return entries();
+    }
+    const low = Math.min(start, end);
+    const high = Math.max(start, end);
+    const matches = range().matches;
+    return entries().filter(({ log }) => {
+      // Keep undated entries visible; interval totals count dated entries separately.
+      if (!(log.timestamp > 0)) {
+        return true;
+      }
+      // Log timestamps can be seconds or milliseconds.
+      const timestamp = log.timestamp < 1e12 ? log.timestamp * 1000 : log.timestamp;
+      return timestamp >= low && timestamp <= high && (!matches || matches(timestamp));
+    });
+  });
   const state = createMemo(() => {
     const session = props.session;
     const detail = props.detail;
@@ -95,15 +58,7 @@ export function SessionDetailPanel(props: {
       detail.timeSeries?.usageReport?.state !== "unavailable" &&
       timeSeriesCursorStart !== null &&
       timeSeriesCursorEnd !== null;
-    const filteredUsage =
-      hasRange && detail.timeSeries?.points && usage
-        ? computeFilteredUsage(
-            usage,
-            detail.timeSeries.points,
-            timeSeriesCursorStart,
-            timeSeriesCursorEnd,
-          )
-        : undefined;
+    const filteredUsage = series().filteredUsage;
     const headerStats = filteredUsage
       ? { totalTokens: filteredUsage.totalTokens, totalCost: filteredUsage.totalCost }
       : { totalTokens: usage?.totalTokens ?? 0, totalCost: usage?.totalCost ?? 0 };
@@ -111,9 +66,7 @@ export function SessionDetailPanel(props: {
 
     const filteredLogs = hasRange
       ? detail.sessionLogsStatus.hasLoaded && detail.sessionLogs
-        ? detail.sessionLogs.filter((log) =>
-            isLogInRange(log, timeSeriesCursorStart, timeSeriesCursorEnd),
-          )
+        ? intervalEntries()
         : null
       : undefined;
     const includedSessionCount =
@@ -187,14 +140,15 @@ export function SessionDetailPanel(props: {
       <div class="session-detail-content">
         {renderSessionSummary(props.session, state().filteredUsage, state().filteredLogs)}
         <div class="session-detail-row">
-          <TimeSeriesCompact
-            detail={props.detail}
-            callbacks={props.callbacks}
-            range={props.range}
-          />
+          <TimeSeriesCompact detail={props.detail} callbacks={props.callbacks} view={series()} />
         </div>
         <div class="session-detail-bottom">
-          <SessionLogs detail={props.detail} callbacks={props.callbacks} />
+          <SessionLogs
+            detail={props.detail}
+            callbacks={props.callbacks}
+            entries={entries()}
+            intervalEntries={intervalEntries()}
+          />
           {
             <ContextPanel
               context={props.detail.context}
@@ -260,6 +214,11 @@ function LoadedContextPanel(props: {
   const state = createMemo(() => {
     const contextWeight = props.weight;
     const usage = props.usage;
+    const injectedFileChars = contextWeight.injectedWorkspaceFiles.reduce(
+      (sum, file) =>
+        file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars,
+      0,
+    );
     const groups = [
       {
         className: "skills",
@@ -282,13 +241,7 @@ function LoadedContextPanel(props: {
       {
         className: "files",
         labelKey: "usage.details.files",
-        tokens: charsToTokens(
-          contextWeight.injectedWorkspaceFiles.reduce(
-            (sum, file) =>
-              file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars,
-            0,
-          ),
-        ),
+        tokens: charsToTokens(injectedFileChars),
         entries: contextWeight.injectedWorkspaceFiles.map(({ name, injectedChars }) => ({
           name,
           chars: injectedChars,
@@ -309,7 +262,15 @@ function LoadedContextPanel(props: {
       {
         className: "system",
         labelKey: "usage.details.system",
-        tokens: charsToTokens(contextWeight.systemPrompt.chars),
+        tokens: charsToTokens(
+          Math.max(
+            0,
+            contextWeight.systemPrompt.chars -
+              injectedFileChars -
+              contextWeight.skills.promptChars -
+              contextWeight.tools.listChars,
+          ),
+        ),
       },
       ...groups,
     ];
@@ -340,7 +301,11 @@ function LoadedContextPanel(props: {
       <div class="context-breakdown-header">
         <div class="card-title usage-section-title">{t("usage.details.systemPromptBreakdown")}</div>
         <Show when={state().hasMore}>
-          <button class="btn btn--sm" onClick={() => props.onToggleExpanded()}>
+          <button
+            class="btn btn--sm"
+            aria-expanded={props.expanded ? "true" : "false"}
+            onClick={() => props.onToggleExpanded()}
+          >
             {props.expanded ? t("usage.details.collapse") : t("usage.details.expandAll")}
           </button>
         </Show>
@@ -431,15 +396,9 @@ function selectedLogFilterValues(select: HTMLSelectElement): string[] {
 function SessionLogs(props: {
   detail: UsageProps["detail"];
   callbacks: UsageProps["callbacks"]["details"];
+  entries: ParsedSessionLog[];
+  intervalEntries: ParsedSessionLog[];
 }) {
-  const logsSource = createMemo(() => props.detail.sessionLogs);
-  const entries = createMemo(() =>
-    (logsSource() ?? []).map((log) => {
-      const toolInfo = parseToolSummary(log.content);
-      const cleanContent = toolInfo.cleanContent || log.content;
-      return { log, toolInfo, cleanContent };
-    }),
-  );
   const expandedState = createMemo(() => props.detail.sessionLogsExpanded);
   const state = createMemo(() => {
     const detail = props.detail;
@@ -450,8 +409,8 @@ function SessionLogs(props: {
       timeSeriesCursorStart: cursorStart,
       timeSeriesCursorEnd: cursorEnd,
     } = detail;
-    const logs = logsSource();
-    const parsedEntries = entries();
+    const logs = detail.sessionLogs;
+    const parsedEntries = props.entries;
     const initialLoading = (loading || status.awaitingGateway) && !status.hasLoaded;
     const initialError = status.error && !status.hasLoaded;
     const refreshStatus = initialLoading
@@ -466,9 +425,8 @@ function SessionLogs(props: {
       new Set(parsedEntries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
     ).toSorted((a, b) => a.localeCompare(b));
     const hasCursorFilter = cursorStart != null && cursorEnd != null;
-    const filteredEntries = parsedEntries.filter(
+    const filteredEntries = props.intervalEntries.filter(
       (entry) =>
-        (!hasCursorFilter || isLogInRange(entry.log, cursorStart, cursorEnd)) &&
         (filters.roles.length === 0 || filters.roles.includes(entry.log.role)) &&
         (!filters.hasTools || entry.toolInfo.tools.length > 0) &&
         (filters.tools.length === 0 ||

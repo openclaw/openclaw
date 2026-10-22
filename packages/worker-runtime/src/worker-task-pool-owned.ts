@@ -2,6 +2,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
+import { WorkerTaskError } from "./worker-task-error.js";
 import type {
   Slot,
   Task,
@@ -33,7 +34,6 @@ export function dispatchOwnedWorkerRequest<Input, Output>(
   owner: {
     accept: (response: WorkerTaskResponse) => void;
     reject: (error: unknown) => void;
-    closedError: () => Error;
   },
 ): void {
   const context = {
@@ -42,7 +42,7 @@ export function dispatchOwnedWorkerRequest<Input, Output>(
   };
   const assertCurrent = () => {
     if (task.done || slot.task !== task) {
-      throw owner.closedError();
+      throw new WorkerTaskError("worker task closed before host dispatch", "unavailable");
     }
   };
   if (task.options.onRequestSync) {

@@ -62,6 +62,9 @@ export const sessionManagerOpenTranscriptCohort = Symbol.for(
   "openclaw.session-manager.open-transcript-cohort",
 );
 
+/** @internal Compaction planning retains its transcript and metadata from one read snapshot. */
+export const sessionManagerOpenCompaction = Symbol.for("openclaw.session-manager.open-compaction");
+
 export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   migrated = false;
   protected sessionId = "";

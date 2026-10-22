@@ -1,15 +1,11 @@
-import { createMemo } from "solid-js";
-import type { ApplicationContext } from "../../app/context.ts";
 import { SessionBackground } from "../../components/session-background.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { createAppearanceBackground } from "./appearance-background-state.ts";
 import { AppearanceBackground as AppearanceBackgroundView } from "./view-appearance-background.tsx";
 
-export type AppearanceBackgroundProps = { context?: ApplicationContext };
-
-export function AppearanceBackground(props: AppearanceBackgroundProps) {
+export function AppearanceBackground() {
   let host!: HTMLElement;
-  const context = createMemo(() => props.context ?? useApplication());
+  const context = useApplication();
   let preview!: SessionBackground;
   let fileInput: HTMLInputElement | undefined;
   const state = createAppearanceBackground(
@@ -26,8 +22,9 @@ export function AppearanceBackground(props: AppearanceBackgroundProps) {
         ref={(element: SessionBackground) => {
           preview = element;
         }}
-        context={context()}
+        context={context}
         surface="preview"
+        presented={state.previewPresented()}
         preferenceOverride={state.previewPreference()}
       />
       <AppearanceBackgroundView

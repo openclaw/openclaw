@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import {
   resolvePackageActivationAnchor,
   resolvePackageActivationControl,
@@ -14,10 +14,7 @@ export async function readImmutableInstallRecord(root: string) {
   try {
     await fs.lstat(resolvePackageActivationControl(anchor));
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? null;
   }
   const journal = resolvePackageActivationJournalPath(anchor);
   const identity = await readDatabasePathIdentity(journal);

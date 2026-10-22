@@ -7,7 +7,6 @@ import {
   resolveAgentHarnessBeforePromptBuildResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildCodexSystemPromptReport,
   prependCodexOpenClawPromptContext,
@@ -79,12 +78,16 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
+  const usesSelectedHistory = Boolean(
+    activeContextEngine ||
+    (!usesSupervisionConnection && params.hostCapabilities.prepareBoundedSeed),
+  );
   // An authored exact-model cap is operator policy, not native capacity discovery.
   // Supervised native sessions keep their existing independent ownership.
   const configuredContextBudget =
-    activeContextEngine &&
+    usesSelectedHistory &&
     !usesSupervisionConnection &&
-    params.authoredContextTokenCap &&
+    (params.authoredContextTokenCap || params.hostCapabilities.prepareBoundedSeed) &&
     effectiveContextTokenBudget
       ? effectiveContextTokenBudget
       : undefined;
@@ -143,21 +146,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const prepareFileContext: NonNullable<
     Parameters<typeof projectContextEngineAssemblyForCodex>[0]["prepareFileContext"]
   > = async (message, maxChars) => {
-    // Older hosts retain ordinary text history, but cannot claim restored attachments.
     const prepare = params.hostCapabilities.prepareContextMedia;
     if (!prepare) {
-      const media = asOptionalRecord(Reflect.get(message, "__openclaw"))?.media;
-      if (
-        (Array.isArray(media) && media.length) ||
-        (message.role === "user" &&
-          Array.isArray(message.content) &&
-          message.content.some((part) => part.type === "image"))
-      ) {
-        throw new CodexContextAttachmentError(
-          "Saved attachments require a newer OpenClaw host. Update the Gateway and Codex plugin together, then retry.",
-        );
-      }
-      return { images: [] };
+      throw new CodexContextAttachmentError(
+        "Saved attachments require a newer OpenClaw host. Update the Gateway and Codex plugin together, then retry.",
+      );
     }
     try {
       const files = await prepare({ message, maxChars });
@@ -194,12 +187,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     | (() => ReturnType<typeof projectContextEngineAssemblyForCodex>)
     | undefined;
   let contextEngineBootstrapPromptApplied = false;
-  const applyActiveContextEngineProjection = async (
+  const applySelectedHistoryProjection = async (
     decisionStartupBinding: typeof mutable.startupBinding,
   ) => {
-    if (!activeContextEngine) {
-      return;
-    }
     const promptBudget = configuredContextBudget
       ? {
           contextTokens: configuredContextBudget,
@@ -223,26 +213,31 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       : undefined;
     const historyBudget = reserveCodexHistoryBudget(promptBudget);
     try {
-      const assembled = await assembleHarnessContextEngine({
-        contextEngine: activeContextEngine,
-        sessionId: runtimeParams.sessionId,
-        sessionKey: contextSessionKey,
-        messages: historyState.messages,
-        tokenBudget: effectiveContextTokenBudget,
-        ...(historyBudget ? { promptBudget: historyBudget.promptBudget } : {}),
-        availableTools: new Set(availableToolNames()),
-        citationsMode: params.config?.memory?.citations,
-        sandboxed: sandbox?.enabled === true,
-        modelId: effectiveRuntimeModelId,
-        contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
-        providerId: effectiveRuntimeProviderId,
-        requestedModelId: usesSupervisionConnection ? undefined : params.requestedModelId,
-        fallbackReason: usesSupervisionConnection ? undefined : params.fallbackReason,
-        degradedReason: usesSupervisionConnection ? undefined : params.degradedReason,
-        runtimeContext: buildActiveContextEngineRuntimeContext(),
-        transcriptReadFence: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
-        prompt: params.prompt,
-      });
+      const assembled: Awaited<ReturnType<typeof assembleHarnessContextEngine>> =
+        activeContextEngine
+          ? await assembleHarnessContextEngine({
+              contextEngine: activeContextEngine,
+              sessionId: runtimeParams.sessionId,
+              sessionKey: contextSessionKey,
+              messages: historyState.messages,
+              tokenBudget: effectiveContextTokenBudget,
+              ...(historyBudget ? { promptBudget: historyBudget.promptBudget } : {}),
+              availableTools: new Set(availableToolNames()),
+              citationsMode: params.config?.memory?.citations,
+              sandboxed: sandbox?.enabled === true,
+              modelId: effectiveRuntimeModelId,
+              contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+              // Without a seed capability, retain the older host's bounded assembly.
+              runtimeId: params.hostCapabilities.prepareBoundedSeed ? "codex" : undefined,
+              providerId: effectiveRuntimeProviderId,
+              requestedModelId: usesSupervisionConnection ? undefined : params.requestedModelId,
+              fallbackReason: usesSupervisionConnection ? undefined : params.fallbackReason,
+              degradedReason: usesSupervisionConnection ? undefined : params.degradedReason,
+              runtimeContext: buildActiveContextEngineRuntimeContext(),
+              transcriptReadFence: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+              prompt: params.prompt,
+            })
+          : { messages: historyState.messages, estimatedTokens: 0 };
       if (!assembled) {
         throw new Error("context engine assemble returned no result");
       }
@@ -275,7 +270,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       embeddedAgentLog.info("codex app-server context-engine projection decision", {
         sessionId: params.sessionId,
         sessionKey: contextSessionKey,
-        engineId: activeContextEngine.info.id,
+        engineId: activeContextEngine?.info.id,
         mode: contextEngineProjection?.mode ?? assembled.contextProjection?.mode ?? "per_turn",
         epoch: contextEngineProjection?.epoch,
         fingerprint: contextEngineProjection?.fingerprint,
@@ -307,8 +302,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       });
     }
   };
-  if (activeContextEngine) {
-    await applyActiveContextEngineProjection(
+  if (usesSelectedHistory) {
+    await applySelectedHistoryProjection(
       resolveCodexProjectionStartupBinding({
         params,
         binding: mutable.startupBinding,
@@ -527,7 +522,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const precomputeNoContextEngineStaleBindingProjection = async () => {
     const binding = mutable.startupBinding;
     if (
-      activeContextEngine ||
+      usesSelectedHistory ||
       params.continuation ||
       !binding?.threadId ||
       binding.pendingSupervisionBranch
@@ -557,7 +552,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             (message.role === "assistant" &&
               message.content.some((part) => part.type === "text" && part.text.trim())))),
     );
-    if (activeContextEngine) {
+    if (usesSelectedHistory) {
       if (configuredContextBudget !== undefined) {
         return false;
       }
@@ -643,9 +638,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     if (staleBindingContinuityForcedFreshStart) {
       await applyContinuityProjection(historyState.messages);
     }
-    if (activeContextEngine) {
+    if (usesSelectedHistory) {
       promptState.contextEngineProjection = undefined;
-      await applyActiveContextEngineProjection(undefined);
+      await applySelectedHistoryProjection(undefined);
     }
     await rebuildCodexPromptBuildFromCurrentProjection();
     embeddedAgentLog.info("codex app-server rebuilt turn prompt after native thread rotation", {
@@ -668,6 +663,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       parentLocalEgress,
       skillsPrompt: skillsInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
       tools: toolBridge.availableSpecs,
+      sourceTools: toolBridge.availableTools,
     });
   const systemPromptReport = buildSystemPromptReport();
   let workspaceReferencesIncluded = true;

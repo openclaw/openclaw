@@ -10,6 +10,7 @@ import {
   getOrLoadSqliteDatabaseAdmissionForPath,
 } from "../sqlite-database-admission.js";
 import { schemaAdmission } from "../sqlite-schema-admission.js";
+import { createDatabaseStoreDiagnostic } from "./diagnostic-record.js";
 import type { DatabaseStoreDiagnostic } from "./diagnostics.js";
 import { listLocalDatabaseDiagnosticStores } from "./local-diagnostics.js";
 import { getPostgresPhysicalFactsForPath } from "./physical-facts.js";
@@ -20,29 +21,12 @@ function unknownStore(
   family: string,
   configured: DatabaseStoreDiagnostic["configured"],
 ): DatabaseStoreDiagnostic {
-  return {
-    family,
-    path: null,
-    configured,
-    observed: "unknown",
-    mismatch: null,
-    schema: { versioning: "unknown", version: null, expectedVersion: null, pending: null },
-    connectivity: "unknown",
-    namespace: null,
-    storeId: null,
-    database: null,
-    extensions: null,
-    admittedExtensions: null,
-    degraded: null,
-    custody: "unverifiable",
-    lease: "unverifiable",
-    backup: null,
-    legacyMigrations: { state: "unknown", pending: [] },
-    issues: ["Status reports admitted facts; unobserved facts remain unknown."],
-    nextSteps: [
-      "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
-    ],
-  };
+  const result = createDatabaseStoreDiagnostic({ family, path: null, configured });
+  result.issues.push("Status reports admitted facts; unobserved facts remain unknown.");
+  result.nextSteps.push(
+    "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+  );
+  return result;
 }
 
 /** Configured paths and admission facts only; never opens stores or probes PostgreSQL. */

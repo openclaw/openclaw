@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, Show } from "solid-js";
+import { createUniqueId, Show } from "solid-js";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu, type MenuItem } from "../../components/solid/menu.tsx";
@@ -33,7 +33,7 @@ export function DeviceEntryMenu(props: {
   };
 }) {
   const id = createUniqueId();
-  const actions = createMemo(() => [
+  const actions = () => [
     {
       value: "desktop",
       labelKey: "devices.inventory.openDesktop",
@@ -80,7 +80,7 @@ export function DeviceEntryMenu(props: {
       pairing: true,
       run: () => props.entry.onRemove?.(),
     },
-  ]);
+  ];
   return (
     <Show when={props.entry.deviceId || props.entry.desktopEnvironment}>
       <Menu
@@ -95,10 +95,11 @@ export function DeviceEntryMenu(props: {
           .map((action): MenuItem => ({
             id: action.value,
             label: t(action.labelKey),
-            disabled: action.pairing && !props.devices.canManagePairing,
+            disabled:
+              action.pairing && (!props.devices.connected || !props.devices.canManagePairing),
             attributes: {
               title:
-                action.pairing && !props.devices.canManagePairing
+                action.pairing && props.devices.connected && !props.devices.canManagePairing
                   ? t("devices.readOnly.pairingRequired")
                   : undefined,
             },
@@ -106,7 +107,10 @@ export function DeviceEntryMenu(props: {
           }))}
         onSelect={(item) => {
           const action = actions().find((entry) => entry.value === item.id);
-          if (action && (!action.pairing || props.devices.canManagePairing)) {
+          if (
+            action &&
+            (!action.pairing || (props.devices.connected && props.devices.canManagePairing))
+          ) {
             action.run();
           }
         }}

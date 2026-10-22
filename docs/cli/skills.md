@@ -99,6 +99,9 @@ default agent.
 Search results add `v` only to numeric version labels, preserving existing prefixes
 and build names. JSON output keeps the registry's original version values.
 
+An unreadable or malformed saved ClawHub sign-in configuration is reported as a
+warning. Requests can continue anonymously; fix that configuration or sign in again.
+
 The skills table renders horizontal tabs as single spaces so descriptions
 stay aligned with the neighboring columns.
 JSON output preserves tabs and line endings in descriptions and paths as escaped
@@ -320,11 +323,12 @@ you can attach, without changing the session. `read --session <session-key>`
 also requires `--revision <hash>` and reads only that exact selected revision;
 it does not expose other private revisions or grant permission to edit them.
 
-Personal operations require an authenticated Gateway profile. The Control UI on a
-single-user Gateway uses a durable owner profile, but ephemeral CLI connections
-do not inherit it. A CLI shared token or password alone still has no personal
-profile; use the existing workspace commands in that case. An explicitly selected
-remote Gateway never falls back to a client-local personal library.
+Personal operations require an authenticated Gateway profile. On a single-user
+Gateway, the Control UI and authenticated CLI token or password connections use
+the same durable owner profile, even when the CLI connection is omitted from
+presence. This is a shared owner, not a separate personal sign-in for each client.
+An explicitly selected remote Gateway never falls back to a client-local personal
+library.
 
 Sharing makes a skill available to teammates but does not grant edit access.
 Transfer to team ownership requires administrator authority. Saving affects

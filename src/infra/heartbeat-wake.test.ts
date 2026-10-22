@@ -519,7 +519,7 @@ describe("heartbeat-wake", () => {
     expect(handler.mock.calls[2]?.[0]).toEqual({ ...wake("interval"), retainedWork: true });
   });
 
-  it("retries only the failed targeted wake without replaying completed siblings", async () => {
+  it("settles a thrown targeted wake without replaying it or completed siblings", async () => {
     const failedTarget = "b";
     vi.useFakeTimers();
     let remainingFailures = 2;
@@ -552,29 +552,11 @@ describe("heartbeat-wake", () => {
     ]);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
 
-    await vi.advanceTimersByTimeAsync(999);
-    expect(handler).toHaveBeenCalledTimes(3);
-
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
       "cron:job-a",
       "cron:job-b",
       "cron:job-c",
-      `cron:job-${failedTarget}`,
-    ]);
-    expect(handler.mock.calls[3]?.[0]).toMatchObject({
-      agentId: `agent-${failedTarget}`,
-      sessionKey: `agent:agent-${failedTarget}:main`,
-    });
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
-      "cron:job-a",
-      "cron:job-b",
-      "cron:job-c",
-      "cron:job-b",
-      "cron:job-b",
     ]);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
@@ -809,40 +791,52 @@ describe("heartbeat wake settlement", () => {
     disposeHandler = setRuntimeHeartbeatWakeHandler(handler);
   }
 
-  it.each([false, true])("logs terminal wake failures with a waiter=%s", async (wait) => {
-    vi.useFakeTimers();
-    const error = vi.spyOn(heartbeatLog, "error").mockImplementation(() => {});
-    const failure = { status: "failed" as const, reason: "synthetic target unavailable" };
-    const handler = vi.fn().mockResolvedValue(failure);
-    setHandler(handler);
-    const request = {
-      source: "exec-event" as const,
-      intent: "event" as const,
-      reason: "exec-event",
-      agentId: "main",
-      sessionKey: "agent:main:wake-failure",
-      coalesceMs: 0,
-    };
-    const result = wait ? requestHeartbeatAndWait(request) : requestHeartbeat(request);
-
-    await vi.runAllTimersAsync();
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(error).toHaveBeenCalledExactlyOnceWith(
-      "session event wake failed; no wake retry scheduled",
-      {
-        source: "exec-event",
-        intent: "event",
+  it.each([
+    { wait: false, throws: false },
+    { wait: true, throws: false },
+    { wait: false, throws: true },
+    { wait: true, throws: true },
+  ])(
+    "logs terminal wake failures with waiter=$wait and throws=$throws",
+    async ({ wait, throws }) => {
+      vi.useFakeTimers();
+      const error = vi.spyOn(heartbeatLog, "error").mockImplementation(() => {});
+      const failure = { status: "failed" as const, reason: "synthetic target unavailable" };
+      const handler = vi.fn().mockResolvedValue(failure);
+      if (throws) {
+        // Bound the broken implementation's retry so the baseline can finish.
+        handler.mockRejectedValueOnce(new Error(failure.reason));
+      }
+      setHandler(handler);
+      const request = {
+        source: "exec-event" as const,
+        intent: "event" as const,
+        reason: "exec-event",
         agentId: "main",
         sessionKey: "agent:main:wake-failure",
-        wakeReason: "exec-event",
-        error: failure.reason,
-      },
-    );
-    if (wait) {
-      expect(await result).toEqual(failure);
-    }
-  });
+        coalesceMs: 0,
+      };
+      const result = wait ? requestHeartbeatAndWait(request) : requestHeartbeat(request);
+
+      await vi.runAllTimersAsync();
+
+      expect(handler).toHaveBeenCalledOnce();
+      expect(error).toHaveBeenCalledExactlyOnceWith(
+        "session event wake failed; no wake retry scheduled",
+        {
+          source: "exec-event",
+          intent: "event",
+          agentId: "main",
+          sessionKey: "agent:main:wake-failure",
+          wakeReason: "exec-event",
+          error: failure.reason,
+        },
+      );
+      if (wait) {
+        expect(await result).toEqual(failure);
+      }
+    },
+  );
 
   it.each(["absent", "queued", "running"])(
     "settles a waiter with an unavailable handler when %s",

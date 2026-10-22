@@ -30,12 +30,6 @@ export function hashRuntimeConfigValue(value: OpenClawConfig): string {
   return fingerprint;
 }
 
-export function hashRuntimeConfigPreparation(config: OpenClawConfig): string {
-  return sha256Base64Url(
-    stableConfigStringify({ config, facts: serializeConfigResolutionFacts(config) }),
-  );
-}
-
 // A detached publication value proves reuse across mutable clones without trusting their identity.
 export function prepareRuntimeConfigValueFact(
   config: OpenClawConfig,

@@ -42,6 +42,7 @@ function applyWhamCooldownResult(params: {
   computed: ProfileUsageStats;
   now: number;
   whamResult: WhamCooldownProbeResult;
+  retryAfterMs?: number;
 }): ProfileUsageStats {
   const existingActiveCooldownUntil = resolveActiveWindowUntil(
     params.existing.cooldownUntil,
@@ -86,6 +87,13 @@ function applyWhamCooldownResult(params: {
     lastProbeAt: params.now,
     cooldownUntil: Math.max(
       existingActiveCooldownUntil,
+      // Available quota does not invalidate the request's rate-limit deadline.
+      params.whamResult.available &&
+        params.computed.cooldownReason === "rate_limit" &&
+        Number.isFinite(params.retryAfterMs) &&
+        (params.retryAfterMs ?? 0) > 0
+        ? (params.computed.cooldownUntil ?? 0)
+        : 0,
       resolveUsageWindowUntil(params.now, params.whamResult.cooldownMs),
     ),
     cooldownReason: cooldownClassification
@@ -124,8 +132,10 @@ export function reconcileWhamBlock(
 
 export type AuthProfileFailureReduction = {
   expectedProfile: AuthProfileCredential;
+  observedAt: number;
   reason: AuthProfileFailureReason;
   modelId?: string;
+  retryAfterMs?: number;
   whamResult: WhamCooldownProbeResult | null;
   probeEligible: boolean;
 };
@@ -133,12 +143,6 @@ export type AuthProfileFailureReduction = {
 export type PersonalAuthProfileUsageReduction =
   | { kind: "success"; expectedProfile: AuthProfileCredential; lastUsed: number; modelId?: string }
   | ({ kind: "failure" } & AuthProfileFailureReduction);
-
-export type PersonalAuthProfileUsageResult = {
-  previous: ProfileUsageStats | undefined;
-  next: ProfileUsageStats;
-  now: number;
-};
 
 /** Both writers reduce their current row using the same prepared provider observation. */
 export function reduceAuthProfileFailure(
@@ -150,7 +154,7 @@ export function reduceAuthProfileFailure(
   if (!profile || profile.setup?.replacement) {
     return undefined;
   }
-  const { expectedProfile, reason, modelId, whamResult } = input;
+  const { expectedProfile, reason, modelId, retryAfterMs, whamResult } = input;
   const currentWhamResult =
     whamResult &&
     input.probeEligible &&
@@ -159,7 +163,10 @@ export function reduceAuthProfileFailure(
     isSameWhamCredential(expectedProfile, profile)
       ? whamResult
       : null;
-  // Quota observations are best effort; only the credential identity must still match.
+  // Successful use also advances lastProbeAt, including inherited profiles.
+  if (currentWhamResult && (previousStats?.lastProbeAt ?? 0) > input.observedAt) {
+    return undefined;
+  }
   if (reason === "no_error_details" && !currentWhamResult) {
     return undefined;
   }
@@ -167,8 +174,14 @@ export function reduceAuthProfileFailure(
     currentWhamResult?.available && previousStats?.blockedReason === "subscription_limit"
       ? reconcileWhamBlock(previousStats, currentWhamResult, now)
       : (previousStats ?? {});
-  const computed = computeNextProfileUsageStats({ existing, now, reason, modelId });
+  const computed = computeNextProfileUsageStats({ existing, now, reason, modelId, retryAfterMs });
   return currentWhamResult
-    ? applyWhamCooldownResult({ existing, computed, now, whamResult: currentWhamResult })
+    ? applyWhamCooldownResult({
+        existing,
+        computed,
+        now,
+        whamResult: currentWhamResult,
+        retryAfterMs,
+      })
     : computed;
 }

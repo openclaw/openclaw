@@ -1,10 +1,11 @@
 import { createComponent, createSignal } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { LinkReaderContent } from "./link-reader-content.tsx";
 import type { LoadImage } from "./link-reader-markdown.tsx";
+import type { ReaderReadyView } from "./link-reader-panel-view.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 
 type ReaderComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
@@ -66,6 +67,75 @@ function update(container: HTMLElement, value: ControlUiLinkReaderDocument, link
 }
 
 describe("link reader document content", () => {
+  it("loads only idle file sections entering the viewport and retires observation", () => {
+    const visible = new Set<(isIntersecting: boolean) => void>();
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(private readonly callback: (entries: { isIntersecting: boolean }[]) => void) {}
+        private readonly notify = (isIntersecting: boolean) => {
+          this.callback([{ isIntersecting }]);
+        };
+        observe() {
+          visible.add(this.notify);
+        }
+        disconnect() {
+          visible.delete(this.notify);
+        }
+      },
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const loadSection = vi.fn();
+    const [sections, setSections] = createSignal<ReaderReadyView["sections"]>({
+      checks: "idle",
+      files: "idle",
+      discussion: "idle",
+    });
+    const mounted = mountSolid(() =>
+      createComponent(LinkReaderContent, {
+        detail: { ...detail("Description"), files: undefined, comments: undefined },
+        target,
+        get sections() {
+          return sections();
+        },
+        onLoadSection: loadSection,
+      }),
+    );
+    flush();
+    for (const notify of visible) {
+      notify(false);
+    }
+    expect(loadSection).not.toHaveBeenCalled();
+    for (const notify of visible) {
+      notify(true);
+    }
+    expect(loadSection).toHaveBeenCalledExactlyOnceWith("files");
+    loadSection.mockClear();
+
+    for (const state of ["loading", "error"] as const) {
+      setSections({ files: state, checks: "idle", discussion: "idle" });
+      flush();
+      for (const notify of visible) {
+        notify(true);
+      }
+      expect(loadSection).not.toHaveBeenCalled();
+    }
+    setSections({ files: "idle" });
+    flush();
+    for (const notify of visible) {
+      notify(true);
+    }
+    expect(loadSection).toHaveBeenCalledExactlyOnceWith("files");
+    loadSection.mockClear();
+    mounted.unmount();
+    for (const notify of visible) {
+      notify(true);
+    }
+    expect(loadSection).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["success", "Checks passed"],
     ["unavailable", "Checks unavailable"],

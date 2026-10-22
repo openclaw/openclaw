@@ -19,6 +19,11 @@ openclaw config set plugins.entries.acpx.enabled true
 Source checkouts can use the local `extensions/acpx` workspace plugin after
 `pnpm install`. Run `/acp doctor` for a readiness check.
 
+The first ACP spawn starts the backend lazily. Concurrent spawns wait for the
+same initial readiness check, bounded by the configured backend timeout. If
+the check fails, spawns report that the backend is unavailable; use `/acp doctor`
+to diagnose and retry after fixing the underlying issue.
+
 OpenClaw only teaches agents about ACP spawning when ACP is **truly usable**:
 ACP must be enabled, dispatch must not be disabled, the current session must
 not be sandbox-blocked, and a runtime backend must be loaded and healthy. If

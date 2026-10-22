@@ -45,6 +45,64 @@ import {
 } from "./message-handler.process.test-helpers.js";
 
 registerDiscordProcessTestLifecycle();
+
+async function runBase(overrides: Parameters<typeof createBaseContext>[0] = {}) {
+  await runProcessDiscordMessage(await createBaseContext(overrides));
+}
+
+async function runAutomatic(
+  overrides: Parameters<typeof createAutomaticSourceDeliveryContext>[0] = {},
+) {
+  await runProcessDiscordMessage(await createAutomaticSourceDeliveryContext(overrides));
+}
+async function runTimedAutomatic(
+  dispatch: (params: DispatchInboundParams | undefined) => Promise<void>,
+  overrides: Parameters<typeof createAutomaticSourceDeliveryContext>[0] = {},
+  advance = 0,
+) {
+  vi.useFakeTimers();
+  const entered = createDeferred<void>();
+  dispatchInboundMessage.mockImplementationOnce(async (params) => {
+    entered.resolve();
+    await dispatch(params);
+    return createNoQueuedDispatchResult();
+  });
+  const running = runAutomatic(overrides);
+  await entered.promise;
+  if (advance) {
+    await vi.advanceTimersByTimeAsync(advance);
+  }
+  await vi.runAllTimersAsync();
+  await running;
+}
+
+const session = { store: "/tmp/openclaw-discord-process-test-sessions.json" };
+const messageToolConfig = {
+  messages: { groupChat: { visibleReplies: "message_tool" } },
+  session,
+} satisfies OpenClawConfig;
+const quotedBotBody =
+  'Automation "daily update" failed 1 times\nCheck automation history for details.';
+const dispatchCtx = () => requireRecord(getLastDispatchCtx(), "dispatch context");
+const expectCtx = (fields: Record<string, unknown>) => expectRecordFields(dispatchCtx(), fields);
+function message(id: string, content: string | undefined, channelId = "c1") {
+  return { id, channelId, content, timestamp: new Date().toISOString(), attachments: [] };
+}
+function attachment(filename: string, content_type: string, id: string) {
+  return { id, url: `https://cdn.discordapp.com/attachments/${filename}`, content_type, filename };
+}
+async function sendFinal(
+  params: DispatchInboundParams | undefined,
+  payload: Parameters<DispatchInboundParams["dispatcher"]["sendFinalReply"]>[0],
+  wait = true,
+) {
+  await params?.dispatcher.sendFinalReply(payload);
+  if (wait) {
+    await params?.dispatcher.waitForIdle();
+  }
+  return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+}
+
 const emptyCounts = {
   delivered: 0,
   deliveredNotVisible: 0,
@@ -69,11 +127,10 @@ describe("processDiscordMessage ack reactions", () => {
     createDiscordRestClientSpy
       .mockReturnValueOnce(client(feedbackRest))
       .mockReturnValueOnce(client(deliveryRest));
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({ text: "hello" });
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-    });
-    await runProcessDiscordMessage(await createAutomaticSourceDeliveryContext());
+    dispatchInboundMessage.mockImplementationOnce((params) =>
+      sendFinal(params, { text: "hello" }, false),
+    );
+    await runAutomatic();
     const reaction = firstMockCall(sendMocks.reactMessageDiscord, "ack reaction");
     const delivery = firstMockCall(deliverDiscordReply, "reply delivery");
     expect(requireRecord(reaction[3], "feedback options").rest).toBe(feedbackRest);
@@ -82,147 +139,105 @@ describe("processDiscordMessage ack reactions", () => {
   });
 
   it.each([
-    {
-      name: "typing mode never",
-      overrides: { cfg: { agents: { defaults: { typingMode: "never" } } } },
-    },
-    { name: "room events", overrides: { inboundEventKind: "room_event" } },
-  ])("suppresses fast-reply typing for $name", async ({ name, overrides }) => {
+    ["never", 0],
+    ["room_event", 0],
+    ["message", 2],
+  ] as const)("honors %s typing policy and admission refreshes", async (mode, refreshes) => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({ text: "fast reply" });
-      await params?.dispatcher.waitForIdle();
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+      if (mode === "message") {
+        expect(typingMocks.sendTyping).not.toHaveBeenCalled();
+        await params?.replyOptions?.onReplyStart?.();
+        await params?.replyOptions?.onReplyStart?.();
+      }
+      return sendFinal(params, { text: "long reply" });
     });
-    await runProcessDiscordMessage(await createAutomaticSourceDeliveryContext(overrides));
-    if (name === "room events") {
+    await runAutomatic(
+      mode === "room_event"
+        ? { inboundEventKind: mode }
+        : { cfg: { agents: { defaults: { typingMode: mode } } } },
+    );
+    if (mode === "room_event") {
       expect(getLastDispatchReplyOptions()?.suppressTyping).toBe(true);
     }
-    expect(typingMocks.sendTyping).not.toHaveBeenCalled();
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("starts typing on admission and forwards repeated resolver refreshes", async () => {
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      expect(typingMocks.sendTyping).not.toHaveBeenCalled();
-      await params?.replyOptions?.onReplyStart?.();
-      await params?.replyOptions?.onReplyStart?.();
-      await params?.dispatcher.sendFinalReply({ text: "long reply" });
-      await params?.dispatcher.waitForIdle();
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-    });
-    const ctx = await createAutomaticSourceDeliveryContext({
-      cfg: { agents: { defaults: { typingMode: "message" } } },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(typingMocks.sendTyping).toHaveBeenCalledTimes(2);
+    expect(typingMocks.sendTyping).toHaveBeenCalledTimes(refreshes);
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
   it("keeps one typing refresh loop for default message-tool replies", async () => {
     vi.useFakeTimers();
-    try {
-      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-        await params?.replyOptions?.onReplyStart?.();
-        await vi.advanceTimersByTimeAsync(3_500);
-        return createNoQueuedDispatchResult();
-      });
-      const ctx = await createBaseContext({
-        shouldRequireMention: false,
-        effectiveWasMentioned: false,
-        discordConfig: { streaming: { mode: "partial", block: { enabled: true } } },
-        cfg: {
-          messages: { groupChat: { visibleReplies: "message_tool" } },
-          session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-        },
-        route: BASE_CHANNEL_ROUTE,
-      });
-
-      await runProcessDiscordMessage(ctx);
-
-      expectRecordFields(requireRecord(getLastDispatchReplyOptions(), "dispatch reply options"), {
-        sourceReplyDeliveryMode: "message_tool_only",
-        typingKeepalive: false,
-        disableBlockStreaming: true,
-      });
-      expect(createDiscordDraftStream).not.toHaveBeenCalled();
-      expect(typingMocks.sendTyping).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("marks automatic visible replies as failed when final Discord delivery fails", async () => {
-    dispatchInboundMessage.mockResolvedValueOnce({
-      queuedFinal: false,
-      counts: { final: 0, tool: 0, block: 0 },
-      settledReceipt: failedFinalReceipt,
-    });
-
-    const ctx = await createAutomaticSourceDeliveryContext();
-
-    await runProcessDiscordMessage(ctx);
-
-    const emojis = getReactionEmojis();
-    expect(emojis).toContain(DEFAULT_EMOJIS.error);
-    expect(emojis).not.toContain(DEFAULT_EMOJIS.done);
-  });
-
-  it("marks a recovered agent failure as failed after delivering its visible error reply", async () => {
-    readAgentRunTerminalOutcome.mockReturnValueOnce("failed");
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({ text: "Something failed", isError: true });
-      await params?.dispatcher.waitForIdle();
-      return {
-        queuedFinal: true,
-        counts: { final: 1, tool: 0, block: 0 },
-      };
+      await params?.replyOptions?.onReplyStart?.();
+      await vi.advanceTimersByTimeAsync(3_500);
+      return createNoQueuedDispatchResult();
+    });
+    await runBase({
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      discordConfig: { streaming: { mode: "partial", block: { enabled: true } } },
+      cfg: messageToolConfig,
+      route: BASE_CHANNEL_ROUTE,
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext();
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    const emojis = getReactionEmojis();
-    expect(emojis).toContain(DEFAULT_EMOJIS.error);
-    expect(emojis).not.toContain(DEFAULT_EMOJIS.done);
+    expectRecordFields(requireRecord(getLastDispatchReplyOptions(), "dispatch reply options"), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      typingKeepalive: false,
+      disableBlockStreaming: true,
+    });
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+    expect(typingMocks.sendTyping).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["delivery", "agent"] as const)(
+    "marks %s failure with an error reaction",
+    async (failure) => {
+      if (failure === "delivery") {
+        dispatchInboundMessage.mockResolvedValueOnce({
+          ...createNoQueuedDispatchResult(),
+          settledReceipt: failedFinalReceipt,
+        });
+      } else {
+        readAgentRunTerminalOutcome.mockReturnValueOnce("failed");
+        dispatchInboundMessage.mockImplementationOnce((params) =>
+          sendFinal(params, { text: "Something failed", isError: true }),
+        );
+      }
+      await runAutomatic();
+      if (failure === "agent") {
+        expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+      }
+      const emojis = getReactionEmojis();
+      expect(emojis).toContain(DEFAULT_EMOJIS.error);
+      expect(emojis).not.toContain(DEFAULT_EMOJIS.done);
+    },
+  );
 
   it.each([
     { target: "channel", args: { channelId: "c1" }, channelId: "c1", messageId: "tracked-m1" },
     { target: "user", args: { to: "user:u1" }, channelId: "dm-u1", messageId: "m1" },
   ])("routes source acknowledgements and tracked $target reactions", async (scenario) => {
-    vi.useFakeTimers();
-    const dispatchEntered = createDeferred<void>();
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      dispatchEntered.resolve();
-      await params?.replyOptions?.onToolStart?.({
-        name: "message",
-        phase: "start",
-        args: {
-          action: "react",
-          ...scenario.args,
-          messageId: scenario.messageId,
-          emoji: "📈",
-          trackToolCalls: true,
-        },
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, DEFAULT_TIMING.debounceMs);
-      });
-      return createNoQueuedDispatchResult();
-    });
-    const ctx = await createAutomaticSourceDeliveryContext({
-      message: { id: "1001", timestamp: new Date().toISOString(), attachments: [] },
-      messageChannelId: "fallback-channel",
-    });
-    const runPromise = runProcessDiscordMessage(ctx);
-    await dispatchEntered.promise;
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-    await vi.runAllTimersAsync();
-    await runPromise;
+    await runTimedAutomatic(
+      async (params) => {
+        await params?.replyOptions?.onToolStart?.({
+          name: "message",
+          phase: "start",
+          args: {
+            action: "react",
+            ...scenario.args,
+            messageId: scenario.messageId,
+            emoji: "📈",
+            trackToolCalls: true,
+          },
+        });
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, DEFAULT_TIMING.debounceMs);
+        });
+      },
+      {
+        message: { id: "1001", timestamp: new Date().toISOString(), attachments: [] },
+        messageChannelId: "fallback-channel",
+      },
+      DEFAULT_TIMING.debounceMs,
+    );
 
     expectReactAckCallAt(0, "👀", {
       channelId: "fallback-channel",
@@ -244,64 +259,44 @@ describe("processDiscordMessage ack reactions", () => {
   });
 
   it("keeps one acknowledgement through reasoning, tools, compaction, silence, and success", async () => {
-    vi.useFakeTimers();
-    const dispatchEntered = createDeferred<void>();
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      dispatchEntered.resolve();
-      await params?.replyOptions?.onReasoningStream?.({});
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-      await params?.replyOptions?.onCompactionStart?.();
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-      await params?.replyOptions?.onCompactionEnd?.();
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallHardMs + 1_000);
-      return createNoQueuedDispatchResult();
-    });
-
-    const ctx = await createAutomaticSourceDeliveryContext({
-      cfg: {
-        messages: { ackReaction: "👀" },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+    await runTimedAutomatic(
+      async (params) => {
+        await params?.replyOptions?.onReasoningStream?.({});
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+        await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+        await params?.replyOptions?.onCompactionStart?.();
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+        await params?.replyOptions?.onCompactionEnd?.();
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallHardMs + 1_000);
       },
-    });
-
-    const runPromise = runProcessDiscordMessage(ctx);
-    await dispatchEntered.promise;
-    await vi.runAllTimersAsync();
-    await runPromise;
+      {
+        cfg: { messages: { ackReaction: "👀" }, session },
+      },
+    );
 
     expect(getReactionEmojis()).toEqual(["👀"]);
     expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
   });
-});
-
-describe("processDiscordMessage deliver-lambda abort logging", () => {
   it("records the cancelled turn without delivering its block reply", async () => {
     const abortController = new AbortController();
-    // Abort after dispatch starts so the delivery boundary observes the cancelled turn.
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       abortController.abort();
       await params?.dispatcher.sendBlockReply({ text: "post-abort block payload" });
       return { queuedFinal: false, counts: { final: 0, tool: 0, block: 1 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    await runAutomatic({
       abortSignal: abortController.signal,
       baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
       route: BASE_CHANNEL_ROUTE,
     });
-
-    await runProcessDiscordMessage(ctx);
 
     expect(logVerbose).toHaveBeenCalledWith(
       "discord block reply skipped (aborted before delivery): target=channel:c1 session=agent:main:discord:channel:c1",
     );
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
-});
-
-describe("processDiscordMessage thread binding activity failure", () => {
   it.each(["current", "aborted", "policy changed"] as const)(
     "continues only with the original inbound authority: %s",
     async (authority) => {
@@ -332,10 +327,9 @@ describe("processDiscordMessage thread binding activity failure", () => {
         throw activityError;
       });
       ctx.threadBindings.touchThread = touchThread;
-      dispatchInboundMessage.mockImplementation(async (params?: DispatchInboundParams) => {
-        await params?.dispatcher.sendFinalReply({ text: "Still received your message." });
-        return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-      });
+      dispatchInboundMessage.mockImplementation((params) =>
+        sendFinal(params, { text: "Still received your message." }, false),
+      );
 
       const processing = runProcessDiscordMessage(ctx);
       await touchEntered.promise;
@@ -352,9 +346,9 @@ describe("processDiscordMessage thread binding activity failure", () => {
         expect.stringContaining(activityError.message),
       );
       const expectedDispatches = authority === "current" ? 1 : 0;
-      expect(recordInboundSession).toHaveBeenCalledTimes(expectedDispatches);
-      expect(dispatchInboundMessage).toHaveBeenCalledTimes(expectedDispatches);
-      expect(deliverDiscordReply).toHaveBeenCalledTimes(expectedDispatches);
+      for (const mock of [recordInboundSession, dispatchInboundMessage, deliverDiscordReply]) {
+        expect(mock).toHaveBeenCalledTimes(expectedDispatches);
+      }
       if (authority === "current") {
         expectFreshFinalText("Still received your message.");
       }
@@ -367,43 +361,27 @@ describe("processDiscordMessage reply session init conflict retry", () => {
     new Error("reply session initialization conflicted for agent:main:discord:channel:c1");
 
   it.each([
-    {
-      name: "an automatic group request",
-      visibleReplies: "automatic",
-      inboundEventKind: "user_request",
-      expectedMode: "automatic",
-      expectedSends: 1,
-    },
-    {
-      name: "an ambient room event",
-      visibleReplies: "automatic",
-      inboundEventKind: "room_event",
-      expectedMode: "message_tool_only",
-      expectedSends: 0,
-    },
-  ] as const)("completes $name with a recorded terminal notice outcome", async (scenario) => {
+    ["user_request", "automatic", 1],
+    ["room_event", "message_tool_only", 0],
+  ] as const)("records terminal notice outcome for %s", async (inboundEventKind, mode, sends) => {
     dispatchInboundMessage.mockRejectedValue(conflictError());
     const errorLog = vi.fn();
-
     const ctx = await createBaseContext({
-      inboundEventKind: scenario.inboundEventKind,
+      inboundEventKind,
       shouldRequireMention: false,
-      effectiveWasMentioned: scenario.inboundEventKind !== "room_event",
-      cfg: { messages: { groupChat: { visibleReplies: scenario.visibleReplies } } },
+      effectiveWasMentioned: inboundEventKind !== "room_event",
+      cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
       runtime: { log: vi.fn(), error: errorLog },
     });
     await expect(runProcessDiscordMessage(ctx)).resolves.toBeUndefined();
-
     expect(dispatchInboundMessage).toHaveBeenCalledTimes(4);
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
-    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe(scenario.expectedMode);
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(scenario.expectedSends);
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe(mode);
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(sends);
     expect(errorLog).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining(
-        `terminal notice ${scenario.expectedSends === 1 ? "delivered" : "suppressed"}`,
-      ),
+      expect.stringContaining(`terminal notice ${sends === 1 ? "delivered" : "suppressed"}`),
     );
-    if (scenario.expectedSends === 1) {
+    if (sends === 1) {
       expectFreshFinalText(
         "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.",
       );
@@ -441,11 +419,7 @@ describe("processDiscordMessage reply session init conflict retry", () => {
     dispatchInboundMessage.mockRejectedValueOnce(originalError);
     const guildHistories = new Map();
     const createReplayContext = () =>
-      createBaseContext({
-        guildHistories,
-        historyLimit: 10,
-        inboundEventKind: "room_event",
-      });
+      createBaseContext({ guildHistories, historyLimit: 10, inboundEventKind: "room_event" });
 
     await expect(runProcessDiscordMessage(await createReplayContext())).rejects.toBe(originalError);
     expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
@@ -492,7 +466,7 @@ describe("processDiscordMessage session routing and room events", () => {
           return createNoQueuedDispatchResult();
         });
       }
-      const ctx = await createBaseContext({
+      await runBase({
         guildHistories,
         historyLimit: 10,
         isGuildMessage: !groupDm,
@@ -504,7 +478,6 @@ describe("processDiscordMessage session routing and room events", () => {
         baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
         route: BASE_CHANNEL_ROUTE,
       });
-      await runProcessDiscordMessage(ctx);
       if (groupDm) {
         expect(getLastDispatchCtx()?.GroupRequireMention).toBe(false);
       } else {
@@ -537,7 +510,7 @@ describe("processDiscordMessage session routing and room events", () => {
       introText: "",
     });
 
-    const ctx = await createBaseContext({
+    await runBase({
       messageChannelId: "thread-1",
       threadChannel: { id: "thread-1", name: "subagent-thread" },
       boundSessionKey: "agent:main:subagent:child",
@@ -545,9 +518,7 @@ describe("processDiscordMessage session routing and room events", () => {
       route: BASE_CHANNEL_ROUTE,
     });
 
-    await runProcessDiscordMessage(ctx);
-
-    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
+    expectCtx({
       SessionKey: "agent:main:subagent:child",
       MessageThreadId: "thread-1",
     });
@@ -574,20 +545,12 @@ describe("processDiscordMessage session routing and room events", () => {
         timestamp: new Date().toISOString(),
       })),
     };
-    const ctx = await createBaseContext({
-      cfg: {
-        channels: { discord: { contextVisibility: "allowlist" } },
-      },
+    await runBase({
+      cfg: { channels: { discord: { contextVisibility: "allowlist" } } },
       baseSessionKey: threadSessionKey,
       route: BASE_CHANNEL_ROUTE,
       messageChannelId: threadId,
-      message: {
-        id: "m1",
-        channelId: threadId,
-        content: "follow-up",
-        timestamp: new Date().toISOString(),
-        attachments: [],
-      },
+      message: message("m1", "follow-up", threadId),
       messageText: "follow-up",
       baseText: "follow-up",
       threadChannel: { id: threadId, name: "child-thread" },
@@ -596,105 +559,36 @@ describe("processDiscordMessage session routing and room events", () => {
       channelConfig: { allowed: true, users: ["U2"] },
     });
 
-    await runProcessDiscordMessage(ctx);
-
     expect(rest.get).toHaveBeenCalled();
-    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
+    expectCtx({
       SessionKey: threadSessionKey,
       MessageThreadId: threadId,
       ThreadLabel: "Discord thread #parent",
+      ThreadStarterBody: undefined,
     });
-    expect(getLastDispatchCtx()?.ThreadStarterBody).toBeUndefined();
   });
 });
-
-async function createQuotedContext(options: {
-  replyId: string;
-  body: string;
-  author: { id: string; username: string; globalName: string };
-  fetch: typeof fetch;
-  text?: string;
-  visibility?: "all" | "allowlist";
-  botUserId?: string;
-}) {
-  const text = options.text ?? "<@bot> what is this?";
-  return await createBaseContext({
-    cfg: {
-      channels: { discord: { contextVisibility: options.visibility ?? "all" } },
-      messages: { ackReaction: "👀" },
-      session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-    },
-    channelConfig: options.visibility === "allowlist" ? { allowed: true, users: ["U1"] } : null,
-    botUserId: options.botUserId,
-    discordRestFetch: options.fetch,
-    message: {
-      id: "m-reply",
-      channelId: "c1",
-      content: text,
-      timestamp: new Date().toISOString(),
-      attachments: [],
-      messageReference: { type: 0, message_id: options.replyId, channel_id: "c1" },
-      referencedMessage: {
-        id: options.replyId,
-        channelId: "c1",
-        content: options.body,
-        timestamp: new Date().toISOString(),
-        attachments: [
-          {
-            id: "att-reply",
-            url: "https://cdn.discordapp.com/attachments/reply.png",
-            content_type: "image/png",
-            filename: "reply.png",
-          },
-        ],
-        author: { ...options.author, discriminator: "0" },
-      },
-    },
-    baseText: text,
-    messageText: text,
-  });
-}
 
 describe("processDiscordMessage session routing", () => {
   it("frames preflight audio transcript in dispatch context and marks media transcribed", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("prepared media must not be fetched again");
     });
-    const ctx = await createBaseContext({
+    await runBase({
       discordRestFetch: fetchImpl,
       message: {
-        id: "m-audio-preflight",
-        channelId: "c1",
-        content: "",
-        timestamp: new Date().toISOString(),
-        attachments: [
-          {
-            id: "att-audio-preflight",
-            url: "https://cdn.discordapp.com/attachments/voice.ogg",
-            content_type: "audio/ogg",
-            filename: "voice.ogg",
-          },
-        ],
+        ...message("m-audio-preflight", ""),
+        attachments: [attachment("voice.ogg", "audio/ogg", "att-audio-preflight")],
       },
       baseText: "",
       messageText: "",
       preflightAudioTranscript: "/status",
-      preparedMedia: [
-        {
-          path: "/tmp/openclaw-discord-test/voice.ogg",
-          contentType: "audio/ogg",
-        },
-      ],
-      cfg: {
-        messages: { groupChat: { visibleReplies: "message_tool" } },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
+      preparedMedia: [{ path: "/tmp/openclaw-discord-test/voice.ogg", contentType: "audio/ogg" }],
+      cfg: messageToolConfig,
     });
 
-    await runProcessDiscordMessage(ctx);
-
     expect(fetchImpl).not.toHaveBeenCalled();
-    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
+    expectCtx({
       BodyForAgent: '[Audio transcript (machine-generated, untrusted)]: "/status"',
       RawBody: "",
       CommandBody: "",
@@ -718,16 +612,14 @@ describe("processDiscordMessage session routing", () => {
   });
 
   it("keeps typed control commands as explicit text command turns", async () => {
-    const ctx = await createBaseContext({
+    await runBase({
       baseText: "/status",
       messageText: "/status",
       hasControlCommand: true,
       commandAuthorized: true,
     });
 
-    await runProcessDiscordMessage(ctx);
-
-    expect(requireRecord(getLastDispatchCtx(), "dispatch context").CommandTurn).toEqual({
+    expect(dispatchCtx().CommandTurn).toEqual({
       kind: "text-slash",
       source: "text",
       authorized: true,
@@ -736,90 +628,70 @@ describe("processDiscordMessage session routing", () => {
     });
   });
 
-  it("does not attach referenced reply media when reply context is hidden", async () => {
-    const fetchImpl = vi.fn(async () => {
-      throw new Error("hidden reply media should not be fetched");
-    });
-    const ctx = await createQuotedContext({
-      replyId: "m-hidden",
-      body: "hidden image",
-      author: { id: "U2", username: "mallory", globalName: "Mallory" },
-      fetch: fetchImpl,
-      visibility: "allowlist",
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(dispatchCtx.ReplyToId).toBe("m-hidden");
-    expect(dispatchCtx.ReplyToBody).toBeUndefined();
-    expect(dispatchCtx.MediaPath).toBeUndefined();
-    expect(dispatchCtx.MediaPaths).toBeUndefined();
-  });
-
-  it("keeps attachment-only referenced messages as typed reply context", async () => {
-    const fetchImpl = vi.fn(
-      async () => new Response(Buffer.from("image"), { headers: { "content-type": "image/png" } }),
-    );
-    const ctx = await createQuotedContext({
-      replyId: "m-attachment-only",
-      body: "",
-      author: { id: "U2", username: "bob", globalName: "Bob" },
-      fetch: fetchImpl,
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
-    expect(dispatchCtx.ReplyToId).toBe("m-attachment-only");
-    expect(dispatchCtx.ReplyToSender).toBe("bob");
-    expect(dispatchCtx.ReplyToBody).toBeUndefined();
-    expect(dispatchCtx.media).toEqual([
-      expect.objectContaining({
-        contentType: "image/png",
-        messageId: "m-attachment-only",
-      }),
-    ]);
-    expect(fetchImpl).toHaveBeenCalledOnce();
-  });
-
-  it("preserves a user's reply to bot text without fetching self media", async () => {
-    const body = 'Automation "daily update" failed 1 times\nCheck automation history for details.';
-    const fetchImpl = vi.fn(async () => {
-      throw new Error("self-reply media should not be fetched");
-    });
-    const ctx = await createQuotedContext({
-      replyId: "m-bot-previous",
-      body,
-      author: { id: "bot-1", username: "Spartacus", globalName: "Spartacus" },
-      fetch: fetchImpl,
-      botUserId: "bot-1",
-      text: "<@bot> hit that again",
-    });
-    await runProcessDiscordMessage(ctx);
-    const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(dispatchCtx.ReplyToId).toBe("m-bot-previous");
-    expect(dispatchCtx.ReplyToSender).toBe("Spartacus");
-    expect(dispatchCtx.ReplyToBody).toBe(body);
-    expect(dispatchCtx.RawBody).toBe("<@bot> hit that again");
-    expect(dispatchCtx.MediaPaths).toBeUndefined();
-  });
+  it.each(["hidden", "attachment-only", "bot-previous"] as const)(
+    "preserves permitted reply context and media for %s",
+    async (kind) => {
+      const hidden = kind === "hidden";
+      const bot = kind === "bot-previous";
+      const replyId = `m-${kind}`;
+      const text = bot ? "<@bot> hit that again" : "<@bot> what is this?";
+      const username = hidden ? "mallory" : bot ? "Spartacus" : "bob";
+      const body = hidden ? "hidden image" : bot ? quotedBotBody : "";
+      const fetchImpl = vi.fn(async () => {
+        if (hidden || bot) {
+          throw new Error("reply media must not be fetched");
+        }
+        return new Response(Buffer.from("image"), { headers: { "content-type": "image/png" } });
+      });
+      await runBase({
+        cfg: {
+          channels: { discord: { contextVisibility: hidden ? "allowlist" : "all" } },
+          messages: { ackReaction: "👀" },
+          session,
+        },
+        channelConfig: hidden ? { allowed: true, users: ["U1"] } : null,
+        botUserId: bot ? "bot-1" : undefined,
+        discordRestFetch: fetchImpl,
+        message: {
+          ...message("m-reply", text),
+          messageReference: { type: 0, message_id: replyId, channel_id: "c1" },
+          referencedMessage: {
+            ...message(replyId, body),
+            attachments: [attachment("reply.png", "image/png", "att-reply")],
+            author: {
+              id: bot ? "bot-1" : "U2",
+              username,
+              globalName: hidden ? "Mallory" : bot ? "Spartacus" : "Bob",
+              discriminator: "0",
+            },
+          },
+        },
+        baseText: text,
+        messageText: text,
+      });
+      expectCtx({ ReplyToId: replyId, ReplyToBody: bot ? body : undefined });
+      if (!hidden) {
+        expectCtx({ ReplyToSender: username });
+      }
+      if (hidden) {
+        expectCtx({ MediaPath: undefined, MediaPaths: undefined });
+      } else if (bot) {
+        expectCtx({ RawBody: text, MediaPaths: undefined });
+      } else {
+        expectCtx({
+          media: [expect.objectContaining({ contentType: "image/png", messageId: replyId })],
+        });
+      }
+      expect(fetchImpl).toHaveBeenCalledTimes(hidden || bot ? 0 : 1);
+    },
+  );
 
   it("stores DM lastRoute with user target for direct-session continuity", async () => {
-    const ctx = await createBaseContext({
+    await runBase({
       ...createDirectMessageContextOverrides(),
-      message: {
-        id: "m1",
-        channelId: "dm1",
-        timestamp: new Date().toISOString(),
-        attachments: [],
-      },
+      message: message("m1", undefined, "dm1"),
       messageChannelId: "dm1",
     });
-
-    await runProcessDiscordMessage(ctx);
 
     expect(getLastRouteUpdate()).toEqual({
       sessionKey: "agent:main:discord:direct:u1",
@@ -827,7 +699,7 @@ describe("processDiscordMessage session routing", () => {
       to: "user:U1",
       accountId: "default",
     });
-    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
+    expectCtx({
       ChatType: "direct",
       From: "discord:U1",
       To: "user:U1",
@@ -837,34 +709,21 @@ describe("processDiscordMessage session routing", () => {
   });
 
   it("pins Discord text DM main-route updates to the single configured DM owner", async () => {
-    const ctx = await createBaseContext({
+    await runBase({
       ...createDirectMessageContextOverrides(),
       cfg: {
         messages: { ackReaction: "👀" },
-        session: {
-          store: "/tmp/openclaw-discord-process-test-sessions.json",
-          dmScope: "main",
-        },
+        session: { ...session, dmScope: "main" },
       },
       channelConfig: { users: ["user:111"] },
       baseSessionKey: "agent:main:main",
-      author: {
-        id: "222",
-        username: "bob",
-        discriminator: "0",
-        globalName: "Bob",
-      },
+      author: { id: "222", username: "bob", discriminator: "0", globalName: "Bob" },
       sender: { id: "222", label: "bob" },
       route: {
-        agentId: "main",
-        channel: "discord",
-        accountId: "default",
+        ...BASE_CHANNEL_ROUTE,
         sessionKey: "agent:main:main",
-        mainSessionKey: "agent:main:main",
       },
     });
-
-    await runProcessDiscordMessage(ctx);
 
     expect(getLastRouteUpdate()).toMatchObject({
       sessionKey: "agent:main:main",
@@ -884,14 +743,13 @@ describe("Discord group-thread participant delivery", () => {
     { name: "deferred warning", agents: ["alice"], warning: true },
   ])("binds delivery to the $name", async ({ agents, warning }) => {
     const workspaceRoot = tempDirs.make("discord-group-thread-workspaces-");
+    const workspaceFor = (agent: string) => path.join(workspaceRoot, `workspace-${agent}`);
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
-        entries: {
-          main: { workspace: path.join(workspaceRoot, "workspace-main") },
-          alice: { workspace: path.join(workspaceRoot, "workspace-alice") },
-          bob: { workspace: path.join(workspaceRoot, "workspace-bob") },
-        },
+        entries: Object.fromEntries(
+          ["main", "alice", "bob"].map((id) => [id, { workspace: workspaceFor(id) }]),
+        ),
       },
       broadcast: agents ? { "discord:c1": agents } : undefined,
     };
@@ -919,7 +777,7 @@ describe("Discord group-thread participant delivery", () => {
           dispatcher.sendBlockReply({
             text: `Reasoning from ${agentId}`,
             isReasoning: true,
-            mediaUrl: path.join(workspaceRoot, `workspace-${agentId}`, "reasoning.txt"),
+            mediaUrl: path.join(workspaceFor(agentId), "reasoning.txt"),
           });
           const queuedFinal = dispatcher.sendFinalReply(
             warning
@@ -929,7 +787,7 @@ describe("Discord group-thread participant delivery", () => {
                 )
               : {
                   text: `Answer from ${agentId}`,
-                  mediaUrl: path.join(workspaceRoot, `workspace-${agentId}`, "answer.txt"),
+                  mediaUrl: path.join(workspaceFor(agentId), "answer.txt"),
                 },
           );
           return { queuedFinal, counts: dispatcher.getQueuedCounts() };
@@ -938,12 +796,11 @@ describe("Discord group-thread participant delivery", () => {
     );
     await runProcessDiscordMessage(ctx);
 
-    const responders = agents;
     expect(errors.mock.calls).toEqual([]);
-    expect(participantRuns).toEqual(responders);
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(responders.length * 2);
-    for (const agentId of responders) {
-      const workspace = path.join(workspaceRoot, `workspace-${agentId}`);
+    expect(participantRuns).toEqual(agents);
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(agents.length * 2);
+    for (const agentId of agents) {
+      const workspace = workspaceFor(agentId);
       for (const kind of ["block", "final"]) {
         const reply =
           warning && kind === "final"

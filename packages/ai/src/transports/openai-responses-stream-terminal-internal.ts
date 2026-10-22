@@ -5,8 +5,16 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { calculateCost } from "../model-utils.js";
+import {
+  extendResponsesMessageText,
+  renderResponsesMessageText,
+  responsesTextSignature,
+  withResponsesTextSources,
+  type ResponsesMessageText,
+} from "../providers/openai-responses-message-text.js";
 import { resolveResponsesMessageSnapshotCollapse } from "../providers/openai-responses-stream-compat.js";
 import {
+  applyResponsesCacheWritePricing,
   mapResponsesTerminalUsage,
   readResponsesReasoningTokens,
   resolveResponsesTerminalStopReason,
@@ -33,7 +41,6 @@ import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   type OpenAIResponsesReasoningReplayMetadata,
 } from "./openai-responses-contracts.js";
-import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import { normalizeOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay.js";
 import type { ResponsesOutputTracker } from "./openai-responses-stream-slots-internal.js";
 import type { ResponsesStreamOptions } from "./openai-responses-stream-types-internal.js";
@@ -47,6 +54,7 @@ export type TextBlockReference = {
   block: TextContent;
   index: number;
   phase: TextSignatureV1["phase"] | undefined;
+  rendered: ResponsesMessageText;
 };
 export type ResponsesThinkingBlock = ThinkingContent & {
   [OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
@@ -58,6 +66,7 @@ type TerminalOutput = AssistantMessage & {
 type TerminalOptions = Pick<
   ResponsesStreamOptions,
   | "serviceTier"
+  | "promptCacheTtl"
   | "onServiceTier"
   | "resolveServiceTier"
   | "applyServiceTierPricing"
@@ -126,6 +135,10 @@ export function createResponsesTerminalController(params: {
   const { output, stream, model, options } = params;
   const blocks = output.content;
   const pendingReasoning = new Set<number>();
+  const completedText = new Map<number, ResponsesMessageText>();
+  const recordCompletedText = (index: number, text: ResponsesMessageText) => {
+    completedText.set(index, text);
+  };
   const deferredToolCompletions: Extract<AssistantMessageEvent, { type: "toolcall_end" }>[] = [];
   const recordPendingReasoning = (contentIndex: number) => {
     pendingReasoning.add(contentIndex);
@@ -167,16 +180,15 @@ export function createResponsesTerminalController(params: {
       }
     }
   };
-  const appendText = (item: ResponseOutputMessage, initialIndex?: number): number | undefined => {
+  const appendText = (
+    item: ResponseOutputMessage,
+    initialIndex: number | undefined,
+    initialRender: ResponsesMessageText,
+    preserveSignature = false,
+  ): number | undefined => {
+    let rendered = initialRender;
     let contentIndex = initialIndex;
-    const text = (Array.isArray(item.content) ? item.content : [])
-      .map((part) => {
-        const content = part as { type: string; text?: string; refusal?: string };
-        return content.type === "output_text" || content.type === "text"
-          ? (content.text ?? "")
-          : (content.refusal ?? "");
-      })
-      .join("");
+    let text = rendered.text;
     const block = contentIndex === undefined ? undefined : blocks[contentIndex];
     const started = block?.type === "text" ? block : undefined;
     if (!text && !started) {
@@ -186,8 +198,10 @@ export function createResponsesTerminalController(params: {
     if (started && contentIndex !== undefined) {
       const previousText = started.text;
       started.text = text;
-      started.textSignature = encodeTextSignatureV1(item.id, phase);
-      params.setLastTextBlock({ block: started, index: contentIndex, phase });
+      started.textSignature = preserveSignature
+        ? withResponsesTextSources(started.textSignature, rendered)
+        : responsesTextSignature(item.id, phase, rendered);
+      params.setLastTextBlock({ block: started, index: contentIndex, phase, rendered });
       if (text.startsWith(previousText)) {
         const delta = text.slice(previousText.length);
         if (delta) {
@@ -197,26 +211,30 @@ export function createResponsesTerminalController(params: {
     } else {
       const previous = params.getLastTextBlock();
       const collapse = resolveResponsesMessageSnapshotCollapse({
-        prior: previous && { text: previous.block.text, phase: previous.phase },
-        nextText: text,
+        prior: previous && { text: previous.rendered.prose, phase: previous.phase },
+        nextText: rendered.prose,
         nextPhase: phase,
       });
       if (collapse.kind === "extend" && previous) {
-        previous.block.text = collapse.text;
-        previous.block.textSignature = encodeTextSignatureV1(item.id, phase);
+        rendered = extendResponsesMessageText(rendered, previous.rendered);
+        text = rendered.text;
+        previous.rendered = rendered;
+        previous.block.text = text;
+        previous.block.textSignature = responsesTextSignature(item.id, phase, rendered);
         contentIndex = previous.index;
       } else {
         const newBlock: TextContent = {
           type: "text",
           text,
-          textSignature: encodeTextSignatureV1(item.id, phase),
+          textSignature: responsesTextSignature(item.id, phase, rendered),
         };
         blocks.push(newBlock);
         contentIndex = blocks.length - 1;
-        params.setLastTextBlock({ block: newBlock, index: contentIndex, phase });
+        params.setLastTextBlock({ block: newBlock, index: contentIndex, phase, rendered });
         stream.push({ type: "text_start", contentIndex, partial: output });
       }
     }
+    recordCompletedText(contentIndex, rendered);
     stream.push({ type: "text_end", contentIndex, content: text, partial: output });
     return contentIndex;
   };
@@ -287,11 +305,42 @@ export function createResponsesTerminalController(params: {
       if (item.type === "message") {
         const tracked = params.outputs.get(item, terminalIndex);
         if (tracked?.completed) {
+          const block = blocks[tracked.contentIndex];
+          const previous = completedText.get(tracked.contentIndex);
+          if (block?.type === "text" && previous && tracked.completedProse !== undefined) {
+            const incoming = renderResponsesMessageText(item.content ?? []);
+            if (!incoming.prose.startsWith(tracked.completedProse)) {
+              continue;
+            }
+            // Earlier cumulative items may add sources without replacing the newest
+            // item's prose or replay identity in their shared public block.
+            const rendered = extendResponsesMessageText(
+              {
+                prose: previous.prose.startsWith(incoming.prose) ? previous.prose : incoming.prose,
+                citations: incoming.citations,
+              },
+              previous,
+            );
+            if (rendered.text !== block.text) {
+              const cursor = params.getLastTextBlock();
+              appendText(
+                item,
+                tracked.contentIndex,
+                rendered,
+                tracked.completedProse !== previous.prose,
+              );
+              if (cursor?.index !== tracked.contentIndex) {
+                // Enriching earlier output must not reopen its sequential collapse boundary.
+                params.setLastTextBlock(cursor);
+              }
+            }
+          }
           continue;
         }
-        const appendedIndex = appendText(item, tracked?.contentIndex);
+        const rendered = renderResponsesMessageText(item.content ?? []);
+        const appendedIndex = appendText(item, tracked?.contentIndex, rendered);
         if (appendedIndex !== undefined) {
-          params.outputs.set(item, appendedIndex, terminalIndex, true);
+          params.outputs.set(item, appendedIndex, terminalIndex, true, rendered.prose);
         }
       } else {
         params.setLastTextBlock(null);
@@ -353,6 +402,7 @@ export function createResponsesTerminalController(params: {
       output.usage.usageReport = { state: "unavailable" };
     }
     calculateCost(model, output.usage);
+    applyResponsesCacheWritePricing(output.usage, response.usage, options?.promptCacheTtl);
     if (options?.applyServiceTierPricing) {
       const tier = options.resolveServiceTier
         ? options.resolveServiceTier(response.service_tier, options.serviceTier)
@@ -442,6 +492,7 @@ export function createResponsesTerminalController(params: {
     finalizeFailedResponse: finalizeTerminalFacts,
     recordIncompleteToolCall,
     recoverTerminalOutput,
+    recordCompletedText,
     emitToolCallCompletion,
     recordPendingReasoning,
     releaseDeferredToolCompletions,

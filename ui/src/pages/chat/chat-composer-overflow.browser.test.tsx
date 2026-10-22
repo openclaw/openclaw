@@ -5,12 +5,17 @@ import type { SessionGoal } from "../../api/types.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidProps } from "../../test-helpers/solid-render.tsx";
-import { flush } from "../../test-helpers/solid-settle.ts";
-import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  composerContextWrapper,
+  createComposerContainer,
+  createComposerProps,
+} from "./chat-composer.test-support.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
 import { AttachmentPreview } from "./components/chat-attachments.tsx";
 import { ChatGoal } from "./components/chat-composer-goal.tsx";
 import { ComposerMenu } from "./components/chat-composer-menu.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { resetChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { ChatComposer } from "./components/chat-composer.tsx";
@@ -44,11 +49,15 @@ describe("composer overflow presentation", () => {
   let attachmentsView: ReturnType<typeof mountSolidProps<ChatAttachmentControlsProps>> | undefined;
 
   function ComposerFixture(props: ComposerFixtureProps) {
+    const Provider = composerContextWrapper(container)!;
+    const questions = createComposerQuestions(props.input.paneId, () => props.input);
     return (
-      <ContentPresentation value={presented}>
-        {props.thread ? <div class="chat-thread" /> : null}
-        <ChatComposer {...props.input} />
-      </ContentPresentation>
+      <Provider>
+        <ContentPresentation value={presented}>
+          {props.thread ? <div class="chat-thread" /> : null}
+          <ChatComposer {...props.input} questions={questions} />
+        </ContentPresentation>
+      </Provider>
     );
   }
 
@@ -126,8 +135,7 @@ describe("composer overflow presentation", () => {
             baseEnabled: false,
             missingDeps: true,
           })),
-          skillsLoading: false,
-          skillsError: false,
+          skillsRead: null,
           mcpServers: [],
           toolsEffectiveResult: null,
           toolsEffectiveLoading: false,
@@ -150,6 +158,7 @@ describe("composer overflow presentation", () => {
           )!,
         )
         .click();
+      await expect.poll(() => container.querySelector('[data-value="open-skills"]')).not.toBeNull();
       await page
         .elementLocator(container.querySelector<HTMLElement>('[data-value="open-skills"]')!)
         .click();
@@ -264,6 +273,9 @@ describe("composer overflow presentation", () => {
     await afterLayout();
     const strips = container.querySelectorAll<HTMLElement>(".composer-context-strip");
     expect(strips).toHaveLength(3);
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-attachment-thumb")).not.toBeNull(),
+    );
     const attachmentBox = rail().querySelector(".chat-attachment-thumb")!.getBoundingClientRect();
     const textareaBox = container.querySelector("textarea")!.getBoundingClientRect();
     const composerBox = container.querySelector(".agent-chat__input")!.getBoundingClientRect();

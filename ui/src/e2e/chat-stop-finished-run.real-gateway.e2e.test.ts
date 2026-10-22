@@ -4,15 +4,17 @@ import path from "node:path";
 import { finished } from "node:stream/promises";
 import { expect, it } from "vitest";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.ts";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import {
+  callGateway,
+  createChatGatewayInstance,
+  gatewayChatUrl,
+} from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:stop-finished";
@@ -25,6 +27,7 @@ type SessionDescriptor = {
   status?: string;
 };
 type EventPayload = {
+  kind?: string;
   sessionKey?: string;
   sessionId?: string;
   inFlightRun?: { runId: string };
@@ -125,30 +128,15 @@ const suite = createControlUiE2eSuite({
     artifactDir = createControlUiE2eArtifactDir("stop-finished-run");
     provider = await startProvider();
     try {
-      instance = await createOpenClawTestInstance({
+      instance = await createChatGatewayInstance({
         name: "stop-finished-run",
-        env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
-        config: {
-          gateway: { controlUi: { enabled: true } },
-          cron: { enabled: false },
-          agents: {
-            ownership: "explicit",
-            defaults: { model: "stop-fixture/echo", modelPolicy: { allow: ["stop-fixture/*"] } },
-            entries: { main: { identity: { name: "Stop fixture" } } },
-          },
-          models: {
-            catalogRefresh: { enabled: false },
-            providers: {
-              "stop-fixture": {
-                api: "openai-responses",
-                apiKey: "synthetic-unused-key",
-                baseUrl: `http://127.0.0.1:${provider.port}/v1`,
-                models: [{ id: "echo", name: "Echo" }],
-              },
-            },
-          },
-          plugins: { allow: [] },
-        },
+        provider: "stop-fixture",
+        identity: "Stop fixture",
+        model: "echo",
+        agents: { ownership: "explicit" },
+        apiKey: "synthetic-unused-key",
+        baseUrl: `http://127.0.0.1:${provider.port}/v1`,
+        models: [{ id: "echo", name: "Echo" }],
       });
       await instance.startGateway();
       return {
@@ -190,12 +178,7 @@ suite.define(() => {
         let delayTerminalDescriptors = true;
         const deferredDescriptors: Array<() => void> = [];
         const call = async (method: string, params: Record<string, unknown>) => {
-          const args = ["gateway", "call", method, "--json", "--params", JSON.stringify(params)];
-          const result = await instance.cli(args);
-          expect(result.code, `${method}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(
-            0,
-          );
-          return JSON.parse(result.stdout);
+          return JSON.parse(await callGateway(instance, method, params));
         };
         const sessionRow = async () => {
           const result: SessionsListResult = await call("sessions.list", {
@@ -254,12 +237,7 @@ suite.define(() => {
           agentId: "main",
           label: "Stop finished run",
         });
-        const handoff = await instance.cli(["dashboard", "--json"]);
-        expect(handoff.code, handoff.stderr).toBe(0);
-        const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
-        const url = new URL(browserUrl);
-        url.pathname = "/chat/main/stop-finished";
-        url.search = "";
+        const url = await gatewayChatUrl(instance, "stop-finished");
         await suite.withPage(
           { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
           async ({ page }) => {
@@ -409,7 +387,7 @@ suite.define(() => {
               hasActiveRun: true,
               status: "running",
             });
-            // Embedded ownership intentionally omits the complete activeRunIds set; scoped history retains the current run identity.
+            // Cursor deltas carry session identity in sessionInfo instead of the full snapshot envelope.
             const activeHistoryResponse = () =>
               received.find((frame) => {
                 const request = sent.find((entry) => entry.id === frame.id);
@@ -417,9 +395,10 @@ suite.define(() => {
                   frame.ok === true &&
                   ["chat.startup", "chat.history"].includes(request?.method ?? "") &&
                   request?.params?.sessionKey === sessionKey &&
-                  frame.payload?.sessionKey === sessionKey &&
-                  frame.payload.sessionId === sessionId &&
-                  frame.payload.sessionInfo?.key === sessionKey &&
+                  (frame.payload?.kind === "delta" ||
+                    (frame.payload?.sessionKey === sessionKey &&
+                      frame.payload.sessionId === sessionId)) &&
+                  frame.payload?.sessionInfo?.key === sessionKey &&
                   frame.payload.sessionInfo.sessionId === sessionId &&
                   frame.payload.sessionInfo.hasActiveRun === true &&
                   frame.payload.sessionInfo.status === "running" &&

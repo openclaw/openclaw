@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { closeActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import type {
@@ -72,12 +73,7 @@ export function recordCircuitBreakerTimeout(key: string, cooldownMs: number): vo
     consecutiveTimeouts: (entry?.consecutiveTimeouts ?? 0) + 1,
     lastTimeoutAt: now,
   });
-  if (timeoutCircuitBreaker.size > DEFAULT_MAX_CACHE_ENTRIES) {
-    const oldestKey = timeoutCircuitBreaker.keys().next().value;
-    if (oldestKey !== undefined) {
-      timeoutCircuitBreaker.delete(oldestKey);
-    }
-  }
+  pruneMapToMaxSize(timeoutCircuitBreaker, DEFAULT_MAX_CACHE_ENTRIES);
 }
 
 export function resetCircuitBreaker(key: string): void {
@@ -221,13 +217,7 @@ export function setCachedResult(cacheKey: string, result: ActiveRecallResult, tt
     expiresAt: now + ttlMs,
     result,
   });
-  while (activeRecallCache.size > DEFAULT_MAX_CACHE_ENTRIES) {
-    const oldestKey = activeRecallCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    activeRecallCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(activeRecallCache, DEFAULT_MAX_CACHE_ENTRIES);
 }
 
 function sweepExpiredCacheEntries(now: number): void {
@@ -251,15 +241,4 @@ export function toSingleLineErrorMessage(error: unknown): string {
 
 export function shouldCacheResult(result: ActiveRecallResult): boolean {
   return result.status === "ok" && result.summary.length > 0;
-}
-
-export function resetActiveRecallStateForTests(): void {
-  activeRecallCache.clear();
-  activeRecallRuns.clear();
-  timeoutCircuitBreaker.clear();
-  lastActiveRecallCacheSweepAt = 0;
-}
-
-export function getCircuitBreakerEntry(key: string): CircuitBreakerEntry | undefined {
-  return timeoutCircuitBreaker.get(key);
 }

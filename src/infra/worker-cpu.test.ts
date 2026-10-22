@@ -15,6 +15,10 @@ import {
   markWorkerRetirement,
   trackNativeWorkerForCpu,
   sampleTrackedWorkerMemory,
+  attributeWorkerToPool,
+  receiveWorkerMemoryPort,
+  flushWorkerDiagnostics,
+  setTrackedWorkerGcObserver,
 } from "./worker-cpu.js";
 import { getWorkerMessageMetrics } from "./worker-message-metrics.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
@@ -29,6 +33,7 @@ const workers: Worker[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await Promise.all(workers.splice(0).map((worker) => worker.terminate()));
+  setTrackedWorkerGcObserver(undefined);
   vi.restoreAllMocks();
 });
 
@@ -42,6 +47,91 @@ async function createWorker(filename?: URL) {
 }
 
 describe("worker CPU lifecycle", () => {
+  it("retains task heap and GC totals across worker retirement without retaining worker ids", async () => {
+    const register = (id: number) => {
+      const worker = Object.assign(new EventEmitter(), {
+        threadId: id,
+        cpuUsage: async () => ({ user: 0, system: 0 }),
+        getHeapStatistics: async () => getHeapStatistics(),
+      });
+      trackNativeWorkerForCpu(
+        worker,
+        new URL("./provider-prompt-state.worker.ts", import.meta.url),
+      );
+      attributeWorkerToPool(worker, {}, "compute");
+      return worker;
+    };
+    const first = register(9001);
+    const reply = async (
+      worker: typeof first,
+      heapUsed: number,
+      durationMs: number,
+      reclaimedBytes: number,
+    ) => {
+      expect(receiveWorkerMemoryPort(worker, { status: "ok", diagnostics: true })).toBe(false);
+      const { port1, port2 } = new MessageChannel();
+      receiveWorkerMemoryPort(worker, { status: "memory", port: port1 });
+      const sample = once(port1, "message");
+      port2.postMessage({ heapUsed, heapTotal: 4096, external: 0, arrayBuffers: 0 });
+      await sample;
+      const flush = flushWorkerDiagnostics(worker, "rotation")!;
+      expect(flushWorkerDiagnostics(worker, "rotation")).toBe(flush);
+      expect(flush.read().status).toBe("pending");
+      port2.postMessage({
+        gc: [{ kind: "scavenge", reason: "other", durationMs, reclaimedBytes }],
+      });
+      port2.postMessage({
+        heapUsed: heapUsed / 2,
+        flushed: true,
+      });
+      // The retained cleanup path must make progress without running port callbacks.
+      flush.service();
+      expect(flush.read().status).toBe("fulfilled");
+      await flush.result;
+      port1.close();
+      port2.close();
+    };
+    const snapshot = () =>
+      sampleTrackedWorkerMemory().workerTaskMetrics.find(
+        (entry) =>
+          entry.workerClass === "compute" && entry.script === "provider-prompt-state.worker.js",
+      );
+    setTrackedWorkerGcObserver(() => {});
+    await reply(first, 2048, 2, 512);
+    first.emit("exit");
+    const second = register(9002);
+    await reply(second, 768, 3, 256);
+    second.emit("exit");
+    expect(snapshot()).toEqual({
+      workerClass: "compute",
+      script: "provider-prompt-state.worker.js",
+      tasksCompleted: 2,
+      heapUsedHighWaterBytes: 2048,
+      gc: [{ kind: "scavenge", count: 2, durationMs: 5, reclaimedBytes: 768 }],
+    });
+  });
+
+  it("bounds an unanswered retirement sample while synchronous cleanup owns the thread", async () => {
+    const worker = await createWorker();
+    attributeWorkerToPool(worker, {}, "compute");
+    const { port1, port2 } = new MessageChannel();
+    receiveWorkerMemoryPort(worker, { status: "memory", port: port1 });
+    setTrackedWorkerGcObserver(() => {});
+    try {
+      expect(flushWorkerDiagnostics(worker, "cancelled")).toBeUndefined();
+      const flush = flushWorkerDiagnostics(worker, "closed")!;
+      flush.service();
+      expect(flush.read().status).toBe("pending");
+      vi.spyOn(performance, "now").mockReturnValue(performance.now() + 101);
+      flush.service();
+      expect(flush.read().status).toBe("fulfilled");
+      await flush.result;
+    } finally {
+      port1.close();
+      port2.close();
+    }
+  });
+
   it.each([
     ["ERR_WORKER_OUT_OF_MEMORY", "crash"],
     ["ERR_CODE_MODE_GC_THRASH", "gc-thrash"],

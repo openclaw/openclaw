@@ -339,6 +339,33 @@ verify_git_rebase_recovery() {
         [[ ! -d "$git_dir/rebase-merge" && ! -d "$git_dir/rebase-apply" ]]
 }
 
+probe_git_remote_ref() {
+    local repo_dir="$1" ref="$2" attempt diagnostic probe_status
+    for attempt in 1 2 3; do
+        if diagnostic="$(git -C "$repo_dir" ls-remote --exit-code origin "$ref" "${ref}^{}" 2>&1)"; then
+            printf '%s\n' "$diagnostic"
+            return 0
+        else
+            probe_status=$?
+        fi
+        # Exit 2 means an absent ref, not a failed connection or authentication.
+        (( probe_status != 2 )) || return 2
+        # Git errors can include credential-bearing URLs or HTTP trace headers.
+        printf '%s\n' "$diagnostic" | sed -E \
+            -e 's#[[:alpha:]][[:alnum:]+.-]*://[^[:space:]]+#[redacted-url]#g' \
+            -e 's/([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]):.*/\1: [redacted]/g' \
+            -e 's/(gh[pousr]_[[:alnum:]_]+|github_pat_[[:alnum:]_]+)/[redacted]/g' >&2
+        if (( attempt == 3 )) || printf '%s\n' "$diagnostic" | grep -Eqi \
+            'Authentication failed|Permission denied|Host key verification failed|could not read (Username|Password)|certificate verification failed|SSL certificate problem' ||
+            ! printf '%s\n' "$diagnostic" | grep -Eqi \
+            'Could not resolve (host|proxy)|Failed to connect|Connection.*(timed out|reset|closed|refused)|timed out|Network is unreachable|No route to host|Broken pipe|TLS connection was non-properly terminated|Empty reply from server|Send failure|Recv failure|GnuTLS recv error|Error in the pull function|SSL_ERROR_SYSCALL|transfer closed with|HTTP/2 stream .*not closed cleanly|RPC failed; curl (5|6|7|18|28|35|52|55|56|92)( |$)|requested URL returned error: (408|429|5[0-9][0-9])'; then
+            return "$probe_status"
+        fi
+        printf 'Retrying Git ref lookup (%s/3)\n' "$((attempt + 1))" >&2
+        sleep "$attempt"
+    done
+}
+
 checkout_git_openclaw_ref() {
     local repo_dir="$1" ref="$2"
     local original_head="" original_status="" branch_worktree=""
@@ -402,10 +429,10 @@ checkout_git_openclaw_ref() {
         namespaces=(tags heads)
     fi
 
-    local namespace=""
+    local namespace="" remote_refs=""
     local probe_status=0
     for namespace in "${namespaces[@]}"; do
-        if git -C "$repo_dir" ls-remote --exit-code origin "refs/${namespace}/${ref}" >/dev/null 2>&1; then
+        if remote_refs="$(probe_git_remote_ref "$repo_dir" "refs/${namespace}/${ref}")"; then
             if [[ "$namespace" == "heads" ]]; then
                 installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
                 local checkout_args=(-B "$ref")
@@ -413,7 +440,15 @@ checkout_git_openclaw_ref() {
                 installer_step "Checking out ${ref}" git -C "$repo_dir" checkout "${checkout_args[@]}" "origin/$ref"
                 GIT_REF_KIND="moving"
             else
-                installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"
+                local tag_depth="" tag_commit=""
+                tag_commit="$(printf '%s\n' "$remote_refs" | awk -v ref="refs/tags/${ref}" '$2 == ref { direct=$1 } $2 == ref"^{}" { peeled=$1 } END { print peeled ? peeled : direct }')"
+                # Depth can shorten existing history. Only bound new tag commits;
+                # the peeled advertisement also handles annotated tags we lack locally.
+                if [[ "$(git -C "$repo_dir" rev-parse --is-shallow-repository)" == true ]] &&
+                    ! GIT_NO_LAZY_FETCH=1 git -C "$repo_dir" cat-file -e "${tag_commit}^{commit}" 2>/dev/null; then
+                    tag_depth="--depth=1"
+                fi
+                installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}" ${tag_depth:+"$tag_depth"}
                 if ! git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
                     installer_error "Requested git version is not a commit: ${ref}"
                     return 1

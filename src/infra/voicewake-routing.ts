@@ -115,21 +115,6 @@ export async function loadVoiceWakeRoutingConfig(
 
 type VoiceWakeResolvedRoute = { mode: "current" } | { agentId: string } | { sessionKey: string };
 
-function resolveVoiceWakeRouteTarget(
-  routeTarget: VoiceWakeRouteTarget | undefined,
-): VoiceWakeResolvedRoute {
-  if (routeTarget?.mode === "current") {
-    return { mode: "current" };
-  }
-  if (routeTarget?.agentId) {
-    return { agentId: routeTarget.agentId };
-  }
-  if (routeTarget?.sessionKey) {
-    return { sessionKey: routeTarget.sessionKey };
-  }
-  return { mode: "current" };
-}
-
 export function resolveVoiceWakeRouteByTrigger(params: {
   trigger: string | undefined;
   config: VoiceWakeRoutingConfig;
@@ -138,5 +123,5 @@ export function resolveVoiceWakeRouteByTrigger(params: {
   const matched = normalizedTrigger
     ? params.config.routes.find((route) => route.trigger === normalizedTrigger)
     : undefined;
-  return resolveVoiceWakeRouteTarget(matched ? matched.target : params.config.defaultTarget);
+  return matched ? matched.target : params.config.defaultTarget;
 }

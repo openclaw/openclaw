@@ -96,14 +96,16 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 async function capture(initialText?: string, stateDir = tempDirs.make("transcript-live-notes-")) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const updates = trackSummaryUpdates();
   const ctx = {
     stateDir,
     config: cfg,
-    logger: { warn: vi.fn() },
+    logger: { warn: vi.spyOn(console, "warn").mockImplementation(() => {}) },
     caller: { kind: "operator" as const, source: "local" as const },
   };
   const store = createTranscriptsStore(ctx);
@@ -154,7 +156,8 @@ async function capture(initialText?: string, stateDir = tempDirs.make("transcrip
     advance: () => advanceSummaryInterval(updates),
     settle: () => settleSummaryUpdates(updates),
     execute(id: string, action: "stop" | "summarize") {
-      const tool = createTranscriptsTool(ctx);
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const tool = createTranscriptsTool({ config: ctx.config, caller: ctx.caller });
       return withPluginRuntimeRegistryScope(registry, () =>
         tool.execute(id, { action, sessionId: "meeting" }),
       );
@@ -225,19 +228,6 @@ describe("live meeting summaries", () => {
     expectCalls(0);
     expect(await fixture.saved()).toEqual(final);
   });
-  it("retires failed snapshot initialization and permits capture retry", async () => {
-    const stateDir = tempDirs.make("transcript-summary-start-retry-");
-    const read = vi
-      .spyOn(TranscriptsStore.prototype, "readSummarySnapshot")
-      .mockRejectedValueOnce(new Error("Snapshot unavailable"));
-    await expect(capture(undefined, stateDir)).rejects.toThrow("Snapshot unavailable");
-    read.mockRestore();
-    const store = createTranscriptsStore({ stateDir, logger: console });
-    expect((await store.readSession("meeting"))?.stoppedAt).toBeTruthy();
-    const fixture = await capture("Recovered capture", stateDir);
-    await fixture.advance();
-    await fixture.expectSummary({ source: "model", utteranceCount: 1 }, 1);
-  });
 
   it("stops pending snapshot input before final inference", async () => {
     const fixture = await capture("Saved speech");
@@ -259,10 +249,13 @@ describe("live meeting summaries", () => {
   });
 
   it("outlives its caller and skips unchanged intervals", async () => {
+    const snapshots = vi.spyOn(TranscriptsStore.prototype, "readSummarySnapshot");
     const caller = new AsyncWorkScope();
     const fixture = await caller.track(() => capture());
+    expect(snapshots).not.toHaveBeenCalled();
     await caller.drain();
     await fixture.advance();
+    expect(snapshots).toHaveBeenCalledOnce();
     expectCalls(0);
     await fixture.speak("First decision");
     await vi.advanceTimersByTimeAsync(fiveMinutes - 1);
@@ -292,6 +285,23 @@ describe("live meeting summaries", () => {
     });
     await fixture.advance();
     expectCalls(2);
+  });
+
+  it("recovers on the next interval after a failed snapshot", async () => {
+    const fixture = await capture("Saved speech");
+    vi.spyOn(fixture.store, "readSummarySnapshot").mockRejectedValueOnce(
+      new Error("Snapshot unavailable"),
+    );
+    await expect(fixture.advance()).rejects.toThrow("Snapshot unavailable");
+    await vi.advanceTimersByTimeAsync(0);
+    expectCalls(0);
+    expect(fixture.ctx.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Snapshot unavailable"),
+    );
+    // The fixture must not rejoin the already-observed rejected interval.
+    vi.mocked(gatewayWorkAdmission.runWithGatewayDetachedWorkAdmission).mockClear();
+    await fixture.advance();
+    await fixture.expectSummary({ source: "model", transcript: ["Saved speech"] }, 1);
   });
 
   it("settles cancelled interim inference before finalizing provider stop", async () => {

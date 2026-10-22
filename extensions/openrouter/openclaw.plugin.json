@@ -19,13 +19,13 @@
             "id": "typesafe/jev-1.13",
             "name": "TypeSafe: Jev 1.13",
             "baseUrl": "https://openrouter.ai/api/v1",
-            "input": ["text"],
-            "contextWindow": 32000,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
             "inference": {
               "chat": false,
               "decision": {
                 "protocol": "openrouter-systemone",
-                "input": ["text"],
+                "input": ["text", "image"],
                 "questions": {
                   "boolean": {
                     "probabilities": "boolean",
@@ -49,7 +49,68 @@
                   "modes": ["auto"]
                 },
                 "limits": {
-                  "maxStateAndQuestionTokens": 32000
+                  "maxStateAndQuestionTokens": 262144,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg"],
+                    "remoteUrls": false
+                  }
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs",
+                  "usdPerMillion": {
+                    "input": 0.042,
+                    "output": 0
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "typesafe/jev-1.14",
+            "name": "TypeSafe: Jev 1.14",
+            "baseUrl": "https://openrouter.ai/api/v1",
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "openrouter-systemone",
+                "input": ["text", "image"],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  },
+                  "box": {
+                    "probabilities": "none",
+                    "abstention": false
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": ["auto"]
+                },
+                "limits": {
+                  "maxStateAndQuestionTokens": 262144,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg"],
+                    "remoteUrls": false
+                  }
                 },
                 "billing": {
                   "unit": "tokens",
@@ -66,13 +127,13 @@
             "id": "~typesafe/jev-latest",
             "name": "TypeSafe: Jev (latest)",
             "baseUrl": "https://openrouter.ai/api/v1",
-            "input": ["text"],
-            "contextWindow": 32000,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
             "inference": {
               "chat": false,
               "decision": {
                 "protocol": "openrouter-systemone",
-                "input": ["text"],
+                "input": ["text", "image"],
                 "questions": {
                   "boolean": {
                     "probabilities": "boolean",
@@ -89,6 +150,10 @@
                     "abstention": false,
                     "minOptions": 2,
                     "maxOptions": 10
+                  },
+                  "box": {
+                    "probabilities": "none",
+                    "abstention": false
                   }
                 },
                 "confidence": "provider-specific",
@@ -96,7 +161,12 @@
                   "modes": ["auto"]
                 },
                 "limits": {
-                  "maxStateAndQuestionTokens": 32000
+                  "maxStateAndQuestionTokens": 262144,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg"],
+                    "remoteUrls": false
+                  }
                 },
                 "billing": {
                   "unit": "tokens",

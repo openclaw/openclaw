@@ -175,6 +175,7 @@ export function buildCodexThreadConfiguration(
       options.developerInstructions ??
         buildDeveloperInstructions(params, {
           dynamicTools: options.dynamicTools,
+          nativeCodeModeEnabled: options.nativeCodeModeEnabled !== false,
           nativeCodeModeOnlyEnabled: config["features.code_mode_only"] === true,
         }),
       options.refreshableInstructions,

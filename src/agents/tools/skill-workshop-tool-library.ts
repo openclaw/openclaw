@@ -12,6 +12,7 @@ const personalArguments = `Personal actions: ${personalActions}. List takes only
 export function createLibrarySkillWorkshopTool(
   capability: SkillLibraryAuthoringCapability,
   workspace?: AnyAgentTool,
+  run: { sandboxed?: boolean } = {},
 ): AnyAgentTool {
   const schema = workspace
     ? Type.Object(
@@ -28,7 +29,7 @@ export function createLibrarySkillWorkshopTool(
     parameters: workspace ? Type.Union([workspace.parameters, schema]) : schema,
     execute: async (id, raw) => {
       if (workspace && (!raw || typeof raw !== "object" || !("target" in raw))) {
-        capability.assertWorkspaceCurrent?.();
+        capability.assertWorkspaceCurrent?.({ sandboxed: run.sandboxed });
         return workspace.execute(id, raw);
       }
       if (!Value.Check(schema, raw)) {

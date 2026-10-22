@@ -13,6 +13,7 @@ import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
 import { resolveModelAsync } from "./model.js";
 import type { ProviderRuntimeHooks } from "./model.provider-hooks.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
+import { makeModel } from "./model.test-harness.js";
 import {
   resolveLlmFirstEventTimeoutMs,
   resolveLlmIdleTimeoutMs,
@@ -85,12 +86,9 @@ function createProviderConfig(baseUrl: string, timeoutSeconds?: number): OpenCla
           ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
           models: [
             {
-              id: MODEL_ID,
+              ...makeModel(MODEL_ID),
               name: "Ornith 1.0 35B",
               api: "openai-completions",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 8_192,
               maxTokens: 512,
             },
@@ -149,8 +147,12 @@ async function listenForDelayedSse(): Promise<{ server: Server; url: string }> {
   return { server, url: `http://127.0.0.1:${address.port}/v1/stream` };
 }
 
-async function openHttpEventStream(url: string, signal: AbortSignal) {
-  const response = await fetch(url, { signal });
+async function nextGuardedHttpEvent(
+  url: string,
+  wrap: (source: AsyncIterable<string>) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>,
+): Promise<IteratorResult<unknown>> {
+  const controller = new AbortController();
+  const response = await fetch(url, { signal: controller.signal });
   if (!response.ok || !response.body) {
     throw new Error(`Expected an HTTP SSE response, received ${response.status}`);
   }
@@ -171,15 +173,6 @@ async function openHttpEventStream(url: string, signal: AbortSignal) {
       reader.releaseLock();
     }
   })();
-  return { source, body };
-}
-
-async function nextGuardedHttpEvent(
-  url: string,
-  wrap: (source: AsyncIterable<string>) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>,
-): Promise<IteratorResult<unknown>> {
-  const controller = new AbortController();
-  const { source, body } = await openHttpEventStream(url, controller.signal);
   let iterator: AsyncIterator<unknown> | undefined;
   try {
     iterator = (await wrap(source))[Symbol.asyncIterator]();
@@ -221,17 +214,14 @@ describe("provider request timeout across rebuilding runtime hooks", () => {
     expect(model.requestTimeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
   });
 
-  it.each(["model"] as const)(
-    "preserves an explicit timeout supplied by the rebuilding %s hook",
-    async (stage) => {
-      const model = await resolveProviderModel({
-        timeoutSeconds: CONFIGURED_TIMEOUT_SECONDS,
-        runtimeHooks: createRebuildingRuntimeHooks(stage, HOOK_TIMEOUT_MS),
-      });
+  it("preserves an explicit timeout supplied by the rebuilding model hook", async () => {
+    const model = await resolveProviderModel({
+      timeoutSeconds: CONFIGURED_TIMEOUT_SECONDS,
+      runtimeHooks: createRebuildingRuntimeHooks("model", HOOK_TIMEOUT_MS),
+    });
 
-      expect(model.requestTimeoutMs).toBe(HOOK_TIMEOUT_MS);
-    },
-  );
+    expect(model.requestTimeoutMs).toBe(HOOK_TIMEOUT_MS);
+  });
 
   it("applies the surviving configured timeout to real HTTP first-event and idle guards", async () => {
     const { server, url } = await listenForDelayedSse();

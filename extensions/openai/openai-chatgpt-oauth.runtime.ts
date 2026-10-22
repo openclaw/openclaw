@@ -12,10 +12,7 @@ const manualInputPromptMessage = "Paste the authorization code (or full redirect
 const openAICodexOAuthOriginator = "openclaw";
 const localManualFallbackDelayMs = 15_000;
 const localManualFallbackGraceMs = 1_000;
-type OpenAICodexOAuthFailureCode =
-  | "callback_timeout"
-  | "callback_validation_failed"
-  | "unsupported_region";
+type OpenAICodexOAuthFailureCode = "callback_validation_failed" | "unsupported_region";
 
 function resolveHomebrewPrefixFromExecPath(execPath: string): string | null {
   const marker = `${path.sep}Cellar${path.sep}`;
@@ -83,9 +80,7 @@ function createManualCodeInputHandler(params: {
   updateProgress: (message: string) => void;
   stopProgress: (message?: string) => void;
   waitForLoginToSettle: Promise<void>;
-  hasBrowserAuthStarted: () => boolean;
 }): () => Promise<string> {
-  let manualFallbackPromise: Promise<string> | undefined;
   const promptForManualCode = () => params.onPrompt({ message: manualInputPromptMessage });
   const switchToManualEntry = async (progressMessage: string, logMessage?: string) => {
     params.updateProgress(progressMessage);
@@ -97,13 +92,6 @@ function createManualCodeInputHandler(params: {
   };
 
   const runLocalManualFallback = async () => {
-    if (!params.hasBrowserAuthStarted()) {
-      return await switchToManualEntry(
-        "Local OAuth callback was unavailable. Paste the redirect URL to continue...",
-        "OpenAI Codex OAuth local callback did not start; switching to manual entry immediately.",
-      );
-    }
-
     for (const delayMs of [localManualFallbackDelayMs, localManualFallbackGraceMs]) {
       const outcome = await raceWithTimeout(
         params.waitForLoginToSettle.then(
@@ -123,10 +111,7 @@ function createManualCodeInputHandler(params: {
     );
   };
 
-  return async () => {
-    manualFallbackPromise ??= params.isRemote ? promptForManualCode() : runLocalManualFallback();
-    return await manualFallbackPromise;
-  };
+  return params.isRemote ? promptForManualCode : runLocalManualFallback;
 }
 
 export async function loginOpenAICodexOAuth(params: {
@@ -185,14 +170,13 @@ export async function loginOpenAICodexOAuth(params: {
       spin.stop(message);
     }
   };
-  let browserAuthStarted = false;
   let markLoginSettled!: () => void;
   const waitForLoginToSettle = new Promise<void>((resolve) => {
     markLoginSettled = resolve;
   });
   const manualPromptAbort = new AbortController();
   try {
-    const { onAuth: baseOnAuth, onPrompt } = params.oauth.createVpsAwareHandlers({
+    const { onAuth, onPrompt } = params.oauth.createVpsAwareHandlers({
       isRemote,
       prompter,
       runtime,
@@ -203,10 +187,7 @@ export async function loginOpenAICodexOAuth(params: {
       manualPromptSignal: manualPromptAbort.signal,
     });
     const creds = await loginOpenAICodex({
-      onAuth: async (event) => {
-        browserAuthStarted = true;
-        await baseOnAuth(event);
-      },
+      onAuth,
       onPrompt,
       originator: openAICodexOAuthOriginator,
       onManualCodeInput:
@@ -218,9 +199,7 @@ export async function loginOpenAICodexOAuth(params: {
           updateProgress,
           stopProgress,
           waitForLoginToSettle,
-          hasBrowserAuthStarted: () => browserAuthStarted,
         }),
-      onProgress: updateProgress,
       signal: params.signal,
       assertCurrent: params.assertCurrent,
     });

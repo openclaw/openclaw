@@ -145,14 +145,54 @@ describe("doctor config analysis helpers", () => {
     expect(stripUnknownConfigKeys(input as never)).toEqual({ config, removed: [removed] });
   });
 
-  it("returns input unchanged when OPENCLAW_UPDATE_IN_PROGRESS=true", () => {
-    withEnv({ OPENCLAW_UPDATE_IN_PROGRESS: "true" }, () => {
-      const input = { hooks: {}, unexpected: true } as never;
-      const result = stripUnknownConfigKeys(input);
-      expect(result.config).toBe(input);
-      expect(result.removed).toEqual([]);
+  it("preserves heartbeat migration input while stripping unrelated unknown keys", () => {
+    const config = {
+      agents: {
+        defaults: { heartbeat: { every: "30m", activeHours: { start: "09:00", end: "17:00" } } },
+        entries: { ops: { heartbeat: { every: "1h", target: "telegram", to: "123" } } },
+      },
+      channels: { defaults: { heartbeatVisibility: { showAlerts: false } } },
+      unexpected: true,
+    };
+
+    const result = stripUnknownConfigKeys(config);
+
+    expect(result.removed).toEqual(["unexpected"]);
+    expect(result.config).toEqual({
+      agents: {
+        defaults: { heartbeat: { every: "30m", activeHours: { start: "09:00", end: "17:00" } } },
+        entries: { ops: { heartbeat: { every: "1h", target: "telegram", to: "123" } } },
+      },
+      channels: { defaults: { heartbeatVisibility: { showAlerts: false } } },
     });
   });
+
+  it("preserves include syntax at agent defaults while stripping unknown keys", () => {
+    const agents = { defaults: { $include: "./agent-defaults.json5" } };
+    const result = stripUnknownConfigKeys({ agents, unexpected: true } as never);
+
+    expect(result.removed).toEqual(["unexpected"]);
+    expect(result.config).toEqual({ agents });
+  });
+
+  it.each([undefined, "1"])(
+    "cleans unowned keys during updates (post-core=%s), preserving deferred inputs",
+    (postCore) => {
+      withEnv(
+        {
+          OPENCLAW_UPDATE_IN_PROGRESS: "true",
+          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: postCore,
+        },
+        () => {
+          const input = { hooks: {}, deferred: { setting: true }, unexpected: true };
+          const result = stripUnknownConfigKeys(input, [["deferred", "setting"]]);
+          expect(result.config).toEqual({ hooks: {}, deferred: { setting: true } });
+          expect(result.removed).toEqual(["unexpected"]);
+          expect(input.unexpected).toBe(true);
+        },
+      );
+    },
+  );
 });
 
 describe("collectImplicitFallbackClobberWarnings", () => {

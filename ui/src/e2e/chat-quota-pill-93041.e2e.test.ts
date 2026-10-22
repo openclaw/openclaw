@@ -199,7 +199,6 @@ const loadingWorkAuth = {
   account: null,
   agentId: "work",
   displayName: null,
-  error: null,
   plan: null,
   ts: null,
 };
@@ -209,8 +208,6 @@ type ChatPane = HTMLElement & {
     assistantName?: string;
     assistantAvatar?: string | null;
     chatAvatarUrl?: string | null;
-    requestUpdate?: () => void;
-    modelAuthStatusError?: string | null;
     modelAuthStatusResult?: {
       ts?: number;
       providers?: Array<{ displayName?: string; usage?: { accountEmail?: string; plan?: string } }>;
@@ -274,7 +271,6 @@ async function visibleAuthState(page: Page) {
       account: provider?.usage?.accountEmail ?? null,
       agentId: pane?.state?.assistantAgentId ?? null,
       displayName: provider?.displayName ?? null,
-      error: pane?.state?.modelAuthStatusError ?? null,
       plan: provider?.usage?.plan ?? null,
       ts: pane?.state?.modelAuthStatusResult?.ts ?? null,
     };
@@ -477,7 +473,6 @@ suite.define(() => {
           pane.state.assistantName = "Main Agent";
           pane.state.assistantAvatar = "M";
           pane.state.chatAvatarUrl = "https://example.test/main-avatar.png";
-          pane.state.requestUpdate?.();
         }
       }, visiblePaneSelector);
       await setSelectedAgent(page, "Work");
@@ -521,7 +516,6 @@ suite.define(() => {
           account: "work@example.test",
           agentId: "work",
           displayName: "Work OpenAI",
-          error: null,
           plan: "Work Team",
           ts: baseTime + 2,
         });

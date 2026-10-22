@@ -138,21 +138,23 @@ OpenRouter connection and auth profiles. No separate TypeSafe login is needed:
 ```json5
 {
   agents: {
-    defaults: { decisionModel: "openrouter/typesafe/jev-1.13" },
+    defaults: { decisionModel: "openrouter/typesafe/jev-1.14" },
   },
 }
 ```
 
-The canonical catalog includes `openrouter/typesafe/jev-1.13` and
+The canonical catalog includes `openrouter/typesafe/jev-1.13`, `openrouter/typesafe/jev-1.14`, and
 `openrouter/~typesafe/jev-latest` as **decision-only** routes. They do not appear as chat
 choices, and selecting a decision model does not change your primary or utility
-model. The latest alias follows future releases; it is not a version pin. Pin 1.13 for
+model. The latest alias follows future releases; it is not a version pin. Pin 1.14 for
 reproducible model selection.
 
-The OpenClaw adapter accepts text or structured JSON objects/arrays and Boolean,
-Choice, and Score questions. Supply instructions for every question. Choice
+The OpenClaw adapter accepts text, structured JSON objects/arrays, or one inline
+PNG/JPEG image with optional text. Both versions support Boolean, Choice, and Score
+questions. Jev 1.14 and the latest alias also support Box questions. Supply
+instructions for every question. Choice
 supports 2–255 options; Score supports 2–10 non-null levels. Boolean criteria are optional, but when
-provided must describe both true and false. Images, sorting, tags and explicit
+provided must describe both true and false. Sorting, tags and explicit
 reasoning controls are rejected before inference. Omit reasoning or use `auto`.
 Jev returns no free-form prose or reasoning trace.
 
@@ -165,7 +167,10 @@ auth and provider routing preferences (including privacy restrictions). Unsuppor
 chat-only parameters are rejected rather than silently dropped. No session IDs,
 user identity or trace fields are added to the request body.
 
-This integration declares a 32,000-token state-plus-questions budget. Jev 1.13's
+This integration declares a 262,144-token state-plus-questions budget. Images are
+limited to 4 MiB decoded and must meet TypeSafe's current dimension requirements;
+OpenClaw does not fetch remote images or resize them. Image and Box support are
+experimental upstream. Jev's
 published input price is $0.042 per million tokens; output tokens are free.
 The adapter preserves reported token
 counts and actual `usage.cost`, including explicit zero. Missing actual cost stays
@@ -181,9 +186,13 @@ The legacy V1 adapter succeeds only when the response is representable without
 losing billing or metadata; otherwise it returns `unsupported-input` rather than
 silently discarding those facts.
 
-OpenRouter also offers `/api/alpha/decisions` and Jev 1.14. This adapter keeps the
-System One endpoint and the text decision subset above; it does not add image
-inputs, Box questions, or the larger context limits of those newer surfaces.
+For an image, pass tagged state `{ type: "image", dataUri: "data:image/png;base64,...", text: "Listing photo" }`
+and a question such as `{ type: "box", instructions: "the product in the listing photo" }`.
+Box answers contain `box: { top, bottom, left, right }`, measured from the top-left
+corner and normalized to image width and height. A Box answer does not mean the
+target exists: ask a Boolean presence question in the same batch. See
+[Multimodal Decisions](https://openrouter.ai/docs/guides/community/multimodal-decisions)
+and [Box](https://docs.typesafe.ai/primitives/box) for upstream behavior.
 
 The known Jev routes are bounded canonical manifest declarations. The ordinary
 live text catalog does not turn `decisions` output rows into synthetic chat

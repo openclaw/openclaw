@@ -62,7 +62,10 @@ export function stageInstalledPackage(installed, work, target, plan) {
           createHash("sha256").update(content).digest("hex");
         const resource = target.platform === "linux" ? resourceBytes(content) : content;
         resourceSize += resource.length;
-        fs.writeFileSync(file, resource);
+        // Windows already has the copied bytes; only Linux needs the resource envelope.
+        if (target.platform === "linux") {
+          fs.writeFileSync(file, resource);
+        }
       }
     }
   };

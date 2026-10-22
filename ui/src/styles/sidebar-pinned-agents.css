@@ -4,14 +4,32 @@
   gap: 8px;
   max-height: min(280px, 36dvh);
   overflow-y: auto;
-  padding: 4px 4px 12px;
-  margin-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+  padding: 4px;
+  margin-bottom: 8px;
 }
 
 .sidebar-pinned-agent {
   position: relative;
   min-width: 0;
+}
+
+.sidebar-pinned-agent__actions {
+  position: absolute;
+  top: 2px;
+  inset-inline-end: 2px;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.sidebar-pinned-agent:is(:hover, :focus-within):has(.sidebar-agent-roster__menu),
+.sidebar-pinned-agent:has(.sidebar-agent-roster__menu [aria-expanded="true"]) {
+  & .sidebar-pinned-agent__actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .sidebar-pinned-agent__link {
@@ -60,27 +78,6 @@
   line-height: 16px;
 }
 
-.sidebar-pinned-agent > .sidebar-agent-roster__menu {
-  position: absolute;
-  top: 0;
-  right: 0;
-}
-
-.sidebar-pinned-agent .sidebar-agent-roster__action {
-  opacity: 0;
-}
-
-.sidebar-pinned-agent:is(:hover, :focus-within) .sidebar-agent-roster__action,
-.sidebar-pinned-agent .sidebar-agent-roster__action[aria-expanded="true"] {
-  opacity: 1;
-}
-
-.sidebar-pinned-agent
-  .sidebar-agent-roster__action:is(:hover, :focus-visible, [aria-expanded="true"]) {
-  color: var(--text);
-  background: transparent;
-}
-
 .sidebar-pinned-agent__tooltip {
   --openclaw-tooltip-max-width: min(280px, calc(100vw - 24px));
   --openclaw-tooltip-padding: 12px;
@@ -113,10 +110,8 @@
 }
 
 @media (hover: none), (pointer: coarse) {
-  .sidebar-pinned-agent .sidebar-agent-roster__action {
+  .sidebar-pinned-agent__actions {
     opacity: 1;
-    min-width: 32px;
-    min-height: 32px;
-    justify-content: center;
+    pointer-events: auto;
   }
 }

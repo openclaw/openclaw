@@ -1,8 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { toAgentRequestSessionKey } from "../routing/session-key.js";
 
-type SessionIdMatch = [string, SessionEntry];
+type SessionIdMatch = readonly [string, SessionEntry, ...unknown[]];
 type SessionIdMatchSelection =
   | { kind: "none" }
   | { kind: "ambiguous"; sessionKeys: string[] }
@@ -15,19 +16,15 @@ function newestFirst([, a]: SessionIdMatch, [, b]: SessionIdMatch): number {
 // Structural suffix/request-key matches beat fuzzy matches; ties between
 // distinct sessions remain ambiguous, in their original store order.
 export function resolveSessionIdMatchSelection(
-  matches: SessionIdMatch[],
+  matches: readonly SessionIdMatch[],
   sessionId: string,
 ): SessionIdMatchSelection {
   if (matches.length === 0) {
     return { kind: "none" };
   }
-  const aliases = new Map<string, SessionIdMatch[]>();
-  for (const match of matches) {
-    const key = normalizeLowercaseStringOrEmpty(toAgentRequestSessionKey(match[0]) ?? match[0]);
-    const group = aliases.get(key) ?? [];
-    group.push(match);
-    aliases.set(key, group);
-  }
+  const aliases = groupRecords(matches, (match) =>
+    normalizeLowercaseStringOrEmpty(toAgentRequestSessionKey(match[0]) ?? match[0]),
+  );
   const normalizedId = normalizeLowercaseStringOrEmpty(sessionId);
   const canonical: SessionIdMatch[] = [];
   const structural: SessionIdMatch[] = [];
@@ -71,7 +68,7 @@ export function resolveSessionIdMatchSelection(
 }
 
 export function resolvePreferredSessionKeyForSessionIdMatches(
-  matches: SessionIdMatch[],
+  matches: readonly SessionIdMatch[],
   sessionId: string,
 ): string | undefined {
   const selection = resolveSessionIdMatchSelection(matches, sessionId);

@@ -42,6 +42,9 @@ Options:
   -NodePrefix <path>      Absolute private directory for -NodeOnly (required)
   -NodeVersion <version>  Exact private Node.js version for -NodeOnly
   -Help                   Show this help
+
+Support: https://community.openclaw.ai/
+FAQ: https://docs.openclaw.ai/start/faq
 "@ | Write-Output
     return
 }
@@ -126,6 +129,7 @@ function Complete-Install {
         return
     }
 
+    Write-Host "Support: https://community.openclaw.ai/"
     if ($PSCommandPath) {
         exit $script:InstallExitCode
     }
@@ -266,7 +270,7 @@ function Test-NodeVersionSupported {
     # release grammar in node-version.mjs; parity cases guard this boundary.
     $versionMatch = [regex]::Match(
         $Version,
-        '^\s*v?(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\s*$'
+        '^\s*v?(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)(?:-(?<prerelease>(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\s*$'
     )
     if (-not $versionMatch.Success) {
         return $false
@@ -283,6 +287,9 @@ function Test-NodeVersionSupported {
         $minor -gt $maxSafeInteger -or
         $patch -gt $maxSafeInteger
     ) {
+        return $false
+    }
+    if ($versionMatch.Groups["prerelease"].Success -and $major -le 26) {
         return $false
     }
     if ($major -eq 24) {

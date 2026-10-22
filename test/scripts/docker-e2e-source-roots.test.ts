@@ -470,7 +470,7 @@ if (command === 'git') {
     file("package/package.json", JSON.stringify({ name: "openclaw", version: "1.2.3" }));
     const packageTgz = at("candidate.tgz");
     expect(spawnSync("tar", ["-czf", packageTgz, "-C", root, "package"]).status).toBe(0);
-    for (const [command, body] of Object.entries({
+    const commands = {
       git: `if [[ "$*" == *rev-parse* ]]; then printf '%040d\\n' 0; fi`,
       sleep: `printf 'sleep %s\\n' "$*" >> "$PROOF_TRACE"`,
       docker: `
@@ -525,11 +525,19 @@ case "$1" in
     ;;
 esac
 `,
-    })) {
+    };
+    for (const [command, body] of Object.entries(commands)) {
       const executable = path.join(bin, command);
       writeFileSync(executable, `#!/bin/bash\nset -eu\n${body}\n`);
       chmodSync(executable, 0o755);
     }
+    // Keep all 1,200 exhaustion probes without starting a new Bash per command.
+    const shellFunctions = file(
+      "proof-functions.sh",
+      Object.entries(commands)
+        .map(([command, body]) => `${command}() (\n${body}\n)\n`)
+        .join("\n"),
+    );
     const cli = runner === "cli";
     const containers = cli
       ? ["openclaw-hosted-installer-proof", "openclaw-source-installer-proof"]
@@ -544,6 +552,7 @@ esac
       [e2e(script)],
       {
         ...env,
+        BASH_ENV: shellFunctions,
         OPENCLAW_CURRENT_PACKAGE_TGZ: packageTgz,
         OPENCLAW_SKIP_DOCKER_BUILD: "1",
         OPENCLAW_DOCKER_ARTIFACT_IDENTITY_PATH: at("identity.json"),

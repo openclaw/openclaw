@@ -14,6 +14,7 @@ import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session
 import { findTranscriptEvent } from "../../config/sessions/session-transcript-match.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
+import { captureChatAbortRegistrationGuard } from "../chat-abort-lifecycle-internal.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
@@ -73,17 +74,24 @@ type ChatSendAgentReplyFinalization =
 export function createChatSendLateReplyFinalizer(
   params: Omit<ChatSendReplyFinalizationParams, "emitFirstAssistantServerTiming">,
 ) {
+  const sourceIsCurrent = params.terminalEntry
+    ? captureChatAbortRegistrationGuard([
+        { runId: params.session.clientRunId, entry: params.terminalEntry },
+      ])
+    : () => true;
   return async ({
     runId: runtimeRunId,
     clientRunId: runId,
     payloads,
     completion,
-    isCurrent,
+    isCurrent: isBatchCurrent,
   }: Pick<QueuedFollowupReplyBatch, "runId" | "payloads" | "completion"> & {
     clientRunId: string;
     isCurrent: () => boolean;
   }): Promise<ChatSendAgentReplyFinalization> => {
     const { context, session } = params;
+    const isCurrent = () =>
+      isBatchCurrent() && (runId !== session.clientRunId || sourceIsCurrent());
     const broadcastParams = {
       // Recovery uses its new run's lifecycle owner, not the original source admission.
       terminalEntry: runId === session.clientRunId ? params.terminalEntry : undefined,
@@ -97,6 +105,7 @@ export function createChatSendLateReplyFinalizer(
     try {
       const result = await finalizeChatSendAgentReplyPayloads({
         ...params,
+        terminalEntry: broadcastParams.terminalEntry,
         emitFirstAssistantServerTiming: () => {},
         inputs: payloads.map((payload) => ({ kind: "raw", payload })),
         isCurrent,

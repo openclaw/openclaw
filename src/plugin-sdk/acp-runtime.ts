@@ -1,5 +1,3 @@
-// Public ACP runtime helpers for plugins that integrate with ACP control/session state.
-
 import { testing as managerTesting, getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { testing as registryTesting, requireAcpRuntimeBackend } from "../acp/runtime/registry.js";

@@ -15,6 +15,7 @@ export {
   parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
+  resolveImageSourceUrl,
   sniffImageMimeType,
   toImageDataUrl,
   type ImageMimeTypeDetection,

@@ -20,8 +20,11 @@ import {
   resolveMessageActionTurnCapability as capability,
   revokeMessageActionTurnCapability as revoke,
 } from "../../gateway/message-action-turn-capability.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   bindUserTurnPromptReactionSource,
   readUserTurnPromptReactionSource,
@@ -67,7 +70,7 @@ let runId: string;
 let index = 0;
 let sourceCurrent: boolean;
 const broadcast = vi.fn();
-const external = vi.fn<NonNullable<ToolOptions["runMessageAction"]>>();
+const external = vi.fn<typeof messageActionRunner.runMessageAction>();
 
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
@@ -86,6 +89,7 @@ beforeEach(async () => {
   setRuntimeConfigSnapshot(config);
   sourceCurrent = true;
   broadcast.mockClear();
+  vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation(external);
   external.mockReset().mockResolvedValue({
     kind: "action",
     action: "react",
@@ -186,14 +190,6 @@ function tool(overrides: ToolOptions = {}) {
     runId,
     currentChannelProvider: "webchat",
     messageActionTurnCapability: token,
-    runMessageAction: external,
-    getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-    resolveCommandSecretRefsViaGateway: async ({ config: inputConfig }) => ({
-      resolvedConfig: inputConfig,
-      diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
-    }),
     ...overrides,
   });
 }
@@ -358,6 +354,38 @@ it("reserves source completion for an explicit terminal addition, never acknowle
   expect(external).not.toHaveBeenCalled();
 });
 
+it("records a terminal reaction on its exact source despite a colliding physical session", async () => {
+  const messageId = await persist();
+  const createOperation = (storeScope: string) =>
+    createReplyOperation({
+      sessionKey: scope.sessionKey,
+      sessionId: scope.sessionId,
+      resetTriggered: false,
+      target: captureSessionTarget({
+        storeScope,
+        sessionKey: scope.sessionKey,
+        incarnation: scope.sessionId,
+      }),
+    });
+  const operation = createOperation(required(recorder.getAdmissionReceipt()).storePath);
+  const competingOperation = createOperation(state.path("other", "sessions.json"));
+  operation.attachBackend({ kind: "embedded", runId, cancel() {} });
+  try {
+    const [outcome] = await Promise.allSettled([execute({ final: true })]);
+    expect(broadcast).toHaveBeenCalledOnce();
+    expect(reactions()[messageId]).toEqual([
+      { emoji: "👍", count: 1, identities: [{ id: "agent:main", label: "Test Agent" }] },
+    ]);
+    expect(outcome.status).toBe("fulfilled");
+    expect(operation.sourceReplyDelivered).toBe(true);
+    expect(competingOperation.sourceReplyDelivered).toBe(false);
+    expect(external).not.toHaveBeenCalled();
+  } finally {
+    operation.complete();
+    competingOperation.complete();
+  }
+});
+
 it("requires a committed host-owned prompt and rejects model-selected targets or identities", async () => {
   await expect(execute({})).rejects.toThrow("has not been committed");
   await persist();
@@ -377,7 +405,7 @@ it("requires a committed host-owned prompt and rejects model-selected targets or
 it.each([
   { sourceReplyOnly: true, error: 'permit only action "send"' },
   { sourceReplyOnly: false, error: 'Message action "react" is disabled' },
-])("keeps send-only schema and execution policy aligned ($sourceReplyOnly)", async (policy) => {
+])("enforces send-only execution policy ($sourceReplyOnly)", async (policy) => {
   await persist();
   const selected = tool(
     policy.sourceReplyOnly
@@ -385,9 +413,11 @@ it.each([
       : { config: { ...config, tools: { message: { actions: { allow: ["send"] } } } } },
   );
   if (policy.sourceReplyOnly) {
-    expect(Check(selected.parameters, { action: "send", message: "Done" })).toBe(true);
+    // The definition matches ordinary turns; source-only delivery is enforced per call.
+    expect(selected.parameters).toEqual(tool({}).parameters);
+  } else {
+    expect(Check(selected.parameters, { action: "react", emoji: "👍" })).toBe(false);
   }
-  expect(Check(selected.parameters, { action: "react", emoji: "👍" })).toBe(false);
   await expect(execute(policy.sourceReplyOnly ? { final: true } : {}, selected)).rejects.toThrow(
     policy.error,
   );

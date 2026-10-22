@@ -183,8 +183,6 @@ function publishToolStreamEntry(host: ToolStreamHost, entry: ToolStreamEntry, fo
   }
   host.toolStreamSyncTimer = window.setTimeout(() => {
     flushToolStreamSync(host);
-    // The initial event rendered before this deferred projection existed.
-    host.requestUpdate?.();
   }, TOOL_STREAM_THROTTLE_MS);
 }
 
@@ -553,7 +551,6 @@ export function handleAgentEvent(
       entry = {
         toolCallId,
         runId: payload.runId,
-        sessionKey,
         name: item.name ?? item.title,
         startedAt: item.startedAt ?? payload.ts,
         receivedAt: Date.now(),
@@ -631,7 +628,6 @@ export function handleAgentEvent(
     entry = {
       toolCallId,
       runId: payload.runId,
-      sessionKey,
       name,
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       receivedAt: now,

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-instructions.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
@@ -30,7 +31,7 @@ import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
-import { runWithTrackedCancellation } from "../shared/async-work-scope.js";
+import { runWithTrackedCancellation } from "../shared/async-work-resources.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   registerMcpLoopbackClientGrantRevocationListener,
@@ -302,7 +303,7 @@ async function startMcpLoopbackServer(
                   messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
                   // Only a run-bound CLI grant carries a verified turn sender's audience.
                   memoryAudience: boundClientGrant?.memoryAudience,
-                  cfg,
+                  cfg: boundClientGrant?.toolPolicyConfig ?? cfg,
                   signal: requestAbort.signal,
                   authProfileStore: boundClientGrant?.toolAuth?.store,
                   authProfileStoreAgentDir: boundClientGrant?.toolAuth?.agentDir || undefined,
@@ -315,6 +316,9 @@ async function startMcpLoopbackServer(
                   onYield: yieldContext?.onYield,
                   ...(boundClientGrant?.skillLibraryAuthoring
                     ? { skillLibraryAuthoring: boundClientGrant.skillLibraryAuthoring }
+                    : {}),
+                  ...(boundClientGrant?.bundledTools
+                    ? { bundledTools: boundClientGrant.bundledTools }
                     : {}),
                 }),
             );
@@ -352,6 +356,10 @@ async function startMcpLoopbackServer(
             stopKeepalive = keepMcpResponseAlive(res, "application/json", "\n");
           }
           const responses: object[] = [];
+          const serverInstructions = resolveBundleMcpServerInstructions(
+            boundClientGrant?.bundledTools,
+            new Set(scopedTools.toolSchema.map((entry) => entry.name)),
+          );
           for (const [messageIndex, message] of messages.entries()) {
             if (!isJsonRpcRequest(message)) {
               responses.push(
@@ -382,6 +390,7 @@ async function startMcpLoopbackServer(
                   message,
                   tools: scopedTools.tools,
                   toolSchema: scopedTools.toolSchema,
+                  ...(serverInstructions ? { serverInstructions } : {}),
                   hookContext: {
                     agentId: scopedTools.agentId,
                     config: cfg,
@@ -428,6 +437,7 @@ async function startMcpLoopbackServer(
                     mintCronRequesterGrant: boundClientGrant.mintCronRequesterGrant,
                     agentId: scopedTools.agentId,
                     sessionKey: requestContext.sessionKey,
+                    requesterOrigin: requestContext.requesterOrigin,
                     turnSourceChannel: requestContext.messageProvider,
                     turnSourceLocal:
                       !requestContext.messageProvider &&

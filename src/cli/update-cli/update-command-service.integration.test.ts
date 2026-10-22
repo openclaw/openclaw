@@ -90,11 +90,6 @@ const mocks = vi.hoisted(() => ({
     >(),
 }));
 
-vi.mock(
-  "../daemon-cli/lifecycle.runtime.js",
-  async () => await import("../daemon-cli/lifecycle.js"),
-);
-
 vi.mock("../../daemon/launchd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/launchd-exec.js")>()),
   execLaunchctl: mocks.launchctl,
@@ -166,8 +161,9 @@ vi.mock("./update-command-service-drain.js", () => ({
   withGatewayMaintenanceDrain: async (_params: unknown, stop: () => Promise<unknown>) =>
     await stop(),
 }));
-vi.mock("../../daemon/systemd-maintenance.js", () => ({
-  prepareSystemdGatewayMaintenance: async () => false,
+vi.mock("../../daemon/systemd-maintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-maintenance.js")>()),
+  prepareSystemdGatewayMaintenance: async () => ({ kind: "unchanged" }),
 }));
 vi.mock("../../daemon/systemd-definition-mutation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-definition-mutation.js")>()),
@@ -589,7 +585,7 @@ describe("preserved update activation with real version guards", () => {
     expectUncalled(repair, mocks.restart, mocks.health);
   });
 
-  registerRecoveryTests({ root: () => root, configPath: () => configPath, run: () => run, mocks });
+  registerRecoveryTests(() => ({ root, configPath, run, mocks }));
 
   registerGenerationRecoveryTests(() => ({ root, configPath, mocks }));
 

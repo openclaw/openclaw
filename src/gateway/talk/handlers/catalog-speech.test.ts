@@ -258,7 +258,7 @@ it("publishes the first catalog after a slow cold refresh without starting concu
   expect(readAvailability).toHaveBeenCalledTimes(1);
 });
 
-it("serves the last catalog during one slow refresh and retains it after the deadline", async () => {
+it("serves the last catalog during one slow refresh and publishes its late success", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const cfg: OpenClawConfig = { plugins: { enabled: false } };
   const context = { getRuntimeConfig: () => cfg, logGateway: { warn: vi.fn() } };
@@ -280,17 +280,15 @@ it("serves the last catalog during one slow refresh and retains it after the dea
   expect(burst.every((result) => result.response === first.response)).toBe(true);
   await vi.advanceTimersByTimeAsync(0);
   expect(readiness).toHaveBeenCalledTimes(2);
-  await vi.advanceTimersByTimeAsync(35_000);
+  await vi.advanceTimersByTimeAsync(6_000);
   expect((await read()).response).toBe(first.response);
   expect(readiness).toHaveBeenCalledTimes(2);
   expect(context.logGateway.warn).toHaveBeenCalledTimes(1);
   expect(context.logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("waiting=speech"));
   pending.resolve(false);
   await vi.advanceTimersByTimeAsync(0);
-  readiness.mockResolvedValue(false);
-  expect((await read()).response).toBe(first.response);
-  await vi.advanceTimersByTimeAsync(0);
   expectCatalog(await read(), "speech", { providers: [{ configured: false }] });
+  expect(readiness).toHaveBeenCalledTimes(2);
 });
 
 it("isolates catalog owners and model overrides while a cold provider is pending", async () => {

@@ -36,7 +36,7 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { getDeliveryQueueEntryOwnersInDatabase } from "../delivery-queue-sqlite.kernel.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
-import { deliverOutboundPayloadsInternal } from "./deliver.js";
+import { deliverOutboundPayloadsInternal, type DeliverOutboundPayloadsParams } from "./deliver.js";
 import {
   captureConversationDeliveryTarget,
   markDurableDeliveryQueued,
@@ -93,7 +93,7 @@ describe("conversation completion through the real delivery queue", () => {
     return registry;
   }
 
-  async function createConversationOperation(
+  async function createOperation(
     operationId: string,
     message: string,
     config: OpenClawConfig = {},
@@ -114,7 +114,30 @@ describe("conversation completion through the real delivery queue", () => {
       conversationRef: destination.conversationRef,
       message,
     });
-    return { stateDir, scope };
+    const completion = {
+      kind: "conversation" as const,
+      agentId: "main",
+      operationId,
+      routeFingerprint: resolveConversationRouteFingerprint(destination),
+    };
+    return {
+      stateDir,
+      scope,
+      completion,
+      read: () => getConversationDeliveryOperation(scope, operationId),
+      deliver: (overrides: Partial<DeliverOutboundPayloadsParams> = {}) =>
+        deliverOutboundPayloadsInternal({
+          cfg: config,
+          channel: "reef",
+          to: destination.target,
+          payloads: [{ text: message }],
+          queuePolicy: "required",
+          deliveryCompletion: completion,
+          conversationDeliveryTarget: captureConversationDeliveryTarget(scope),
+          onDeliveryAttempt: async () => {},
+          ...overrides,
+        }),
+    };
   }
 
   async function drainReefRecovery(stateDir: string) {
@@ -161,12 +184,7 @@ describe("conversation completion through the real delivery queue", () => {
       };
       const operationId = `clickclack-scaffold-${adapter}`;
       const message = "⚠️ 🛠️ `search repos (agent)` failed";
-      const { stateDir, scope } = await createConversationOperation(
-        operationId,
-        message,
-        config,
-        destination,
-      );
+      const { stateDir, scope } = await createOperation(operationId, message, config, destination);
       setActivePluginRegistry(
         createTestRegistry([
           {
@@ -206,29 +224,22 @@ describe("conversation completion through the real delivery queue", () => {
   it("fails closed for an unfinished conversation intent without route authority", async () => {
     const operationId = "missing-route-operation";
     const queueId = "missing-route-queue";
-    const { stateDir, scope } = await createConversationOperation(operationId, "retained intent");
+    const { stateDir, read, deliver } = await createOperation(operationId, "retained intent");
     const sendText = vi.fn(async () => ({ channel: "reef" as const, messageId: "must-not-send" }));
     installSender(sendText);
     const rejectionError = "Conversation delivery is missing its current route authorization";
 
     await expect(
-      deliverOutboundPayloadsInternal({
-        cfg: {},
-        channel: "reef",
-        to: conversation.target,
-        payloads: [{ text: "retained intent" }],
-        queuePolicy: "required",
+      deliver({
         deliveryIntentId: queueId,
         deliveryCompletion: { kind: "conversation", agentId: "main", operationId },
-        conversationDeliveryTarget: captureConversationDeliveryTarget(scope),
-        onDeliveryAttempt: async () => {},
       }),
     ).rejects.toMatchObject({
       message: rejectionError,
       cause: { retryable: false },
       queueCustody: "released",
     });
-    expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+    expect(await read()).toMatchObject({
       status: "rejected",
       queueId,
       rejectionError,
@@ -253,7 +264,10 @@ describe("conversation completion through the real delivery queue", () => {
     async ({ reason, expectedReason }) => {
       const operationId = "provider-rejected-operation";
       const queueId = "provider-rejected-queue";
-      const { stateDir, scope } = await createConversationOperation(operationId, "rendered text");
+      const { stateDir, scope, read, deliver } = await createOperation(
+        operationId,
+        "rendered text",
+      );
       const writerReady = createDeferred<ReturnType<typeof holdConversationWriterForTest>>();
       let providerRejects = true;
       const platformSend = vi.fn(async () => ({
@@ -286,12 +300,9 @@ describe("conversation completion through the real delivery queue", () => {
           operation: readConversationDeliveryStateForTest(scope, operationId),
         };
       };
-      const observations: Array<{
-        observer: "message_sent" | "audit";
-        state: ReturnType<typeof readState>;
-      }> = [];
+      const observations: Array<["message_sent" | "audit", ReturnType<typeof readState>]> = [];
       const messageSent = vi.fn<PluginHookHandlerMap["message_sent"]>(() => {
-        observations.push({ observer: "message_sent", state: readState() });
+        observations.push(["message_sent", readState()]);
       });
       addTestHook({ registry, pluginId: "reef", hookName: "message_sent", handler: messageSent });
       initializeGlobalHookRunner(registry);
@@ -299,25 +310,10 @@ describe("conversation completion through the real delivery queue", () => {
       onTrustedMessageAuditEventForTest((event) => {
         if (event.action === "message.outbound.finished") {
           auditOutcomes.push(event.outcome);
-          observations.push({ observer: "audit", state: readState() });
+          observations.push(["audit", readState()]);
         }
       });
-      const outcome = deliverOutboundPayloadsInternal({
-        cfg: {},
-        channel: "reef",
-        to: conversation.target,
-        payloads: [{ text: "rendered text" }],
-        queuePolicy: "required",
-        deliveryIntentId: queueId,
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId,
-          routeFingerprint: resolveConversationRouteFingerprint(conversation),
-        },
-        conversationDeliveryTarget: captureConversationDeliveryTarget(scope),
-        onDeliveryAttempt: async () => {},
-      }).then(
+      const outcome = deliver({ deliveryIntentId: queueId }).then(
         (results) => ({ results }),
         (error: unknown) => ({ error }),
       );
@@ -358,13 +354,11 @@ describe("conversation completion through the real delivery queue", () => {
           }),
         };
         expect(observations).toEqual([
-          { observer: "message_sent", state: terminalState },
-          { observer: "audit", state: terminalState },
+          ["message_sent", terminalState],
+          ["audit", terminalState],
         ]);
         expect(auditOutcomes).toEqual(["failed"]);
-        expect(
-          (await getConversationDeliveryOperation(scope, operationId))?.platformMessageId,
-        ).toBeUndefined();
+        expect((await read())?.platformMessageId).toBeUndefined();
         expect(messageSent).toHaveBeenCalledWith(
           expect.objectContaining({
             content: "rendered text",
@@ -386,16 +380,15 @@ describe("conversation completion through the real delivery queue", () => {
       const legacyMarker = path.join(fixtures.tmpDir(), "custom", "sessions.json");
       const config = locator === "legacy-marker" ? { session: { store: legacyMarker } } : {};
       const operationId = "retained-created-operation";
-      const { stateDir, scope } = await createConversationOperation(
-        operationId,
-        "retained intent",
-        config,
-      );
+      const {
+        stateDir,
+        scope,
+        completion: baseCompletion,
+        read,
+        deliver,
+      } = await createOperation(operationId, "retained intent", config);
       const completion = {
-        kind: "conversation" as const,
-        agentId: "main",
-        operationId,
-        routeFingerprint: resolveConversationRouteFingerprint(conversation),
+        ...baseCompletion,
         ...(locator === "legacy-marker" ? { storePath: legacyMarker } : {}),
       };
       const queueId = "retained-queue-before-callback";
@@ -410,7 +403,7 @@ describe("conversation completion through the real delivery queue", () => {
         queueId,
         stateDir,
       );
-      expect((await getConversationDeliveryOperation(scope, operationId))?.status).toBe("created");
+      expect((await read())?.status).toBe("created");
       const sendText = vi.fn(async () => {
         expect((await loadPendingDelivery(queueId, stateDir))?.deliveryCompletion).toEqual(
           completion,
@@ -419,41 +412,30 @@ describe("conversation completion through the real delivery queue", () => {
       });
       installSender(sendText);
       await expect(
-        deliverOutboundPayloadsInternal({
-          cfg: config,
-          channel: "reef",
-          to: conversation.target,
-          payloads: [{ text: "retained intent" }],
-          queuePolicy: "required",
+        deliver({
           deliveryIntentId: queueId,
           reusePendingDeliveryIntent: true,
           requireUnknownSendReconciliation: false,
           deliveryCompletion: { ...completion, storePath: scope.storePath },
-          conversationDeliveryTarget: captureConversationDeliveryTarget(scope),
-          onDeliveryAttempt: async () => {},
         }),
       ).resolves.toMatchObject([{ messageId: "retained-send" }]);
       expect(sendText).toHaveBeenCalledOnce();
-      expect((await getConversationDeliveryOperation(scope, operationId))?.status).toBe("sent");
+      expect((await read())?.status).toBe("sent");
       expect(await loadPendingDelivery(queueId, stateDir)).toBeNull();
     },
   );
 
-  it.each(["logical-agent", "physical-owner", "physical-path"] as const)(
+  it.each([
+    ["logical-agent", "agentId"],
+    ["physical-owner", "databaseAgentId"],
+    ["physical-path", "storePath"],
+  ] as const)(
     "rejects changed %s before completion mutates the operation",
-    async (changed) => {
+    async (_changed, key) => {
       const operationId = "mismatched-completion";
-      const { scope } = await createConversationOperation(operationId, "captured owner");
+      const { scope } = await createOperation(operationId, "captured owner");
       const target = captureConversationDeliveryTarget(scope);
-      if (changed === "logical-agent") {
-        target.agentId = "other";
-      }
-      if (changed === "physical-owner") {
-        target.databaseAgentId = "other";
-      }
-      if (changed === "physical-path") {
-        target.storePath = path.join(fixtures.tmpDir(), "other.sqlite");
-      }
+      target[key] = key === "storePath" ? path.join(fixtures.tmpDir(), "other.sqlite") : "other";
       await expect(
         markDurableDeliveryQueued(
           { kind: "conversation", agentId: "main", operationId },
@@ -597,12 +579,14 @@ describe("conversation completion through the real delivery queue", () => {
       expect(queued).not.toHaveProperty("deliveryQueueStateContext");
       expect(queued).not.toHaveProperty("env");
       expect(queued).not.toHaveProperty("supervisorMode");
-      expect(queued?.id).toBe(queueId);
-      expect(queued?.deliveryCompletion).toMatchObject({
-        kind: "conversation",
-        agentId: "main",
-        operationId,
-        routeFingerprint: resolveConversationRouteFingerprint(conversation),
+      expect(queued).toMatchObject({
+        id: queueId,
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId,
+          routeFingerprint: resolveConversationRouteFingerprint(conversation),
+        },
       });
       await custody.writer.release();
       settlementWriter = await settlementWriterReady;

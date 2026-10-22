@@ -23,6 +23,8 @@ import {
   compactUnboundedRequestOptions,
   compactCodexSessionWithTestHost as maybeCompactCodexAppServerSessionImpl,
   compactDetails,
+  compactionItemEvent,
+  compactionParams as createCompactionParams,
   expectCompactStartRequest,
   createFakeCodexCompactionClient,
   createNodeExecCompactionParams,
@@ -32,6 +34,7 @@ import {
   flushAsyncTasks,
   maybeCompactCodexAppServerSession,
   requireCompactResult,
+  recoveredCompactionBinding,
   resetCodexAppServerClientFactoryForTest,
   setCodexAppServerClientFactoryForTest,
   writeCompactionTestBinding,
@@ -71,15 +74,8 @@ async function writeTestBinding(
 function compactionParams(
   sessionFile: string,
   overrides: Partial<Parameters<typeof maybeCompactCodexAppServerSession>[0]> = {},
-): Parameters<typeof maybeCompactCodexAppServerSession>[0] {
-  return {
-    sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
-    sessionFile,
-    workspaceDir: tempDir,
-    trigger: "manual",
-    ...overrides,
-  };
+) {
+  return createCompactionParams(tempDir, sessionFile, overrides);
 }
 
 function emitTurn(
@@ -144,27 +140,6 @@ function runtimeAuthPlan(
   };
 }
 
-async function recoveredBinding(sessionKey: string) {
-  const current = {
-    kind: "session" as const,
-    agentId: "main",
-    sessionKey,
-    sessionId: "after-compaction",
-  };
-  const previous = { ...current, sessionId: "before-compaction" };
-  const scope = {
-    agentId: current.agentId,
-    sessionKey,
-    storePath: path.join(tempDir, "admitted", "sessions.json"),
-  };
-  await upsertSessionEntry({ ...scope, entry: { sessionId: previous.sessionId, updatedAt: 1 } });
-  await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
-  const bindingStore = createCodexTestBindingStore();
-  const binding = { threadId: "thread-1", cwd: tempDir };
-  await bindingStore.mutate(previous, { kind: "set", binding });
-  return { current, scope, bindingStore, binding };
-}
-
 function replaceBindingAfterRead(sessionFile: string) {
   let bindingReads = 0;
   return {
@@ -211,7 +186,8 @@ describe("maybeCompactCodexAppServerSession", () => {
   });
 
   it("rejects a host-only rotation after recovering the predecessor during compaction startup", async () => {
-    const { current, scope, bindingStore, binding } = await recoveredBinding(
+    const { current, scope, bindingStore, binding } = await recoveredCompactionBinding(
+      tempDir,
       "agent:main:recovered-compaction",
     );
     const fake = createFakeCodexClient({ retainedThreadId: null });
@@ -405,11 +381,10 @@ describe("maybeCompactCodexAppServerSession", () => {
   });
 
   it("releases an obsolete physical owner when compaction migrates the same native thread", async () => {
-    const fake = createFakeCodexClient({ autoCompleteCompaction: false });
-    setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const sessionFile = await writeCompactionTestBinding(tempDir, {
-      clientId: "client-before-compaction",
-    });
+    const { fake, sessionFile } = await setupCompaction(
+      { autoCompleteCompaction: false },
+      { clientId: "client-before-compaction" },
+    );
     const pending = startCompaction(sessionFile);
     await vi.waitFor(() => {
       expectCompactStartRequest(fake.request, "thread-1", compactUnboundedRequestOptions);
@@ -699,9 +674,9 @@ describe("maybeCompactCodexAppServerSession", () => {
   });
 
   it("skips post-context-engine native compaction when the binding changes before projection clear", async () => {
-    const fake = createFakeCodexClient();
-    setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const sessionFile = await writeTestBinding({ contextEngine: contextEngineBinding() });
+    const { fake, sessionFile } = await setupCompaction(undefined, {
+      contextEngine: contextEngineBinding(),
+    });
     const bindingStore = replaceBindingAfterRead(sessionFile);
 
     const result = await compactResult(
@@ -739,9 +714,9 @@ describe("maybeCompactCodexAppServerSession", () => {
   });
 
   it("reports a recoverable stale-binding failure when a required-preflight native request sees the binding change", async () => {
-    const fake = createFakeCodexClient();
-    setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const sessionFile = await writeTestBinding({ contextEngine: contextEngineBinding() });
+    const { fake, sessionFile } = await setupCompaction(undefined, {
+      contextEngine: contextEngineBinding(),
+    });
     const bindingStore = replaceBindingAfterRead(sessionFile);
 
     const result = await compactResult(
@@ -948,14 +923,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     await flushAsyncTasks();
     expect(settled).toBe(false);
 
-    fake.emit({
-      method: "item/started",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: { id: "compact-item-1", type: "contextCompaction" },
-      },
-    });
+    fake.emit(compactionItemEvent("item/started", "turn-1"));
     fake.emit({
       method: "thread/tokenUsage/updated",
       params: {
@@ -972,14 +940,7 @@ describe("maybeCompactCodexAppServerSession", () => {
         tokenUsage: { last: { totalTokens: 321 } },
       },
     });
-    fake.emit({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: { id: "compact-item-1", type: "contextCompaction" },
-      },
-    });
+    fake.emit(compactionItemEvent("item/completed", "turn-1"));
     await flushAsyncTasks();
     expect(settled).toBe(false);
     emitTurn(fake, "turn-1", "completed");
@@ -1013,14 +974,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     await vi.waitFor(() => expect(fake.request).toHaveBeenCalledOnce());
     emitTurn(fake, "compact-turn-finished", "inProgress");
     for (const method of ["item/started", "item/completed"] as const) {
-      fake.emit({
-        method,
-        params: {
-          threadId: "thread-1",
-          turnId: "compact-turn-finished",
-          item: { id: "compact-item-finished", type: "contextCompaction" },
-        },
-      });
+      fake.emit(compactionItemEvent(method, "compact-turn-finished", "compact-item-finished"));
     }
 
     abortController.abort();
@@ -1101,7 +1055,8 @@ describe("maybeCompactCodexAppServerSession", () => {
   });
 
   it("preserves a recovered binding when the host rotates during timed-out remote retirement", async () => {
-    const { current, scope, bindingStore, binding } = await recoveredBinding(
+    const { current, scope, bindingStore, binding } = await recoveredCompactionBinding(
+      tempDir,
       "agent:main:recovered-retirement",
     );
     const next = { ...current, sessionId: "next-compaction" };
@@ -1235,44 +1190,60 @@ describe("maybeCompactCodexAppServerSession", () => {
     await vi.waitFor(() => {
       expect(fake.request).toHaveBeenCalledTimes(1);
     });
-    const second = maybeCompactCodexAppServerSession({
-      sessionId: "session-2",
-      sessionKey: "agent:main:session-2",
-      sessionFile: secondSessionFile,
-      workspaceDir: tempDir,
-      trigger: "manual",
-      abortSignal: abortController.signal,
-    });
-    await flushAsyncTasks();
-    expect(factory).toHaveBeenCalledTimes(1);
-    abortController.abort();
-    await expect(second).resolves.toMatchObject({
-      ok: false,
-      compacted: false,
-      reason: "codex app-server compaction aborted while waiting to start",
-    });
+    let mutationQueued = createDeferred<void>();
+    const enqueueMutation = threadOwnershipQueue.withCodexAppServerThreadMutation;
+    const queueSpy = vi
+      .spyOn(threadOwnershipQueue, "withCodexAppServerThreadMutation")
+      .mockImplementation((threadId, run) => {
+        const pending = enqueueMutation(threadId, run);
+        if (threadId === "thread-1") {
+          mutationQueued.resolve();
+        }
+        return pending;
+      });
+    try {
+      const second = maybeCompactCodexAppServerSession({
+        sessionId: "session-2",
+        sessionKey: "agent:main:session-2",
+        sessionFile: secondSessionFile,
+        workspaceDir: tempDir,
+        trigger: "manual",
+        abortSignal: abortController.signal,
+      });
+      await mutationQueued.promise;
+      expect(factory).toHaveBeenCalledTimes(1);
+      abortController.abort();
+      await expect(second).resolves.toMatchObject({
+        ok: false,
+        compacted: false,
+        reason: "codex app-server compaction aborted while waiting to start",
+      });
 
-    const third = maybeCompactCodexAppServerSession({
-      sessionId: "session-3",
-      sessionKey: "agent:main:session-3",
-      sessionFile: thirdSessionFile,
-      workspaceDir: tempDir,
-      trigger: "manual",
-    });
-    await flushAsyncTasks();
-    expect(factory).toHaveBeenCalledTimes(1);
-    expect(fake.request).toHaveBeenCalledTimes(1);
+      mutationQueued = createDeferred<void>();
+      const third = maybeCompactCodexAppServerSession({
+        sessionId: "session-3",
+        sessionKey: "agent:main:session-3",
+        sessionFile: thirdSessionFile,
+        workspaceDir: tempDir,
+        trigger: "manual",
+      });
+      await mutationQueued.promise;
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(fake.request).toHaveBeenCalledTimes(1);
 
-    fake.completeCompaction();
-    await expect(first).resolves.toMatchObject({ ok: true, compacted: true });
-    await vi.waitFor(() => {
-      expect(
-        fake.request.mock.calls.filter(([method]) => method === "thread/compact/start"),
-      ).toHaveLength(2);
-    });
+      fake.completeCompaction();
+      await expect(first).resolves.toMatchObject({ ok: true, compacted: true });
+      await vi.waitFor(() => {
+        expect(
+          fake.request.mock.calls.filter(([method]) => method === "thread/compact/start"),
+        ).toHaveLength(2);
+      });
 
-    fake.completeCompaction();
-    await expect(third).resolves.toMatchObject({ ok: true, compacted: true });
+      fake.completeCompaction();
+      await expect(third).resolves.toMatchObject({ ok: true, compacted: true });
+    } finally {
+      queueSpy.mockRestore();
+    }
   });
 
   it("preserves stale thread binding metadata for recovery and reports failed native compaction", async () => {

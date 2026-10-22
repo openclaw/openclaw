@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { CronJob } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
@@ -17,6 +18,62 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+it("retains the editor draft, filters and loaded jobs through reconnect while fencing old reads", async () => {
+  const job = createCronViewJob("saved", { name: "Saved automation" });
+  const stale = createDeferred<ReturnType<typeof cronListResponse>>();
+  const fresh = createDeferred<ReturnType<typeof cronListResponse>>();
+  const save = createDeferred<CronJob>();
+  const fallback = createRequest();
+  let lists = 0;
+  const client = createTestGatewayClient((method) => {
+    if (method === "cron.list") {
+      lists += 1;
+      return lists === 1 ? cronListResponse([job]) : lists === 2 ? stale.promise : fresh.promise;
+    }
+    if (method === "cron.get") {
+      return job;
+    }
+    if (method === "cron.update") {
+      return save.promise;
+    }
+    return fallback(method);
+  });
+  const gateway = createGateway(client, true);
+  const page = createPage(createContext(gateway), { render: true });
+  await waitForCronPage(() => expect(page.cron.cronJobs).toHaveLength(1));
+  page.selectJob(job);
+  page.patchForm({ name: "Unsaved name", payloadText: "Unsaved prompt" });
+  page.cron.cronJobsQuery = "saved";
+  gateway.emitRetiredEvent({ type: "event", event: "cron", payload: {} });
+  await waitForCronPage(() => expect(lists).toBe(2));
+  gateway.emitSnapshot({ phase: "reconnecting", hello: null });
+  await page.settle();
+  expect(page.cron.cronEditingJob?.id).toBe("saved");
+  expect(page.cron.cronForm.name).toBe("Unsaved name");
+  expect(page.cron.cronForm.payloadText).toBe("Unsaved prompt");
+  expect(page.cron.cronJobsQuery).toBe("saved");
+  expect(page.cron.cronJobs).toHaveLength(1);
+  gateway.emitSnapshot({ phase: "connected", hello: operatorHello(["operator.admin"]) });
+  await waitForCronPage(() => expect(lists).toBe(3));
+  stale.resolve(cronListResponse([]));
+  await page.settle();
+  expect(page.cron.cronJobs).toHaveLength(1);
+  fresh.resolve(cronListResponse([job]));
+  await page.settle();
+  expect(page.cron.cronForm.name).toBe("Unsaved name");
+  page.submitForm();
+  expect(page.cron.cronBusy).toBe(true);
+  gateway.emitSnapshot({ phase: "reconnecting" });
+  gateway.emitSnapshot({ phase: "connected" });
+  save.resolve({ ...job, name: "Saved by an old request" });
+  await page.settle();
+  expect(page.cron.cronForm.name).toBe("Unsaved name");
+  gateway.emitSnapshot({ client: createTestGatewayClient(createRequest()), phase: "reconnecting" });
+  await page.settle();
+  expect(page.cron.cronForm.name).toBe("");
+  expect(page.cron.cronJobs).toEqual([]);
 });
 
 it.each([
@@ -118,7 +175,7 @@ it.each([
     expect(page.cron.cronJobsSnapshotRevision).not.toBeNull();
     expect(page.cron.cronEditingJob?.id ?? null).toBe(expected?.id ?? null);
     expect(page.querySelector(".cron-detail-title")?.textContent ?? null).toBe(
-      expected ? `Fresh ${expected.name}` : null,
+      expected ? expected.name : null,
     );
   });
   if (expected) {

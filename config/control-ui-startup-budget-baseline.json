@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 338803,
-  "reason": "Integrated main after schema and syntax-highlighting deferrals measures 338803 B at startup; cap at 338900 B with the existing 64 B build-variance allowance.",
-  "updatedAt": "2026-10-17"
+  "startupJsGzipBytes": 325081,
+  "reason": "Solid 2 action/optimistic runtime adoption, W-SOLID2-RECIPES; offset tracked by HF-STARTUP-BUDGET",
+  "updatedAt": "2026-10-21"
 }

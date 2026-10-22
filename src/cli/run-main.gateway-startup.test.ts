@@ -523,7 +523,7 @@ describe("runCli exit behavior", () => {
 
     await runCli(cliArgs("gateway", "run"));
 
-    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false, quiet: true });
+    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false });
     expect(loadConfigMock).toHaveBeenCalledWith(readOnlyCoreOptions);
     expect(startProxyMock).toHaveBeenNthCalledWith(1, earlyProxy);
     expect(startProxyMock).toHaveBeenNthCalledWith(2, finalProxy);

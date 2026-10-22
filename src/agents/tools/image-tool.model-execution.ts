@@ -2,7 +2,7 @@ import { findCapabilityProviderById } from "../../../packages/media-generation-c
 import { normalizeMediaProviderId } from "../../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../../config/types.tools.js";
-import { DEFAULT_TIMEOUT_SECONDS } from "../../media-understanding/defaults.js";
+import { MEDIA_CAPABILITY_DEFAULTS } from "../../media-understanding/defaults.constants.js";
 import { matchesMediaEntryCapability } from "../../media-understanding/entry-capabilities.js";
 import {
   describeImageWithModel,
@@ -205,7 +205,7 @@ export async function runImagePrompt(params: {
         );
         const timeoutMs = resolveTimeoutMs(
           sharedEntry?.timeoutSeconds ?? providerCfg.tools?.media?.image?.timeoutSeconds,
-          DEFAULT_TIMEOUT_SECONDS.image,
+          MEDIA_CAPABILITY_DEFAULTS.image.timeoutSeconds,
         );
         const imageProvider = getMediaUnderstandingProvider(provider, providerRegistry);
         const request = {

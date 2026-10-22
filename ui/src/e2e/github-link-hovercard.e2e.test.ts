@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -98,6 +99,7 @@ async function openPullPreviewPage(
   );
 
   const page = await context.newPage();
+  await installControlUiE2eRendererStallProbe(page);
   await page.clock.install();
   const gateway = await installPreview(page, {
     deferredMethods: deferPreview ? ["forge.preview"] : [],

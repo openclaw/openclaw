@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getChildLogger } from "../../logging/logger.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
@@ -107,9 +108,6 @@ export async function readSessionEntryMaintenanceAgeAfterWriterRelease(
       ageChanges: pending.changes,
     },
   });
-  if (result.kind !== "maintenance-age" && result.kind !== "maintenance-plan-stale") {
-    throw new Error("SQLite automatic maintenance returned another age result");
-  }
   pending.acknowledge();
   return result;
 }
@@ -246,12 +244,7 @@ function buildSessionMaintenanceBatches(params: {
     groupsByRoot.set(root, group);
   }
 
-  const plansBySessionId = new Map<string, SessionStateDeletePlan[]>();
-  for (const plan of params.stateDeletePlans) {
-    const plans = plansBySessionId.get(plan.sessionId) ?? [];
-    plans.push(plan);
-    plansBySessionId.set(plan.sessionId, plans);
-  }
+  const plansBySessionId = groupRecords(params.stateDeletePlans, (plan) => plan.sessionId);
   const standaloneGroups: SessionMaintenanceBatch[] = [];
   for (const [sessionId, plans] of plansBySessionId) {
     const removalIndex = removalIndexBySessionId.get(sessionId);
@@ -509,11 +502,11 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
                   settlement = capture(
                     entries.filter(({ sessionKey }) => removedKeys.has(sessionKey)),
                   );
-                  settlement.beforeCommit();
+                  return settlement.beforeCommit();
                 },
+                settled: (settledOutcome) => settlement?.settle(settledOutcome.kind),
               },
             );
-            settlement?.settle(outcome.kind);
             const result = readSessionActorStorageResult(outcome);
             return new Set(result.removedSessionKeys);
           },
@@ -624,9 +617,6 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
               });
         },
       );
-      if (result.kind !== "maintenance-finalize") {
-        throw new Error("SQLite maintenance returned another operation's result");
-      }
       archivedTranscripts = result.value.archivedTranscripts;
       const committedIndices = new Set(result.value.committedEntryIndices);
       changedEntryRemovals = removalOutcomes.filter((_, index) => !committedIndices.has(index));

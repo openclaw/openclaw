@@ -118,6 +118,7 @@ function expectCmdWrappedInvocation(call: ExecaCall, commandFragment = "pnpm.cmd
 let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
 let runCommandBuffered: typeof import("./exec.js").runCommandBuffered;
 let runCommandBuffersWithTimeout: typeof import("./exec-runner.js").runCommandBuffersWithTimeout;
+let runUtf8CommandBuffersWithTimeout: typeof import("./exec-runner.js").runUtf8CommandBuffersWithTimeout;
 let runExec: typeof import("./exec.js").runExec;
 let spawnCommand: typeof import("./exec.js").spawnCommand;
 let withCommandProcessScope: typeof import("./exec-spawn.js").withCommandProcessScope;
@@ -158,7 +159,8 @@ describe("Windows command execution", () => {
     ({ getWindowsInstallRoots } = await import("../infra/windows-install-roots.js"));
     ({ runCommandBuffered, runCommandWithTimeout, runExec, spawnCommand } =
       await import("./exec.js"));
-    ({ runCommandBuffersWithTimeout } = await import("./exec-runner.js"));
+    ({ runCommandBuffersWithTimeout, runUtf8CommandBuffersWithTimeout } =
+      await import("./exec-runner.js"));
     ({ withCommandProcessScope } = await import("./exec-spawn.js"));
     execaMock.mockReset().mockImplementation(() => createMockSubprocess());
     isRegularFileMock.mockReset().mockReturnValue(true);
@@ -415,6 +417,26 @@ describe("Windows command execution", () => {
       stderr,
       windowsEncoding: "gbk",
     });
+  });
+
+  it("retains UTF-8 bytes and trims only the bounded capture edge regardless of console page", async () => {
+    changingCodepageOutput({
+      stdoutChunks: [Buffer.from("a🦊z")],
+      stderrChunks: [Buffer.from([0xf0, 0x9f])],
+    });
+    await expect(
+      runUtf8CommandBuffersWithTimeout(["node", "utf8-output.js"], {
+        maxOutputBytes: { stdout: 4, stderr: 4 },
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toMatchObject({
+      code: 0,
+      stdout: Buffer.from("z"),
+      stdoutTruncatedBytes: 5,
+      stderr: Buffer.from([0xf0, 0x9f]),
+      windowsEncoding: null,
+    });
+    expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 
   it("decodes truncated, split output with the code page captured before spawn", async () => {

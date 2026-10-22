@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import {
   assertCurrentNativeHostLaunchContext,
   assertExpectedNativeHostProfile,
@@ -25,7 +26,6 @@ import {
   generateChromeExtensionIdForPath,
   inspectInstalledCopy,
   installStableChromeExtension,
-  pathInfo,
   stableChromeExtensionDir,
 } from "./extension-install-layout.js";
 import { inspectRegistration, installRegistration } from "./extension-install-registration.js";
@@ -132,7 +132,7 @@ export async function installChromeExtensionBootstrap(params: {
   for (const root of chromeProductRoots()) {
     params.signal?.throwIfAborted();
     try {
-      if (!(await pathInfo(root.userDataDir))) {
+      if (!(await lstatIfExists(root.userDataDir, "ENOENT"))) {
         if (platform !== "darwin" || root.product !== "chrome") {
           continue;
         }

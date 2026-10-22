@@ -5,10 +5,7 @@ import {
   readSourceConfigSnapshotForWrite,
   type ConfigWriteOptions,
 } from "./io.js";
-import {
-  canonicalizeConfiguredMcpServer,
-  normalizeConfiguredMcpServers,
-} from "./mcp-config-normalize.js";
+import { canonicalizeConfiguredMcpServer } from "./mcp-config-normalize.js";
 import { replaceConfigFile } from "./mutate.js";
 import { redactSensitiveArgv } from "./redact-argv.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "./redact-snapshot.js";
@@ -17,7 +14,7 @@ import type { McpServerToolFilterConfig } from "./types.mcp.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
-type ConfigMcpServers = ReturnType<typeof normalizeConfiguredMcpServers>;
+type ConfigMcpServers = Record<string, Record<string, unknown>>;
 
 type McpArgvRestoreResult =
   | { ok: true; server: Record<string, unknown> }
@@ -117,7 +114,7 @@ function resolveConfiguredMcpServers(
     ok: true,
     path: snapshot.path,
     config: structuredClone(sourceConfig),
-    mcpServers: normalizeConfiguredMcpServers(sourceConfig.mcp?.servers),
+    mcpServers: sourceConfig.mcp?.servers ?? {},
     authoredConfig: snapshot.authoredConfig,
     runtimeConfig: snapshot.runtimeConfig,
     sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,

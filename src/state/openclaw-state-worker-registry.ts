@@ -5,6 +5,10 @@ import type {
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 const loaders = {
+  sandboxPersistentExec: () =>
+    import("../agents/sandbox/persistent-exec-store.worker.js").then(
+      (m) => m.sandboxPersistentExecOperations,
+    ),
   sandboxRegistry: () =>
     import("../agents/sandbox/registry-write.worker.js").then((m) => m.sandboxRegistryOperations),
   workspace: () =>
@@ -62,8 +66,6 @@ const loaders = {
     import("../gateway/worker-environments/prepared-pool-presence.worker.js").then(
       (m) => m.preparedPoolPresenceOperations,
     ),
-  clawProvenance: () =>
-    import("../claws/provenance-write.worker.js").then((m) => m.clawProvenanceOperations),
   projects: () =>
     import("../projects/project-registry.worker.js").then((m) => m.projectRegistryOperations),
   operatorApprovals: () =>
@@ -130,7 +132,6 @@ const loaders = {
       (m) => m.nativeHookRelayOperations,
     ),
   audit: () => import("../audit/audit-event-writer.worker.js").then((m) => m.auditOperations),
-  promotions: () => import("../infra/promotions-feed.worker.js").then((m) => m.promotionOperations),
   telemetry: () => import("../infra/telemetry-store.worker.js").then((m) => m.telemetryOperations),
   doctor: () => import("../commands/doctor-state.worker.js").then((m) => m.doctorOperations),
   modelCatalog: () =>

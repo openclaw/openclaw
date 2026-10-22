@@ -4,7 +4,7 @@ import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-s
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
 import type { OpenShellMirrorBackend } from "./backend.types.js";
-import { createOpenShellFsBridge } from "./fs-bridge.js";
+import { OpenShellFsBridge } from "./fs-bridge.js";
 
 function createBridge(workspaceDir: string) {
   const backend = {
@@ -23,7 +23,7 @@ function createBridge(workspaceDir: string) {
       containerWorkdir: "/sandbox",
     },
   });
-  return { backend, bridge: createOpenShellFsBridge({ sandbox, backend }) };
+  return { backend, bridge: new OpenShellFsBridge(sandbox, backend) };
 }
 
 it("keeps omitted read limits unlimited and explicit zero limits empty", async () => {

@@ -129,6 +129,14 @@ export async function prepareSubagentRecoveryFixture(
       };
       return {
         controlUiAdmin: false,
+        assertPolicyCurrent: assertCurrent,
+        authenticatedUserProfile: {
+          profileId: params.snapshot.profileId,
+          displayName: null,
+          avatarRevision: "1",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
         authority: createAdmittedRunOperatorAuthority({
           profileId: params.snapshot.profileId,
           scopes: params.snapshot.scopes,
@@ -472,7 +480,7 @@ export function registerSubagentRegistrationPersistenceTests({
       queued,
     });
 
-    expect(mocks.persistRegistryRows).toHaveBeenCalledTimes(queued ? 2 : 1);
+    expect(mocks.persistRegistryRows).toHaveBeenCalledOnce();
     expect(mocks.persistRegistryRows).toHaveBeenCalledWith(expect.any(Map), [runId]);
   });
 
@@ -592,35 +600,22 @@ export function registerSubagentRegistrationPersistenceTests({
   });
 }
 
-export function createRestoredRequesterWakeRuns(params: {
-  activationSettlement: boolean;
-  requesterYielded?: true;
-  endedAt: number;
-}): SubagentRunRecord[] {
-  const { activationSettlement, requesterYielded, endedAt } = params;
+export function createRestoredRequesterWakeRuns(endedAt: number): SubagentRunRecord[] {
   return Array.from({ length: 3 }, (_, index): SubagentRunRecord => {
     const runId = `run-restored-wake-${index}`;
-    return createDeliveredWake(
-      runId,
-      requesterYielded ? undefined : { status: "pending", attemptCount: 0 },
-      {
-        childSessionKey: `agent:main:subagent:restored-wake-${index}`,
-        childSessionIdentity: { sessionId: `sess-restored-wake-${index}` },
-        requesterSessionKey: `agent:main:requester-${index}`,
-        requesterDisplayKey: `requester-${index}`,
-        task: "resume a durable requester wake",
-        createdAt: endedAt - 1_000,
-        endedReason: "subagent-complete",
-        startedAt: endedAt - 500,
-        endedAt,
-        ...(activationSettlement
-          ? {
-              requesterTurnRunId: `requester-turn-${index}`,
-              requesterTurnYielded: requesterYielded ?? undefined,
-              taskRunId: runId,
-            }
-          : {}),
-      },
-    );
+    return createDeliveredWake(runId, undefined, {
+      childSessionKey: `agent:main:subagent:restored-wake-${index}`,
+      childSessionIdentity: { sessionId: `sess-restored-wake-${index}` },
+      requesterSessionKey: `agent:main:requester-${index}`,
+      requesterDisplayKey: `requester-${index}`,
+      task: "resume a durable requester wake",
+      createdAt: endedAt - 1_000,
+      endedReason: "subagent-complete",
+      startedAt: endedAt - 500,
+      endedAt,
+      requesterTurnRunId: `requester-turn-${index}`,
+      requesterTurnYielded: true,
+      taskRunId: runId,
+    });
   });
 }

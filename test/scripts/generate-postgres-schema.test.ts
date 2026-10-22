@@ -77,8 +77,8 @@ describe("PostgreSQL schema generation", () => {
         kind,
       ).toEqual([]);
     }
-    expect(agent.objects.filter((item) => item.kind === "trigger" && item.sql)).toHaveLength(10);
-    expect(agent.objects.filter((item) => item.kind === "triggerFunction")).toHaveLength(4);
+    expect(agent.objects.filter((item) => item.kind === "trigger" && item.sql)).toHaveLength(4);
+    expect(agent.objects.filter((item) => item.kind === "triggerFunction")).toHaveLength(2);
     expect(agent.objects.filter((item) => item.kind === "check" && item.sql)).toHaveLength(66);
     const pending = report.pendingCapabilities.filter((item) => item.database === "agent");
     expect(pending.filter((item) => item.kind === "trigger")).toHaveLength(4);
@@ -174,6 +174,7 @@ describe("PostgreSQL schema generation", () => {
       "state.postgres.sql",
       "state-v23-v24.postgres.sql",
       "state-v24-v25.postgres.sql",
+      "state-v28-v29.postgres.sql",
       "agent.postgres.sql",
       "agent-search.postgres.sql",
       ...report.fragments.map((item) => item.file),
@@ -207,6 +208,7 @@ describe("PostgreSQL schema generation", () => {
         "state.postgres.sql",
         "state-v23-v24.postgres.sql",
         "state-v24-v25.postgres.sql",
+        "state-v28-v29.postgres.sql",
         "runtime.ts",
         "sqlite-catalogs.ts",
         "sqlite-state-catalogs.ts",

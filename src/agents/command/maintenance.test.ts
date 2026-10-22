@@ -17,6 +17,14 @@ import {
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 
 const {
+  runAgentAttemptMock: attempt,
+  runMemoryFlushIfNeededMock: memoryFlush,
+  runSessionPreflightCompactionMock: preflight,
+  runSessionCompactionIfNeededMock: compact,
+  runCliTurnCompactionLifecycleMock: cliCompact,
+  deliverAgentCommandResultMock: deliver,
+} = state;
+const {
   replaceSessionEntry,
   patchSessionEntryCore,
   loadSessionEntry,
@@ -27,11 +35,37 @@ const {
 
 registerAgentCommandCompactionTestHooks();
 
+function sessionTarget(sessionId: string, kind = "explicit") {
+  return {
+    sessionId,
+    sessionKey: `agent:main:${kind}:${sessionId}`,
+    storePath: requireStorePath(),
+  };
+}
+async function transcript(target: Parameters<typeof loadTranscriptEvents>[0]) {
+  return JSON.stringify(await loadTranscriptEvents(target));
+}
+function answer(sessionId: string, text: string, runner: "cli" | "embedded" = "embedded") {
+  return makeCompactionResult({ sessionId, text, runner, agentHarnessId: "openclaw" });
+}
+function expectDelivered(text: string, sessionId?: string) {
+  expect(deliver).toHaveBeenCalledWith(
+    expect.objectContaining({
+      payloads: [{ text }],
+      ...(sessionId
+        ? {
+            result: expect.objectContaining({
+              meta: expect.objectContaining({ agentMeta: expect.objectContaining({ sessionId }) }),
+            }),
+          }
+        : {}),
+    }),
+  );
+}
+
 describe("agent command foreground completion", () => {
   it("skips fresh-child preflight once and reads committed state on its next turn", async () => {
-    const sessionId = "fresh-child-preflight";
-    const sessionKey = `agent:main:subagent:${sessionId}`;
-    const storePath = requireStorePath();
+    const { sessionId, sessionKey, storePath } = sessionTarget("fresh-child-preflight", "subagent");
     const firstPrompt = "Remember the child's first-turn marker.";
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
     const runtimeContext = {
@@ -45,7 +79,7 @@ describe("agent command foreground completion", () => {
         configuredCatalogEntries: [],
       },
     };
-    state.runAgentAttemptMock.mockImplementation(async (params) => {
+    attempt.mockImplementation(async (params) => {
       await params.userTurnTranscriptRecorder?.persistApproved();
       return makeCompactionResult({ sessionId, text: "Child answer.", runner: "embedded" });
     });
@@ -56,20 +90,16 @@ describe("agent command foreground completion", () => {
       { ...runtimeContext, freshChild: true },
     );
     await waitForSessionMaintenance(sessionKey);
-    expect(state.runSessionPreflightCompactionMock).not.toHaveBeenCalled();
-    expect(JSON.stringify(await loadTranscriptEvents({ sessionId, storePath }))).toContain(
-      firstPrompt,
-    );
+    expect(preflight).not.toHaveBeenCalled();
+    expect(await transcript({ sessionId, storePath })).toContain(firstPrompt);
 
     await patchSessionEntryCore({ sessionKey, storePath }, () => ({
       totalTokens: 90_000,
       totalTokensFresh: true,
     }));
-    state.runSessionPreflightCompactionMock.mockImplementationOnce(async (params) => {
+    preflight.mockImplementationOnce(async (params) => {
       expect(params.sessionEntry).toMatchObject({ sessionId, totalTokens: 90_000 });
-      expect(JSON.stringify(await loadTranscriptEvents({ sessionId, storePath }))).toContain(
-        firstPrompt,
-      );
+      expect(await transcript({ sessionId, storePath })).toContain(firstPrompt);
       return params.sessionEntry;
     });
     await agentCommandFromGatewayIngress(
@@ -77,9 +107,9 @@ describe("agent command foreground completion", () => {
       ...GATEWAY_INGRESS_ARGS,
       runtimeContext,
     );
-    expect(state.runSessionPreflightCompactionMock).toHaveBeenCalledOnce();
+    expect(preflight).toHaveBeenCalledOnce();
     expect(findStoredSessionEntry(sessionKey)?.sessionId).toBe(sessionId);
-    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
+    expect(attempt).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -91,10 +121,8 @@ describe("agent command foreground completion", () => {
     "retains the accepted preflight successor (abort=$abortStage, preserve=$preserveUserFacingSessionModelState)",
     async ({ abortStage, preserveUserFacingSessionModelState }) => {
       const aborted = abortStage !== "none";
-      const sessionId = "preflight-predecessor";
+      const { sessionId, sessionKey, storePath } = sessionTarget("preflight-predecessor");
       const successorId = "preflight-successor";
-      const sessionKey = `agent:main:explicit:${sessionId}`;
-      const storePath = requireStorePath();
       const prompt = "Record the preflight successor marker.";
       const events: string[] = [];
       const controller = new AbortController();
@@ -104,7 +132,7 @@ describe("agent command foreground completion", () => {
         { sessionKey, storePath },
         { sessionId, updatedAt: Date.now(), totalTokens: 90_000, totalTokensFresh: true },
       );
-      state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
+      memoryFlush.mockImplementationOnce(async (params) => {
         events.push("checkpoint");
         if (abortStage === "memory") {
           controller.abort(abortError);
@@ -112,7 +140,7 @@ describe("agent command foreground completion", () => {
         }
         return { sessionEntry: params.sessionEntry, outcome: "completed" };
       });
-      state.runSessionPreflightCompactionMock.mockImplementationOnce(async (params) => {
+      preflight.mockImplementationOnce(async (params) => {
         const entry = expectDefined(params.sessionEntry, "preflight predecessor");
         const checkpoint = expectDefined(params.beforeCompaction, "preflight checkpoint");
         const refreshed = expectDefined(await checkpoint(entry), "checkpoint session");
@@ -147,7 +175,7 @@ describe("agent command foreground completion", () => {
         params.onSessionIdChanged?.(accepted.sessionId);
         return accepted.entry;
       });
-      state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      attempt.mockImplementationOnce(async (params) => {
         events.push("attempt");
         await params.userTurnTranscriptRecorder?.persistApproved();
         return makeCompactionResult({
@@ -177,57 +205,33 @@ describe("agent command foreground completion", () => {
         expect(findStoredSessionEntry(sessionKey)?.sessionId).toBe(
           abortStage === "memory" ? sessionId : successorId,
         );
-        expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
-        expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+        expect(attempt).not.toHaveBeenCalled();
+        expect(deliver).not.toHaveBeenCalled();
         return;
       }
       await command;
 
       expect(events).toEqual(["checkpoint", "compaction", "attempt"]);
-      expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
-      expect(state.runSessionPreflightCompactionMock).toHaveBeenCalledOnce();
-      expect(state.runSessionCompactionIfNeededMock).not.toHaveBeenCalled();
-      expect(state.runAgentAttemptMock.mock.calls[0]?.[0]).toMatchObject({
+      expect(memoryFlush).toHaveBeenCalledOnce();
+      expect(preflight).toHaveBeenCalledOnce();
+      expect(compact).not.toHaveBeenCalled();
+      expect(attempt.mock.calls[0]?.[0]).toMatchObject({
         sessionId: successorId,
         sessionTarget: { agentId: "main", sessionId: successorId, sessionKey, storePath },
       });
       expect(findStoredSessionEntry(sessionKey)?.sessionId).toBe(successorId);
-      const successorEvents = await loadTranscriptEvents({
-        agentId: "main",
-        sessionId: successorId,
-        storePath,
-      });
-      const predecessorEvents = await loadTranscriptEvents({
-        agentId: "main",
-        sessionId,
-        storePath,
-      });
-      expect(JSON.stringify(successorEvents)).toContain(prompt);
-      expect(JSON.stringify(predecessorEvents)).not.toContain(prompt);
-      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          payloads: [{ text: "successor answer" }],
-          result: expect.objectContaining({
-            meta: expect.objectContaining({
-              agentMeta: expect.objectContaining({ sessionId: successorId }),
-            }),
-          }),
-        }),
+      expect(await transcript({ agentId: "main", sessionId: successorId, storePath })).toContain(
+        prompt,
       );
+      expect(await transcript({ agentId: "main", sessionId, storePath })).not.toContain(prompt);
+      expectDelivered("successor answer", successorId);
     },
   );
 
   it("returns a completed Gateway reply before optional memory work finishes", async () => {
-    const sessionId = "foreground-before-memory";
-    const sessionKey = `agent:main:explicit:${sessionId}`;
-    let releaseFlush = () => {};
-    const flush = new Promise<void>((resolve) => {
-      releaseFlush = resolve;
-    });
-    let markFlushStarted = () => {};
-    const flushStarted = new Promise<void>((resolve) => {
-      markFlushStarted = resolve;
-    });
+    const { sessionId, sessionKey } = sessionTarget("foreground-before-memory");
+    const flush = createDeferred();
+    const flushStarted = createDeferred();
     let foregroundCompleted = false;
     const requestBudget = {
       contextWindow: 32_768,
@@ -235,21 +239,16 @@ describe("agent command foreground completion", () => {
       fixedTokens: 9_500,
       pendingTokens: 512,
     };
-    let flushParameters: Parameters<typeof state.runMemoryFlushIfNeededMock>[0] | undefined;
-    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+    let flushParameters: Parameters<typeof memoryFlush>[0] | undefined;
+    attempt.mockImplementationOnce(async (params) => {
       params.onSuccessfulAuthProfile?.({});
       params.onCompactionRequestBudget?.(requestBudget);
-      return makeCompactionResult({
-        sessionId,
-        text: "Completed foreground answer.",
-        runner: "embedded",
-        agentHarnessId: "openclaw",
-      });
+      return answer(sessionId, "Completed foreground answer.");
     });
-    state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
+    memoryFlush.mockImplementationOnce(async (params) => {
       flushParameters = params;
-      markFlushStarted();
-      await flush;
+      flushStarted.resolve();
+      await flush.promise;
       return { sessionEntry: params.sessionEntry, outcome: "completed" };
     });
     const command = agentCommandFromGatewayIngress(
@@ -273,7 +272,7 @@ describe("agent command foreground completion", () => {
       return result;
     });
     try {
-      await flushStarted;
+      await flushStarted.promise;
       expect(foregroundCompleted).toBe(true);
       expect(flushParameters?.followupRun.run).toMatchObject({
         messageProvider: "webchat",
@@ -285,19 +284,15 @@ describe("agent command foreground completion", () => {
       });
       // Only the flush audience inherits the command's trusted owner status.
       expect(flushParameters?.followupRun.memoryAudienceSenderIsOwner).toBe(true);
-      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          payloads: [{ text: "Completed foreground answer." }],
-        }),
-      );
+      expectDelivered("Completed foreground answer.");
       expect(readCompactionLifecyclePhases()).toContain("end");
-      expect(state.runSessionCompactionIfNeededMock).not.toHaveBeenCalled();
+      expect(compact).not.toHaveBeenCalled();
     } finally {
-      releaseFlush();
+      flush.resolve();
       await command;
       await waitForSessionMaintenance(sessionKey);
     }
-    expect(state.runSessionCompactionIfNeededMock).toHaveBeenCalledWith(
+    expect(compact).toHaveBeenCalledWith(
       expect.objectContaining({
         compactionRequestBudget: { ...requestBudget, pendingTokens: 0 },
       }),
@@ -307,28 +302,22 @@ describe("agent command foreground completion", () => {
   it.each(["cli", "embedded"] as const)(
     "preserves the %s one-shot compaction boundary before delivery",
     async (runner) => {
-      const sessionId = `one-shot-compaction-${runner}`;
-      const sessionKey = `agent:main:explicit:${sessionId}`;
+      const { sessionId, sessionKey } = sessionTarget(`one-shot-compaction-${runner}`);
       const compactionStarted = createDeferred();
       const releaseCompaction = createDeferred();
       const events: string[] = [];
-      state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      attempt.mockImplementationOnce(async (params) => {
         params.onSuccessfulAuthProfile?.({});
-        return makeCompactionResult({
-          sessionId,
-          text: "one-shot answer",
-          runner,
-          agentHarnessId: "openclaw",
-        });
+        return answer(sessionId, "one-shot answer", runner);
       });
-      state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
+      cliCompact.mockImplementationOnce(async (params) => {
         events.push("compaction started");
         compactionStarted.resolve();
         await releaseCompaction.promise;
         events.push("compaction completed");
         return params.sessionEntry;
       });
-      state.deliverAgentCommandResultMock.mockImplementationOnce(async () => {
+      deliver.mockImplementationOnce(async () => {
         events.push("delivery");
         return { deliverySucceeded: true };
       });
@@ -346,7 +335,7 @@ describe("agent command foreground completion", () => {
               command.then(() => "command completed before compaction"),
             ]),
           ).resolves.toBe("compaction");
-          expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+          expect(deliver).not.toHaveBeenCalled();
           releaseCompaction.resolve();
         }
         await command;
@@ -357,12 +346,10 @@ describe("agent command foreground completion", () => {
             ? ["compaction started", "compaction completed", "delivery"]
             : ["delivery"],
         );
-        expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledTimes(
-          runner === "cli" ? 1 : 0,
-        );
-        expect(state.runSessionCompactionIfNeededMock).not.toHaveBeenCalled();
-        expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
-        expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
+        expect(cliCompact).toHaveBeenCalledTimes(runner === "cli" ? 1 : 0);
+        expect(compact).not.toHaveBeenCalled();
+        expect(memoryFlush).not.toHaveBeenCalled();
+        expect(deliver).toHaveBeenCalledOnce();
       } finally {
         releaseCompaction.resolve();
         await Promise.allSettled([command]);

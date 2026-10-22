@@ -516,7 +516,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     ctx.saveSlackAssistantThreadContext({
       assistantChannelId: "D123",
       threadTs: "10.000",
-      userId: "U1",
       channelId: "C_CACHED",
       teamId: "T_CACHED",
       enterpriseId: "E_CACHED",

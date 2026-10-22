@@ -35,7 +35,7 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
@@ -348,7 +348,6 @@ describe("subagent orphan recovery — faithful restart path", () => {
               startedAt,
               lifecycleGeneration: getAgentEventLifecycleGeneration,
               state: {
-                currentTurnUserMessagePersisted: true,
                 lifecycleEnded: false,
                 lifecycleFinishing: false,
               },
@@ -518,13 +517,13 @@ describe("subagent orphan recovery — faithful restart path", () => {
           return unlock;
         });
       const pending = testing.sweepOnceForTests();
-      let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
       try {
         await entered.promise;
         if (owner === "run") {
           registerAgentRunContext("fresh-execution", { sessionKey: childSessionKey, sessionId });
         } else {
-          admission = await beginSessionWorkAdmission({
+          admission = await beginSessionEffect({
             scope: storePath,
             identities: [childSessionKey, sessionId],
             assertAllowed: () => {},
@@ -593,6 +592,12 @@ describe("subagent orphan recovery — faithful restart path", () => {
       });
       if (owner === "original") {
         await prepareSubagentRecoveryFixture(entry, { stateDir: fixture.stateDir });
+      } else if (owner !== "unclassified") {
+        await writeSession({
+          sessionKey: entry.requesterSessionKey,
+          defaultSessionId: "recovery-requester-session",
+          lifecycleRevision: "recovery-requester-revision",
+        });
       }
       await addSubagentRunForTests(entry);
       if (owner === "original" || owner === "unclassified") {
@@ -604,15 +609,16 @@ describe("subagent orphan recovery — faithful restart path", () => {
         rotateAgentEventLifecycleGeneration();
         await initSubagentRegistry();
         await activateGatewayRuntime();
+        await fixture.settle();
       }
       const announce = vi.mocked(runSubagentAnnounceFlow);
       const cleanupBrowser = vi.mocked(cleanupBrowserSessionsForLifecycleEnd);
-      let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
       try {
         if (owner === "run") {
           registerAgentRunContext("fresh-execution", { sessionKey: childSessionKey, sessionId });
         } else if (owner === "admission") {
-          admission = await beginSessionWorkAdmission({
+          admission = await beginSessionEffect({
             scope: storePath,
             identities: [childSessionKey, sessionId],
             assertAllowed: () => {},
@@ -627,14 +633,14 @@ describe("subagent orphan recovery — faithful restart path", () => {
           ).toBeUndefined();
           return;
         }
-        await vi.waitFor(() =>
-          expect(announce).toHaveBeenCalledWith(
-            expect.objectContaining({
-              childRunId: runId,
-              outcome: expect.objectContaining({ status: "error", error: "Saved restart outcome" }),
-              suppressChildSessionEffects: owner !== "original",
-            }),
-          ),
+        // A concurrent sweep skips recovery already owned by startup.
+        await fixture.settle();
+        expect(announce).toHaveBeenCalledWith(
+          expect.objectContaining({
+            childRunId: runId,
+            outcome: expect.objectContaining({ status: "error", error: "Saved restart outcome" }),
+            suppressChildSessionEffects: owner !== "original",
+          }),
         );
         expect(cleanupBrowser).toHaveBeenCalledTimes(owner === "original" ? 1 : 0);
         if (owner !== "original") {

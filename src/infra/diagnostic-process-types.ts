@@ -1,6 +1,7 @@
 import type { HeapSpaceInfo } from "node:v8";
 import type { GcSample } from "./gc-observer.js";
 import type { WorkerMessageMetric } from "./worker-message-metrics.js";
+import type { WorkerPoolClass } from "./worker-pool-sizing.js";
 import type { WorkerRequestKind } from "./worker-request-kind.js";
 
 export type DiagnosticRuntimeMeasurementFields =
@@ -97,8 +98,16 @@ export type DiagnosticWorkerRetainedData = {
 
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
+  /** Linux RssAnon: resident anonymous pages, including managed heaps and buffers. */
+  anonymousRssBytes?: number;
+  /** Linux VmSwap: swapped anonymous private pages, excluding shared-memory swap. */
+  anonymousSwapBytes?: number;
   heapTotalBytes: number;
   heapUsedBytes: number;
+  /** Actual main-isolate V8 limit; absent on runtimes without V8. */
+  heapSizeLimitBytes?: number;
+  /** old_space + large_object_space at the last observed native major-GC epilogue. */
+  oldGenerationAfterGcBytes?: number;
   externalBytes: number;
   arrayBuffersBytes: number;
   heapSpaces?: HeapSpaceInfo[];
@@ -128,6 +137,8 @@ export type DiagnosticMemoryUsage = {
     retainedData?: readonly DiagnosticWorkerRetainedData[];
     /** Actual V8 isolate limit; unavailable on runtimes without V8. */
     heapSizeLimitBytes?: number;
+    /** Absent until a major GC is observed, and for native-only fallback samples. */
+    oldGenerationAfterGcBytes?: number;
     threadId?: number;
     /** Same bounded slot as diagnostic.gc; absent for overflow and other scripts. */
     workerSlot?: number;
@@ -141,6 +152,14 @@ export type DiagnosticMemoryUsage = {
     script: string;
     started: number;
     retired: { reason: string; count: number }[];
+  }[];
+  /** Process-lifetime pool totals; completed workers remain represented after native exit. */
+  workerTaskMetrics?: {
+    workerClass: WorkerPoolClass | "other";
+    script: string;
+    tasksCompleted: number;
+    heapUsedHighWaterBytes: number;
+    gc: { kind: GcSample["kind"]; count: number; durationMs: number; reclaimedBytes: number }[];
   }[];
   /** Main-thread transport totals; unknown payload sizes remain separate from known zero bytes. */
   workerMessages?: WorkerMessageMetric[];

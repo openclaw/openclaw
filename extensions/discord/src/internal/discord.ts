@@ -7,14 +7,6 @@ export * from "./api.webhooks.js";
 export * from "./client.js";
 export * from "./commands.js";
 export { BaseMessageInteractiveComponent, type ComponentData } from "./components.base.js";
-export {
-  Button,
-  Container,
-  Row,
-  Separator,
-  StringSelectMenu,
-  TextDisplay,
-} from "./components.message.js";
 export { Modal } from "./components.modal.js";
 export * from "./embeds.js";
 export * from "./interactions.js";

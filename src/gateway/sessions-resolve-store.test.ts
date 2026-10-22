@@ -1,6 +1,3 @@
-/**
- * Session resolve store tests.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -20,31 +17,30 @@ import {
 } from "./sessions-resolve.js";
 
 type ResolveParams = Parameters<typeof resolveSessionKeyFromResolveParamsWithClient>[0];
+const mainWork = (): OpenClawConfig => ({ agents: { entries: { main: {}, work: {} } } });
+const opsOnly = (): OpenClawConfig => ({ agents: { entries: { ops: {} } } });
+const resolved = (key: string, agentId = "main") => ({ ok: true, key, agentId });
 
 const projections = new Map<OpenClawConfig, Promise<SessionRowProjection>>();
-const resolveSessionKeyFromResolveParams = async (
-  params: Omit<ResolveParams, "client" | "projection"> & {
-    cfg: OpenClawConfig;
-    client?: ResolveParams["client"];
-  },
-) => {
-  let pending = projections.get(params.cfg);
+const resolve = async (cfg: OpenClawConfig, p: ResolveParams["p"]) => {
+  let pending = projections.get(cfg);
   if (!pending) {
-    pending = createSessionRowProjection({ cfg: params.cfg });
-    projections.set(params.cfg, pending);
+    pending = createSessionRowProjection({ cfg });
+    projections.set(cfg, pending);
   }
   return withPreparedSessionResolve(
-    {
-      client: params.client ?? null,
-      p: params.p,
-      projection: await pending,
-    },
+    { client: null, p, projection: await pending },
     (result) => result,
   );
 };
 
 describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
-  const freshUpdatedAt = () => Date.now();
+  const deletedMainError = 'Agent "main" no longer exists in configuration';
+  const expectInvalid = (cfg: OpenClawConfig, p: ResolveParams["p"], message: string) =>
+    expect(resolve(cfg, p)).resolves.toEqual({
+      ok: false,
+      error: { code: ErrorCodes.INVALID_REQUEST, message },
+    });
 
   async function withStateDirEnv<T>(
     prefix: string,
@@ -71,45 +67,30 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
     }
   }
 
+  const seedAgent = (cfg: OpenClawConfig, agentId: string, store: Record<string, SessionEntry>) =>
+    seedSessionStore(resolveSessionStorePathCore(cfg.session?.store, { agentId }), store);
+  const entry = (sessionId: string, label?: string): SessionEntry => ({
+    sessionId,
+    label,
+    updatedAt: Date.now(),
+  });
+
   it("does not resolve another agent store when agentId is scoped", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-agent-scope-", async () => {
-      const cfg: OpenClawConfig = {
-        agents: { entries: { main: {}, work: {} } },
-      };
-      const workStorePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "work" });
-      await seedSessionStore(workStorePath, {
-        "agent:work:target": {
-          sessionId: "sess-shared",
-          label: "shared-label",
-          updatedAt: freshUpdatedAt(),
-        },
+      const cfg = mainWork();
+      await seedAgent(cfg, "work", {
+        "agent:work:target": entry("sess-shared", "shared-label"),
       });
-
-      await expect(
-        resolveSessionKeyFromResolveParams({
-          cfg,
-          p: { sessionId: "sess-shared", agentId: "main" },
-        }),
-      ).resolves.toEqual({
-        ok: false,
-        error: {
-          code: ErrorCodes.INVALID_REQUEST,
-          message: "No session found: sess-shared",
-        },
-      });
-
-      await expect(
-        resolveSessionKeyFromResolveParams({
-          cfg,
-          p: { label: "shared-label", agentId: "main" },
-        }),
-      ).resolves.toEqual({
-        ok: false,
-        error: {
-          code: ErrorCodes.INVALID_REQUEST,
-          message: "No session found with label: shared-label",
-        },
-      });
+      await expectInvalid(
+        cfg,
+        { sessionId: "sess-shared", agentId: "main" },
+        "No session found: sess-shared",
+      );
+      await expectInvalid(
+        cfg,
+        { label: "shared-label", agentId: "main" },
+        "No session found with label: shared-label",
+      );
     });
   });
 
@@ -125,15 +106,10 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         },
       } satisfies OpenClawConfig;
       await seedSessionStore(storePath, {
-        global: { sessionId: "sess-owned-global", updatedAt: freshUpdatedAt() },
+        global: entry("sess-owned-global"),
       });
 
-      await expect(
-        resolveSessionKeyFromResolveParams({
-          cfg,
-          p: { key: "global", agentId: "research" },
-        }),
-      ).resolves.toMatchObject({
+      await expect(resolve(cfg, { key: "global", agentId: "research" })).resolves.toMatchObject({
         ok: false,
         error: {
           code: ErrorCodes.INVALID_REQUEST,
@@ -145,54 +121,24 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
 
   it("preserves cross-agent ambiguity when agentId is absent", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-cross-agent-", async () => {
-      const cfg: OpenClawConfig = {
-        agents: { entries: { main: {}, work: {} } },
-      };
-      const updatedAt = freshUpdatedAt();
-      await seedSessionStore(resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }), {
-        "main-target": {
-          sessionId: "sess-shared",
-          label: "shared-label",
-          updatedAt,
-        },
-      });
-      await seedSessionStore(resolveSessionStorePathCore(cfg.session?.store, { agentId: "work" }), {
-        "work-target": {
-          sessionId: "sess-shared",
-          label: "shared-label",
-          updatedAt,
-        },
-      });
+      const cfg = mainWork();
+      const shared = entry("sess-shared", "shared-label");
+      await seedAgent(cfg, "main", { "main-target": shared });
+      await seedAgent(cfg, "work", { "work-target": shared });
 
-      const sessionIdResult = await resolveSessionKeyFromResolveParams({
-        cfg,
-        p: { sessionId: "sess-shared" },
-      });
-      expect(sessionIdResult.ok).toBe(false);
-      if (sessionIdResult.ok) {
-        throw new Error("expected ambiguous sessionId result");
+      for (const [selector, message] of [
+        [{ sessionId: "sess-shared" }, "Multiple sessions found for sessionId: sess-shared"],
+        [{ label: "shared-label" }, "Multiple sessions found with label: shared-label"],
+      ] as const) {
+        const result = await resolve(cfg, selector);
+        expect(result).toMatchObject({ ok: false, error: { code: ErrorCodes.INVALID_REQUEST } });
+        if (result.ok) {
+          throw new Error("expected ambiguous result");
+        }
+        expect(result.error.message).toContain(message);
+        expect(result.error.message).toContain("agent:main:main-target");
+        expect(result.error.message).toContain("agent:work:work-target");
       }
-      expect(sessionIdResult.error.code).toBe(ErrorCodes.INVALID_REQUEST);
-      expect(sessionIdResult.error.message).toContain(
-        "Multiple sessions found for sessionId: sess-shared",
-      );
-      expect(sessionIdResult.error.message).toContain("agent:main:main-target");
-      expect(sessionIdResult.error.message).toContain("agent:work:work-target");
-
-      const labelResult = await resolveSessionKeyFromResolveParams({
-        cfg,
-        p: { label: "shared-label" },
-      });
-      expect(labelResult.ok).toBe(false);
-      if (labelResult.ok) {
-        throw new Error("expected ambiguous label result");
-      }
-      expect(labelResult.error.code).toBe(ErrorCodes.INVALID_REQUEST);
-      expect(labelResult.error.message).toContain(
-        "Multiple sessions found with label: shared-label",
-      );
-      expect(labelResult.error.message).toContain("agent:main:main-target");
-      expect(labelResult.error.message).toContain("agent:work:work-target");
     });
   });
 
@@ -204,37 +150,26 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           entries: { ops: {}, research: {} },
         },
       };
-      await seedSessionStore(resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" }), {
-        global: { sessionId: "session-ops", updatedAt: freshUpdatedAt() },
-      });
-      await seedSessionStore(
-        resolveSessionStorePathCore(cfg.session?.store, { agentId: "research" }),
-        {
-          global: { sessionId: "session-research", updatedAt: freshUpdatedAt() },
-        },
-      );
+      await seedAgent(cfg, "ops", { global: entry("session-ops") });
+      await seedAgent(cfg, "research", { global: entry("session-research") });
 
       await expect(
-        resolveSessionKeyFromResolveParams({
-          cfg,
-          p: { sessionId: "session-research", includeGlobal: true },
-        }),
-      ).resolves.toEqual({ ok: true, key: "global", agentId: "research" });
+        resolve(cfg, { sessionId: "session-research", includeGlobal: true }),
+      ).resolves.toEqual(resolved("global", "research"));
     });
   });
 
   it("selects the deterministic winner within one agent before cross-agent checks", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-same-agent-", async () => {
       const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
-      await seedSessionStore(storePath, {
+      await seedAgent(cfg, "main", {
         "agent:main:older": { sessionId: "session-duplicate", updatedAt: 10 },
         "agent:main:newer": { sessionId: "session-duplicate", updatedAt: 20 },
       });
 
-      await expect(
-        resolveSessionKeyFromResolveParams({ cfg, p: { sessionId: "session-duplicate" } }),
-      ).resolves.toEqual({ ok: true, key: "agent:main:newer", agentId: "main" });
+      await expect(resolve(cfg, { sessionId: "session-duplicate" })).resolves.toEqual(
+        resolved("agent:main:newer"),
+      );
     });
   });
 
@@ -244,81 +179,31 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         session: { mainKey: "main", store: undefined },
         agents: { entries: { ops: {} } },
       } satisfies OpenClawConfig;
-      await seedSessionStore(resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }), {
-        "agent:main:guildchat:direct:u1": {
-          sessionId: "sess-stale-main",
-          label: "stale-main",
-          updatedAt: freshUpdatedAt(),
-        },
+      await seedAgent(cfg, "main", {
+        "agent:main:guildchat:direct:u1": entry("sess-stale-main", "stale-main"),
       });
-
-      await expect(
-        resolveSessionKeyFromResolveParams({
-          cfg,
-          p: { sessionId: "sess-stale-main" },
-        }),
-      ).resolves.toEqual({
-        ok: false,
-        error: {
-          code: ErrorCodes.INVALID_REQUEST,
-          message: 'Agent "main" no longer exists in configuration',
-        },
-      });
+      await expectInvalid(cfg, { sessionId: "sess-stale-main" }, deletedMainError);
     });
   });
 
   it("does not adopt legacy main aliases from discovered deleted-agent stores", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-discovered-main-", async () => {
-      const cfg: OpenClawConfig = {
-        agents: { entries: { ops: {} } },
-      };
-      const staleMainStorePath = resolveSessionStorePathCore(cfg.session?.store, {
-        agentId: "main",
+      const cfg = opsOnly();
+      await seedAgent(cfg, "main", {
+        "agent:main:main": entry("sess-discovered-main", "discovered-main"),
       });
-      await seedSessionStore(staleMainStorePath, {
-        "agent:main:main": {
-          sessionId: "sess-discovered-main",
-          label: "discovered-main",
-          updatedAt: freshUpdatedAt(),
-        },
-      });
-
-      await expect(
-        resolveSessionKeyFromResolveParams({
-          cfg,
-          p: { sessionId: "sess-discovered-main" },
-        }),
-      ).resolves.toEqual({
-        ok: false,
-        error: {
-          code: ErrorCodes.INVALID_REQUEST,
-          message: 'Agent "main" no longer exists in configuration',
-        },
-      });
-
-      await expect(
-        resolveSessionKeyFromResolveParams({
-          cfg,
-          p: { label: "discovered-main" },
-        }),
-      ).resolves.toEqual({
-        ok: false,
-        error: {
-          code: ErrorCodes.INVALID_REQUEST,
-          message: 'Agent "main" no longer exists in configuration',
-        },
-      });
+      await expectInvalid(cfg, { sessionId: "sess-discovered-main" }, deletedMainError);
+      await expectInvalid(cfg, { label: "discovered-main" }, deletedMainError);
     });
   });
 
   it.each([
     {
       name: "ordinary reads leave lifecycle-bound legacy ACP metadata unavailable",
-      bound: true,
       repair: false,
     },
-    { name: "Doctor repairs ACP keys after session rows are canonical", bound: true, repair: true },
-  ])("$name", async ({ bound, repair }) => {
+    { name: "Doctor repairs ACP keys after session rows are canonical", repair: true },
+  ])("$name", async ({ repair }) => {
     await withStateDirEnv(
       "openclaw-sessions-resolve-acp-harness-partial-",
       async ({ tempRoot, stateDir }) => {
@@ -336,19 +221,19 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
             sessionId: "sess-acp-harness-partial",
             lifecycleRevision: "revision-acp-harness-partial",
             label: "claude-delegate-partial",
-            updatedAt: freshUpdatedAt(),
+            updatedAt: Date.now(),
           },
         });
         writeAcpSessionMetaForMigration({
           sessionKey: legacyAcpKey,
-          lifecycleRevision: bound ? "revision-acp-harness-partial" : undefined,
+          lifecycleRevision: "revision-acp-harness-partial",
           meta: {
             backend: "acpx",
             agent: "claude",
             runtimeSessionName: legacyAcpKey,
             mode: "oneshot",
             state: "idle",
-            lastActivityAt: freshUpdatedAt(),
+            lastActivityAt: Date.now(),
           },
         });
         const readRows = () =>
@@ -356,8 +241,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
             .db.prepare("SELECT * FROM acp_sessions ORDER BY session_key")
             .all();
         const before = readRows();
-        expect(before).toHaveLength(1);
-        expect(before[0]?.session_key).toBe(legacyAcpKey);
+        expect(before).toMatchObject([{ session_key: legacyAcpKey }]);
 
         if (repair) {
           await expect(fs.access(claudeStorePath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -376,11 +260,12 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
               expect(readRows()).toEqual(before);
               await noteSessionTranscriptHealth({ cfg, env: process.env, shouldRepair: true });
               const repaired = readRows();
-              expect(repaired).toHaveLength(1);
-              expect(repaired[0]).toEqual({
-                ...before[0],
-                session_key: buildAcpDatabaseSessionKey(acpKey, "claude"),
-              });
+              expect(repaired).toEqual([
+                {
+                  ...before[0],
+                  session_key: buildAcpDatabaseSessionKey(acpKey, "claude"),
+                },
+              ]);
               await noteSessionTranscriptHealth({ cfg, env: process.env, shouldRepair: true });
               expect(readRows()).toEqual(repaired);
             },
@@ -391,11 +276,10 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           { key: acpKey },
           { sessionId: "sess-acp-harness-partial" },
           { label: "claude-delegate-partial" },
-          { key: acpKey },
         ]) {
-          await expect(resolveSessionKeyFromResolveParams({ cfg, p: selector })).resolves.toEqual(
+          await expect(resolve(cfg, selector)).resolves.toEqual(
             repair
-              ? { ok: true, key: acpKey, agentId: "claude" }
+              ? resolved(acpKey, "claude")
               : {
                   ok: false,
                   error: {
@@ -414,40 +298,14 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
 
   it("rejects an explicit listed deleted main key instead of remapping to the live default main", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-key-deleted-main-", async () => {
-      const cfg: OpenClawConfig = {
-        agents: { entries: { ops: {} } },
-      };
-      const liveDefaultStorePath = resolveSessionStorePathCore(cfg.session?.store, {
-        agentId: "ops",
+      const cfg = opsOnly();
+      await seedAgent(cfg, "ops", {
+        "agent:ops:main": entry("sess-live-default"),
       });
-      await seedSessionStore(liveDefaultStorePath, {
-        "agent:ops:main": {
-          sessionId: "sess-live-default",
-          updatedAt: freshUpdatedAt(),
-        },
+      await seedAgent(cfg, "main", {
+        "agent:main:main": entry("sess-deleted-main"),
       });
-      const staleMainStorePath = resolveSessionStorePathCore(cfg.session?.store, {
-        agentId: "main",
-      });
-      await seedSessionStore(staleMainStorePath, {
-        "agent:main:main": {
-          sessionId: "sess-deleted-main",
-          updatedAt: freshUpdatedAt(),
-        },
-      });
-
-      await expect(
-        resolveSessionKeyFromResolveParams({
-          cfg,
-          p: { key: "agent:main:main" },
-        }),
-      ).resolves.toEqual({
-        ok: false,
-        error: {
-          code: ErrorCodes.INVALID_REQUEST,
-          message: 'Agent "main" no longer exists in configuration',
-        },
-      });
+      await expectInvalid(cfg, { key: "agent:main:main" }, deletedMainError);
     });
   });
 });

@@ -9,7 +9,10 @@ import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-e
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import type { SessionRowTranscriptReadParams } from "./session-row-transcript-backfill.types.js";
-import type { SessionRowTranscriptProjection } from "./session-row-transcript-preview.js";
+import type {
+  SessionRowAssistantMessage,
+  SessionRowTranscriptProjection,
+} from "./session-row-transcript-preview.js";
 
 type BackfillParams = SessionRowTranscriptReadParams & {
   sessionEntry: Pick<
@@ -28,7 +31,7 @@ export function presentSessionRowTranscriptFields(
   >,
 ): {
   lastMessagePreview?: string;
-  lastAssistantMessage?: NonNullable<SessionRowTranscriptProjection["lastAssistantMessage"]>;
+  lastAssistantMessage?: SessionRowAssistantMessage;
   fallbackModel?: { provider: string; model: string };
 } {
   const { sessionEntry, model, ...scope } = params;
@@ -45,7 +48,9 @@ export function presentSessionRowTranscriptFields(
     ...(fields.lastMessagePreview !== null
       ? { lastMessagePreview: fields.lastMessagePreview }
       : {}),
-    ...(fields.lastAssistantMessage ? { lastAssistantMessage: fields.lastAssistantMessage } : {}),
+    ...(fields.lastAssistantMessage && typeof fields.lastAssistantMessage !== "string"
+      ? { lastAssistantMessage: fields.lastAssistantMessage }
+      : {}),
     ...(fallback
       ? { fallbackModel: { provider: fallback.modelProvider, model: fallback.model } }
       : {}),
@@ -74,7 +79,7 @@ export async function backfillSessionRowTranscriptFields(params: BackfillParams)
       undefined,
       "background",
     );
-    return fields ? presentSessionRowTranscriptFields(params, fields) : {};
+    return fields ? presentSessionRowTranscriptFields(params, fields) : undefined;
   } finally {
     await execution.release();
   }

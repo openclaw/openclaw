@@ -26,14 +26,12 @@ import {
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import { resolveCodexAppServerSpawnIdentity } from "./spawn-identity.js";
-import {
-  createClientHarness,
-  createCodexTestModel,
-  createInferenceReadyClientHarness,
-} from "./test-support.js";
+import { createCodexTestModel, createInferenceReadyClientHarness } from "./test-support.js";
 
-export type AttemptClientHarness = ReturnType<typeof createClientHarness>;
-const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
+export type AttemptClientHarness = ReturnType<typeof createInferenceReadyClientHarness>;
+type StartupParams = Parameters<typeof startCodexAttemptThread>[0];
+type HarnessMessage = { id?: number; method?: string; params?: unknown };
+const requestWait = { interval: 1, timeout: 15_000 };
 
 export function createAttemptClientHarness(): AttemptClientHarness {
   return createInferenceReadyClientHarness({
@@ -48,68 +46,52 @@ export function createAttemptClientHarness(): AttemptClientHarness {
 
 export function createAttemptThreadStarter(
   tempRoots: Set<string>,
-  pluginConfig: CodexPluginConfig,
+  defaultPluginConfig: CodexPluginConfig,
 ) {
   return function startThreadWithHarness(
     startupTimeoutMs: number,
     signal = new AbortController().signal,
-    overrides?: {
+    overrides: {
       pluginConfig?: CodexPluginConfig;
+      buildAttemptParams?: StartupParams["buildAttemptParams"];
+      runtimeArtifactRequest?: StartupParams["runtimeArtifactRequest"];
+      sandbox?: StartupParams["sandbox"];
+      sandboxExecServerEnabled?: boolean;
+      runtime?: StartupParams["runtime"];
+      appServer?: StartupParams["appServer"];
       startupPreparedAuth?: CodexAppServerPreparedAuth;
       attemptClientFactory?: (harness: AttemptClientHarness) => CodexAppServerClientFactory;
-      buildAttemptParams?: () => EmbeddedRunAttemptParams;
       harness?: AttemptClientHarness;
       paths?: AttemptPaths;
       skipStartSpy?: boolean;
-      runtimeArtifactRequest?: Parameters<
-        typeof startCodexAttemptThread
-      >[0]["runtimeArtifactRequest"];
-      sandbox?: Parameters<typeof startCodexAttemptThread>[0]["sandbox"];
-      sandboxExecServerEnabled?: boolean;
-      runtime?: Parameters<typeof startCodexAttemptThread>[0]["runtime"];
-      appServer?: Parameters<typeof startCodexAttemptThread>[0]["appServer"];
-    },
+    } = {},
   ) {
-    const harness = overrides?.harness ?? createAttemptClientHarness();
-    const paths = overrides?.paths ?? createAttemptPaths(tempRoots);
-    const startSpy = overrides?.skipStartSpy
+    const { runtimeArtifactRequest, startupPreparedAuth } = overrides;
+    const pluginConfig = overrides.pluginConfig ?? defaultPluginConfig;
+    const harness = overrides.harness ?? createAttemptClientHarness();
+    const paths = overrides.paths ?? createAttemptPaths(tempRoots);
+    const startSpy = overrides.skipStartSpy
       ? undefined
       : vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-    const effectivePluginConfig = overrides?.pluginConfig ?? pluginConfig;
-
     const run = startCodexAttemptThread({
       bindingStore: testCodexAppServerBindingStore,
-      runtime: overrides?.runtime,
+      runtime: overrides.runtime,
       attemptClientFactory:
-        overrides?.attemptClientFactory?.(harness) ?? getLeasedSharedCodexAppServerClient,
-      appServer:
-        overrides?.appServer ??
-        resolveCodexAppServerRuntimeOptions({ pluginConfig: effectivePluginConfig }),
-      pluginConfig: effectivePluginConfig,
-      computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig: effectivePluginConfig }),
+        overrides.attemptClientFactory?.(harness) ?? getLeasedSharedCodexAppServerClient,
+      appServer: overrides.appServer ?? resolveCodexAppServerRuntimeOptions({ pluginConfig }),
+      pluginConfig,
+      computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig }),
       clientOptions: {
-        ...(overrides?.startupPreparedAuth
-          ? { preparedAuth: overrides.startupPreparedAuth }
-          : { authProfileId: undefined }),
-        authBindingFingerprint: undefined,
-        authRequirement: undefined,
-        ...(overrides?.runtimeArtifactRequest
-          ? {
-              runtimeArtifactMode: "capture",
-              ...(overrides.runtimeArtifactRequest.expected
-                ? { expectedRuntimeArtifact: overrides.runtimeArtifactRequest.expected }
-                : {}),
-            }
-          : {}),
+        preparedAuth: startupPreparedAuth,
+        runtimeArtifactMode: runtimeArtifactRequest ? "capture" : undefined,
+        expectedRuntimeArtifact: runtimeArtifactRequest?.expected,
       },
-      ...(overrides?.runtimeArtifactRequest
-        ? { runtimeArtifactRequest: overrides.runtimeArtifactRequest }
-        : {}),
+      runtimeArtifactRequest,
       startupAuthAccountCacheKey: undefined,
       startupEnvApiKeyCacheKey: undefined,
       agentDir: paths.agentDir,
       config: undefined,
-      buildAttemptParams: overrides?.buildAttemptParams ?? (() => createAttemptParams(paths)),
+      buildAttemptParams: overrides.buildAttemptParams ?? (() => createAttemptParams(paths)),
       sessionAgentId: "agent-1",
       effectiveWorkspace: paths.workspaceDir,
       effectiveCwd: paths.cwd,
@@ -119,8 +101,8 @@ export function createAttemptThreadStarter(
       bundleMcpThreadConfig,
       nativeToolSurfaceEnabled: true,
       nativeProviderWebSearchSupport: "supported",
-      sandboxExecServerEnabled: overrides?.sandboxExecServerEnabled ?? false,
-      sandbox: overrides?.sandbox ?? null,
+      sandboxExecServerEnabled: overrides.sandboxExecServerEnabled ?? false,
+      sandbox: overrides.sandbox ?? null,
       contextEngineProjection: undefined,
       startupTimeoutMs,
       signal,
@@ -132,27 +114,18 @@ export function createAttemptThreadStarter(
   };
 }
 
-export function readHarnessMessages(
-  writes: string[],
-): Array<{ id?: number; method?: string; params?: unknown }> {
-  return writes.map(
-    (write) => JSON.parse(write) as { id?: number; method?: string; params?: unknown },
-  );
+export function readHarnessMessages(writes: string[]): HarnessMessage[] {
+  return writes.map((write) => JSON.parse(write) as HarnessMessage);
 }
 
-export function readHarnessRequestMethods(
-  harness: AttemptClientHarness,
-): Array<string | undefined> {
+export function readHarnessRequestMethods(harness: AttemptClientHarness) {
   return readHarnessMessages(harness.writes)
     .filter(({ id }) => id !== undefined)
     .map(({ method }) => method);
 }
 
 export async function answerInitialize(harness: AttemptClientHarness): Promise<void> {
-  await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1), {
-    interval: 1,
-    timeout: HARNESS_REQUEST_TIMEOUT_MS,
-  });
+  await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1), requestWait);
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
   harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.149.0 (macOS; test)" } });
 }
@@ -160,19 +133,14 @@ export async function answerInitialize(harness: AttemptClientHarness): Promise<v
 export async function waitForRequest(
   harness: AttemptClientHarness,
   method: string,
-): Promise<{ id?: number; method?: string; params?: unknown }> {
-  await vi.waitFor(
-    () =>
-      expect(readHarnessMessages(harness.writes).some((write) => write.method === method)).toBe(
-        true,
-      ),
-    { interval: 1, timeout: HARNESS_REQUEST_TIMEOUT_MS },
-  );
-  const request = readHarnessMessages(harness.writes).find((write) => write.method === method);
-  if (!request) {
-    throw new Error(`${method} request was not written`);
-  }
-  return request;
+): Promise<HarnessMessage> {
+  return vi.waitFor(() => {
+    const request = readHarnessMessages(harness.writes).find((write) => write.method === method);
+    if (!request) {
+      throw new Error(`${method} request was not written`);
+    }
+    return request;
+  }, requestWait);
 }
 
 export async function waitForThreadStart(harness: AttemptClientHarness): Promise<{ id?: number }> {
@@ -188,39 +156,30 @@ export async function captureExpectedRuntimeArtifact(
     withEphemeralCodexAuthStore({ startOptions: appServer.start }),
   );
   const spawnIdentity = resolveCodexAppServerSpawnIdentity(startOptions);
-  const before = await captureCodexAppServerRuntimeArtifactBeforeStart({
-    startOptions,
-    spawnIdentity,
-  });
+  const options = { startOptions, spawnIdentity };
+  const before = await captureCodexAppServerRuntimeArtifactBeforeStart(options);
   return finalizeCodexAppServerRuntimeArtifact({
+    ...options,
     before,
-    startOptions,
-    spawnIdentity,
     runtimeIdentity: { serverVersion: "0.149.0", userAgent: "openclaw/0.149.0 (macOS; test)" },
   });
 }
 
 export function createPairedAttemptRuntime() {
   const channels: Array<{ close: ReturnType<typeof vi.fn>; sessionId: string }> = [];
-  const openDuplex = vi.fn<
-    NonNullable<Parameters<typeof startCodexAttemptThread>[0]["runtime"]>["nodes"]["openDuplex"]
-  >(async (request) => {
-    let resolveClosed: (value: unknown) => void = () => undefined;
-    const closed = new Promise<unknown>((resolve) => {
-      resolveClosed = resolve;
-    });
-    const channel = {
-      send: vi.fn(async () => undefined),
-      onMessage: vi.fn(() => () => undefined),
-      closed,
-      close: vi.fn(() => resolveClosed({ ok: true })),
-    };
-    channels.push({
-      close: channel.close,
-      sessionId: (request.params as { sessionId: string }).sessionId,
-    });
-    return channel;
-  });
+  const openDuplex = vi.fn<NonNullable<StartupParams["runtime"]>["nodes"]["openDuplex"]>(
+    async (request) => {
+      const closed = Promise.withResolvers<unknown>();
+      const close = vi.fn(() => closed.resolve({ ok: true }));
+      channels.push({ close, sessionId: (request.params as { sessionId: string }).sessionId });
+      return {
+        send: vi.fn(async () => undefined),
+        onMessage: vi.fn(() => () => undefined),
+        closed: closed.promise,
+        close,
+      };
+    },
+  );
   return {
     runtime: createPluginRuntimeMock({ nodes: { openDuplex } }),
     channels,
@@ -228,12 +187,7 @@ export function createPairedAttemptRuntime() {
   };
 }
 
-export type AttemptPaths = {
-  agentDir: string;
-  cwd: string;
-  sessionFile: string;
-  workspaceDir: string;
-};
+export type AttemptPaths = Record<"agentDir" | "cwd" | "sessionFile" | "workspaceDir", string>;
 
 export function createAttemptPaths(tempRoots: Set<string>): AttemptPaths {
   const root = path.join(os.tmpdir(), `openclaw-codex-attempt-startup-${randomUUID()}`);

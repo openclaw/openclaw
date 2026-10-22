@@ -1,11 +1,11 @@
 import { z } from "zod";
 
 const positiveInteger = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
-const questionType = z.enum(["boolean", "choice", "score", "sort", "tags"]);
+const questionType = z.enum(["boolean", "choice", "score", "sort", "tags", "box"]);
 const questionTypes = z
   .array(questionType)
   .min(1)
-  .max(5)
+  .max(6)
   .refine((values) => new Set(values).size === values.length);
 const probabilitySemantics = z.enum([
   "boolean",
@@ -38,6 +38,7 @@ const questions = z
     score: question.optional(),
     sort: question.optional(),
     tags: question.optional(),
+    box: question.optional(),
   })
   .refine((value) => Object.values(value).some(Boolean));
 const reasoningMode = z.enum(["auto", "off", "on"]);

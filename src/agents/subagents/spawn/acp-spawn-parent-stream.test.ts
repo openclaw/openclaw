@@ -1,27 +1,17 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import { startAcpSpawnParentStreamRelay } from "./acp-spawn-parent-stream.js";
 
-const { enqueueSessionEventMock, recordAcpParentStreamEventsMock } = vi.hoisted(() => ({
+const { enqueueSessionEventMock } = vi.hoisted(() => ({
   enqueueSessionEventMock: vi.fn((_text: string, _options: Record<string, unknown>) => ({
     id: "occurrence",
     cancel: vi.fn(() => true),
     settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: true }),
   })),
-  recordAcpParentStreamEventsMock: vi.fn(),
 }));
 // mock-isolation: Capture parent relay events without starting reply turns or session lookups.
 vi.mock("../../../auto-reply/reply/session-event-handoff.js", () => ({
   enqueueSessionEventForHost: enqueueSessionEventMock,
-}));
-
-vi.mock("./acp-parent-stream-store.sqlite.js", () => ({
-  createAcpParentStreamRecorder: () => ({
-    record: recordAcpParentStreamEventsMock,
-    close: async () => {},
-  }),
 }));
 
 let emitAgentEvent: typeof import("../../../infra/agent-events.js").emitAgentEvent;
@@ -90,8 +80,6 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
   beforeEach(() => {
     enqueueSessionEventMock.mockClear();
-    recordAcpParentStreamEventsMock.mockReset();
-    recordAcpParentStreamEventsMock.mockResolvedValue({ ok: true, value: undefined });
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-04T01:00:00.000Z"));
   });
@@ -145,80 +133,6 @@ describe("startAcpSpawnParentStreamRelay", () => {
       });
     }
     await relay.dispose();
-  });
-
-  it("backs off and caps confirmed rollback retries", async () => {
-    const rollback = createDeferredCore<{ ok: false; error: Error }>();
-    recordAcpParentStreamEventsMock
-      .mockReturnValueOnce(rollback.promise)
-      .mockResolvedValue({ ok: true, value: undefined });
-    const relay = createRelay("run-diagnostic-retry", {
-      childSessionId: "session-diagnostic-retry",
-    });
-
-    relay.assistant("first");
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(recordAcpParentStreamEventsMock).toHaveBeenCalledTimes(1);
-
-    relay.assistant("arrived while the write was pending");
-    rollback.resolve({ ok: false, error: new Error("database unavailable") });
-    await vi.advanceTimersByTimeAsync(0);
-    for (let index = 0; index < 300; index += 1) {
-      relay.assistant(`event-${index}`);
-    }
-    expect(recordAcpParentStreamEventsMock).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1_999);
-    expect(recordAcpParentStreamEventsMock).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(recordAcpParentStreamEventsMock).toHaveBeenCalledTimes(2);
-    expect(recordAcpParentStreamEventsMock.mock.calls[1]?.[0]).toHaveLength(256);
-    await relay.dispose();
-  });
-
-  it.each(["overloaded", "outcome-unknown"] as const)(
-    "retries only proven pre-execution refusal (%s)",
-    async (code) => {
-      const failure = new SqliteWorkerError("controlled worker failure", code);
-      recordAcpParentStreamEventsMock.mockRejectedValueOnce(failure);
-      const relay = createRelay("outcome", {
-        childSessionId: "child",
-        agentId: "main",
-      });
-      relay.emit("acp", { phase: "runtime_event" });
-      await vi.advanceTimersByTimeAsync(1_000);
-      await vi.advanceTimersByTimeAsync(2_000);
-      await relay.dispose();
-      expect(recordAcpParentStreamEventsMock).toHaveBeenCalledTimes(code === "overloaded" ? 2 : 1);
-      await expect(recordAcpParentStreamEventsMock.mock.results[0]?.value).rejects.toBe(failure);
-    },
-  );
-
-  it("joins an in-flight batch before the final buffer and seals event admission", async () => {
-    const gate = createDeferredCore<{ ok: true; value: undefined }>();
-    recordAcpParentStreamEventsMock.mockReturnValueOnce(gate.promise);
-    const relay = createRelay("settlement", {
-      childSessionId: "child",
-      agentId: "main",
-    });
-    const emitOrdinal = (ordinal: number) => relay.emit("acp", { ordinal });
-    emitOrdinal(1);
-    await vi.advanceTimersByTimeAsync(1_000);
-    emitOrdinal(2);
-    let disposed = false;
-    const closing = relay.dispose().then(() => {
-      disposed = true;
-    });
-    emitOrdinal(3);
-    expect(disposed).toBe(false);
-    expect(recordAcpParentStreamEventsMock).toHaveBeenCalledTimes(1);
-    gate.resolve({ ok: true, value: undefined });
-    await closing;
-    expect(
-      recordAcpParentStreamEventsMock.mock.calls.map(([events]) =>
-        events.map((entry: { event: { data: { ordinal: number } } }) => entry.event.data.ordinal),
-      ),
-    ).toEqual([[1], [2]]);
   });
 
   it("remaps cron-run parent session keys while relaying stream events", async () => {

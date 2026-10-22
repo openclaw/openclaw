@@ -122,6 +122,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
     profileId?: string;
     reason?: AuthProfileFailureReason | null;
     modelId?: string;
+    retryAfterMs?: number;
   }) => {
     const { profileId, reason } = failure;
     if (
@@ -147,6 +148,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
       agentDir,
       runId: params.runId,
       modelId: failure.modelId,
+      retryAfterMs: failure.retryAfterMs,
     };
     if (profileId) {
       await markAuthProfileFailure({
@@ -403,6 +405,18 @@ export function createEmbeddedRunFailoverRetryController(input: {
         );
         return false;
       }
+      if (rateLimit) {
+        try {
+          await maybeMarkAuthProfileFailure({
+            profileId: preparedRuntime.snapshot().lastProfileId,
+            reason: resolveProfileFailureReason("rate_limit", { transientRateLimit: true }),
+            modelId,
+            retryAfterMs: retry.retryAfterMs,
+          });
+        } catch (error) {
+          log.warn(`profile failure mark failed: ${String(error)}`);
+        }
+      }
       const outputLimit = retry.reason === "output_limit";
       const attempt = (outputLimit ? outputLimitRetryCount : retryCount) + 1;
       const maxRetries = outputLimit
@@ -428,7 +442,12 @@ export function createEmbeddedRunFailoverRetryController(input: {
         let remainingMs = delayMs;
         while (remainingMs > 0) {
           const chunkMs = Math.min(remainingMs, RETRY_SLEEP_CHUNK_MS);
-          await sleepWithAbort(chunkMs, params.abortSignal);
+          try {
+            await sleepWithAbort(chunkMs, params.abortSignal);
+          } catch (error) {
+            params.abortSignal?.throwIfAborted();
+            throw error;
+          }
           remainingMs -= chunkMs;
         }
         completed = true;

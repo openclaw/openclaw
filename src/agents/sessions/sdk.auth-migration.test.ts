@@ -204,7 +204,7 @@ it.each([
         ),
         model,
         thinkingLevel: "medium",
-        resourceLoader: createResourceLoader(),
+        resourceLoader: await createResourceLoader(),
         settingsManager: SettingsManager.inMemory(),
         sessionManager: SessionManager.inMemory(),
         tools: [],

@@ -50,6 +50,7 @@ export async function preserveDoctorOriginalState(params: {
   signal: AbortSignal;
   assertCurrent: () => void;
   writeAuthority?: UpdateDoctorWriteAuthority;
+  fullIntegrityCheck?: boolean;
 }): Promise<void> {
   const original = params.writeAuthority?.originalRecoveryCapture;
   const runId = original?.runId ?? params.env[UPDATE_RUN_ID_ENV]?.trim();
@@ -152,6 +153,7 @@ export async function preserveDoctorOriginalState(params: {
       assertCurrent,
       signal: params.signal,
       acquisition: { mode: "maintenance-owner" },
+      fullIntegrityCheck: params.fullIntegrityCheck,
     });
     assertCurrent();
     params.runtime.log(

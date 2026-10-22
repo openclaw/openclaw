@@ -64,16 +64,32 @@ ends unexpectedly.
 The private worker validates core and node configuration through a read-only
 bootstrap, without Gateway-wide Doctor preflight or channel-schema validation.
 Node plugins still validate their own settings before publishing commands, and
-the node runtime owns its MCP clients. Node startup retains the Doctor-owned
-device-auth, device-identity, and exec-approval migrations; this is not a promise
-that all worker startup is read-only. Public `node run`, Gateway, and Doctor
-retain their existing startup policies.
+the node runtime owns its MCP clients. Node startup prepares client credentials
+through their migration owner before using them, and retains exec-approval
+migrations; this is not a promise that all worker startup is read-only.
 
-When the native app creates identity, device-auth, or approval tables before
-the worker starts, node startup completes that recognized version-zero database
-through the shared initializer before plugins read their state. Existing
-native rows are preserved. This does not migrate an already-versioned shared
-Gateway database or adopt unknown or occupied bootstrap state.
+The native app loads private identities and cached device tokens from its local
+`client/credentials.sqlite` before connecting, without opening the selected
+Gateway database. The active app serves bounded same-user credential operations,
+holding exclusive SQLite custody only for each operation. A fresh client can create an identity while
+PostgreSQL or the Gateway is unavailable; shared approval policy still requires
+its existing state owner.
+
+The packaged app runs the matching bundled CLI's narrow, noninteractive
+credential preparation before native admission. Gateway and node startup use
+the same migration owner. Ordinary pending migrations and validated remounts
+complete automatically without a manual Doctor command or a recovery prompt.
+A recognized credential-only native version-zero database can be
+extracted under exclusive custody before PostgreSQL bootstrap. Unknown data or
+other application tables require the supported Doctor/port route. Existing
+private keys are preserved; migration failure never silently creates replacement
+keys. Update older apps after shared credential retirement. Doctor remains the
+recovery path for unsupported or inconsistent source state.
+
+Independent native credential sources remain untouched after their read-only
+import. The previous app can still read them after rollback. The local copy keeps
+source identity and content hash, preserving refreshed tokens for an unchanged
+source and rebuilding after a source change. Consumed JSON imports remain consumed.
 
 ## Automatic setup
 

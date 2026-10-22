@@ -1,6 +1,7 @@
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog-paging";
 import { z } from "zod";
+import { jsonObjectSchema } from "./app-server/json-schema.js";
 import type { CodexThreadItem } from "./app-server/protocol.js";
 import {
   CatalogParamsError,
@@ -23,7 +24,7 @@ const transcriptPageSchema = z.strictObject({
       id: z.string(),
       type: z.enum(["userMessage", "agentMessage", "reasoning", "toolCall", "toolResult", "other"]),
       text: z.string().optional(),
-      raw: z.record(z.string(), z.json()).optional(),
+      raw: jsonObjectSchema.optional(),
       truncated: z.boolean().optional(),
     }),
   ),

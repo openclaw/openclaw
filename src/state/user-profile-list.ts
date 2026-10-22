@@ -33,6 +33,7 @@ import {
   applyUserProfileEmailBinding,
   bindPreparedUserProfileIdentity,
   projectUserProfileDisplay,
+  projectUserProfileGitHubFacts,
   projectUserProfileSnapshot,
   projectCatalogUserProfileIdentity,
   resolveCatalogProfile,
@@ -139,7 +140,7 @@ export function captureResidentUserProfileAccess(
       return {
         profileId: profile.id,
         emails: [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted(),
-        ...(profile.githubAccountIds ? { githubAccountIds: [...profile.githubAccountIds] } : {}),
+        ...projectUserProfileGitHubFacts(profile),
         assignedRole: profile.role ?? null,
         githubLogin: profile.githubLogin ?? null,
       };
@@ -694,8 +695,6 @@ export function stageUserProfileCatalogChange(db: EngineConnection, profileIds: 
   if (catalog) {
     const rows = selectProfileAccessEntries(db, profileIds);
     stageSqliteTransactionState(db, {
-      stage: () => {},
-      rollback: () => {},
       commit: () => {
         for (const id of profileIds) {
           catalog.delete(id);

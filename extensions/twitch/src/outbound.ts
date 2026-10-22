@@ -109,12 +109,6 @@ export const twitchOutbound = {
 
   sendMedia: async (params: ChannelOutboundContext): Promise<OutboundDeliveryResult> => {
     const { text, mediaUrl } = params;
-    const signal = (params as { signal?: AbortSignal }).signal;
-
-    if (signal?.aborted) {
-      throw new Error("Outbound delivery aborted");
-    }
-
     const message = mediaUrl ? `${text || ""} ${mediaUrl}`.trim() : text;
 
     return twitchOutbound.sendText({

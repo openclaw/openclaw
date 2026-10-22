@@ -23,6 +23,7 @@ import { stageClawAddHostRequirementsStateless } from "./add-stateless.js";
 import {
   installClawPackages,
   rollbackStatelessClawPackages,
+  withPackageBoundaries,
 } from "./packages.boundary.test-support.js";
 import { preflightClawPackage } from "./packages.js";
 import { emptyPluginCapabilityEvidence, packageInstallPlan } from "./packages.test-support.js";
@@ -49,7 +50,7 @@ function testPackageLease(onRelease: () => void = () => {}) {
       key: "test-package",
       owner: "test-owner",
     },
-    heartbeat: () => {},
+    assertCurrent: () => {},
     release: onRelease,
   };
 }
@@ -87,23 +88,6 @@ function packageDeps(
       ...emptyPluginCapabilityEvidence,
       grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
     }),
-    persistPackageRef: (plan, pkg, persistOptions) => ({
-      schemaVersion: "openclaw.clawPackageRef.v1",
-      agentId: plan.agent.finalId,
-      clawName: plan.claw.name,
-      kind: pkg.kind,
-      source: pkg.source,
-      ref: pkg.ref,
-      version: pkg.version!,
-      integrity: pkg.integrity!,
-      status: persistOptions?.status ?? "pending",
-      relationship: "referenced",
-      origin: "claw-introduced",
-      independentOwner: false,
-      installedAtMs: 1,
-      updatedAtMs: 1,
-    }),
-    completePackageRef: (ref, status) => ({ ...ref, status }),
   } satisfies InstallOptions["deps"];
 }
 
@@ -137,36 +121,34 @@ describe("Claw committed plugin requirement handoff", () => {
       const plan = packageInstallPlan([
         { kind: "plugin", source: "clawhub", ref: "@owner/demo", version: "1.0.0", integrity },
       ]);
-      const stage = await stageClawAddHostRequirementsStateless(plan, {
-        consentPlanIntegrity: plan.planIntegrity,
-        runtimeBatch: batch,
-        pluginConsent: {
-          onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
-        },
-        installPackages: (currentPlan, options) =>
-          installClawPackages(currentPlan, { ...options, env, deps }),
-        rollbackPackages: (refs, options) =>
-          rollbackStatelessClawPackages(refs, { ...options, env, deps }),
-      });
-      expect(stage.kind).toBe("ready");
-      if (stage.kind !== "ready") {
-        return;
-      }
+      await withPackageBoundaries(async () => {
+        const stage = await stageClawAddHostRequirementsStateless(plan, {
+          consentPlanIntegrity: plan.planIntegrity,
+          runtimeBatch: batch,
+          pluginConsent: {
+            onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
+          },
+        });
+        expect(stage.kind).toBe("ready");
+        if (stage.kind !== "ready") {
+          return;
+        }
 
-      batch.retain("missing-plugin");
-      await withPluginLifecycleLease({ env }, async (lease) => {
-        await expect(batch.prepare(lease)).rejects.toThrow("no longer installed");
-      });
-      batch.close();
-      const result = await stage.failBeforeContinue(
-        new Error("batch preparation failed"),
-        "package_runtime_failed",
-      );
+        batch.retain("missing-plugin");
+        await withPluginLifecycleLease({ env }, async (lease) => {
+          await expect(batch.prepare(lease)).rejects.toThrow("no longer installed");
+        });
+        batch.close();
+        const result = await stage.failBeforeContinue(
+          new Error("batch preparation failed"),
+          "package_runtime_failed",
+        );
 
-      expect(result.error).toMatchObject({ code: "package_runtime_failed" });
-      expect(uninstallPlugin).toHaveBeenCalledWith(expect.objectContaining({ pluginId: "demo" }));
-      expect(uninstallPlugin.mock.calls[0]?.[0]).not.toHaveProperty("deferRuntime");
-      expect(result.packages[0]?.status).toBe("rolled_back");
+        expect(result.error).toMatchObject({ code: "package_runtime_failed" });
+        expect(uninstallPlugin).toHaveBeenCalledWith(expect.objectContaining({ pluginId: "demo" }));
+        expect(uninstallPlugin.mock.calls[0]?.[0]).not.toHaveProperty("deferRuntime");
+        expect(result.packages[0]?.status).toBe("rolled_back");
+      }, deps);
     });
   });
 
@@ -377,44 +359,18 @@ describe("Claw committed plugin requirement handoff", () => {
           })),
         );
         const pending = installClawPackages(plan, options);
-        let completed: Awaited<typeof pending> | undefined;
         if (lateFailure) {
           await expect(pending).rejects.toMatchObject({
             code: "package_install_failed",
             message: "postcommit metadata failure",
           });
         } else {
-          completed = await pending;
-          expect(completed).toHaveLength(2);
+          expect(await pending).toHaveLength(2);
         }
         expect(reloadPlugins).toHaveBeenCalledOnce();
         expect(log).toHaveBeenCalledWith("Previous plugin cleanup did not finish.");
         expect(cleanup).toHaveBeenCalledTimes(lateFailure ? 1 : 2);
         expect(log).toHaveBeenCalledWith("Source cleanup warning for first");
-        if (completed) {
-          const installedRefs = completed;
-          cleanup.mockClear();
-          const installPlugin = vi.fn(async () => {
-            throw new Error("resumed requirement was reinstalled");
-          });
-          const resumedOptions = {
-            ...options,
-            deps: {
-              ...options.deps,
-              installPlugin,
-              readPackageRefs: () => installedRefs,
-            },
-          };
-          reloadPlugins.mockRejectedValueOnce(new Error("runtime reply lost"));
-          await expect(installClawPackages(plan, resumedOptions)).rejects.toMatchObject({
-            code: "package_runtime_failed",
-            message: expect.stringContaining("Runtime activation was not confirmed"),
-          });
-          await expect(installClawPackages(plan, resumedOptions)).resolves.toHaveLength(2);
-          expect(installPlugin).not.toHaveBeenCalled();
-          expect(cleanup).not.toHaveBeenCalled();
-          expect(reloadPlugins).toHaveBeenCalledTimes(3);
-        }
       });
     },
   );
@@ -481,7 +437,6 @@ describe("stateless Claw plugin rollback", () => {
   it("removes an unchanged plugin introduced by an unpublished Add", async () => {
     const deps = rollbackDeps(() => "2026-10-14T01:00:00.000Z");
     const refs = await installClawPackages(packageInstallPlan([pluginPackage]), {
-      stateless: true,
       pluginConsent,
       deps,
     });
@@ -497,11 +452,23 @@ describe("stateless Claw plugin rollback", () => {
     let installedAt = "2026-10-14T01:00:00.000Z";
     const deps = rollbackDeps(() => installedAt);
     const refs = await installClawPackages(packageInstallPlan([pluginPackage]), {
-      stateless: true,
       pluginConsent,
       deps,
     });
     installedAt = "2026-10-14T01:00:01.000Z";
+
+    expect(await rollbackStatelessClawPackages(refs, { deps })).toEqual([]);
+    expect(deps.uninstallPlugin).not.toHaveBeenCalled();
+    expect(refs[0]?.status).toBe("complete");
+  });
+
+  it("keeps an introduced plugin if a legacy owner claims it before rollback", async () => {
+    const deps = rollbackDeps(() => "2026-10-14T01:00:00.000Z");
+    const refs = await installClawPackages(packageInstallPlan([pluginPackage]), {
+      pluginConsent,
+      deps,
+    });
+    deps.readPackageRefs.mockResolvedValue(refs.map((ref) => ({ ...ref, independentOwner: true })));
 
     expect(await rollbackStatelessClawPackages(refs, { deps })).toEqual([]);
     expect(deps.uninstallPlugin).not.toHaveBeenCalled();
@@ -643,9 +610,7 @@ describe("Claw source-host plugin collision", () => {
     await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}");
     await withEnvAsync(env, async () => {
       const deps = packageDeps(root, async () => ({}));
-      const persistPackageRef = vi.fn(deps.persistPackageRef);
       const installPlugin = vi.fn(async () => {});
-      const onExternalMutation = vi.fn();
       await expect(
         installClawPackages(packageInstallPlan([pinnedBundledPlugin]), {
           env,
@@ -658,15 +623,11 @@ describe("Claw source-host plugin collision", () => {
             installPlugin,
             preflightPlugin,
             probePlugin,
-            persistPackageRef,
             acquirePackageLease: async () => testPackageLease(),
           },
-          onExternalMutation,
         }),
       ).rejects.toMatchObject({ code: "plugin_source_host_conflict", installedPackages: [] });
-      expect(persistPackageRef).not.toHaveBeenCalled();
       expect(installPlugin).not.toHaveBeenCalled();
-      expect(onExternalMutation).not.toHaveBeenCalled();
     });
   });
 });

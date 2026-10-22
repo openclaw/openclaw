@@ -450,7 +450,6 @@ describe("AppSidebar viewer presence", () => {
         expect(document.querySelector("openclaw-elapsed-time")?.textContent).toBeTruthy(),
       );
       const elapsed = document.querySelector("openclaw-elapsed-time")!;
-      await elapsed.updateComplete;
       const cardIntervals = scheduleInterval.mock.results
         .filter((result) => result.type === "return")
         .map((result) => result.value);
@@ -480,7 +479,7 @@ describe("AppSidebar viewer presence", () => {
       await vi.waitFor(() =>
         expect(document.querySelector(".person-activity-hovercard")).toBeNull(),
       );
-      // The bridge waits one microtask before disposing a disconnected view.
+      // The hovercard waits one microtask before disposing a disconnected view.
       await Promise.resolve();
       expect(elapsed.isConnected).toBe(false);
       for (const interval of cardIntervals) {

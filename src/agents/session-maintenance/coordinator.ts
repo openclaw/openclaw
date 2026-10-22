@@ -7,6 +7,15 @@ import {
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.context.js";
+import {
+  getSessionControllerEntryForOperation,
+  isCurrentSessionControllerOperation,
+} from "../../sessions/session-controller.identity.js";
+import {
+  sessionTargetOwnersMatch,
+  type SessionTarget,
+} from "../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withoutGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
@@ -19,6 +28,7 @@ type MaintenanceOwner = {
   predecessors: readonly MaintenanceOwner[];
   preemptible: boolean;
   running: boolean;
+  target?: SessionTarget;
 };
 type SessionMaintenance = {
   owners: Set<MaintenanceOwner>;
@@ -84,10 +94,27 @@ registerAgentEventLifecycleRotationHandler("session-maintenance", () => {
   }
 });
 
+function waitsForCurrentTurn(owner: MaintenanceOwner): boolean {
+  if (owner.running || !owner.target) {
+    return false;
+  }
+  const operation = getCurrentSessionControllerOwner();
+  if (!operation || !isCurrentSessionControllerOperation(operation)) {
+    return false;
+  }
+  const entry = getSessionControllerEntryForOperation(operation);
+  return Boolean(
+    entry.target &&
+    entry.aliases.has(owner.target.sessionKey) &&
+    sessionTargetOwnersMatch(entry.target, owner.target),
+  );
+}
+
 /** Tracks a producer's real completion; cancellation never releases a writer early. */
 export function createSessionMaintenanceOwner(params: {
   sessionKey: string;
   preemptible?: boolean;
+  target?: SessionTarget;
   abortSignal?: AbortSignal;
 }) {
   const key = params.sessionKey.trim();
@@ -115,6 +142,7 @@ export function createSessionMaintenanceOwner(params: {
     predecessors: independentOwners(session, ancestors),
     preemptible: params.preemptible === true,
     running: params.preemptible !== true,
+    target: params.target,
   };
   session.owners.add(owner);
   const assertCurrent = () => {
@@ -129,7 +157,11 @@ export function createSessionMaintenanceOwner(params: {
     done,
     assertCurrent,
     releaseWrites,
-    run: async <T>(run: () => Promise<T>): Promise<T> => {
+    run: async <T>(
+      work:
+        | (() => Promise<T>)
+        | { admit: (run: (work: () => Promise<T>) => Promise<T>) => Promise<T> },
+    ): Promise<T> => {
       // Waiting on successors would make nested model reads mutually await sibling work.
       await Promise.all(owner.predecessors.map((predecessor) => predecessor.writesDone));
       if (owner.preemptible) {
@@ -143,15 +175,22 @@ export function createSessionMaintenanceOwner(params: {
           }
         }
         assertCurrent();
-        owner.running = true;
       }
-      // Maintenance owns this session's work, never its launching turn's tool grants.
-      return withoutGatewayToolCallerIdentity(() =>
-        runOutsideOperatorToolGatewayAuthority(() =>
-          // Nested model reads must not wait on their own maintenance parent.
-          state.current.run(new Set([...ancestors, owner]), run),
-        ),
-      );
+      const run = (execute: () => Promise<T>) => {
+        if (owner.preemptible) {
+          assertCurrent();
+          // Queued controller admission is not a writer that its current turn must drain.
+          owner.running = true;
+        }
+        // Maintenance owns this session's work, never its launching turn's tool grants.
+        return withoutGatewayToolCallerIdentity(() =>
+          runOutsideOperatorToolGatewayAuthority(() =>
+            // Nested model reads must not wait on their own maintenance parent.
+            state.current.run(new Set([...ancestors, owner]), execute),
+          ),
+        );
+      };
+      return typeof work === "function" ? run(work) : work.admit(run);
     },
     track: <T>(work: Promise<T>): Promise<T> =>
       work.finally(() => {
@@ -199,8 +238,14 @@ export async function beginForegroundSessionMaintenance(sessionKey?: string): Pr
 export async function waitForSessionMaintenance(sessionKey?: string): Promise<void> {
   const session = sessionKey ? state.sessions.get(sessionKey.trim()) : undefined;
   const current = state.current.getStore();
+  const blocked = new Set(current);
+  for (const owner of session?.owners ?? []) {
+    if (waitsForCurrentTurn(owner)) {
+      blocked.add(owner);
+    }
+  }
   await Promise.all(
-    independentOwners(session, current)
+    independentOwners(session, blocked)
       .filter((owner) => owner.running || session?.foreground === 0)
       .map((owner) => (current?.size ? owner.writesDone : owner.done)),
   );

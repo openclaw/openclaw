@@ -87,7 +87,6 @@ export function stripAssistantMediaDirectivesForDisplay(
     .join("\n");
 }
 
-/** Resolve the text cap used when projecting chat history for display. */
 export function resolveEffectiveChatHistoryMaxChars(maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;

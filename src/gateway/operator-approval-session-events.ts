@@ -2,6 +2,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import type {
   PendingApprovalSnapshot,
   SessionApprovalEvent,
+  SessionApprovalReplay,
 } from "../../packages/gateway-protocol/src/index.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
@@ -205,10 +206,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     const truncated = records.length > MAX_SESSION_APPROVAL_REPLAY;
     for (const record of records) {
       if (approvals.length === MAX_SESSION_APPROVAL_REPLAY) {
-        return {
-          replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated: true },
-          isCurrent,
-        };
+        break;
       }
       const approval = projectOperatorApprovalSnapshot(record, controlUiBasePath);
       if (approval?.status === "pending") {
@@ -219,7 +217,13 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         });
       }
     }
-    return { replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated }, isCurrent };
+    const replay: SessionApprovalReplay = {
+      sessionKey,
+      updatedAtMs: snapshotAtMs,
+      approvals,
+      truncated,
+    };
+    return { replay, isCurrent };
   };
 
   return {
@@ -227,7 +231,12 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     replay: async (sessionKey, client) => {
       if (!canReviewOperatorApproval(client)) {
         return {
-          replay: { sessionKey, updatedAtMs: now(), approvals: [], truncated: false },
+          replay: {
+            sessionKey,
+            updatedAtMs: now(),
+            approvals: [],
+            truncated: false,
+          },
           isCurrent: () => !canReviewOperatorApproval(client),
           release: () => {},
         };
@@ -252,7 +261,12 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       const key = JSON.stringify([sessionKey, reviewerDeviceId]);
       let scope = replayScopes.get(key);
       if (!scope) {
-        scope = { sessionKey, reviewerDeviceId, references: 0, revision: 0 };
+        scope = {
+          sessionKey,
+          reviewerDeviceId,
+          references: 0,
+          revision: 0,
+        };
         replayScopes.set(key, scope);
       }
       const retained = scope;

@@ -17,6 +17,7 @@ import {
   closeAgentNotification,
   createClient,
   createNativeModelSourceFixture,
+  directSpawnItem,
   notifyChildStarted,
   successfulSendInputOutput,
   threadRead,
@@ -40,7 +41,212 @@ async function startAssignment(observeTurn = true) {
   return { f, client, parent };
 }
 
+async function startNestedAssignment() {
+  const f = await fixture();
+  const client = createClient();
+  const parent = await f.register(
+    client,
+    f.historyOwner(),
+    createNativeModelSourceFixture(["model-a"]),
+  );
+  await parent.ready;
+  parent.bindTurn("parent-turn");
+  await f.spawn(client);
+  await notifyChildStarted(client, "child-thread", "grandchild", "/root/child/grandchild");
+  await client.item(
+    directSpawnItem("v2", "child-thread", "grandchild"),
+    "child-turn",
+    "child-thread",
+  );
+  await client.notify({
+    method: "turn/started",
+    params: { threadId: "grandchild", turn: { id: "grandchild-turn" } },
+  });
+  const capture = await codexNativeSubagentMonitorRuntime.captureModelSource({
+    client: client.client,
+    threadId: "grandchild",
+    turnId: "grandchild-turn",
+    parentThreadId: "child-thread",
+    parentTurnId: "child-turn",
+    rootTurnId: "parent-turn",
+  });
+  assert(capture);
+  capture.release();
+  return { f, client, parent };
+}
+
 describe("native pending assignment inventory through registered monitor admission", () => {
+  it("acknowledges a grandchild's native completion without root delivery or restart replay", async () => {
+    const { f, client, parent } = await startNestedAssignment();
+    expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual([
+      expect.objectContaining({ childThreadId: "child-thread" }),
+      expect.objectContaining({
+        childThreadId: "grandchild",
+        nativeParentThreadId: "child-thread",
+      }),
+    ]);
+    await client.completeTurn({
+      threadId: "grandchild",
+      turnId: "grandchild-turn",
+      status: "completed",
+      items: [{ id: "final", type: "agentMessage", phase: "final_answer", text: "Nested result" }],
+    });
+    await completeInForeground(client);
+    await parent.unregister();
+    expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual([]);
+    expect(f.deliver).not.toHaveBeenCalled();
+    client.close();
+    const recovered = await f.register(createClient());
+    await recovered.ready;
+    await recovered.unregister();
+    expect(recovered.listPendingChildren()).toEqual([]);
+    expect(f.deliver).not.toHaveBeenCalled();
+  });
+
+  it.each(["available", "unavailable", "revoked"] as const)(
+    "settles a restored grandchild only with native lineage and current custody (%s)",
+    async (scenario) => {
+      const { f, client, parent } = await startNestedAssignment();
+      await completeInForeground(client);
+      await parent.unregister();
+      client.close();
+      const saved = await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner());
+      expect(saved).toEqual([expect.objectContaining({ childThreadId: "grandchild" })]);
+      const recoveredClient = createClient();
+      recoveredClient.setThreadRead(
+        "grandchild",
+        threadRead({
+          childThreadId: "grandchild",
+          parentThreadId: "child-thread",
+          turnId: "grandchild-turn",
+          result: "Nested result",
+          resultPhase: "final_answer",
+        }),
+      );
+      const metadata = threadRead({ childThreadId: "child-thread", directParentField: false });
+      const entered = createDeferred<void>();
+      const release = createDeferred<typeof metadata>();
+      recoveredClient.setThreadReadFactory("child-thread", () => {
+        if (scenario === "unavailable") {
+          throw new Error("Native middle thread is temporarily unavailable");
+        }
+        if (scenario === "revoked") {
+          entered.resolve();
+          return release.promise;
+        }
+        return metadata;
+      });
+      const recovered = await f.register(recoveredClient);
+      if (scenario === "revoked") {
+        await entered.promise;
+        recovered.closeGateway();
+        release.resolve(metadata);
+      }
+      await recovered.ready;
+      await recovered.unregister();
+      expect(f.deliver).not.toHaveBeenCalled();
+      expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual(
+        scenario === "available" ? [] : saved,
+      );
+      if (scenario !== "available") {
+        recoveredClient.setThreadRead("child-thread", metadata);
+        const retry = await f.register(recoveredClient);
+        await retry.ready;
+        await retry.unregister();
+        expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual(
+          [],
+        );
+      }
+      recoveredClient.close();
+      const restarted = await f.register(createClient());
+      await restarted.ready;
+      await restarted.unregister();
+      expect(restarted.listPendingChildren()).toEqual([]);
+      expect(f.deliver).not.toHaveBeenCalled();
+    },
+  );
+
+  it("settles restoration writes before reading the next assignment or reporting readiness", async () => {
+    const f = await fixture();
+    const assignments = ["first-child", "second-child"].map((childThreadId) => ({
+      runId: `codex-thread:${childThreadId}`,
+      childThreadId,
+      nativeTurnId: `${childThreadId}-turn`,
+      nativeParentThreadId: "parent-thread",
+      owner: f.historyOwner(),
+    }));
+    for (const assignment of assignments) {
+      await f.store.mutate(
+        f.identity,
+        { kind: "record-native-subagent-assignment", owner: f.historyOwner(), assignment },
+        () => {},
+      );
+    }
+    const entered = createDeferred<void>();
+    const releaseWrite = createDeferred<void>();
+    let writing = false;
+    const mutate = f.store.mutate.bind(f.store);
+    vi.spyOn(f.store, "mutate").mockImplementation(
+      async (identity, mutation, assertCurrent, authority) => {
+        if (mutation.kind !== "record-native-subagent-assignment") {
+          return await mutate(identity, mutation, assertCurrent, authority);
+        }
+        writing = true;
+        entered.resolve();
+        try {
+          await releaseWrite.promise;
+          return await mutate(identity, mutation, assertCurrent, authority);
+        } finally {
+          writing = false;
+        }
+      },
+    );
+    const readAssignments = f.store.readNativeSubagentAssignments!.bind(f.store);
+    const conflictingRead = vi.fn();
+    vi.spyOn(f.store, "readNativeSubagentAssignments").mockImplementation(async (...args) => {
+      if (writing) {
+        conflictingRead();
+        throw new Error("Plugin state authority is unavailable");
+      }
+      return await readAssignments(...args);
+    });
+    const client = createClient();
+    for (const assignment of assignments) {
+      client.setThreadRead(
+        assignment.childThreadId,
+        threadRead({
+          childThreadId: assignment.childThreadId,
+          turnId: assignment.nativeTurnId,
+          result: `Recovered ${assignment.childThreadId}`,
+          resultPhase: "final_answer",
+        }),
+      );
+    }
+    const parent = await f.register(client);
+    let ready = false;
+    void parent.ready.then(() => {
+      ready = true;
+    });
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ready).toBe(false);
+      expect(conflictingRead).not.toHaveBeenCalled();
+      releaseWrite.resolve();
+      await parent.ready;
+      expect(ready).toBe(true);
+      expect(conflictingRead).not.toHaveBeenCalled();
+      expect(parent.listPendingChildren()).toHaveLength(2);
+      expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual(
+        assignments.map((assignment) => expect.objectContaining(assignment)),
+      );
+    } finally {
+      releaseWrite.resolve();
+      await parent.unregister();
+      client.close();
+    }
+  });
+
   it.each(["committed", "rejected", "failed", "source-revoked", "binding-retired"] as const)(
     "withholds native inference authority until its exact assignment is acknowledged (%s)",
     async (outcome) => {
@@ -500,6 +706,8 @@ describe("native pending assignment inventory through registered monitor admissi
       );
       await client.notify(turnStartedNotification("followup-turn"));
       const nativeRoot = threadRead({ childThreadId: "parent-thread", threadStatus: "notLoaded" });
+      nativeRoot.thread.parentThreadId = null;
+      nativeRoot.thread.source = "cli";
       nativeRoot.thread.modelProvider = "provider-a";
       client.setThreadRead("parent-thread", nativeRoot);
       await expect(
@@ -533,6 +741,11 @@ describe("native pending assignment inventory through registered monitor admissi
             agentsStates: { "child-thread": { status: "completed", message: "A result" } },
           },
         },
+      });
+      await client.completeTurn({
+        turnId: "followup-turn",
+        status: "completed",
+        items: [{ id: "b-final", type: "agentMessage", phase: "final_answer", text: "B result" }],
       });
       await replacement.unregister();
       expect(f.deliver).toHaveBeenCalledOnce();

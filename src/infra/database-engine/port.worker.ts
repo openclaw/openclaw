@@ -155,7 +155,7 @@ async function* readBatches(
       rows = statement.iterate(...params);
     } else {
       const result = await endpoint.db.query(sql, params.map(binding));
-      rows = decodePostgresRows({ ...result, rowCount: result.rowCount ?? 0 }, true);
+      rows = decodePostgresRows(result, true);
     }
     let count = 0,
       bytes = 0;

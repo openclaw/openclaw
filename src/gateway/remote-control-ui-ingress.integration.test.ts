@@ -212,7 +212,6 @@ describe("remote Control UI ingress production composition", () => {
     const requestContext = bindSessionRowProjection(
       {
         ...createGatewayWsTestRequestContext(),
-        chatAbortControllers: new Map(),
         getRuntimeConfig: () => config,
         trackExecution: <T>(run: () => T | Promise<T>) => connectionWork.track(run),
         logGateway: logger,
@@ -638,13 +637,13 @@ describe("remote Control UI ingress production composition", () => {
           );
         }
         await expectStatus(readRemote(`/claw/api/users/${person.id}/avatar`, ui), 200);
-        await expectStatus(
-          readRemote(
-            `/claw/__openclaw__/workspace-icon/${encodeURIComponent(`agent:main:ingress-${person.id}`)}`,
-            ui,
-          ),
-          isAdmin ? 200 : 403,
-        );
+        // Session byte routes follow session visibility: each person reads the icon of the
+        // draft they created, the reader role (sessions.others: none) cannot see the admin's
+        // draft, and admin scope stays unfiltered.
+        const iconPath = (owner: { id: string }) =>
+          `/claw/__openclaw__/workspace-icon/${encodeURIComponent(`agent:main:ingress-${owner.id}`)}`;
+        await expectStatus(readRemote(iconPath(person), ui), 200);
+        await expectStatus(readRemote(iconPath(isAdmin ? reader : admin), ui), isAdmin ? 200 : 403);
       } finally {
         await binding.close();
       }

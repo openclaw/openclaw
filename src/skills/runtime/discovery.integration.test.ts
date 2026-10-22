@@ -1,3 +1,4 @@
+import nativeFs, { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
@@ -32,7 +33,10 @@ const temporary = useAutoCleanupTempDirTracker((cleanup) =>
 let workspace: string;
 beforeEach(() => {
   workspace = temporary.make("skills-discovery-");
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
+  vi.setSystemTime(0);
 });
 function request(dir = workspace): WorkspaceSkillSourceRequest {
   const skills = path.join(dir, "skills");
@@ -51,17 +55,40 @@ const descriptions = async (input = request(), watch = true) =>
   (await prepareLocalSkillSources(input, { watch })).entries.map(
     (entry) => entry.skill.description,
   );
-async function completePassiveScan(milliseconds = 60_000) {
+async function completePassiveScan(milliseconds = 30 * 60_000 + 50) {
   const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
   try {
-    await vi.advanceTimersByTimeAsync(milliseconds);
-    await Promise.all(tasks.mock.results.map((result) => result.value));
+    let settledTasks = 0;
+    for (let elapsed = 0; elapsed < milliseconds; elapsed += 60_000) {
+      await vi.advanceTimersByTimeAsync(Math.min(60_000, milliseconds - elapsed));
+      // Native events during a scan can start another pass before publication.
+      while (settledTasks < tasks.mock.results.length) {
+        const pending = tasks.mock.results.slice(settledTasks);
+        settledTasks += pending.length;
+        await Promise.all(pending.map((result) => result.value));
+      }
+    }
   } finally {
     tasks.mockRestore();
   }
 }
 const write = (description: string, dir = workspace, relative = "skills/guide") =>
   writeSkill({ dir: path.join(dir, relative), name: path.basename(relative), description });
+async function waitForLiveWatch(directory: string, workspaceDir = workspace) {
+  const version = getSkillsResourceVersion(workspaceDir);
+  const marker = path.join(directory, ".watch-ready");
+  // Native registration can miss startup writes. Establish the live stream before
+  // the single edit under test; missed events are covered by safety reconciliation.
+  const pulse = setInterval(() => writeFileSync(marker, "ready"), 100);
+  try {
+    await expect
+      .poll(() => getSkillsResourceVersion(workspaceDir), { timeout: 10_000 })
+      .toBeGreaterThan(version);
+  } finally {
+    clearInterval(pulse);
+    await fs.rm(marker, { force: true });
+  }
+}
 function trackSettlement(promise: Promise<unknown>) {
   const settled = vi.fn();
   void promise.then(settled, settled);
@@ -144,19 +171,46 @@ it("serves published skills while discovery is scanning another workspace", asyn
   expect(await cold).toEqual(["New workspace"]);
 });
 
-it("coalesces passive edits until the minute boundary and shares one worker", async () => {
-  const other = temporary.make("skills-discovery-other-");
+it("does no discovery work during five unchanged minutes", async () => {
   await descriptions();
-  await descriptions(request(other));
+  const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
+  for (let minute = 0; minute < 5; minute++) {
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.all(tasks.mock.results.map((result) => result.value));
+  }
+  expect(tasks).not.toHaveBeenCalled();
+});
+
+it("discovers external edits without waiting for a periodic scan and shares one worker", async () => {
+  vi.useRealTimers();
+  const other = temporary.make("skills-discovery-other-");
+  await write("Original");
+  await write("Other original", other);
+  expect(await descriptions()).toEqual(["Original"]);
+  expect(await descriptions(request(other))).toEqual(["Other original"]);
+  await waitForLiveWatch(path.join(workspace, "skills"));
+  await waitForLiveWatch(path.join(other, "skills"), other);
   expect(discoveryPools()).toEqual([expect.objectContaining({ workerCount: 1 })]);
   await write("First");
   await write("Final");
   await write("Other", other);
-  await vi.advanceTimersByTimeAsync(59_999);
-  expect(await descriptions()).toEqual([]);
-  await completePassiveScan(1);
-  expect(await descriptions()).toEqual(["Final"]);
-  expect(await descriptions(request(other))).toEqual(["Other"]);
+  await expect.poll(() => descriptions(), { timeout: 10_000 }).toEqual(["Final"]);
+  await expect.poll(() => descriptions(request(other)), { timeout: 10_000 }).toEqual(["Other"]);
+});
+
+it("observes edits inside an admitted external symlink target", async () => {
+  vi.useRealTimers();
+  const external = temporary.make("skills-external-target-");
+  const target = path.join(external, "guide");
+  await writeSkill({ dir: target, name: "guide", description: "Original target" });
+  await fs.mkdir(path.join(workspace, "skills"));
+  await fs.symlink(target, path.join(workspace, "skills", "guide"), "junction");
+  const input = request();
+  input.sourcePlan.allowSymlinkTargets = [external];
+  expect(await descriptions(input)).toEqual(["Original target"]);
+  await waitForLiveWatch(target);
+  await writeSkill({ dir: target, name: "guide", description: "Edited target" });
+  await expect.poll(() => descriptions(input), { timeout: 10_000 }).toEqual(["Edited target"]);
 });
 
 it("applies config refresh on the healthy worker and drops departed sources", async () => {
@@ -297,7 +351,19 @@ it("keeps watch=false passive state fixed while explicit refresh remains immedia
 
 it("rediscovers replaced workspaces and roots that disappear and return", async () => {
   await write("Original");
-  expect(await descriptions()).toEqual(["Original"]);
+  expect(await descriptions(request(), false)).toEqual(["Original"]);
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const watch = vi.spyOn(nativeFs, "watch");
+  // Register the Windows observation on an already prepared source, so this
+  // exercises its handle boundary without changing worker launch semantics.
+  Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+  try {
+    expect(await descriptions()).toEqual(["Original"]);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
+  expect(watch).toHaveBeenCalledOnce();
+  expect(watch.mock.calls[0]![0]).toBe(workspace);
   await fs.rename(workspace, path.join(temporary.make("skills-retired-"), "workspace"));
   for (const description of ["Replacement", undefined, "Recreated"]) {
     await (description
@@ -368,8 +434,8 @@ it("discovers new agent-plugin children during the passive worker pass", async (
   const names = async () =>
     (await prepareLocalSkillSources(input, { plan })).entries.map((entry) => entry.skill.name);
   expect(await names()).toContain("first");
-  await write("Second", skillRoot, "second");
   expect(await names()).not.toContain("second");
+  await write("Second", skillRoot, "second");
   await completePassiveScan();
   expect(await names()).toContain("second");
 });

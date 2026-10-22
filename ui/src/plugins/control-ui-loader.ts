@@ -2,6 +2,7 @@ import type {
   ControlUiDisposer,
   ControlUiPlugin,
   ControlUiSettingsView,
+  ControlUiChannelSettingsView,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -56,7 +57,7 @@ export async function initializeControlUiPlugin(
 export type ControlUiPluginModule = {
   default?: ControlUiPlugin;
   pluginId?: string;
-  settingsViews?: readonly ControlUiSettingsView[];
+  settingsViews?: readonly (ControlUiSettingsView | ControlUiChannelSettingsView)[];
 };
 
 /** Both activation and packaged Settings presentations share one asset loader. */

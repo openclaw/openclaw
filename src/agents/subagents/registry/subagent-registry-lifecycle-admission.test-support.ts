@@ -13,6 +13,7 @@ import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { RequesterSettleWakeState } from "./subagent-registry.types.js";
 
 type RequesterSettleWakeParams = Parameters<
@@ -63,38 +64,26 @@ export function registerRequesterDatabaseAdmissionTests({
         entry,
         maybeWakeRequesterAfterAllChildrenSettled: settleWake,
       });
-      vi.useFakeTimers();
-      try {
-        controller.resumeRequesterSettleWake(entry.runId, entry);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(readLifecycleRun(entry).requesterSettleWake).toEqual({
-          ...wake,
-          nextAttemptAt: Date.now() + 30_000,
+      const pendingWork = observeRootWork();
+      controller.resumeRequesterSettleWake(entry.runId, entry);
+      await pendingWork();
+      expect(readLifecycleRun(entry).requesterSettleWake).toEqual(wake);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(settleWake).toHaveBeenCalledOnce();
+
+      if (outcome === "cancelled") {
+        await controller.retireSubagentObligations(readLifecycleRun(entry), () => {}, {
+          requesterNotified: true,
         });
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-        // Startup can outlast both delivery and stale-deferral budgets. No turn
-        // has been admitted, so those budgets and the replay key must be untouched.
-        for (let attempt = 0; attempt < 12; attempt++) {
-          await vi.advanceTimersByTimeAsync(30_000);
-          expect(readLifecycleRun(entry).requesterSettleWake).toEqual({
-            ...wake,
-            nextAttemptAt: Date.now() + 30_000,
-          });
-        }
-        expect(settleWake).toHaveBeenCalledTimes(13);
-        if (outcome === "cancelled") {
-          await controller.cancelRequesterSettleWake(readLifecycleRun(entry), () => {});
-        } else {
-          ready = true;
-        }
-        await vi.advanceTimersByTimeAsync(30_000);
-        expect(settleWake).toHaveBeenCalledTimes(outcome === "cancelled" ? 13 : 14);
-        expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        controller.clearScheduledResumeTimers();
-        vi.useRealTimers();
+      } else {
+        ready = true;
       }
+      const resumedWork = observeRootWork();
+      controller.resumeRequesterSettleWake(entry.runId, readLifecycleRun(entry));
+      await resumedWork();
+      expect(settleWake).toHaveBeenCalledTimes(outcome === "cancelled" ? 1 : 2);
+      expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
     },
   );
 

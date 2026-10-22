@@ -87,7 +87,8 @@ function startGateway(
       executablePath: process.execPath,
       argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
       cwd: repoRoot,
-      usePackagedPlugins: true,
+      // Repository fixtures stage auth directly; packaged bootstrap has dedicated coverage.
+      usePackagedPlugins: false,
     },
     providerMode: "mock-openai",
     providerBaseUrl,
@@ -304,7 +305,40 @@ suite.define(() => {
         disabledJob(automationName, "Complete this synthetic reminder."),
       );
       await send("100001", "create", "Create a disabled hourly reminder.");
-      await transport.waitForOutbound({ textIncludes: "create:", timeoutMs: 60_000 });
+      try {
+        await transport.waitForOutbound({ textIncludes: "create:", timeoutMs: 60_000 });
+      } catch (error) {
+        const providerState = provider.diagnostics("create");
+        const snapshot = transport.state.getSnapshot();
+        const outbound = snapshot.messages.filter((message) => message.direction === "outbound");
+        const matchingRequests = providerState.observedRequests.filter(
+          (request) => request.marker === "create",
+        );
+        const facts = {
+          phase: "telegram-create-reply",
+          provider: {
+            initialRequestObserved: providerState.matchingInitialRequestObserved,
+            automationsToolAvailable: providerState.automationsToolAvailable,
+            resultReceived: providerState.resultReceived,
+            requestCount: providerState.observedRequests.length,
+            matchingRequestCount: matchingRequests.length,
+            toolOutputRequestCount: matchingRequests.filter((request) => request.hasOutput).length,
+            errorCount: providerState.providerErrors.length,
+          },
+          transport: {
+            inboundCount: snapshot.messages.filter((message) => message.direction === "inbound")
+              .length,
+            outboundCount: outbound.length,
+            errorCount: outbound.filter((message) => message.isError).length,
+            matchingReplyCount: outbound.filter((message) => message.text.includes("create:"))
+              .length,
+          },
+        };
+        console.error("[control-ui-e2e] automation creation failure facts", JSON.stringify(facts));
+        // Diagnostics must preserve the original timeout even if artifact writing fails.
+        await writeVerdict("create-failure-facts.public.json", facts).catch(() => undefined);
+        throw error;
+      }
       const created = readResult(provider.results.get("create") ?? "null");
       expect(created).toMatchObject({
         id: expect.any(String),
@@ -347,9 +381,12 @@ suite.define(() => {
         textIncludes: `${nonOwnerMarker}:`,
         timeoutMs: 60_000,
       });
-      expect(provider.toolAvailability.get(nonOwnerMarker)).toBe(false);
-      expect(provider.results.has(nonOwnerMarker)).toBe(false);
-      expect(nonOwnerReply.text).toContain("Automation tools are unavailable for this caller.");
+      // The definition stays visible for prompt caching; execution requires owner authority.
+      const nonOwnerRefusal =
+        "automations needs the owner's authority, and this turn was not started by the owner. Do not retry automations.";
+      expect(provider.toolAvailability.get(nonOwnerMarker)).toBe(true);
+      expect(provider.results.get(nonOwnerMarker)).toBe(nonOwnerRefusal);
+      expect(nonOwnerReply.text).toContain(nonOwnerRefusal);
       expect(await gateway.call("cron.get", { id: jobId })).toEqual(jobBeforeNonOwner);
       expect(await gateway.call("cron.runs", { id: jobId })).toEqual(runsBeforeNonOwner);
       expect(managementAuditEvents()).toHaveLength(0);
@@ -437,13 +474,15 @@ suite.define(() => {
         }
       });
       const auditEvents = managementAuditEvents();
-      expect(auditEvents).toHaveLength(actions.length + 2);
+      // Both configured-owner reads and removal's revision lookup are audited.
+      expect(auditEvents).toHaveLength(actions.length + 3);
       await writeVerdict("verdict.json", {
         admin: adminResults,
         cronRuns: observedCronRuns,
         configuredTelegramOwner: ownerResults,
         nonOwnerTelegramConversation: {
           automationsAvailable: provider.toolAvailability.get(nonOwnerMarker),
+          refusal: provider.results.get(nonOwnerMarker),
         },
         adminManagementAuditEvents: auditEvents.length,
       });

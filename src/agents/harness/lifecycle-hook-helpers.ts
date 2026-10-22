@@ -26,7 +26,6 @@ type AgentHarnessHookParams<Event> = {
 };
 type FinalizeRetryBudget = Map<string, number>;
 
-/** Returns the current global hook runner for harness lifecycle hooks. */
 export function getAgentHarnessHookRunner(): AgentHarnessHookRunner {
   return getGlobalHookRunner();
 }
@@ -97,7 +96,6 @@ export async function awaitAgentHarnessAgentEndHook(
   await executeAgentHarnessAgentEndHook({ ...params, unrefTimeout: false });
 }
 
-/** Normalized before-finalize hook decision consumed by harness loops. */
 type AgentHarnessBeforeAgentFinalizeOutcome =
   | { action: "continue" }
   | { action: "revise"; reason: string }

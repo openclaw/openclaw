@@ -82,10 +82,7 @@ export type ToolParameterSchemaOptions = {
   modelCompat?: ToolSchemaModelCompat;
 };
 
-const MAX_TOOL_PARAMETER_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
-const toolParameterSchemaCache = createToolSchemaNormalizationCache<TSchema>(
-  MAX_TOOL_PARAMETER_SCHEMA_CACHE_ENTRIES_PER_SCHEMA,
-);
+const toolParameterSchemaCache = createToolSchemaNormalizationCache<TSchema>();
 
 function isGeminiModelId(modelId: string): boolean {
   return /(?:^|[/:])gemini(?:$|[-/:.])/.test(modelId);

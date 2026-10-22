@@ -26,6 +26,7 @@ export * from "./sessions-goal.js";
 export * from "./sessions-provider-review.js";
 export {
   SessionsListParamsSchema,
+  SessionsSubscribeParamsSchema,
   SessionOwnerSessionCountSchema,
   type SessionsListParams,
   type SessionOwnerSessionCount,
@@ -139,6 +140,14 @@ export const SessionsCompanionAskParamsSchema = closedObject({
     Type.String({ minLength: 1, maxLength: SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS }),
   ),
   attachments: Type.Optional(ChatAttachmentsSchema),
+  /** Side chat model for this question; omitted uses the agent's utility model. */
+  model: Type.Optional(NonEmptyString),
+  /** Reasoning level for this question; omitted uses the model default. */
+  thinkingLevel: Type.Optional(NonEmptyString),
+  /** Speed for this question; omitted uses the model default. */
+  fastMode: Type.Optional(
+    Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+  ),
 });
 
 /** Companion answer returned only to the requesting operator. */
@@ -155,6 +164,8 @@ export const SessionsCompanionStateParamsSchema = closedObject({
 
 export const SessionsCompanionStateResultSchema = closedObject({
   exchanges: Type.Array(SessionCompanionExchangeSchema, { maxItems: 24 }),
+  /** Model Side chat answers with when a question names none; absent when unavailable. */
+  defaultModel: Type.Optional(NonEmptyString),
 });
 
 /** Selects the in-memory companion thread to clear. */
@@ -246,14 +257,25 @@ export const SessionsFilesListResultSchema = closedObject({
 });
 
 /** Reads one session-referenced file by path. */
-export const SessionsFilesGetParamsSchema = closedObject({
+const sessionFilePathProperties = {
   sessionKey: NonEmptyString,
   path: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+};
+export const SessionsFilesGetParamsSchema = closedObject({
+  ...sessionFilePathProperties,
+  messageEntryId: Type.Optional(NonEmptyString),
+});
+
+const SessionFileSourceSchema = closedObject({
+  workspaceId: NonEmptyString,
+  root: Type.Union([NonEmptyString, Type.Null()]),
+  fileRoot: Type.Union([NonEmptyString, Type.Null()]),
 });
 
 export const SessionsFilesGetResultSchema = closedObject({
   sessionKey: NonEmptyString,
+  source: Type.Optional(SessionFileSourceSchema),
   root: Type.Optional(NonEmptyString),
   file: SessionFileEntrySchema,
 });
@@ -303,9 +325,10 @@ export const SessionsFilesAssetsResultSchema = closedObject({
   ),
 });
 
-/** Overwrites one existing session workspace file with hash-based CAS. */
+/** Overwrites an existing file with content and optional managed-source preconditions. */
 export const SessionsFilesSetParamsSchema = closedObject({
-  ...SessionsFilesGetParamsSchema.properties,
+  ...sessionFilePathProperties,
+  expectedSource: Type.Optional(SessionFileSourceSchema),
   content: Type.String(),
   expectedHash: SessionFileHashSchema,
 });
@@ -358,6 +381,10 @@ export const SessionsDiffParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   scope: Type.Optional(SessionDiffScopeSchema),
   commit: Type.Optional(NonEmptyString),
+  /** File metadata and line counts only; skip patches and branch history. */
+  summaryOnly: Type.Optional(Type.Boolean()),
+  /** Return a computing result while a shared checkout read is pending. */
+  poll: Type.Optional(Type.Boolean()),
 });
 
 /** Branch + working-tree diff for one session checkout. */
@@ -377,6 +404,8 @@ export const SessionsDiffResultSchema = closedObject({
   additions: Type.Integer({ minimum: 0 }),
   deletions: Type.Integer({ minimum: 0 }),
   truncated: Type.Optional(Type.Boolean()),
+  /** Poll again for the completed diff; empty files do not mean no changes. */
+  computing: Type.Optional(Type.Boolean()),
   unavailableReason: Type.Optional(
     stringLiteralUnion(["unknown_session", "not_git", "unknown_commit", "workspace_stopped"]),
   ),

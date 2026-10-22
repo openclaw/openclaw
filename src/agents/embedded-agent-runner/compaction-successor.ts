@@ -3,7 +3,7 @@ import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
 } from "../../auto-reply/reply/session-hooks.js";
-import { projectHarnessCompletionCompaction } from "../../config/sessions/harness-completion-compaction.js";
+import { projectRestartRecoveryCompaction } from "../../config/sessions/harness-completion-compaction.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -23,6 +23,7 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { sameSessionTranscriptStorePath } from "../../config/sessions/transcript-store-identity.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -243,7 +244,7 @@ export async function acceptCompactionSuccessor(params: {
         requireCompactionWriterEntry(entry, expected);
         return {
           sessionId: successor.sessionId,
-          ...projectHarnessCompletionCompaction(entry, successor.sessionId),
+          ...projectRestartRecoveryCompaction(entry, successor.sessionId),
         };
       },
       {
@@ -267,12 +268,16 @@ export async function acceptCompactionSuccessor(params: {
               }),
             }),
           };
-          params.onCommitted?.(committed);
-          if (committed.admissionTransition) {
-            params.assertActive.onSessionCompactionCommitted?.(
-              committed.admissionTransition,
-              entry,
-            );
+          try {
+            params.onCommitted?.(committed);
+          } finally {
+            // Every committed successor must reach its authority owner, even if another sink fails.
+            if (committed.admissionTransition) {
+              params.assertActive.onSessionCompactionCommitted?.(
+                committed.admissionTransition,
+                entry,
+              );
+            }
           }
         },
       },
@@ -328,7 +333,6 @@ function emitCompactionSessionLifecycleHooks(params: {
   }
   if (params.nextEntry.sessionId && params.storePath) {
     noteActiveSessionForShutdown({
-      cfg: params.cfg,
       sessionKey: params.sessionKey,
       sessionId: params.nextEntry.sessionId,
       storePath: params.storePath,
@@ -409,7 +413,10 @@ function assertSameSessionBinding(
   if (
     successorTarget.agentId !== currentTarget.agentId ||
     successorTarget.sessionKey !== currentTarget.sessionKey ||
-    path.resolve(successorTarget.storePath) !== path.resolve(currentTarget.storePath)
+    !sameSessionTranscriptStorePath(
+      path.resolve(successorTarget.storePath),
+      path.resolve(currentTarget.storePath),
+    )
   ) {
     throw new Error(`${label} successor target changed the active session binding`);
   }

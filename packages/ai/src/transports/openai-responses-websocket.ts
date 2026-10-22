@@ -24,6 +24,7 @@ import {
 } from "./openai-responses-continuation.js";
 import {
   parseOpenAIResponsesWebSocketServerError,
+  isResponsesTerminalEventType,
   OpenAIResponsesWebSocketPostDispatchError,
   OpenAIResponsesWebSocketPreDispatchError,
   OpenAIResponsesWebSocketSafeRetryError,
@@ -208,7 +209,12 @@ function prepareWebSocketConnection(client: OpenAI, headers: Record<string, stri
   if (!resolvedApiKey) {
     throw new Error("OpenAI Responses WebSocket requires a resolved API key");
   }
-  const resolvedClient = client.withOptions({ apiKey: resolvedApiKey });
+  // Cached sockets must not retain HTTP hooks, including the SDK logger bound to that client.
+  const resolvedClient = client.withOptions({
+    apiKey: resolvedApiKey,
+    fetch: undefined,
+    logger: undefined,
+  });
   return {
     client: resolvedClient,
     headers: resolvedHeaders,
@@ -591,10 +597,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
           if (event.type === "response.completed") {
             terminalResponse = event.response;
           }
-          terminalReceived =
-            event.type === "response.completed" ||
-            event.type === "response.incomplete" ||
-            event.type === "response.failed";
+          terminalReceived = isResponsesTerminalEventType(event.type);
           if (terminalReceived) {
             steering?.seal();
             if (event.type === "response.failed") {

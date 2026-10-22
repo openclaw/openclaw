@@ -11,22 +11,18 @@ const DISCORD_ACTIVITY_REQUEST_TIMEOUT_MS = 15_000;
 const JSON_MAX_BYTES = 64 * 1024;
 const INSTANCE_ID_MAX_LENGTH = 256;
 
-export { fetchWithSsrFGuard };
-export type FetchGuard = typeof fetchWithSsrFGuard;
-
 export function normalizeInstanceId(value: string | null): string | undefined {
   const instanceId = normalizeBoundedOptionalString(value, INSTANCE_ID_MAX_LENGTH);
   return instanceId && !containsAsciiControlCharacter(instanceId) ? instanceId : undefined;
 }
 
 export async function fetchDiscordJson(params: {
-  fetchGuard: FetchGuard;
   fetchImpl?: typeof fetch;
   url: string;
   init: RequestInit;
   auditContext: string;
   endpointRuntime?: DiscordEndpointRuntime | null;
-}): Promise<{ ok: boolean; status: number; body?: Record<string, unknown> }> {
+}): Promise<{ ok: boolean; body?: Record<string, unknown> }> {
   const endpoint = Object.hasOwn(params, "endpointRuntime")
     ? params.endpointRuntime
     : getDiscordEndpointRuntime();
@@ -56,7 +52,7 @@ export async function fetchDiscordJson(params: {
         ),
         release: async () => {},
       }
-    : await params.fetchGuard({
+    : await fetchWithSsrFGuard({
         url: params.url,
         fetchImpl: params.fetchImpl,
         init: params.init,
@@ -68,11 +64,10 @@ export async function fetchDiscordJson(params: {
   try {
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
-      return { ok: false, status: response.status };
+      return { ok: false };
     }
     return {
       ok: true,
-      status: response.status,
       body: await readProviderJsonResponse<Record<string, unknown>>(
         response,
         "Discord Activity OAuth",
@@ -87,7 +82,6 @@ export async function fetchDiscordJson(params: {
 }
 
 export async function resolveActivityInstanceChannel(params: {
-  fetchGuard: FetchGuard;
   applicationId: string;
   instanceId: string;
   discordUserId: string;
@@ -98,7 +92,6 @@ export async function resolveActivityInstanceChannel(params: {
   let result: Awaited<ReturnType<typeof fetchDiscordJson>>;
   try {
     result = await fetchDiscordJson({
-      fetchGuard: params.fetchGuard,
       fetchImpl: params.proxyFetch,
       url: `https://discord.com/api/v10/applications/${encodeURIComponent(params.applicationId)}/activity-instances/${encodeURIComponent(params.instanceId)}`,
       init: { headers: { Authorization: `Bot ${params.botAuth}` } },

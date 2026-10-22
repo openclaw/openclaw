@@ -19,7 +19,6 @@ vi.mock("../../agents/auth-profiles/external-cli-sync.js", () => ({
   readExternalCliBootstrapCredential: () => null,
 }));
 vi.mock("../../agents/auth-profiles/oauth-shared.js", () => ({}));
-vi.mock("../../web-search/runtime-execution.js", () => ({}));
 vi.mock("../../agents/auth-profiles/store.js", () => ({
   getPreparedRuntimeAuthProfileStoreSnapshot: mocks.snapshot,
 }));
@@ -74,6 +73,14 @@ vi.mock("../../agents/model-catalog-decisions.js", () => ({
 }));
 import { prepareWebSearchStatus } from "./web-search-status.js";
 
+const readStatus = async (config: OpenClawConfig) =>
+  (await prepareWebSearchStatus({ getRuntimeConfig: () => config } as GatewayRequestContext, {}))
+    .status;
+const publishProfile = (profile: AuthProfileStore["profiles"][string] | undefined) =>
+  mocks.snapshot.mockReturnValue(
+    profile ? { version: 1, profiles: { "openai:fixture": profile } } : undefined,
+  );
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.providers.mockReturnValue([
@@ -97,28 +104,20 @@ beforeEach(() => {
 it.each([false, true])(
   "projects prepared auth without persisted fallback (published=%s)",
   async (published) => {
-    mocks.snapshot.mockReturnValue(
+    publishProfile(
       published
         ? {
-            version: 1,
-            profiles: {
-              "openai:fixture": {
-                type: "token",
-                provider: "openai",
-                token: "synthetic-fixture-token",
-              },
-            },
+            type: "token",
+            provider: "openai",
+            token: "synthetic-fixture-token",
           }
         : undefined,
     );
     const config: OpenClawConfig = {
       tools: { web: { search: { openaiCodex: { enabled: true } } } },
     };
-    const result = await prepareWebSearchStatus(
-      { getRuntimeConfig: () => config } as GatewayRequestContext,
-      {},
-    );
-    expect(result.status?.providers).toMatchObject([
+    const status = await readStatus(config);
+    expect(status?.providers).toMatchObject([
       {
         id: "example",
         configured: published,
@@ -126,9 +125,9 @@ it.each([false, true])(
       },
     ]);
     // Native search follows the selected transport; the model request admits credentials.
-    expect(result.status?.route.kind).toBe("native");
+    expect(status?.route.kind).toBe("native");
     expect(mocks.persistedAuth).not.toHaveBeenCalled();
-    expect(JSON.stringify(result.status)).not.toContain("synthetic-fixture-token");
+    expect(JSON.stringify(status)).not.toContain("synthetic-fixture-token");
   },
 );
 
@@ -138,34 +137,23 @@ it.each([
 ])(
   "reports a search provider's expired sign-in from shared auth health (expired=$reported)",
   async ({ expires, reported }) => {
-    mocks.snapshot.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai:fixture": {
-          type: "oauth",
-          provider: "openai",
-          access: "synthetic-access-token",
-          refresh: "synthetic-refresh-token",
-          expires,
-        },
-      },
+    publishProfile({
+      type: "oauth",
+      provider: "openai",
+      access: "synthetic-access-token",
+      refresh: "synthetic-refresh-token",
+      expires,
     });
     mocks.catalog.mockResolvedValueOnce(undefined);
     const config: OpenClawConfig = { tools: { web: { search: { provider: "example" } } } };
-    const result = await prepareWebSearchStatus(
-      { getRuntimeConfig: () => config } as GatewayRequestContext,
-      {},
-    );
+    const status = await readStatus(config);
 
-    expect(result.status?.providers).toMatchObject([
-      { id: "example", credentialSource: "auth-profile" },
-    ]);
-    expect(result.status?.testProvider).toMatchObject({ id: "example" });
-    const reason = result.status?.route.reason ?? "";
+    expect(status?.providers).toMatchObject([{ id: "example", credentialSource: "auth-profile" }]);
+    expect(status?.testProvider).toMatchObject({ id: "example" });
+    const reason = status?.route.reason ?? "";
     expect(reason.includes("The openai sign-in this provider uses is expired.")).toBe(reported);
     expect(reason.includes("send `/login openai` from a private chat")).toBe(reported);
     expect(reason.includes("openclaw models auth login --provider openai")).toBe(reported);
-    expect(JSON.stringify(result.status)).not.toContain("synthetic-");
-    expect(JSON.stringify(result.status)).not.toContain("openai:fixture");
+    expect(JSON.stringify(status)).not.toMatch(/synthetic-|openai:fixture/);
   },
 );

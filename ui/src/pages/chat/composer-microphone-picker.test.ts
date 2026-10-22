@@ -42,12 +42,12 @@ it.each(["session", "dispose"] as const)(
       method === "talk.config" ? Promise.resolve({}) : readCatalog(),
     );
     let updated = createDeferred();
-    const requestUpdate = vi.fn(() => {
+    const onCatalogChange = vi.fn(() => {
       if (picker.realtimeStatus !== "checking") {
         updated.resolve();
       }
     });
-    const client = connect(request, requestUpdate, session ? "agent:first:main" : undefined);
+    const client = connect(request, onCatalogChange, session ? "agent:first:main" : undefined);
     await updated.promise;
     expectStatus(session ? "ready" : "unavailable");
     window.dispatchEvent(new Event("focus"));
@@ -68,12 +68,12 @@ it.each(["session", "dispose"] as const)(
     await updated.promise;
     const status = session ? "unavailable" : "ready";
     expectStatus(status);
-    requestUpdate.mockClear();
+    onCatalogChange.mockClear();
     stale.resolve(catalog(session));
     await stale.promise;
     await Promise.resolve();
     expectStatus(status);
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(onCatalogChange).not.toHaveBeenCalled();
     if (session) {
       picker.syncCatalog(client, true, "agent:second:main");
       expect(readCatalog).toHaveBeenCalledTimes(3);

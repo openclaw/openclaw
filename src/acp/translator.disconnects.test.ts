@@ -1,5 +1,6 @@
+import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
@@ -11,8 +12,19 @@ import {
   createAcpGatewayAgent,
 } from "./translator.test-helpers.js";
 
+const visibleReply = (text = "final answer", status: AcpAgentWaitResult["status"] = "ok") => ({
+  status,
+  terminalReply: { disposition: "visible" as const, text },
+});
+const textChunks = (events: { update: SessionUpdate }[]) =>
+  events.flatMap(({ update }) =>
+    update.sessionUpdate === "agent_message_chunk" && update.content.type === "text"
+      ? [update.content.text]
+      : [],
+  );
+
 async function createReconnectHarness(
-  result: AcpAgentWaitResult,
+  result: AcpAgentWaitResult = visibleReply(),
   historyText: string | null = result.terminalReply?.disposition === "visible"
     ? result.terminalReply.text
     : "",
@@ -52,163 +64,94 @@ async function createReconnectHarness(
   const acceptedRunId = await sent.promise;
 
   return {
-    agent,
     connection,
     eventLedger,
     promptPromise,
-    runId: acceptedRunId,
-    sessionId,
-    sessionKey,
+    chunks: () => textChunks(connection["__sessionUpdateMock"].mock.calls.map(([n]) => n)),
+    replay: async () =>
+      textChunks((await eventLedger.readReplay({ sessionId, sessionKey })).events),
+    reconnect: () => {
+      agent.handleGatewayDisconnect("1006: connection lost");
+      agent.handleGatewayReconnect();
+    },
+    chat: (text: string, state: "delta" | "final" = "delta") =>
+      agent.handleGatewayEvent(
+        createChatEvent({
+          runId: acceptedRunId,
+          sessionKey,
+          seq: state === "delta" ? 1 : 2,
+          state,
+          message: { content: [{ type: "text", text }] },
+        }),
+      ),
   };
 }
 
-async function streamText(
-  harness: Awaited<ReturnType<typeof createReconnectHarness>>,
-  text: string,
-) {
-  await harness.agent.handleGatewayEvent(
-    createChatEvent({
-      runId: harness.runId,
-      sessionKey: harness.sessionKey,
-      seq: 1,
-      state: "delta",
-      message: { content: [{ type: "text", text }] },
-    }),
-  );
-}
+it("recovers an indented timeout reply beyond the terminal summary cap", async () => {
+  const prefix = "    " + "A".repeat(5_000);
+  const full = prefix + "B".repeat(1_000) + "\n";
+  const result = visibleReply(full.slice(0, 4_096), "timeout");
+  const harness = await createReconnectHarness(result, full);
+  await harness.chat(prefix);
+  harness.reconnect();
+  await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  expect(harness.chunks().join("")).toBe(full);
+  expect((await harness.replay()).join("")).toBe(full);
+});
 
-function reconnect(harness: Awaited<ReturnType<typeof createReconnectHarness>>) {
-  harness.agent.handleGatewayDisconnect("1006: connection lost");
-  harness.agent.handleGatewayReconnect();
-}
+it("reports missing authoritative history instead of settling with the terminal summary", async () => {
+  const harness = await createReconnectHarness(visibleReply("summary"), null);
+  harness.reconnect();
+  await expect(harness.promptPromise).rejects.toThrow("Full reply recovery unavailable");
+  expect(harness.chunks()).toEqual([
+    "[OpenClaw interruption] Full reply recovery unavailable (reply-not-found). Check the session history.",
+  ]);
+});
 
-function messageChunks(harness: Awaited<ReturnType<typeof createReconnectHarness>>) {
-  return harness.connection["__sessionUpdateMock"].mock.calls.flatMap(([notification]) => {
-    const update = notification.update;
-    return update.sessionUpdate === "agent_message_chunk" && update.content.type === "text"
-      ? [update.content.text]
-      : [];
+it("recovers visible text before rejecting a failed run", async () => {
+  const harness = await createReconnectHarness({
+    ...visibleReply("final answer", "error"),
+    error: "boom",
   });
-}
+  harness.reconnect();
+  await expect(harness.promptPromise).rejects.toThrow("boom");
+  expect(harness.chunks()).toEqual(["final answer", "[OpenClaw interruption] boom"]);
+});
 
-describe("acp translator reconnect settlement", () => {
-  it("recovers an indented timeout reply beyond the terminal summary cap", async () => {
-    const prefix = "    " + "A".repeat(5_000);
-    const full = prefix + "B".repeat(1_000) + "\n";
-    const harness = await createReconnectHarness(
-      {
-        status: "timeout",
-        terminalReply: { disposition: "visible", text: full.slice(0, 4_096) },
-      },
-      full,
-    );
-    await streamText(harness, prefix);
-    reconnect(harness);
-    await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-    expect(messageChunks(harness).join("")).toBe(full);
-    const replay = await harness.eventLedger.readReplay(harness);
-    expect(
-      replay.events
-        .flatMap(({ update }) =>
-          update.sessionUpdate === "agent_message_chunk" && update.content.type === "text"
-            ? [update.content.text]
-            : [],
-        )
-        .join(""),
-    ).toBe(full);
-  });
+it("claims recovery before a late final event can emit the suffix twice", async () => {
+  const harness = await createReconnectHarness();
+  await harness.chat("final");
+  const recordBlocked = createDeferred();
+  const recordUpdate = harness.eventLedger.recordUpdate.bind(harness.eventLedger);
+  harness.eventLedger.recordUpdate = async (params) => {
+    if (
+      params.update.sessionUpdate === "agent_message_chunk" &&
+      params.update.content.type === "text" &&
+      params.update.content.text === " answer"
+    ) {
+      await recordBlocked.promise;
+    }
+    await recordUpdate(params);
+  };
 
-  it("reports missing authoritative history instead of settling with the terminal summary", async () => {
-    const harness = await createReconnectHarness(
-      {
-        status: "ok",
-        terminalReply: { disposition: "visible", text: "summary" },
-      },
-      null,
-    );
-    reconnect(harness);
-    await expect(harness.promptPromise).rejects.toThrow("Full reply recovery unavailable");
-    expect(messageChunks(harness)).toEqual([
-      "[OpenClaw interruption] Full reply recovery unavailable (reply-not-found). Check the session history.",
-    ]);
-  });
+  harness.reconnect();
+  await vi.waitFor(() => expect(harness.chunks()).toContain(" answer"));
+  const lateFinal = harness.chat("final answer", "final");
+  recordBlocked.resolve();
+  await lateFinal;
 
-  it("recovers visible text before rejecting a failed run", async () => {
-    const harness = await createReconnectHarness({
-      status: "error",
-      error: "boom",
-      terminalReply: { disposition: "visible", text: "final answer" },
-    });
+  await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  expect(harness.chunks().filter((text) => text === " answer")).toHaveLength(1);
+});
 
-    reconnect(harness);
+it("settles after recovered update delivery rejects", async () => {
+  const harness = await createReconnectHarness();
+  harness.connection.sessionUpdate = vi.fn(async () => {
+    throw new Error("client gone");
+  }) as typeof harness.connection.sessionUpdate;
 
-    await expect(harness.promptPromise).rejects.toThrow("boom");
-    expect(messageChunks(harness)).toEqual(["final answer", "[OpenClaw interruption] boom"]);
-  });
+  harness.reconnect();
 
-  it("claims recovery before a late final event can emit the suffix twice", async () => {
-    const harness = await createReconnectHarness({
-      status: "ok",
-      terminalReply: { disposition: "visible", text: "final answer" },
-    });
-    await streamText(harness, "final");
-    let releaseRecord!: () => void;
-    const recordBlocked = new Promise<void>((resolve) => {
-      releaseRecord = resolve;
-    });
-    const recordUpdate = harness.eventLedger.recordUpdate.bind(harness.eventLedger);
-    harness.eventLedger.recordUpdate = async (params) => {
-      if (
-        params.update.sessionUpdate === "agent_message_chunk" &&
-        params.update.content.type === "text" &&
-        params.update.content.text === " answer"
-      ) {
-        await recordBlocked;
-      }
-      await recordUpdate(params);
-    };
-
-    reconnect(harness);
-    await vi.waitFor(() => expect(messageChunks(harness)).toContain(" answer"));
-    const lateFinal = harness.agent.handleGatewayEvent(
-      createChatEvent({
-        runId: harness.runId,
-        sessionKey: harness.sessionKey,
-        seq: 2,
-        state: "final",
-        message: { content: [{ type: "text", text: "final answer" }] },
-      }),
-    );
-    releaseRecord();
-    await lateFinal;
-
-    await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-    expect(messageChunks(harness).filter((text) => text === " answer")).toHaveLength(1);
-  });
-
-  it("settles after recovered update delivery rejects", async () => {
-    const harness = await createReconnectHarness({
-      status: "ok",
-      terminalReply: { disposition: "visible", text: "final answer" },
-    });
-    harness.connection.sessionUpdate = vi.fn(async () => {
-      throw new Error("client gone");
-    }) as typeof harness.connection.sessionUpdate;
-
-    reconnect(harness);
-
-    await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-    const replay = await harness.eventLedger.readReplay({
-      sessionId: harness.sessionId,
-      sessionKey: harness.sessionKey,
-    });
-    expect(
-      replay.events.some(
-        (event) =>
-          event.update.sessionUpdate === "agent_message_chunk" &&
-          event.update.content.type === "text" &&
-          event.update.content.text === "final answer",
-      ),
-    ).toBe(true);
-  });
+  await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  expect(await harness.replay()).toContain("final answer");
 });

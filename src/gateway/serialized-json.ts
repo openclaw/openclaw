@@ -1,17 +1,22 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
 const serializedArrays = new WeakMap<readonly unknown[], Uint8Array>();
-const frameSegments = new WeakMap<Uint8Array, readonly Uint8Array[]>();
+/** Owned immutable segments; only transports that require contiguous bytes materialize them. */
+export class SerializedGatewayFrame {
+  readonly byteLength: number;
+  #buffer?: Buffer;
 
-/** Retain shared byte identities across per-recipient frame envelopes. */
-export function concatGatewayFrame(chunks: readonly Uint8Array[]): Buffer {
-  const frame = Buffer.concat(chunks);
-  frameSegments.set(frame, chunks);
-  return frame;
-}
+  constructor(readonly segments: readonly Uint8Array[]) {
+    this.byteLength = segments.reduce((sum, bytes) => sum + bytes.byteLength, 0);
+  }
 
-export function gatewayFrameSegments(frame: Uint8Array): readonly Uint8Array[] | undefined {
-  return frameSegments.get(frame);
+  toBuffer(): Buffer {
+    return (this.#buffer ??= Buffer.concat(this.segments, this.byteLength));
+  }
+
+  toString(): string {
+    return this.toBuffer().toString("utf8");
+  }
 }
 
 /** Own the optional payload field, including JSON omission, before socket fanout. */
@@ -20,7 +25,7 @@ export class SerializedJsonPayload {
 
   constructor(payload: unknown) {
     const frame = serializeGatewayFrame({ type: "res", payload });
-    const bytes = typeof frame === "string" ? Buffer.from(frame) : frame;
+    const bytes = typeof frame === "string" ? Buffer.from(frame) : frame.toBuffer();
     this.bytes = bytes.subarray('{"type":"res"'.length, -1);
   }
 
@@ -43,6 +48,10 @@ export function registerSerializedJsonArray<T>(
 ): readonly T[] {
   serializedArrays.set(values, Buffer.from(`[${encodedRows.join(",")}]`));
   return values;
+}
+
+export function serializedJsonArrayBytes(values: readonly unknown[]): number {
+  return serializedArrays.get(values)?.byteLength ?? 0;
 }
 
 function arrayBytes(value: unknown): Uint8Array | undefined {
@@ -78,7 +87,7 @@ function fieldJson(key: string, value: unknown): string {
   return JSON.stringify({ [key]: value }).slice(1, -1);
 }
 
-export function serializeGatewayFrame(value: unknown): string | Buffer {
+export function serializeGatewayFrame(value: unknown): string | SerializedGatewayFrame {
   const frame = asOptionalRecord(value);
   const sharedPayload = frame?.type === "res" ? frame.payload : undefined;
   if (
@@ -87,7 +96,7 @@ export function serializeGatewayFrame(value: unknown): string | Buffer {
     typeof frame.toJSON !== "function"
   ) {
     const envelope = Object.fromEntries(Object.entries(frame).filter(([key]) => key !== "payload"));
-    return concatGatewayFrame([
+    return new SerializedGatewayFrame([
       Buffer.from(JSON.stringify(envelope).slice(0, -1)),
       sharedPayload.bytes,
       Buffer.from("}"),
@@ -137,5 +146,5 @@ export function serializeGatewayFrame(value: unknown): string | Buffer {
     chunks.push(Buffer.from("}"));
   };
   appendObject(frame);
-  return concatGatewayFrame(chunks);
+  return new SerializedGatewayFrame(chunks);
 }

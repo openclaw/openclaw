@@ -2,7 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { formatUiExternalText } from "../format-error.ts";
 import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
-import { isSessionRunActive } from "../session-run-state.ts";
+import { isSessionRunStateActive } from "../session-run-state.ts";
 import { mapSessionResultRows } from "./reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -55,7 +55,7 @@ function createSessionRunTerminalReconciler(
       return existing;
     }
     const row = observation?.project(existing) ?? existing;
-    const wasActive = row.hasActiveRun === true || isSessionRunActive(row);
+    const wasActive = row.hasActiveRun === true || isSessionRunStateActive(row);
     const previousTerminalRunId = row.lastRunId?.trim();
     const isTerminal = terminal.status !== "queued" && terminal.status !== "running";
     // An idle tuple may predate this run or belong to a newer completion.

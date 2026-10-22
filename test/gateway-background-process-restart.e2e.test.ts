@@ -270,7 +270,6 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
                 params: { transport: "sse", openaiWsWarmup: false },
               },
             },
-            heartbeat: { every: "0m" },
             skipBootstrap: true,
             skills: [],
             timeoutSeconds: 120,
@@ -318,7 +317,7 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
           mode: "backend",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
-            path: instance.state.path("device.sqlite"),
+            path: instance.state.path("device", "client", "credentials.sqlite"),
           }),
         },
         {
@@ -335,6 +334,8 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
             async () => {
               const history = await client!.request("chat.history", { sessionKey });
               expect(JSON.stringify(history)).toContain(final);
+              // History includes terminal persistence; the roster can already appear idle.
+              expect(history).toMatchObject({ sessionInfo: { hasActiveRun: false } });
               const sessions = await client!.request<SessionsListResult>("sessions.list", {
                 agentId: "main",
               });

@@ -1,6 +1,6 @@
 import "./isolated-agent.mocks.js";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, expect, it } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -20,29 +20,21 @@ import {
 } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
-type AnnounceOptions = {
-  payloads: ReplyPayload[];
-  cfg?: Parameters<typeof makeCfg>[2];
-  entries?: Record<string, SessionEntry>;
-  delivery?: { mode: "announce"; channel: "last" | "telegram"; to?: string };
-};
-async function withAnnounce(
-  options: AnnounceOptions,
-  check: (
-    result: Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>,
-    deps: ReturnType<typeof createCliDeps>,
-  ) => void = () => {},
+async function announce(
+  payloads: ReplyPayload[],
+  options: {
+    gateway?: NonNullable<Parameters<typeof makeCfg>[2]>["gateway"];
+    entries?: Record<string, SessionEntry>;
+    delivery?: { mode: "announce"; channel: "last" | "telegram"; to?: string };
+  } = {},
 ) {
-  await withTempCronHome(async (home) => {
+  return withTempCronHome(async (home) => {
     const storePath = path.join(home, ".openclaw", "sessions", "sessions.json");
-    const cfg = makeCfg(home, storePath, {
-      ...options.cfg,
-      ...(options.cfg?.session ? { session: { store: storePath, ...options.cfg.session } } : {}),
-    });
+    const cfg = makeCfg(home, storePath, options.gateway ? { gateway: options.gateway } : {});
     setRuntimeConfigSnapshot(cfg);
     await writeSessionStoreEntries(home, options.entries ?? {});
     const deps = createCliDeps();
-    mockAgentPayloads(options.payloads);
+    mockAgentPayloads(payloads);
     const result = await runCronIsolatedAgentTurn({
       deliveryAttemptFence: null,
       cfg,
@@ -55,95 +47,68 @@ async function withAnnounce(
       sessionKey: "cron:job-1",
       lane: "cron",
     });
-    check(result, deps);
+    return { result, deps };
   });
 }
 
-describe("isolated cron delivery notifications", () => {
-  beforeAll(async () => {
-    setupIsolatedAgentTurnMocks();
-    resetSystemEventsForTest();
-    await withAnnounce({ payloads: [{ text: "warm runtime" }] });
-  });
-  beforeEach(() => {
-    setupIsolatedAgentTurnMocks();
-    resetSystemEventsForTest();
-  });
+function reset() {
+  setupIsolatedAgentTurnMocks();
+  resetSystemEventsForTest();
+}
+beforeAll(async () => {
+  reset();
+  await announce([{ text: "warm runtime" }]);
+});
+beforeEach(reset);
 
-  it("adds the exact run-session inspection link only to the final visible payload", async () => {
-    await withAnnounce(
-      {
-        payloads: [
-          { text: "first cron update", mediaUrl: "https://example.com/report.png" },
-          { text: "final cron summary" },
-        ],
-        cfg: {
-          gateway: { publicOrigin: "https://control.example", controlUi: { basePath: "/console" } },
-        },
-      },
-      (result, deps) => {
-        expect(result.status).toBe("ok");
-        expect(result.delivered).toBe(true);
-        expect(result.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
-        expect(deps.telegram).toHaveBeenNthCalledWith(
-          1,
-          "123",
-          "first cron update",
-          expect.any(Object),
-        );
-        expect(deps.telegram).toHaveBeenNthCalledWith(
-          2,
-          "123",
-          `final cron summary\nInspect: https://control.example/console/chat/main/${result.sessionKey?.replace(/^agent:main:/, "").replaceAll(":", "/")}`,
-          expect.any(Object),
-        );
-        expect(deps.telegram).toHaveBeenCalledTimes(2);
-        expect(peekSystemEvents("agent:main:main")).toEqual([]);
-        expect(peekSystemEvents("agent:main:global")).toEqual([]);
-        expect(peekSystemEventEntries("agent:other:global")).toEqual([]);
-      },
-    );
-  });
+it("adds the exact run-session inspection link only to the final visible payload", async () => {
+  const { result, deps } = await announce(
+    [
+      { text: "first cron update", mediaUrl: "https://example.com/report.png" },
+      { text: "final cron summary" },
+    ],
+    { gateway: { publicOrigin: "https://control.example", controlUi: { basePath: "/console" } } },
+  );
+  expect(result).toMatchObject({ status: "ok", delivered: true });
+  const sessionKey = result.sessionKey;
+  if (typeof sessionKey !== "string") {
+    throw new Error("expected a cron run session key");
+  }
+  expect(sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+  const finalText = `final cron summary\nInspect: https://control.example/console/chat/main/${sessionKey.replace(/^agent:main:/, "").replaceAll(":", "/")}`;
+  expect(deps.telegram).toHaveBeenNthCalledWith(1, "123", "first cron update", expect.any(Object));
+  expect(deps.telegram).toHaveBeenNthCalledWith(2, "123", finalText, expect.any(Object));
+  expect(deps.telegram).toHaveBeenCalledTimes(2);
+  expect(peekSystemEvents("agent:main:main")).toEqual([]);
+  expect(peekSystemEvents("agent:main:global")).toEqual([]);
+  expect(peekSystemEventEntries("agent:other:global")).toEqual([]);
+});
 
-  it("does not turn a silent reply into an inspection-link announcement", async () => {
-    await withAnnounce(
-      {
-        payloads: [{ text: "NO_REPLY" }],
-        cfg: { gateway: { publicOrigin: "https://control.example" } },
-      },
-      (result, deps) => {
-        expect(result.status).toBe("ok");
-        expect(result.delivered).toBeFalsy();
-        expect(deps.telegram).not.toHaveBeenCalled();
-      },
-    );
+it("does not turn a silent reply into an inspection-link announcement", async () => {
+  const { result, deps } = await announce([{ text: "NO_REPLY" }], {
+    gateway: { publicOrigin: "https://control.example" },
   });
+  expect(result.status).toBe("ok");
+  expect(result.delivered).toBeFalsy();
+  expect(deps.telegram).not.toHaveBeenCalled();
+});
 
-  it("refuses keyless delivery inherited from another conversation's shared main bucket", async () => {
-    // #91613: main.lastTo belongs to whichever conversation last wrote the shared bucket.
-    await withAnnounce(
-      {
-        payloads: [{ text: "implicit cron digest" }],
-        delivery: { mode: "announce", channel: "last" },
-        entries: {
-          "agent:main:main": {
-            sessionId: "main-session",
-            updatedAt: Date.now(),
-            delivery: normalizeSessionDeliveryState({
-              context: { channel: "telegram", to: "123" },
-            }),
-          },
-        },
+it("refuses keyless delivery inherited from another conversation's shared main bucket", async () => {
+  // #91613: main.lastTo belongs to whichever conversation last wrote the shared bucket.
+  const { result, deps } = await announce([{ text: "implicit cron digest" }], {
+    delivery: { mode: "announce", channel: "last" },
+    entries: {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now(),
+        delivery: normalizeSessionDeliveryState({ context: { channel: "telegram", to: "123" } }),
       },
-      (result, deps) => {
-        expect(result.status).toBe("ok");
-        expect(result.error).toBeUndefined();
-        expect(result.deliveryError).toContain("shared agent-main session bucket");
-        expect(result.deliveryState?.status).toBe("not-delivered");
-        expect(result.delivered).toBe(false);
-        expect(deps.telegram).not.toHaveBeenCalled();
-        expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
-      },
-    );
+    },
   });
+  expect(result).toMatchObject({ status: "ok", delivered: false });
+  expect(result.error).toBeUndefined();
+  expect(result.deliveryState?.status).toBe("not-delivered");
+  expect(result.deliveryError).toContain("shared agent-main session bucket");
+  expect(deps.telegram).not.toHaveBeenCalled();
+  expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
 });

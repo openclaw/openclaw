@@ -12,8 +12,6 @@ type SkillsChangeEvent = {
     | "remote-node"
     | "config-change"
     | "workshop";
-  changedPath?: string;
-  sourceScope?: SkillsSourceScope;
 };
 
 export type SkillsSourceScope = ExecutionSkillWorkspace;
@@ -57,10 +55,7 @@ export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent
 }
 
 /** Coverage recovery follows content reconciliation; it never creates a source revision. */
-export function notifySkillsWatchAvailable(params: {
-  workspaceDir: string;
-  sourceScope: SkillsSourceScope;
-}): void {
+export function notifySkillsWatchAvailable(params: { workspaceDir: string }): void {
   emit({ ...params, reason: "watch-available" });
 }
 
@@ -80,13 +75,11 @@ function sourceScopeKey(workspaceDir: string, scope: SkillsSourceScope = {}): st
 export function bumpSkillsSnapshotVersion(params?: {
   workspaceDir?: string;
   reason?: SkillsChangeEvent["reason"];
-  changedPath?: string;
   sourceScopes?: SkillsSourceScope[];
 }): number {
   const event: SkillsChangeEvent = {
     workspaceDir: params?.workspaceDir,
     reason: params?.reason ?? "manual",
-    changedPath: params?.changedPath,
   };
   sourceClock = bumpVersion(sourceClock);
   if (!params?.workspaceDir) {

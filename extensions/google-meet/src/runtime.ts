@@ -372,8 +372,7 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
     }
     const dtmfSequence = dialPlan.dtmfSequence;
     const hasExplicitAgent = Boolean(
-      normalizeOptionalString(request.agentId) ||
-      normalizeOptionalString(this.params.config.realtime.agentId),
+      normalizeOptionalString(request.agentId) || this.params.config.realtime.agentId,
     );
     const delegatedAgentId = hasExplicitAgent ? session.agentId : undefined;
     const voiceCallResult = this.params.config.voiceCall.enabled

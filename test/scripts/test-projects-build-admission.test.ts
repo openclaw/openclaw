@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -62,18 +63,127 @@ const modelTarget = "src/agents/embedded-agent-runner/model-resolution-consisten
 const targets = [modelTarget, "extensions/qa-lab/src/suite-process-lifecycle.test.ts"];
 const lifecycle = targets[1]!;
 const ordinaryQa = "extensions/qa-lab/src/gateway-child.test.ts";
-const qaRuntimeConsumers = listVitestRuntimeConsumerFiles([
-  "test/vitest/vitest.extension-qa.config.ts",
-]);
+const qaRuntimeConsumers = listVitestRuntimeConsumerFiles([configPath("extension-qa")]);
 const patternFiles = createPatternFileHelper("plugin-build-selection-");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const e2eTarget = "test/openclaw-launcher-version.e2e.test.ts";
-const e2eConfig = "test/vitest/vitest.e2e.config.ts";
+const e2eConfig = configPath("e2e");
 let originalArgv: string[];
 let originalExitCode: typeof process.exitCode;
 let terminal: ReturnType<typeof createDeferred<unknown>>;
 const testProjectsUrl = new URL("../../scripts/test-projects.mts", import.meta.url).href;
 let startCount = 0;
+function configPath(name: string) {
+  return `test/vitest/vitest.${name}.config.ts`;
+}
+const runVitest = "scripts/run-vitest.mts";
+const scoped = (file: string) => file.replace("extensions/", "");
+const excludeQa = (transform = (file: string) => file) =>
+  qaRuntimeConsumers.flatMap((file) => ["--exclude", transform(file)]);
+const excludeConsumers = (config: string) =>
+  listVitestRuntimeConsumerFiles([configPath(config)]).flatMap((file) => ["--exclude", file]);
+const noExit = async () => {};
+const configArgs = (config: string, ...args: string[]) => ["--config", configPath(config), ...args];
+const runConfig = (config: string, ...args: string[]) => ["run", ...configArgs(config, ...args)];
+const currentRuntimeArgs = ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"];
+const uiBuildArgs = ["scripts/ui.js", "build"];
+async function expectPassed(pattern = /^\[test\] passed /u) {
+  const outcome = await terminal.promise;
+  if (outcome instanceof Error) {
+    throw outcome;
+  }
+  expect(outcome).toMatch(pattern);
+}
+function stubEnv(values: Record<string, string>) {
+  for (const [name, value] of Object.entries(values)) {
+    vi.stubEnv(name, value);
+  }
+}
+type Completion = { code: number | null; signal: NodeJS.Signals | null; groupJoined: boolean };
+function makeReader(completion: Promise<Completion>) {
+  return { completion, getForwardedSignal: () => undefined };
+}
+const completedReader = (groupJoined = true) =>
+  makeReader(Promise.resolve({ code: 0, signal: null, groupJoined }));
+const preparationArgs = () => commands.prepare.mock.calls.map(([command]) => command.args);
+function waitForAdmission(started: Promise<unknown>, running: Promise<unknown>, label: string) {
+  return withTestTimeout(Promise.race([started, running]), 5_000, label);
+}
+function runPlan(config: string, forwardedArgs: string[] = [], timingTargets?: string[]) {
+  return {
+    config,
+    forwardedArgs,
+    includePatterns: null,
+    watchMode: false,
+    ...(timingTargets ? { timingTargets } : {}),
+  };
+}
+function expectPrivateQaPreparation() {
+  expect(commands.prepare).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      args: ["scripts/prepare-vitest-runtime.mjs"],
+      env: expect.objectContaining({ OPENCLAW_BUILD_PRIVATE_QA: "1" }),
+    }),
+  );
+}
+type ReaderInput = { env: NodeJS.ProcessEnv; pnpmArgs: string[] };
+async function assertSchedulerDrain({
+  args,
+  firstOutcome,
+  expected,
+  rejects,
+  reusePeer = false,
+  observe,
+}: {
+  args: string[];
+  firstOutcome: Completion | Error;
+  expected: number;
+  rejects: boolean;
+  reusePeer?: boolean;
+  observe?: (input: ReaderInput) => void;
+}) {
+  const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+  const first = createDeferred<Completion>();
+  const peer = createDeferred<Completion>();
+  const admitted = createDeferred();
+  const joined = { code: 0, signal: null, groupJoined: process.platform !== "win32" };
+  let settled = false;
+  commands.reader.mockImplementation((input) => {
+    observe?.(input);
+    const index = commands.reader.mock.calls.length;
+    if (index === 2) {
+      admitted.resolve();
+    }
+    return makeReader(
+      index === 1
+        ? first.promise
+        : index === 2 || reusePeer
+          ? peer.promise
+          : Promise.resolve(joined),
+    );
+  });
+  const running = runTestProjects(noExit, args).finally(() => {
+    settled = true;
+  });
+  const checked = rejects ? expect(running).rejects.toThrow() : running;
+  try {
+    await waitForAdmission(admitted.promise, running, "scheduler admission");
+    expect(commands.reader).toHaveBeenCalledTimes(2);
+    if (firstOutcome instanceof Error) {
+      first.reject(firstOutcome);
+    } else {
+      first.resolve(firstOutcome);
+    }
+    await nextTurn();
+    expect(commands.reader).toHaveBeenCalledTimes(expected);
+    expect(settled).toBe(false);
+  } finally {
+    first.resolve(joined);
+    peer.resolve(joined);
+    await checked;
+  }
+  expect(commands.reader).toHaveBeenCalledTimes(expected);
+}
 
 beforeEach(() => {
   const env = testRunnerFixtureEnv();
@@ -102,23 +212,20 @@ beforeEach(() => {
       return readFileSync(file, readOptions);
     },
   );
-  commands.reader.mockReset().mockImplementation(() => ({
-    completion: Promise.resolve({
-      code: 0,
-      signal: null,
-      groupJoined: process.platform !== "win32",
-    }),
-    getForwardedSignal: () => undefined,
-  }));
+  commands.reader
+    .mockReset()
+    .mockImplementation(() => completedReader(process.platform !== "win32"));
   originalArgv = process.argv;
   originalExitCode = process.exitCode;
   process.exitCode = 0;
-  vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
-  vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "");
-  vi.stubEnv("OPENCLAW_E2E_SKIP_BUILD", "");
-  vi.stubEnv("OPENCLAW_E2E_USE_PREBUILT_DIST", "");
-  vi.stubEnv("OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY", "");
-  vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", "");
+  stubEnv({
+    OPENCLAW_TEST_PROJECTS_PARALLEL: "",
+    OPENCLAW_BUILD_PRIVATE_QA: "",
+    OPENCLAW_E2E_SKIP_BUILD: "",
+    OPENCLAW_E2E_USE_PREBUILT_DIST: "",
+    OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "",
+    OPENCLAW_VITEST_INCLUDE_FILE: "",
+  });
   terminal = createDeferred<unknown>();
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation((value: unknown) => {
@@ -138,59 +245,35 @@ afterEach(() => {
 
 describe("CLI runtime admission", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
-  posixIt.for<[name: string, args: string[], implicitRoot?: boolean]>([
-    ["ordinary target", [ordinaryQa]],
-    ["implicit root ordinary directory", ["run", "src/utils"], true],
-    ["implicit root watch", ["watch", "src/config"], true],
-    ["ordinary CLI config", ["--config", "test/vitest/vitest.cli.config.ts"]],
+  posixIt.for<[args: string[], implicitRoot?: boolean]>([
+    [[ordinaryQa]],
+    [["run", "src/utils"], true],
+    [["watch", "src/config"], true],
+    [configArgs("cli")],
+    [configArgs("cli-process", ...excludeConsumers("cli-process"))],
     [
-      "CLI process runtime exclusions",
-      [
-        "--config",
-        "test/vitest/vitest.cli-process.config.ts",
-        ...listVitestRuntimeConsumerFiles(["test/vitest/vitest.cli-process.config.ts"]).flatMap(
-          (file) => ["--exclude", file],
-        ),
-      ],
+      configArgs(
+        "gateway-server",
+        ...[
+          "server.acp-native-model.product.test.ts",
+          "server-sidecar-retention.test.ts",
+          "server.config-patch.test.ts",
+        ].flatMap((file) => ["--exclude", file]),
+      ),
     ],
-    [
-      "Gateway server scoped exclusion",
-      [
-        "--config",
-        "test/vitest/vitest.gateway-server.config.ts",
-        "--exclude",
-        "server.acp-native-model.product.test.ts",
-        "--exclude",
-        "server-sidecar-retention.test.ts",
-        "--exclude",
-        "server.config-patch.test.ts",
-      ],
-    ],
-    [
-      "root scoped exclusion",
-      [
-        "--config",
-        "vitest.config.ts",
-        "suite-process-lifecycle",
-        "--exclude",
-        lifecycle.replace("extensions/", ""),
-      ],
-    ],
-    [
-      "scoped exclusion",
-      qaRuntimeConsumers.flatMap((file) => ["--exclude", file.replace("extensions/", "")]),
-    ],
-    ["absolute exclusion", qaRuntimeConsumers.flatMap((file) => ["--exclude", path.resolve(file)])],
-    ["alternate root", ["--root", "."]],
-    ["alternate directory", ["--dir=extensions"]],
-    ["project override", ["--project", "extension-qa"]],
-    ["custom config", ["--config", "custom.config.ts"]],
-    ["list command", ["list"]],
-    ["help", ["--help"]],
-    ["version only", ["--version=true"]],
+    [["--config", "vitest.config.ts", "suite-process-lifecycle", "--exclude", scoped(lifecycle)]],
+    [excludeQa(scoped)],
+    [excludeQa((file) => path.resolve(file))],
+    [["--root", "."]],
+    [["--dir=extensions"]],
+    [["--project", "extension-qa"]],
+    [["--config", "custom.config.ts"]],
+    [["list"]],
+    [["--help"]],
+    [["--version=true"]],
   ])(
-    "leaves direct $0 selection without runtime preparation",
-    async ([_name, args, implicitRoot], { signal, onTestFinished }) => {
+    "leaves direct %j selection without runtime preparation",
+    async ([args, implicitRoot], { signal, onTestFinished }) => {
       const lifetime = createFixtureLifetime();
       onTestFinished(() => lifetime.cleanup());
       await lifetime.run(async () => {
@@ -205,15 +288,13 @@ cp.spawn = (bin, args, options) => spawn(process.execPath, ['-e',
   args.includes('scripts/prepare-vitest-runtime.mjs') ? 'process.exit(91)' : ''], options);
 syncFixtureBuiltinExports();\n`,
         );
-        const configArgs =
-          implicitRoot || args.includes("--config")
-            ? []
-            : ["--config", "test/vitest/vitest.extension-qa.config.ts"];
+        const defaultConfigArgs =
+          implicitRoot || args.includes("--config") ? [] : ["--config", configPath("extension-qa")];
         let child: ChildProcess | undefined;
         await lifetime.track(
           runCliCommand({
             bin: process.execPath,
-            args: ["--import", preload, "scripts/run-vitest.mts", ...configArgs, ...args],
+            args: ["--import", preload, "scripts/run-vitest.mts", ...defaultConfigArgs, ...args],
             env: testRunnerFixtureEnv(),
             stdio: "ignore",
             signal,
@@ -233,74 +314,39 @@ syncFixtureBuiltinExports();\n`,
   posixIt.for([
     ["single", "scripts/test-extension.mts", []],
     ["batch", "scripts/test-extension-batch.mts", ["qa-lab,firecrawl"]],
-    [
-      "direct watch",
-      "scripts/run-vitest.mts",
-      ["watch", "--config=test/vitest/vitest.extension-qa.config.ts"],
-    ],
-    [
-      "config short control",
-      "scripts/run-vitest.mts",
-      ["run", "-c", "test/vitest/vitest.extension-qa.config.ts"],
-    ],
-    [
-      "config empty long",
-      "scripts/run-vitest.mts",
-      ["run", "--config=", "test/vitest/vitest.extension-qa.config.ts"],
-    ],
-    ["root config", "scripts/run-vitest.mts", ["run", "--config", "vitest.config.ts"]],
-    ["implicit root directory", "scripts/run-vitest.mts", ["run", "src/config"], "runtime"],
+    ["direct watch", runVitest, ["watch", `--config=${configPath("extension-qa")}`]],
+    ["config short control", runVitest, ["run", "-c", configPath("extension-qa")]],
+    ["config empty long", runVitest, ["run", "--config=", configPath("extension-qa")]],
+    ["root config", runVitest, ["run", "--config", "vitest.config.ts"]],
+    ["implicit root directory", runVitest, ["run", "src/config"], "runtime"],
     [
       "CLI process selective exclusion",
-      "scripts/run-vitest.mts",
-      [
-        "run",
-        "--config",
-        "test/vitest/vitest.cli-process.config.ts",
-        "--exclude",
-        "src/cli/update-dry-run-state.process.test.ts",
-      ],
+      runVitest,
+      runConfig("cli-process", "--exclude", "src/cli/update-dry-run-state.process.test.ts"),
       "runtime",
     ],
     [
       "Codex delivery QA runtime",
-      "scripts/run-vitest.mts",
-      [
-        "run",
-        "--config",
-        "test/vitest/vitest.infra.config.ts",
-        "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
-      ],
+      runVitest,
+      runConfig("infra", "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts"),
       "private-qa",
     ],
     [
       "Gateway server selective exclusion",
-      "scripts/run-vitest.mts",
-      [
-        "run",
-        "--config",
-        "test/vitest/vitest.gateway-server.config.ts",
-        "--exclude",
-        "server-sidecar-retention.test.ts",
-      ],
+      runVitest,
+      runConfig("gateway-server", "--exclude", "server-sidecar-retention.test.ts"),
       "runtime",
     ],
     [
       "Windows cron process identity",
-      "scripts/run-vitest.mts",
-      [
-        "run",
-        "--config",
-        "test/vitest/vitest.gateway-database-workers.config.ts",
+      runVitest,
+      runConfig(
+        "gateway-database-workers",
         "src/gateway/gateway-cron-process-identity.windows.test.ts",
-      ],
+      ),
       "runtime",
     ],
-    [
-      "aggregate config",
-      "scripts/run-vitest.mts",
-      ["run", "--config", "test/vitest/vitest.full-extensions.config.ts"],
-    ],
+    ["aggregate config", runVitest, runConfig("full-extensions")],
   ] as const)(
     "blocks %s CLI readers until successful build and preserves SIGTERM",
     async ([_name, script, args, mode = "private-qa"], { signal, onTestFinished }) => {
@@ -454,34 +500,30 @@ describe("full-suite timing metadata", () => {
     const timingFile = path.join(root, "timings.json");
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_TIMINGS_PATH", timingFile);
     vi.stubEnv("OPENCLAW_VITEST_SHARD_NAME", "same-parent");
-    const config = "test/vitest/vitest.tooling.config.ts";
+    const config = configPath("tooling");
     actual.writeShardTimings([actual.createShardTimingSample({ config }, 999_999)], root);
     const writeTimings = vi
       .spyOn(timings, "writeShardTimings")
       .mockImplementation(actual.writeShardTimings);
-    commands.prepare.mockResolvedValue(0);
-    commands.reader.mockImplementation(() => ({
-      completion: Promise.resolve({ code: 0, signal: null, groupJoined: true }),
-      getForwardedSignal: () => undefined,
-    }));
+    commands.reader.mockImplementation(() => completedReader());
     const files = ["test/scripts/run-with-env.test.ts", "test/scripts/run-node.test.ts"];
     for (const file of files) {
       const includeFile = patternFiles.writePatternFile("timing-include.json", [file]);
       vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", includeFile);
-      await runTestProjects(async () => {}, [config]);
+      await runTestProjects(noExit, [config]);
       expect(fs.existsSync(includeFile)).toBe(true);
       expect(commands.reader.mock.lastCall?.[0].env.OPENCLAW_VITEST_INCLUDE_FILE).toBe(includeFile);
     }
     const inheritedFile = process.env.OPENCLAW_VITEST_INCLUDE_FILE;
     fs.writeFileSync(inheritedFile!, "{}");
-    await runTestProjects(async () => {}, [files[0]!]);
+    await runTestProjects(noExit, [files[0]!]);
     const inlineFile = commands.reader.mock.lastCall?.[0].env.OPENCLAW_VITEST_INCLUDE_FILE;
     expect(inlineFile).not.toBe(inheritedFile);
     expect(fs.existsSync(inheritedFile!)).toBe(true);
     expect(fs.existsSync(inlineFile)).toBe(false);
     const planner = await import("../../scripts/test-projects.test-support.mts");
     const empty = vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue([]);
-    await runTestProjects(async () => {}, []);
+    await runTestProjects(noExit, []);
     empty.mockRestore();
     expect(commands.reader).toHaveBeenCalledTimes(3);
     const samples = writeTimings.mock.calls.flatMap(([entries]) => entries);
@@ -492,8 +534,8 @@ describe("full-suite timing metadata", () => {
     expect(stored[config].averageMs).toBe(999_999);
     expect(Object.keys(stored)).toHaveLength(4);
     vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", "");
-    const cliConfig = "test/vitest/vitest.cli.config.ts";
-    await runTestProjects(async () => {}, [cliConfig]);
+    const cliConfig = configPath("cli");
+    await runTestProjects(noExit, [cliConfig]);
     expect(writeTimings.mock.lastCall?.[0]).toEqual([
       expect.objectContaining({ config: cliConfig, includePatternCount: 0 }),
     ]);
@@ -516,24 +558,14 @@ describe("full-suite timing metadata", () => {
       if (includeFile) {
         vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", includeFile);
       }
-      const config = "test/vitest/vitest.tooling.config.ts";
+      const config = configPath("tooling");
       vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
-        files.map((file) => ({
-          config,
-          forwardedArgs: [file],
-          timingTargets: [file],
-          includePatterns: null,
-          watchMode: false,
-        })),
+        files.map((file) => runPlan(config, [file], [file])),
       );
       const writeTimings = vi.spyOn(timings, "writeShardTimings");
-      commands.prepare.mockResolvedValue(0);
-      commands.reader.mockImplementation(() => ({
-        completion: Promise.resolve({ code: 0, signal: null, groupJoined: true }),
-        getForwardedSignal: () => undefined,
-      }));
+      commands.reader.mockImplementation(() => completedReader());
 
-      await runTestProjects(async () => {}, []);
+      await runTestProjects(noExit, []);
 
       expect(commands.reader).toHaveBeenCalledTimes(2);
       const launches = commands.reader.mock.calls.map(([input]) => input);
@@ -570,30 +602,32 @@ describe("full-suite timing metadata", () => {
 });
 
 describe("packed config continuation", () => {
-  const configs = ["test/vitest/vitest.logging.config.ts", "test/vitest/vitest.process.config.ts"];
+  const configs = [configPath("logging"), configPath("process")];
   it.each([
-    { name: "ordinary Linux failure", platform: "linux", code: 1, expected: 2 },
-    { name: "ordinary Windows failure", platform: "win32", code: 1, expected: 2 },
-    { name: "local default failure", ci: "", code: 1, expected: 1 },
-    { name: "local opt-out failure", ci: "", optIn: "0", code: 1, expected: 1 },
-    { name: "local opted-in failure", ci: "", optIn: "1", code: 1, expected: 2 },
-    { name: "CI ignores local opt-out", optIn: "0", code: 1, expected: 2 },
-    { name: "local opted-in infrastructure", ci: "", optIn: "1", code: 2, expected: 1 },
-    { name: "unknown exit", code: null, expected: 1 },
-    { name: "timeout", code: 1, timeout: true, expected: 1 },
-    { name: "signal", code: 1, signaled: true, expected: 1 },
-    { name: "unjoined child", code: 1, unjoined: true, expected: 1 },
-    { name: "rejected child", code: 1, rejected: true, expected: 1 },
-  ])("preserves complete selection and failure status for $name", async (scenario) => {
+    { platform: "linux", code: 1, expected: 2 },
+    { platform: "win32", code: 1, expected: 2 },
+    { ci: "", code: 1, expected: 1 },
+    { ci: "", optIn: "0", code: 1, expected: 1 },
+    { ci: "", optIn: "1", code: 1, expected: 2 },
+    { optIn: "0", code: 1, expected: 2 },
+    { ci: "", optIn: "1", code: 2, expected: 1 },
+    { code: null, expected: 1 },
+    { code: 1, timeout: true, expected: 1 },
+    { code: 1, signaled: true, expected: 1 },
+    { code: 1, unjoined: true, expected: 1 },
+    { code: 1, rejected: true, expected: 1 },
+  ])("preserves complete selection and failure status for %j", async (scenario) => {
     vi.spyOn(process, "platform", "get").mockReturnValue(
       scenario.platform === "win32" ? "win32" : "linux",
     );
-    vi.stubEnv("CI", scenario.ci ?? "1");
-    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "1");
-    vi.stubEnv("OPENCLAW_VITEST_SHARD_NAME", "serial-fixture");
-    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", "");
-    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "");
-    vi.stubEnv("OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE", scenario.optIn ?? "");
+    stubEnv({
+      CI: scenario.ci ?? "1",
+      OPENCLAW_TEST_PROJECTS_PARALLEL: "1",
+      OPENCLAW_VITEST_SHARD_NAME: "serial-fixture",
+      OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: "",
+      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "",
+      OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: scenario.optIn ?? "",
+    });
     const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
     const selected: string[] = [];
     commands.reader.mockImplementation(({ pnpmArgs, onNoOutputTimeout }) => {
@@ -644,7 +678,7 @@ describe("empty changed selection", () => {
     const lanes = await import("../../scripts/changed-lanes.mts");
     const changedPaths = vi.spyOn(lanes, "listChangedPathsFromGit").mockReturnValue(paths);
     const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
-    await runTestProjects(async () => {}, ["--changed", "origin/main"], {
+    await runTestProjects(noExit, ["--changed", "origin/main"], {
       ...testRunnerFixtureEnv(),
       OPENCLAW_TEST_CHANGED_BROAD: "0",
     });
@@ -670,51 +704,40 @@ describe("automatic exact-target admission", () => {
   ];
   beforeEach(async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.stubEnv("CI", "1");
-    vi.stubEnv("GITHUB_ACTIONS", "");
-    vi.stubEnv("OPENCLAW_TEST_PROJECTS_SERIAL", "");
-    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", "");
-    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "");
-    vi.stubEnv("OPENCLAW_VITEST_MAX_WORKERS", "2");
+    stubEnv({
+      CI: "1",
+      GITHUB_ACTIONS: "",
+      OPENCLAW_TEST_PROJECTS_SERIAL: "",
+      OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: "",
+      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "",
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    });
     vi.spyOn(os, "availableParallelism").mockReturnValue(8);
     vi.spyOn(os, "totalmem").mockReturnValue(24 * 1024 ** 3);
-    commands.prepare.mockResolvedValue(0);
     const planner = await import("../../scripts/test-projects.test-support.mts");
     expect(planner.findUnmatchedExplicitTestTargets(files, process.cwd())).toEqual([]);
   });
 
   it.each([
-    { name: "CI=1", expected: 2 },
-    { name: "changed targets", changed: true, expected: 2 },
-    { name: "changed targets with serial override", changed: true, serial: "1", expected: 1 },
-    { name: "CI=true", ci: "true", expected: 2 },
-    { name: "unresolved config outputs", args: [], expected: 1 },
-    { name: "console reporter without coverage override", args: ["--reporter=dot"], expected: 1 },
-    { name: "coverage override without reporter", args: ["--coverage.enabled=false"], expected: 1 },
-    {
-      name: "JSON without owner",
-      args: ["--reporter=json", "--coverage.enabled=false"],
-      expected: 1,
-    },
-    {
-      name: "GitHub summary",
-      args: ["--reporter=github-actions", "--coverage.enabled=false"],
-      expected: 1,
-    },
-    { name: "coverage destination", args: ["--coverage"], expected: 1 },
-    { name: "file destination", args: ["--outputFile=report.json"], expected: 1 },
-    { name: "file reporter", args: ["--reporter=html"], expected: 1 },
-    { name: "plural file reporter", args: ["--reporters=html"], expected: 1 },
-    { name: "custom reporter", args: ["--reporter=./custom-reporter.mjs"], expected: 1 },
-    { name: "local", ci: "", expected: 1 },
-    { name: "constrained CPU", cpus: 4, expected: 1 },
-    { name: "unknown memory", gib: Number.NaN, expected: 1 },
-    { name: "explicit parallel", parallel: "3", expected: 3 },
-    { name: "explicit serial", serial: "1", expected: 1 },
-    { name: "portable", portable: true, expected: 1 },
-    { name: "caller cache leaf", callerLeaf: true, expected: 1 },
+    { expected: 2 },
+    { changed: true, expected: 2 },
+    { changed: true, serial: "1", expected: 1 },
+    { ci: "true", expected: 2 },
+    { args: [], expected: 1 },
+    { args: ["--coverage"], expected: 1 },
+    { args: ["--outputFile=report.json"], expected: 1 },
+    { args: ["--reporter=html"], expected: 1 },
+    { args: ["--reporters=html"], expected: 1 },
+    { args: ["--reporter=./custom-reporter.mjs"], expected: 1 },
+    { ci: "", expected: 1 },
+    { cpus: 4, expected: 1 },
+    { gib: Number.NaN, expected: 1 },
+    { parallel: "3", expected: 3 },
+    { serial: "1", expected: 1 },
+    { portable: true, expected: 1 },
+    { callerLeaf: true, expected: 1 },
   ])(
-    "preserves resolved specs and policy for $name",
+    "preserves resolved specs and policy for %j",
     async ({ ci, cpus, gib, parallel, serial, portable, callerLeaf, args, changed, expected }) => {
       vi.stubEnv("CI", ci ?? "1");
       vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", parallel ?? "");
@@ -750,15 +773,14 @@ describe("automatic exact-target admission", () => {
         });
         active += 1;
         peak = Math.max(peak, active);
-        return {
-          completion: nextTurn().then(() => {
+        return makeReader(
+          nextTurn().then(() => {
             active -= 1;
             return { code: 0, signal: null, groupJoined: !portable };
           }),
-          getForwardedSignal: () => undefined,
-        };
+        );
       });
-      await runTestProjects(async () => {}, [
+      await runTestProjects(noExit, [
         ...(changed ? ["--changed", "origin/main"] : files),
         ...(args ?? outputArgs),
       ]);
@@ -819,11 +841,9 @@ describe("automatic exact-target admission", () => {
           : "src/gateway/server.sessions.fixture-lifecycle.test.ts";
       const barrierFiles = ["src/utils.test.ts", gatewayFile, modelTarget];
       const configs = [
-        "test/vitest/vitest.unit-fast-fake-timers.config.ts",
-        mode === "automatic"
-          ? "test/vitest/vitest.gateway.config.ts"
-          : "test/vitest/vitest.gateway-server.config.ts",
-        "test/vitest/vitest.agents-embedded-agent.config.ts",
+        configPath("unit-fast-fake-timers"),
+        mode === "automatic" ? configPath("gateway") : configPath("gateway-server"),
+        configPath("agents-embedded-agent"),
       ];
       const planner = await import("../../scripts/test-projects.test-support.mts");
       expect(planner.findUnmatchedExplicitTestTargets(barrierFiles, process.cwd())).toEqual([]);
@@ -837,13 +857,9 @@ describe("automatic exact-target admission", () => {
       }
       if (mode.endsWith("full suite")) {
         vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
-          configs.map((config, index) => ({
-            config,
-            forwardedArgs: [...outputArgs, barrierFiles[index]!],
-            timingTargets: [barrierFiles[index]!],
-            includePatterns: null,
-            watchMode: false,
-          })),
+          configs.map((config, index) =>
+            runPlan(config, [...outputArgs, barrierFiles[index]!], [barrierFiles[index]!]),
+          ),
         );
       }
       const releases = configs.map(() => createDeferred());
@@ -859,8 +875,8 @@ describe("automatic exact-target admission", () => {
         selected.push(config);
         events.push(`start:${index}`);
         admissions[index]!.resolve();
-        return {
-          completion: releases[index]!.promise.then(() => {
+        return makeReader(
+          releases[index]!.promise.then(() => {
             events.push(`joined:${index}`);
             return {
               code: index === 1 && outcome === "failure" ? 1 : 0,
@@ -868,8 +884,7 @@ describe("automatic exact-target admission", () => {
               groupJoined: true,
             };
           }),
-          getForwardedSignal: () => undefined,
-        };
+        );
       });
       const exit = vi.fn(async () => {});
       const running = runTestProjects(
@@ -878,21 +893,13 @@ describe("automatic exact-target admission", () => {
       );
       try {
         for (let index = 0; index < 2; index++) {
-          await withTestTimeout(
-            Promise.race([admissions[index]!.promise, running]),
-            5_000,
-            "barrier admission",
-          );
+          await waitForAdmission(admissions[index]!.promise, running, "barrier admission");
           expect(selected).toEqual(configs.slice(0, index + 1));
           expect(events).not.toContain("dispose");
           releases[index]!.resolve();
         }
         if (outcome !== "SIGTERM") {
-          await withTestTimeout(
-            Promise.race([admissions[2]!.promise, running]),
-            5_000,
-            "post-barrier admission",
-          );
+          await waitForAdmission(admissions[2]!.promise, running, "post-barrier admission");
           expect(events).toEqual(["start:0", "joined:0", "start:1", "joined:1", "start:2"]);
         }
       } finally {
@@ -913,56 +920,20 @@ describe("automatic exact-target admission", () => {
   it.each(["failure", "unjoined", "rejection", "signal"])(
     "drains peers and admits later exact-target specs only after an ordinary %s",
     async (outcome) => {
-      const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
-      const first = createDeferred<{
-        code: number;
-        signal: NodeJS.Signals | null;
-        groupJoined: boolean;
-      }>();
-      const peer = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
-      const admitted = createDeferred();
-      let settled = false;
-      commands.reader.mockImplementation(() => {
-        if (commands.reader.mock.calls.length === 2) {
-          admitted.resolve();
-        }
-        return {
-          completion: commands.reader.mock.calls.length === 1 ? first.promise : peer.promise,
-          getForwardedSignal: () => undefined,
-        };
+      await assertSchedulerDrain({
+        args: [...files, ...outputArgs],
+        expected: outcome === "failure" ? 3 : 2,
+        rejects: outcome === "unjoined" || outcome === "rejection",
+        reusePeer: true,
+        firstOutcome:
+          outcome === "rejection"
+            ? new Error("child join rejected")
+            : {
+                code: outcome === "unjoined" ? 0 : 1,
+                signal: outcome === "signal" ? "SIGTERM" : null,
+                groupJoined: outcome !== "unjoined",
+              },
       });
-      const running = runTestProjects(async () => {}, [...files, ...outputArgs]).finally(() => {
-        settled = true;
-      });
-      const checked =
-        outcome === "unjoined" || outcome === "rejection"
-          ? expect(running).rejects.toThrow()
-          : running;
-      try {
-        await withTestTimeout(
-          Promise.race([admitted.promise, running]),
-          5_000,
-          "automatic admission",
-        );
-        expect(commands.reader).toHaveBeenCalledTimes(2);
-        if (outcome === "rejection") {
-          first.reject(new Error("child join rejected"));
-        } else {
-          first.resolve({
-            code: outcome === "unjoined" ? 0 : 1,
-            signal: outcome === "signal" ? "SIGTERM" : null,
-            groupJoined: outcome !== "unjoined",
-          });
-        }
-        await nextTurn();
-        expect(commands.reader).toHaveBeenCalledTimes(outcome === "failure" ? 3 : 2);
-        expect(settled).toBe(false);
-      } finally {
-        first.resolve({ code: 0, signal: null, groupJoined: true });
-        peer.resolve({ code: 0, signal: null, groupJoined: true });
-        await checked;
-      }
-      expect(commands.reader).toHaveBeenCalledTimes(outcome === "failure" ? 3 : 2);
       if (outcome === "failure") {
         expect(process.exitCode).toBe(1);
         expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/^\[test\] failed 3 /u));
@@ -992,18 +963,12 @@ describe("cache lease completion", () => {
       commands.reader.mockImplementation(({ pnpmArgs }) => {
         if (pnpmArgs.includes("scripts/ensure-playwright-chromium.mts")) {
           preflights += 1;
-        } else if (pnpmArgs.includes("test/vitest/vitest.ui-e2e.config.ts")) {
+        } else if (pnpmArgs.includes(configPath("ui-e2e"))) {
           attempts += 1;
         }
-        return {
-          completion: Promise.resolve({ code: 0, signal: null, groupJoined: false }),
-          getForwardedSignal: () => undefined,
-        };
+        return completedReader(false);
       });
-      const running = runTestProjects(async () => {}, [
-        "test/vitest/vitest.ui-e2e.config.ts",
-        "test/vitest/vitest.cli.config.ts",
-      ]);
+      const running = runTestProjects(noExit, [configPath("ui-e2e"), configPath("cli")]);
       if (platform === "win32") {
         await expect(running).resolves.toBeUndefined();
         expect(attempts).toBe(1);
@@ -1036,17 +1001,11 @@ describe("cache lease completion", () => {
       commands.reader
         .mockImplementationOnce(({ onNoOutputTimeout }) => {
           onNoOutputTimeout();
-          return {
-            completion: Promise.resolve({ code, signal, groupJoined: true }),
-            getForwardedSignal: () => undefined,
-          };
+          return makeReader(Promise.resolve({ code, signal, groupJoined: true }));
         })
-        .mockImplementation(() => ({
-          completion: Promise.resolve({ code: 0, signal: null, groupJoined: true }),
-          getForwardedSignal: () => undefined,
-        }));
+        .mockImplementation(() => completedReader());
 
-      await runTestProjects(exitBySignal, ["test/vitest/vitest.cli.config.ts"]);
+      await runTestProjects(exitBySignal, [configPath("cli")]);
 
       expect(process.exitCode).toBe(code === 0 || code === 1 ? 2 : 143);
       expect(commands.reader).toHaveBeenCalledTimes(1);
@@ -1072,21 +1031,14 @@ describe("cache lease completion", () => {
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
       if (concurrency === 1) {
         vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
-          [
-            "test/vitest/vitest.ui-e2e.config.ts",
-            "test/vitest/vitest.cli.config.ts",
-            "test/vitest/vitest.ui-e2e.config.ts",
-          ].map((config) => ({
-            config,
-            forwardedArgs: [],
-            includePatterns: null,
-            watchMode: false,
-          })),
+          [configPath("ui-e2e"), configPath("cli"), configPath("ui-e2e")].map((config) =>
+            runPlan(config),
+          ),
         );
       }
-      const firstPreflight = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
-      const firstExecution = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
-      const peer = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
+      const firstPreflight = createDeferred<Completion>();
+      const firstExecution = createDeferred<Completion>();
+      const peer = createDeferred<Completion>();
       const started = createDeferred();
       const executionStarted = createDeferred();
       const paths: string[] = [];
@@ -1103,7 +1055,7 @@ describe("cache lease completion", () => {
           uiPaths.push(cache);
           preflights += 1;
           completion = preflights === 1 ? firstPreflight.promise : Promise.resolve(joined);
-        } else if (pnpmArgs.includes("test/vitest/vitest.ui-e2e.config.ts")) {
+        } else if (pnpmArgs.includes(configPath("ui-e2e"))) {
           uiPaths.push(cache);
           attempts += 1;
           completion = attempts === 1 ? firstExecution.promise : Promise.resolve(joined);
@@ -1115,13 +1067,11 @@ describe("cache lease completion", () => {
         if (paths.length === (concurrency === 1 ? 1 : 2)) {
           started.resolve();
         }
-        return { completion, getForwardedSignal: () => undefined };
+        return makeReader(completion);
       });
       const running = runTestProjects(
-        async () => {},
-        concurrency === 1
-          ? []
-          : ["test/vitest/vitest.ui-e2e.config.ts", "test/vitest/vitest.cli.config.ts"],
+        noExit,
+        concurrency === 1 ? [] : [configPath("ui-e2e"), configPath("cli")],
       );
       try {
         await withTestTimeout(started.promise, 5_000, "preflight and peer admission");
@@ -1175,11 +1125,11 @@ describe("cache lease completion", () => {
       const groupJoined = process.platform !== "win32";
       const focused = scope === "ci-focused";
       const configs = [
-        "test/vitest/vitest.unit-fast.config.ts",
-        "test/vitest/vitest.unit-fast-fake-timers.config.ts",
-        "test/vitest/vitest.cli.config.ts",
+        configPath("unit-fast"),
+        configPath("unit-fast-fake-timers"),
+        configPath("cli"),
       ];
-      const databaseConfig = "test/vitest/vitest.extension-database-workers.config.ts";
+      const databaseConfig = configPath("extension-database-workers");
       const files = [
         "extensions/telegram/src/polling-session.test.ts",
         "extensions/telegram/src/telegram-ingress-drain.test.ts",
@@ -1199,78 +1149,31 @@ describe("cache lease completion", () => {
       if (scope === "ci-full-suite") {
         const planner = await import("../../scripts/test-projects.test-support.mts");
         vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
-          configs.map((config) => ({
-            config,
-            forwardedArgs: [],
-            includePatterns: null,
-            watchMode: false,
-          })),
+          configs.map((config) => runPlan(config)),
         );
       }
-      commands.prepare.mockResolvedValue(0);
-      const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
-      const first = createDeferred<{
-        code: number;
-        signal: NodeJS.Signals | null;
-        groupJoined: boolean;
-      }>();
-      const second = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
-      const admitted = createDeferred();
-      const settled = { value: false };
       const selections: unknown[] = [];
-      commands.reader.mockImplementation(({ env, pnpmArgs }) => {
-        if (focused) {
-          expect(pnpmArgs[pnpmArgs.indexOf("--config") + 1]).toBe(databaseConfig);
-          selections.push(JSON.parse(fs.readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE, "utf8")));
-        }
-        const index = commands.reader.mock.calls.length;
-        if (index === 2) {
-          admitted.resolve();
-        }
-        return {
-          completion:
-            index === 1
-              ? first.promise
-              : index === 2
-                ? second.promise
-                : Promise.resolve({ code: 0, signal: null, groupJoined }),
-          getForwardedSignal: () => undefined,
-        };
+      await assertSchedulerDrain({
+        args: focused ? [databaseConfig] : scope === "ci-full-suite" ? [] : configs,
+        expected,
+        rejects: outcome === "rejection",
+        firstOutcome:
+          outcome === "rejection"
+            ? new Error("unverified group completion")
+            : {
+                code: outcome === "infrastructure" ? 2 : 1,
+                signal: outcome === "signal" ? "SIGTERM" : null,
+                groupJoined,
+              },
+        observe: ({ env, pnpmArgs }) => {
+          if (focused) {
+            expect(pnpmArgs[pnpmArgs.indexOf("--config") + 1]).toBe(databaseConfig);
+            const includeFile = env.OPENCLAW_VITEST_INCLUDE_FILE;
+            assert(includeFile, "Expected focused Vitest selection file");
+            selections.push(JSON.parse(fs.readFileSync(includeFile, "utf8")));
+          }
+        },
       });
-      const running = runTestProjects(
-        async () => {},
-        focused ? [databaseConfig] : scope === "ci-full-suite" ? [] : configs,
-      ).finally(() => {
-        settled.value = true;
-      });
-      const checked = outcome === "rejection" ? expect(running).rejects.toThrow() : running;
-      try {
-        await withTestTimeout(
-          Promise.race([admitted.promise, running]),
-          5_000,
-          "scheduler admission",
-        );
-        expect(commands.reader).toHaveBeenCalledTimes(2);
-        if (outcome === "rejection") {
-          first.reject(new Error("unverified group completion"));
-        } else {
-          first.resolve({
-            code: outcome === "infrastructure" ? 2 : 1,
-            signal: outcome === "signal" ? "SIGTERM" : null,
-            groupJoined,
-          });
-        }
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(settled.value).toBe(false);
-        expect(commands.reader).toHaveBeenCalledTimes(expected);
-      } finally {
-        first.resolve({ code: 0, signal: null, groupJoined });
-        second.resolve({ code: 0, signal: null, groupJoined });
-        await checked;
-      }
-      expect(commands.reader).toHaveBeenCalledTimes(expected);
       if (focused) {
         expect(console.error).toHaveBeenCalledWith("[test] inner parallelism 2");
         const selected = selections.flat();
@@ -1304,12 +1207,12 @@ function createPreparationGate<T>(prepare: typeof commands.prepare) {
 }
 
 describe("test-projects build admission", () => {
-  const toolingConfig = "test/vitest/vitest.tooling.config.ts";
-  const infraConfig = "test/vitest/vitest.infra.config.ts";
+  const toolingConfig = configPath("tooling");
+  const infraConfig = configPath("infra");
   const ordinaryTooling = "test/scripts/run-vitest-state-cleanup.test.ts";
   const runtimeTooling = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
   const privateQaInfra = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
-  const uiConfig = "test/vitest/vitest.ui-e2e.config.ts";
+  const uiConfig = configPath("ui-e2e");
   const avatarTarget = "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts";
   const mockUiTarget = "ui/src/e2e/chat-code-block-fences.e2e.test.ts";
 
@@ -1327,13 +1230,13 @@ describe("test-projects build admission", () => {
         runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
         await Promise.race([ui.started, entry]);
         expect(commands.reader).not.toHaveBeenCalled();
-        expect(commands.prepare.mock.lastCall?.[0].args).toEqual(["scripts/ui.js", "build"]);
+        expect(commands.prepare.mock.lastCall?.[0].args).toEqual(uiBuildArgs);
       } finally {
         runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
         ui.resolve(0);
         await entry;
       }
-      expect(await terminal.promise).toMatch(/^\[test\] passed /u);
+      await expectPassed();
       expect(commands.reader).toHaveBeenCalled();
     },
   );
@@ -1397,7 +1300,7 @@ describe("test-projects build admission", () => {
         await Promise.race([ui.started, entry]);
         expect(commands.reader).not.toHaveBeenCalled();
         expect(commands.prepare.mock.lastCall?.[0]).toMatchObject({
-          args: ["scripts/ui.js", "build"],
+          args: uiBuildArgs,
         });
         expect(commands.uiAssets).toHaveBeenCalledWith(
           path.resolve("dist/control-ui"),
@@ -1409,16 +1312,9 @@ describe("test-projects build admission", () => {
         ui?.resolve(0);
         await entry;
       }
-      const outcome = await terminal.promise;
-      if (outcome instanceof Error) {
-        throw outcome;
-      }
-      expect(outcome).toMatch(/^\[test\] passed /u);
+      await expectPassed();
       expect(commands.prepareE2e).toHaveBeenCalledTimes(mixed ? 1 : 0);
-      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual([
-        ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
-        ["scripts/ui.js", "build"],
-      ]);
+      expect(preparationArgs()).toEqual([currentRuntimeArgs, uiBuildArgs]);
       expect(commands.uiAssets).toHaveBeenCalledTimes(2);
       expect(process.exitCode).toBe(0);
     },
@@ -1438,10 +1334,7 @@ describe("test-projects build admission", () => {
       await start([avatarTarget]);
       await terminal.promise;
       expect(commands.reader).not.toHaveBeenCalled();
-      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual([
-        ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
-        ["scripts/ui.js", "build"],
-      ]);
+      expect(preparationArgs()).toEqual([currentRuntimeArgs, uiBuildArgs]);
       expect(process.exitCode).toBe(outcome === "nonzero" ? 7 : 2);
       if (outcome === "still stale") {
         expect(await terminal.promise).toMatchObject({
@@ -1464,11 +1357,7 @@ describe("test-projects build admission", () => {
       );
       const rejected = expect(running).rejects.toMatchObject({ name: "AbortError" });
       try {
-        await withTestTimeout(
-          Promise.race([source.started, running]),
-          5_000,
-          "source loader admission",
-        );
+        await waitForAdmission(source.started, running, "source loader admission");
         const listeners = process
           .listeners("SIGTERM")
           .filter((listener) => !existingListeners.has(listener));
@@ -1478,9 +1367,7 @@ describe("test-projects build admission", () => {
         source.resolve();
         await rejected;
       }
-      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual([
-        ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
-      ]);
+      expect(preparationArgs()).toEqual([currentRuntimeArgs]);
       expect(commands.uiAssets).not.toHaveBeenCalled();
       expect(commands.reader).not.toHaveBeenCalled();
       expect(exitBySignal).toHaveBeenCalledExactlyOnceWith("SIGTERM");
@@ -1489,26 +1376,23 @@ describe("test-projects build admission", () => {
   );
 
   it.each<{
-    name: string;
     args: string[];
     include?: string[];
     flag?: string;
     build: boolean;
   }>([
-    { name: "owned Gateway", args: [avatarTarget], build: true },
-    { name: "inherited Gateway", args: [uiConfig], include: [avatarTarget], build: true },
+    { args: [avatarTarget], build: true },
+    { args: [uiConfig], include: [avatarTarget], build: true },
     {
-      name: "native QA Gateway",
       args: [uiConfig],
       include: ["extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts"],
       build: true,
     },
-    { name: "empty include", args: [uiConfig], include: [], build: false },
-    { name: "inherited mock", args: [uiConfig], include: [mockUiTarget], build: false },
-    { name: "owned mock", args: [mockUiTarget], include: [avatarTarget], build: false },
-    { name: "owned over empty include", args: [avatarTarget], include: [], build: true },
+    { args: [uiConfig], include: [], build: false },
+    { args: [uiConfig], include: [mockUiTarget], build: false },
+    { args: [mockUiTarget], include: [avatarTarget], build: false },
+    { args: [avatarTarget], include: [], build: true },
     {
-      name: "excluded Gateway",
       args: [avatarTarget, "--", "--exclude", avatarTarget],
       build: false,
     },
@@ -1516,8 +1400,8 @@ describe("test-projects build admission", () => {
       "OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY",
       "OPENCLAW_E2E_SKIP_BUILD",
       "OPENCLAW_E2E_USE_PREBUILT_DIST",
-    ].map((flag) => ({ name: flag, args: [avatarTarget], flag, build: false })),
-  ])("prepares only selected Gateway assets: $name", async ({ args, include, build, flag }) => {
+    ].map((flag) => ({ args: [avatarTarget], flag, build: false })),
+  ])("prepares only selected Gateway assets: %j", async ({ args, include, build, flag }) => {
     if (include) {
       vi.stubEnv(
         "OPENCLAW_VITEST_INCLUDE_FILE",
@@ -1528,7 +1412,7 @@ describe("test-projects build admission", () => {
       vi.stubEnv(flag, "1");
     }
     await start(args);
-    expect(await terminal.promise).toMatch(/^\[test\] passed /u);
+    await expectPassed();
     expect(commands.prepare).toHaveBeenCalledTimes(build ? 1 : 0);
     expect(commands.uiAssets).toHaveBeenCalledTimes(build ? 1 : 0);
     expect(
@@ -1536,115 +1420,91 @@ describe("test-projects build admission", () => {
     ).toBe(false);
   });
 
-  it.each([
-    {
-      name: "borrowed ordinary tooling",
-      args: [toolingConfig],
-      include: [ordinaryTooling],
-      build: false,
-    },
-    {
-      name: "borrowed runtime tooling",
-      args: [toolingConfig],
-      include: [runtimeTooling],
-      build: true,
-    },
-    {
-      name: "borrowed private-QA infra",
-      args: [infraConfig],
-      include: [privateQaInfra],
-      build: true,
-    },
-    { name: "borrowed empty selection", args: [toolingConfig], include: [], build: false },
-    { name: "whole config without an override", args: [toolingConfig], build: true },
-    {
-      name: "owned ordinary over borrowed runtime",
-      args: [ordinaryTooling],
-      include: [runtimeTooling],
-      build: false,
-    },
-    {
-      name: "owned runtime over borrowed ordinary",
-      args: [runtimeTooling],
-      include: [ordinaryTooling],
-      build: true,
-    },
-    { name: "owned runtime over borrowed empty", args: [runtimeTooling], include: [], build: true },
-  ])("prepares only the effective config selection: $name", async ({ args, include, build }) => {
-    commands.prepare.mockResolvedValue(0);
-    const workerCompiler =
-      args[0] === infraConfig
-        ? createControlledWorkerCompiler(tempDirs.make("private-qa-worker-"), process.env)
+  it.each<[target: string, build: boolean, include?: string[]]>([
+    [toolingConfig, false, [ordinaryTooling]],
+    [toolingConfig, true, [runtimeTooling]],
+    [infraConfig, true, [privateQaInfra]],
+    [toolingConfig, false, []],
+    [toolingConfig, true],
+    [ordinaryTooling, false, [runtimeTooling]],
+    [runtimeTooling, true, [ordinaryTooling]],
+    [runtimeTooling, true, []],
+  ])(
+    "prepares only the effective config selection: %s, build=%s, include=%j",
+    async (target, build, include) => {
+      const args = [target];
+      const workerCompiler =
+        args[0] === infraConfig
+          ? createControlledWorkerCompiler(tempDirs.make("private-qa-worker-"), process.env)
+          : undefined;
+      if (workerCompiler) {
+        commands.prepare.mockImplementation((command) =>
+          path.basename(command.args[0]) === "vitest-worker-compiler.mts"
+            ? runCliCommand({ ...command, args: workerCompiler.args(command.args[1]) })
+            : Promise.resolve(0),
+        );
+      }
+      const borrowed = include
+        ? patternFiles.writePatternFile("borrowed.json", include)
         : undefined;
-    if (workerCompiler) {
-      commands.prepare.mockImplementation((command) =>
-        path.basename(command.args[0]) === "vitest-worker-compiler.mts"
-          ? runCliCommand({ ...command, args: workerCompiler.args(command.args[1]) })
-          : Promise.resolve(0),
-      );
-    }
-    const borrowed = include ? patternFiles.writePatternFile("borrowed.json", include) : undefined;
-    const original = borrowed
-      ? { bytes: fs.readFileSync(borrowed), stat: fs.statSync(borrowed) }
-      : undefined;
-    if (borrowed) {
-      vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", borrowed);
-    }
-    const selected: unknown[] = [];
-    commands.reader.mockImplementation(({ env, pnpmArgs }) => {
-      const wrapperArgv = process.argv;
-      // The config consumes the reader's CLI, not its parent wrapper's targets.
-      process.argv = [
-        process.execPath,
-        ...pnpmArgs.slice(pnpmArgs.indexOf(resolveVitestCliEntry())),
-      ];
-      try {
-        const createConfig =
-          args[0] === infraConfig ? createInfraVitestConfig : createToolingVitestConfig;
-        selected.push(createConfig(env).test?.include);
-      } finally {
-        process.argv = wrapperArgv;
+      const original = borrowed
+        ? { bytes: fs.readFileSync(borrowed), stat: fs.statSync(borrowed) }
+        : undefined;
+      if (borrowed) {
+        vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", borrowed);
       }
-      return {
-        completion: Promise.resolve({ code: 0, signal: null }),
-        getForwardedSignal: () => undefined,
-      };
-    });
-
-    await start(args);
-    const outcome = await terminal.promise;
-    if (outcome instanceof Error) {
-      throw outcome;
-    }
-    expect(outcome).toMatch(/^\[test\] passed 1 Vitest shard/u);
-    expect(commands.prepare).toHaveBeenCalledTimes((build ? 1 : 0) + (workerCompiler ? 1 : 0));
-    if (workerCompiler) {
-      expect(workerCompiler.read()).toHaveLength(1);
-    }
-    expect(commands.prepareE2e).not.toHaveBeenCalled();
-    expect(commands.reader).toHaveBeenCalledOnce();
-    expect(selected).toEqual([
-      args[0] === infraConfig
-        ? include
-        : args[0] === toolingConfig
-          ? (include ?? ["test/**/*.test.ts", "src/scripts/**/*.test.ts"])
-          : args,
-    ]);
-    if (borrowed && original) {
-      expect(fs.readFileSync(borrowed)).toEqual(original.bytes);
-      expect(fs.statSync(borrowed)).toMatchObject({
-        ino: original.stat.ino,
-        mtimeMs: original.stat.mtimeMs,
+      const selected: unknown[] = [];
+      commands.reader.mockImplementation(({ env, pnpmArgs }) => {
+        const wrapperArgv = process.argv;
+        // The config consumes the reader's CLI, not its parent wrapper's targets.
+        process.argv = [
+          process.execPath,
+          ...pnpmArgs.slice(pnpmArgs.indexOf(resolveVitestCliEntry())),
+        ];
+        try {
+          const createConfig =
+            args[0] === infraConfig ? createInfraVitestConfig : createToolingVitestConfig;
+          selected.push(createConfig(env).test?.include);
+        } finally {
+          process.argv = wrapperArgv;
+        }
+        return {
+          completion: Promise.resolve({ code: 0, signal: null }),
+          getForwardedSignal: () => undefined,
+        };
       });
-      const readerInclude = commands.reader.mock.calls[0]![0].env.OPENCLAW_VITEST_INCLUDE_FILE;
-      if (args[0] === toolingConfig || args[0] === infraConfig) {
-        expect(readerInclude).toBe(borrowed);
-      } else {
-        expect(readerInclude).not.toBe(borrowed);
-        expect(fs.existsSync(readerInclude)).toBe(false);
+
+      await start(args);
+      await expectPassed(/^\[test\] passed 1 Vitest shard/u);
+      expect(commands.prepare).toHaveBeenCalledTimes((build ? 1 : 0) + (workerCompiler ? 1 : 0));
+      if (workerCompiler) {
+        expect(workerCompiler.read()).toHaveLength(1);
       }
-    }
-  });
+      expect(commands.prepareE2e).not.toHaveBeenCalled();
+      expect(commands.reader).toHaveBeenCalledOnce();
+      expect(selected).toEqual([
+        args[0] === infraConfig
+          ? include
+          : args[0] === toolingConfig
+            ? (include ?? ["test/**/*.test.ts", "src/scripts/**/*.test.ts"])
+            : args,
+      ]);
+      if (borrowed && original) {
+        expect(fs.readFileSync(borrowed)).toEqual(original.bytes);
+        expect(fs.statSync(borrowed)).toMatchObject({
+          ino: original.stat.ino,
+          mtimeMs: original.stat.mtimeMs,
+        });
+        const readerInclude = commands.reader.mock.calls[0]![0].env.OPENCLAW_VITEST_INCLUDE_FILE;
+        if (args[0] === toolingConfig || args[0] === infraConfig) {
+          expect(readerInclude).toBe(borrowed);
+        } else {
+          expect(readerInclude).not.toBe(borrowed);
+          expect(fs.existsSync(readerInclude)).toBe(false);
+        }
+      }
+    },
+  );
 
   it.each([
     { args: ["--help=true"], prepare: false },
@@ -1660,7 +1520,6 @@ describe("test-projects build admission", () => {
     { args: ["--configLoader=", "runner"], prepare: true },
     { args: ["--isolate=", "false"], prepare: true },
   ])("admits preparation from native controls only: $args", async ({ args, prepare }) => {
-    commands.prepare.mockResolvedValue(0);
     await start([lifecycle, "--", ...args]);
     await terminal.promise;
     expect(commands.reader).toHaveBeenCalledOnce();
@@ -1670,64 +1529,56 @@ describe("test-projects build admission", () => {
   });
 
   it.each([
-    { name: "serial success", parallel: false, outcome: "success", e2e: false },
-    { name: "parallel success", parallel: true, outcome: "success", e2e: false },
-    { name: "runtime exit", parallel: false, outcome: "exit", e2e: false },
-    { name: "runtime rejection", parallel: false, outcome: "throw", e2e: false },
-    { name: "mixed E2E rejection", parallel: false, outcome: "throw", e2e: true },
-  ])(
-    "admits readers only after successful preparation: $name",
-    async ({ parallel, outcome, e2e }) => {
-      vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", parallel ? "2" : "");
-      const preparation = createPreparationGate<number | NodeJS.ProcessEnv>(
-        e2e ? commands.prepareE2e : commands.prepare,
-      );
-      const readers = createDeferred<{ code: number; signal: null }>();
-      const readersStarted = createDeferred();
-      commands.reader.mockImplementation(() => {
-        if (commands.reader.mock.calls.length === (parallel ? 2 : 1)) {
-          readersStarted.resolve();
-        }
-        return { completion: readers.promise, getForwardedSignal: () => undefined };
-      });
-      const entry = start(e2e ? [...targets, e2eTarget] : targets);
-      try {
-        await Promise.race([preparation.started, entry]);
-        expect(commands.reader).not.toHaveBeenCalled();
-        if (!e2e) {
-          expect(commands.prepare).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({
-              args: ["scripts/prepare-vitest-runtime.mjs"],
-              env: expect.objectContaining({ OPENCLAW_BUILD_PRIVATE_QA: "1" }),
-            }),
-          );
-        }
-        if (outcome === "throw") {
-          preparation.reject(new Error(e2e ? "E2E build failed" : "build failed"));
-        } else {
-          preparation.resolve(outcome === "exit" ? 7 : 0);
-        }
-        if (outcome === "success") {
-          await Promise.race([readersStarted.promise, entry]);
-          expect(commands.reader).toHaveBeenCalledTimes(parallel ? 2 : 1);
-        }
-      } finally {
-        preparation.resolve(0);
-        readers.resolve({ code: 0, signal: null });
-        await entry;
+    { parallel: false, outcome: "success", e2e: false },
+    { parallel: true, outcome: "success", e2e: false },
+    { parallel: false, outcome: "exit", e2e: false },
+    { parallel: false, outcome: "throw", e2e: false },
+    { parallel: false, outcome: "throw", e2e: true },
+  ])("admits readers only after successful preparation: %j", async ({ parallel, outcome, e2e }) => {
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", parallel ? "2" : "");
+    const preparation = createPreparationGate<number | NodeJS.ProcessEnv>(
+      e2e ? commands.prepareE2e : commands.prepare,
+    );
+    const readers = createDeferred<{ code: number; signal: null }>();
+    const readersStarted = createDeferred();
+    commands.reader.mockImplementation(() => {
+      if (commands.reader.mock.calls.length === (parallel ? 2 : 1)) {
+        readersStarted.resolve();
+      }
+      return { completion: readers.promise, getForwardedSignal: () => undefined };
+    });
+    const entry = start(e2e ? [...targets, e2eTarget] : targets);
+    try {
+      await Promise.race([preparation.started, entry]);
+      expect(commands.reader).not.toHaveBeenCalled();
+      if (!e2e) {
+        expectPrivateQaPreparation();
+      }
+      if (outcome === "throw") {
+        preparation.reject(new Error(e2e ? "E2E build failed" : "build failed"));
+      } else {
+        preparation.resolve(outcome === "exit" ? 7 : 0);
       }
       if (outcome === "success") {
-        expect(await terminal.promise).toMatch(/^\[test\] passed 2 Vitest shards/u);
-        expect(commands.reader).toHaveBeenCalledTimes(2);
-      } else {
-        expect(commands.reader).not.toHaveBeenCalled();
+        await Promise.race([readersStarted.promise, entry]);
+        expect(commands.reader).toHaveBeenCalledTimes(parallel ? 2 : 1);
       }
-      if (e2e) {
-        expect(commands.prepare).not.toHaveBeenCalled();
-      }
-      expect(process.exitCode).toBe(outcome === "success" ? 0 : outcome === "exit" ? 7 : 2);
-    },
-  );
+    } finally {
+      preparation.resolve(0);
+      readers.resolve({ code: 0, signal: null });
+      await entry;
+    }
+    if (outcome === "success") {
+      await expectPassed(/^\[test\] passed 2 Vitest shards/u);
+      expect(commands.reader).toHaveBeenCalledTimes(2);
+    } else {
+      expect(commands.reader).not.toHaveBeenCalled();
+    }
+    if (e2e) {
+      expect(commands.prepare).not.toHaveBeenCalled();
+    }
+    expect(process.exitCode).toBe(outcome === "success" ? 0 : outcome === "exit" ? 7 : 2);
+  });
 
   it.each(["", "OPENCLAW_E2E_SKIP_BUILD", "OPENCLAW_E2E_USE_PREBUILT_DIST"])(
     "coalesces mixed E2E preparation and preserves prebuilt ownership (flag=%s)",
@@ -1751,7 +1602,7 @@ describe("test-projects build admission", () => {
         preparation.resolve(flag ? {} : { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
         await entry;
       }
-      expect(await terminal.promise).toMatch(/^\[test\] passed 3 Vitest shards/u);
+      await expectPassed(/^\[test\] passed 3 Vitest shards/u);
       if (flag) {
         expect(commands.prepareE2e).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ [flag]: "1" }),
@@ -1769,9 +1620,9 @@ describe("test-projects build admission", () => {
 });
 
 describe("plugin batch build admission", () => {
-  const qaConfig = "test/vitest/vitest.extension-qa.config.ts";
-  const databaseConfig = "test/vitest/vitest.extension-database-workers.config.ts";
-  const combinedConfig = "test/vitest/vitest.database-worker-watch.config.ts";
+  const qaConfig = configPath("extension-qa");
+  const databaseConfig = configPath("extension-database-workers");
+  const combinedConfig = configPath("database-worker-watch");
 
   it.each([
     { parallel: "1", outcome: 0 },
@@ -1801,12 +1652,7 @@ describe("plugin batch build admission", () => {
       try {
         await Promise.race([preparation.started, running]);
         expect(reader).not.toHaveBeenCalled();
-        expect(commands.prepare).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            args: ["scripts/prepare-vitest-runtime.mjs"],
-            env: expect.objectContaining({ OPENCLAW_BUILD_PRIVATE_QA: "1" }),
-          }),
-        );
+        expectPrivateQaPreparation();
       } finally {
         if (outcome === "throw") {
           preparation.reject(new Error("build spawn failed"));
@@ -1830,144 +1676,48 @@ describe("plugin batch build admission", () => {
     },
   );
 
-  it.each([
-    { name: "full QA", ids: ["qa-lab"], build: true, configs: [databaseConfig, qaConfig] },
-    {
-      name: "shared config, channel only",
-      ids: ["qa-channel"],
-      build: false,
-      configs: [databaseConfig, qaConfig],
-    },
-    {
-      name: "unrelated plugin",
-      ids: ["firecrawl"],
-      build: false,
-      configs: ["test/vitest/vitest.extension-misc.config.ts"],
-    },
-    { name: "ordinary QA file", args: [ordinaryQa], build: false, configs: [combinedConfig] },
-    { name: "lifecycle file", args: [lifecycle], build: true, configs: [combinedConfig] },
-    {
-      name: "absolute lifecycle",
-      args: [path.resolve(lifecycle)],
-      build: true,
-      configs: [combinedConfig],
-    },
-    {
-      name: "selective runtime exclusion",
-      args: ["--exclude", lifecycle],
-      build: true,
-      configs: [databaseConfig, qaConfig],
-    },
-    {
-      name: "exact exclusion",
-      args: qaRuntimeConsumers.flatMap((file) => ["--exclude", file]),
-      build: false,
-      configs: [databaseConfig, qaConfig],
-    },
-    {
-      name: "equals exclusion",
-      args: qaRuntimeConsumers.map((file) => `--exclude=${file}`),
-      build: false,
-      configs: [databaseConfig, qaConfig],
-    },
-    {
-      name: "scoped exclusion",
-      args: qaRuntimeConsumers.flatMap((file) => ["--exclude", file.replace("extensions/", "")]),
-      build: false,
-      configs: [databaseConfig, qaConfig],
-    },
-    {
-      name: "absolute exclusion",
-      args: qaRuntimeConsumers.flatMap((file) => ["--exclude", path.resolve(file)]),
-      build: false,
-      configs: [databaseConfig, qaConfig],
-    },
-    {
-      name: "glob exclusion",
-      args: qaRuntimeConsumers.flatMap((file) => [
-        "--exclude",
-        `${path.posix.dirname(file)}/**/*.test.ts`,
-      ]),
-      build: false,
-      configs: [combinedConfig],
-    },
-    {
-      name: "all QA excluded",
-      args: ["--exclude=extensions/qa-lab/**"],
-      build: false,
-      configs: [combinedConfig],
-    },
-    { name: "empty include", include: [], build: false, configs: [databaseConfig, qaConfig] },
-    {
-      name: "unrelated include",
-      include: [ordinaryQa],
-      build: false,
-      configs: [databaseConfig, qaConfig],
-    },
-    {
-      name: "lifecycle include",
-      include: [lifecycle],
-      build: true,
-      configs: [databaseConfig, qaConfig],
-    },
-    {
-      name: "absolute lifecycle include",
-      include: [path.resolve(lifecycle)],
-      build: true,
-      configs: [databaseConfig, qaConfig],
-    },
-    {
-      name: "scoped lifecycle include",
-      include: [lifecycle.replace("extensions/", "")],
-      build: true,
-      configs: [databaseConfig, qaConfig],
-    },
-    {
-      name: "runtime include outside config directory",
-      include: ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts"],
-      args: ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts"],
-      build: false,
-      configs: [combinedConfig],
-    },
-    {
-      name: "include outside emitted roots",
-      ids: ["qa-channel"],
-      include: [lifecycle],
-      build: false,
-      configs: [databaseConfig, qaConfig],
-    },
-    {
-      name: "cross-root CLI with include",
-      ids: ["qa-channel"],
-      args: [lifecycle],
-      include: [lifecycle],
-      build: true,
-      configs: [combinedConfig],
-    },
-    {
-      name: "include outside explicit target",
-      args: [ordinaryQa],
-      include: [lifecycle],
-      build: true,
-      configs: [combinedConfig],
-    },
-    {
-      name: "existing exact-exclude expansion",
-      args: [ordinaryQa, "--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"],
-      build: true,
-      configs: [combinedConfig],
-    },
-    { name: "no groups", ids: [], build: false, configs: [] },
+  const qaConfigs = [databaseConfig, qaConfig];
+  const combined = [combinedConfig];
+  const runtime = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
+  type Selection = { ids?: string[]; args?: string[]; include?: string[] };
+  it.each<[Selection, boolean, string[]]>([
+    [{ ids: ["qa-lab"] }, true, qaConfigs],
+    [{ ids: ["qa-channel"] }, false, qaConfigs],
+    [{ ids: ["firecrawl"] }, false, [configPath("extension-misc")]],
+    [{ args: [ordinaryQa] }, false, combined],
+    [{ args: [lifecycle] }, true, combined],
+    [{ args: [path.resolve(lifecycle)] }, true, combined],
+    [{ args: ["--exclude", lifecycle] }, true, qaConfigs],
+    [{ args: excludeQa() }, false, qaConfigs],
+    [{ args: qaRuntimeConsumers.map((file) => `--exclude=${file}`) }, false, qaConfigs],
+    [{ args: excludeQa(scoped) }, false, qaConfigs],
+    [{ args: excludeQa((file) => path.resolve(file)) }, false, qaConfigs],
+    [{ args: excludeQa((file) => `${path.posix.dirname(file)}/**/*.test.ts`) }, false, combined],
+    [{ args: ["--exclude=extensions/qa-lab/**"] }, false, combined],
+    [{ include: [] }, false, qaConfigs],
+    [{ include: [ordinaryQa] }, false, qaConfigs],
+    [{ include: [lifecycle] }, true, qaConfigs],
+    [{ include: [path.resolve(lifecycle)] }, true, qaConfigs],
+    [{ include: [scoped(lifecycle)] }, true, qaConfigs],
+    [{ include: [runtime], args: [runtime] }, false, combined],
+    [{ ids: ["qa-channel"], include: [lifecycle] }, false, qaConfigs],
+    [{ ids: ["qa-channel"], args: [lifecycle], include: [lifecycle] }, true, combined],
+    [{ args: [ordinaryQa], include: [lifecycle] }, true, combined],
+    [
+      { args: [ordinaryQa, "--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"] },
+      true,
+      combined,
+    ],
+    [{ ids: [] }, false, []],
   ])(
-    "prepares the actual invocation selection: $name",
-    async ({ ids = ["qa-lab"], args = [], include, build, configs }) => {
+    "prepares the actual invocation selection: %j, build=%s",
+    async ({ ids = ["qa-lab"], args = [], include }, build, configs) => {
       const { resolveExtensionBatchPlan } =
         await import("../../scripts/lib/extension-test-plan.mts");
       const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch-run.mts");
       const env = include
         ? { OPENCLAW_VITEST_INCLUDE_FILE: patternFiles.writePatternFile("include.json", include) }
         : {};
-      commands.prepare.mockResolvedValue(0);
       const reader = vi
         .fn<(params: VitestBatchRunParams) => Promise<number>>()
         .mockResolvedValue(0);

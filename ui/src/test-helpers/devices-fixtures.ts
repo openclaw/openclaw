@@ -43,6 +43,7 @@ export const deviceDesktopEnvironments: EnvironmentSummary[] = [
 
 export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): DevicesProps {
   return {
+    connected: true,
     loading: false,
     nodes: [],
     presence: [],

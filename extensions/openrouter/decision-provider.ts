@@ -24,19 +24,25 @@ import {
 } from "./provider-routing.js";
 
 export function isOpenRouterDecisionModel(modelId: string): boolean {
-  return modelId === "typesafe/jev-1.13" || modelId === "~typesafe/jev-latest";
+  return (
+    modelId === "typesafe/jev-1.13" ||
+    modelId === "typesafe/jev-1.14" ||
+    modelId === "~typesafe/jev-latest"
+  );
 }
 
 function unsupported(): ProviderDecisionOutcomeV2 {
   return { status: "unavailable", reason: "unsupported-input" };
 }
 
-function supportsBatch(batch: DecisionBatchV2): boolean {
+function supportsBatch(batch: DecisionBatchV2, modelId: string): boolean {
   if (!validateDecisionBatchV2(batch)) {
     return false;
   }
-  // This adapter supports text and structured JSON, not image/list state or JSON scalars.
+  // Jev accepts PNG/JPEG only. The shared validator bounds and checks inline data;
+  // neither this adapter nor the host fetches image URLs or resizes caller evidence.
   if (
+    batch.state.type !== "image" &&
     batch.state.type !== "text" &&
     (batch.state.type !== "json" ||
       batch.state.value === null ||
@@ -44,9 +50,18 @@ function supportsBatch(batch: DecisionBatchV2): boolean {
   ) {
     return false;
   }
+  if (
+    batch.state.type === "image" &&
+    !/^data:image\/(?:png|jpeg);base64,/.test(batch.state.dataUri)
+  ) {
+    return false;
+  }
   return Object.values(batch.questions).every((q) => {
     if (q.type === "sort" || q.type === "tags" || q.instructions == null) {
       return false;
+    }
+    if (q.type === "box") {
+      return modelId !== "typesafe/jev-1.13";
     }
     if (q.type === "choice") {
       return Object.keys(q.criteria).length <= 255;
@@ -85,7 +100,7 @@ function decodeResponse(batch: DecisionBatchV2, response: unknown): unknown {
       if (answer.type === "noul") {
         return [id, { type: "boolean", probabilityTrue: answer.noul }];
       }
-      if (answer.type !== "choice" && answer.type !== "score") {
+      if (answer.type !== "choice" && answer.type !== "score" && answer.type !== "box") {
         return [id, undefined];
       }
       if (
@@ -95,6 +110,9 @@ function decodeResponse(batch: DecisionBatchV2, response: unknown): unknown {
         answer.confidence > 1
       ) {
         return [id, undefined];
+      }
+      if (answer.type === "box") {
+        return [id, { type: "box", box: answer.box, confidence: answer.confidence }];
       }
       if (answer.type === "choice") {
         return [
@@ -169,7 +187,12 @@ function buildRequest(batch: DecisionBatchV2, context: DecisionProviderContextV2
         ? batch.state.text
         : batch.state.type === "json"
           ? batch.state.value
-          : undefined,
+          : batch.state.type === "image"
+            ? [
+                ...(batch.state.text === undefined ? [] : [batch.state.text]),
+                { type: "image_url", image_url: { url: batch.state.dataUri } },
+              ]
+            : undefined,
     questions: Object.fromEntries(
       Object.entries(batch.questions).map(([id, question]) => [
         id,
@@ -189,7 +212,7 @@ export function buildOpenRouterDecisionProvider(): DecisionProviderV2 {
       if (
         !isOpenRouterDecisionModel(context.model.id) ||
         (context.reasoning !== undefined && context.reasoning !== "auto") ||
-        !supportsBatch(batch)
+        !supportsBatch(batch, context.model.id)
       ) {
         return unsupported();
       }

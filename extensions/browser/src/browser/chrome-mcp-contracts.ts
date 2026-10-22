@@ -1,7 +1,6 @@
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import { SdkErrorCode, type Client, type Tool } from "@modelcontextprotocol/client";
+import type { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import type { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import type { CdpActionTimeouts } from "./cdp.js";
 
@@ -12,7 +11,7 @@ export type ChromeMcpStructuredPage = {
 };
 
 export type ChromeMcpToolResult = {
-  structuredContent?: Record<string, unknown>;
+  structuredContent?: unknown;
   content?: Array<Record<string, unknown>>;
   isError?: boolean;
 };
@@ -22,6 +21,7 @@ export type ChromeMcpSession = {
   transport: StdioClientTransport;
   closeTransport: () => Promise<void>;
   ready: Promise<void>;
+  tools?: Tool[];
   processCleanup?: ChromeMcpProcessCleanupState;
   processCleanupRefresh?: Promise<void>;
   routing?: ChromeMcpRoutingState;
@@ -29,7 +29,7 @@ export type ChromeMcpSession = {
 
 export type ChromeMcpRoutingState = {
   sessionNonce: string;
-  withOperationLock: ReturnType<typeof createAsyncLock>;
+  operationPermits: ReturnType<typeof createPermitPool>;
   targetIdByPageId: Map<number, string>;
   nextTargetHandleId: number;
   snapshotsByTarget: Map<
@@ -84,7 +84,7 @@ export type ChromeMcpPageProbe = {
   onResult: (tabCount: number | null) => void;
 };
 
-export const MCP_REQUEST_TIMEOUT_CODE: number = ErrorCode.RequestTimeout;
+export const MCP_REQUEST_TIMEOUT_CODE = SdkErrorCode.RequestTimeout;
 
 export type ChromeMcpProfileOptions = {
   userDataDir?: string;

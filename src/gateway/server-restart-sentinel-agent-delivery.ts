@@ -1,6 +1,8 @@
 import path from "node:path";
 import { formatGeneratedMediaDeliveredForPrompt } from "../agents/internal-events.js";
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
+import { reserveSubagentCompletionControllerSource } from "../agents/subagents/announce/subagent-announce-controller-source.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
   durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
@@ -15,7 +17,6 @@ import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   inspectDeliveryQueueReceipt,
   type DeliveryQueueStateContext,
@@ -31,15 +32,19 @@ import {
   mergeSessionDeliveryPreparedMediaBlocks,
 } from "../infra/session-delivery-queue-storage.js";
 import {
+  SessionDeliveryAttemptStartError,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
-  type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.records.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getMediaDir } from "../media/store.js";
-import { isSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
+import { isSessionControllerWorkActive } from "../sessions/session-controller.lifecycle.js";
+import {
+  retireSessionControllerInput,
+  type SessionControllerInput,
+} from "../sessions/session-controller.mailbox.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -78,111 +83,6 @@ async function deadLetterSessionDelivery(
 function resolveQueuedAgentRunId(entry: QueuedAgentTurnSessionDelivery) {
   const base = entry.idempotencyKey ?? entry.messageId;
   return entry.agentRunAttempt ? `${base}:attempt:${entry.agentRunAttempt}` : base;
-}
-
-/** Send generated media to an external route exactly once, settled by the outbound receipt. */
-async function sendQueuedGeneratedMedia(params: {
-  entry: QueuedAgentTurnSessionDelivery;
-  route: SessionDeliveryRoute;
-  mediaUrls: string[];
-  agentId: string;
-  canonicalKey: string;
-  cfg: OpenClawConfig;
-  deps: CliDeps;
-  sessionGeneration: SessionDeliveryGeneration;
-  queueContext: OpenClawStateWorkerContext;
-}): Promise<void> {
-  const { entry, route, cfg, sessionGeneration } = params;
-  const deliveryIntentId = `${GENERATED_MEDIA_DELIVERY_COMPLETION_RETENTION.idPrefix}${entry.id}`;
-  const deliveryQueueContext: DeliveryQueueStateContext = {
-    stateDir: resolveStateDir(params.queueContext.environment),
-    workerContext: params.queueContext,
-  };
-  const inspectReceipt = () =>
-    inspectDeliveryQueueReceipt(
-      outboundDeliveryQueueName({ sessionGeneration }),
-      deliveryIntentId,
-      false,
-      deliveryQueueContext,
-    );
-  const deferToOutboundOwner = async (): Promise<never> => {
-    await deferSessionDelivery(entry.id, AGENT_DELIVERY_OWNERSHIP_RETRY_MS, params.queueContext);
-    throw new SessionDeliveryDeferredError(
-      "queued generated-media send is still owned by outbound delivery recovery",
-    );
-  };
-  const deadLetterAmbiguous = async (facts: Record<string, unknown>): Promise<never> => {
-    log.warn("queued generated-media send has ambiguous attachment side effects", {
-      queueId: entry.id,
-      ...facts,
-    });
-    return await deadLetterSessionDelivery(
-      entry,
-      "queued generated-media delivery dead-lettered after ambiguous side effects",
-      params.queueContext,
-    );
-  };
-  if (entry.deliveryStartedAt !== undefined) {
-    // A started send settles only from its outbound receipt. An expired,
-    // failed or missing receipt cannot prove the media is absent, so never resend.
-    const receipt = await inspectReceipt();
-    if (receipt.status === "completed") {
-      return;
-    }
-    if (receipt.status === "pending") {
-      return await deferToOutboundOwner();
-    }
-    return await deadLetterAmbiguous({ receipt: receipt.status ?? "missing" });
-  }
-  await markSessionDeliveryAttemptStarted(entry, params.queueContext);
-  const result = await sendDurableMessageBatchCore(
-    {
-      cfg,
-      channel: route.channel,
-      to: route.to,
-      accountId: route.accountId,
-      replyToId: route.replyToId,
-      threadId: route.threadId,
-      payloads: [{ mediaUrls: params.mediaUrls }],
-      session: buildOutboundSessionContext({
-        cfg,
-        agentId: params.agentId,
-        sessionKey: params.canonicalKey,
-        conversationType: route.chatType,
-      }),
-      durability: "required",
-      deliveryIntentId,
-      reusePendingDeliveryIntent: true,
-      completionRetention: GENERATED_MEDIA_DELIVERY_COMPLETION_RETENTION,
-      deps: createOutboundSendDeps(params.deps),
-    },
-    undefined,
-    deliveryQueueContext,
-    // Outbound custody re-checks the requester before every platform send,
-    // including a recovery replay after the requester was reset or replaced.
-    sessionGeneration,
-  );
-  params.queueContext.admission.assertCurrent();
-  if (result.status === "sent") {
-    return;
-  }
-  // A replayed intent sends nothing new; its durable receipt owns the outcome.
-  const receipt = await inspectReceipt();
-  if (receipt.status === "completed") {
-    return;
-  }
-  if (receipt.status === "pending") {
-    return await deferToOutboundOwner();
-  }
-  // A terminally failed intent may have sent before failing; a fresh intent
-  // attempt would bypass the outbound owner and could duplicate the media.
-  if (receipt.status === "failed" || durableMessageBatchMayHaveReachedRecipient(result)) {
-    return await deadLetterAmbiguous({ status: result.status, receipt: receipt.status });
-  }
-  // Proven unsent: the queue releases this attempt's fence before the retry.
-  throw new SessionDeliverySafeRetryError("queued generated-media send did not reach the chat", {
-    cause: result.status === "failed" ? result.error : undefined,
-  });
 }
 
 /** Persist generated media into an internal-route transcript as one idempotent host message. */
@@ -421,7 +321,11 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
   }
   const assertRequesterIdle = () => {
     if (
-      isSessionWorkAdmissionActive(params.storePath, [params.canonicalKey, sessionEntry?.sessionId])
+      isSessionControllerWorkActive(
+        params.storePath,
+        [params.canonicalKey, sessionEntry?.sessionId],
+        params.agentId,
+      )
     ) {
       throw new SessionDeliveryDeferredError(
         "queued generated-media completion is waiting for its requester to finish",
@@ -466,14 +370,105 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
           params.queueContext,
         );
       }
-      await sendQueuedGeneratedMedia({
-        ...params,
-        entry,
-        route,
-        mediaUrls,
-        cfg: resolveConfig(),
-        sessionGeneration,
-      });
+      const { agentId, canonicalKey, deps, queueContext } = params;
+      const cfg = resolveConfig();
+      // The outbound receipt settles the external media send exactly once.
+      const sendQueuedGeneratedMedia = async (): Promise<void> => {
+        const deliveryIntentId = `${GENERATED_MEDIA_DELIVERY_COMPLETION_RETENTION.idPrefix}${entry.id}`;
+        const deliveryQueueContext: DeliveryQueueStateContext = {
+          stateDir: resolveStateDir(queueContext.environment),
+          workerContext: queueContext,
+        };
+        const inspectReceipt = () =>
+          inspectDeliveryQueueReceipt(
+            outboundDeliveryQueueName({ sessionGeneration }),
+            deliveryIntentId,
+            false,
+            deliveryQueueContext,
+          );
+        const deferToOutboundOwner = async (): Promise<never> => {
+          await deferSessionDelivery(entry.id, AGENT_DELIVERY_OWNERSHIP_RETRY_MS, queueContext);
+          throw new SessionDeliveryDeferredError(
+            "queued generated-media send is still owned by outbound delivery recovery",
+          );
+        };
+        const deadLetterAmbiguous = async (facts: Record<string, unknown>): Promise<never> => {
+          log.warn("queued generated-media send has ambiguous attachment side effects", {
+            queueId: entry.id,
+            ...facts,
+          });
+          return await deadLetterSessionDelivery(
+            entry,
+            "queued generated-media delivery dead-lettered after ambiguous side effects",
+            queueContext,
+          );
+        };
+        if (entry.deliveryStartedAt !== undefined) {
+          // A started send settles only from its outbound receipt. An expired,
+          // failed or missing receipt cannot prove the media is absent, so never resend.
+          const receipt = await inspectReceipt();
+          if (receipt.status === "completed") {
+            return;
+          }
+          if (receipt.status === "pending") {
+            return await deferToOutboundOwner();
+          }
+          return await deadLetterAmbiguous({ receipt: receipt.status ?? "missing" });
+        }
+        await markSessionDeliveryAttemptStarted(entry, queueContext);
+        const result = await sendDurableMessageBatchCore(
+          {
+            cfg,
+            channel: route.channel,
+            to: route.to,
+            accountId: route.accountId,
+            replyToId: route.replyToId,
+            threadId: route.threadId,
+            payloads: [{ mediaUrls }],
+            session: buildOutboundSessionContext({
+              cfg,
+              agentId,
+              sessionKey: canonicalKey,
+              conversationType: route.chatType,
+            }),
+            durability: "required",
+            deliveryIntentId,
+            reusePendingDeliveryIntent: true,
+            completionRetention: GENERATED_MEDIA_DELIVERY_COMPLETION_RETENTION,
+            deps: createOutboundSendDeps(deps),
+          },
+          undefined,
+          deliveryQueueContext,
+          // Outbound custody re-checks the requester before every platform send,
+          // including a recovery replay after the requester was reset or replaced.
+          sessionGeneration,
+        );
+        queueContext.admission.assertCurrent();
+        if (result.status === "sent") {
+          return;
+        }
+        // A replayed intent sends nothing new; its durable receipt owns the outcome.
+        const receipt = await inspectReceipt();
+        if (receipt.status === "completed") {
+          return;
+        }
+        if (receipt.status === "pending") {
+          return await deferToOutboundOwner();
+        }
+        // A terminally failed intent may have sent before failing; a fresh intent
+        // attempt would bypass the outbound owner and could duplicate the media.
+        if (receipt.status === "failed" || durableMessageBatchMayHaveReachedRecipient(result)) {
+          return await deadLetterAmbiguous({ status: result.status, receipt: receipt.status });
+        }
+        // Proven unsent: the queue releases this attempt's fence before the retry.
+        throw new SessionDeliverySafeRetryError(
+          "queued generated-media send did not reach the chat",
+          {
+            cause: result.status === "failed" ? result.error : undefined,
+          },
+        );
+      };
+      await sendQueuedGeneratedMedia();
     }
     await advanceSessionDeliveryAgentRun(
       entry.id,
@@ -496,21 +491,34 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
   const queuedRunId = resolveQueuedAgentRunId(entry);
   const cronLifecycleRevision = sessionEntry?.cronRunContinuation?.lifecycleRevision?.trim();
   const cronSessionId = cronLifecycleRevision ? sessionEntry?.sessionId?.trim() : undefined;
-  // Fence before gateway admission. Recovery clears it only for an explicit
-  // pre-acceptance safe retry; an accepted turn may already have effects.
-  await markSessionDeliveryAttemptStarted(entry, {
-    ...params.queueContext,
-    admission: {
-      ...params.queueContext.admission,
-      assertCurrent: () => {
-        params.queueContext.admission.assertCurrent();
-        assertRequesterIdle();
-      },
-    },
-  });
+  const completionOwner =
+    entry.owner?.kind === "subagent_completion" ? subagentRuns.get(entry.owner.runId) : undefined;
+  let controllerInput: SessionControllerInput | undefined;
   let accepted = false;
   try {
-    params.queueContext.admission.assertCurrent();
+    assertRequesterAdmissionCurrent();
+    controllerInput = completionOwner
+      ? await reserveSubagentCompletionControllerSource(completionOwner, queuedRunId)
+      : undefined;
+    assertRequesterAdmissionCurrent();
+    if (completionOwner && !controllerInput) {
+      await deferSessionDelivery(entry.id, AGENT_DELIVERY_OWNERSHIP_RETRY_MS, params.queueContext);
+      throw new SessionDeliveryDeferredError(
+        "queued generated-media completion is waiting for its requester source",
+      );
+    }
+    // Fence after source custody, before gateway admission. Recovery clears it only
+    // for an explicit pre-acceptance safe retry; an accepted turn may have effects.
+    await markSessionDeliveryAttemptStarted(entry, {
+      ...params.queueContext,
+      admission: {
+        ...params.queueContext.admission,
+        assertCurrent: () => {
+          params.queueContext.admission.assertCurrent();
+          assertRequesterIdle();
+        },
+      },
+    });
     assertRequesterAdmissionCurrent();
     await dispatchGatewayMethodInProcess(
       "agent",
@@ -536,6 +544,7 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
         idempotencyKey: queuedRunId,
       },
       {
+        controllerInput,
         ...(cronSessionId ? { allowSyntheticCronRunContinuation: true } : {}),
         expectFinal: true,
         ...(binding ? { assertAdmissionCurrent: assertRequesterAdmissionCurrent } : {}),
@@ -550,6 +559,12 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
       },
     );
   } catch (error) {
+    if (
+      error instanceof SessionDeliveryAttemptStartError ||
+      (completionOwner && !controllerInput && error instanceof SessionDeliveryDeferredError)
+    ) {
+      throw error;
+    }
     if (error instanceof SessionDeliveryDeadLetteredError) {
       return await abandonCompletion(error.message);
     }
@@ -560,6 +575,10 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
       );
     }
     throw error;
+  } finally {
+    if (controllerInput && !controllerInput.custody.rpcAdopted) {
+      retireSessionControllerInput(controllerInput);
+    }
   }
   return true;
 }

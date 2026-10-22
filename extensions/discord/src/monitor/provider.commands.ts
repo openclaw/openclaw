@@ -13,7 +13,7 @@ import { danger, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 
-export type DiscordProviderCommandSpec = NativeCommandSpec | PluginCommandNativeCandidate;
+type DiscordProviderCommandSpec = NativeCommandSpec | PluginCommandNativeCandidate;
 
 const loadPluginCommandRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/plugin-command-runtime"),

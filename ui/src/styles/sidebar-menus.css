@@ -66,15 +66,11 @@
   --sidebar-filter-row-height: calc(var(--settings-control-height) + var(--space-1));
   --sidebar-filter-row-inset: var(--space-2);
 
-  box-sizing: border-box;
   width: calc(var(--space-8) * 8);
   max-width: calc(100dvw - var(--space-6));
   max-height: min(calc(100dvh - var(--space-6)), var(--auto-size-available-height, 100dvh));
-  overflow: auto;
-  overscroll-behavior: contain;
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
   font-size: calc((var(--control-ui-text-sm) + var(--control-ui-text-md)) / 2);

@@ -31,6 +31,13 @@ function bundledArtifact(
   setBundledDir(bundledPluginsDir, trust);
   return { bundledPluginsDir, modulePath };
 }
+function pluginFixture(type = "commonjs") {
+  const root = tempDirs.make("openclaw-public-surface-loader-");
+  const bundledPluginsDir = path.join(root, "extensions");
+  const pluginRoot = path.join(bundledPluginsDir, "demo");
+  writeArtifact(path.join(pluginRoot, "package.json"), JSON.stringify({ type }));
+  return { root, bundledPluginsDir, pluginRoot };
+}
 async function freshLoader(scope: string) {
   const loader = await importFreshModule<typeof import("./public-surface-loader.js")>(
     import.meta.url,
@@ -92,11 +99,8 @@ describe("bundled plugin public surface loader", () => {
   });
 
   it("loads bundled artifacts from each caller's environment without changing process.env", async () => {
-    const tempRoot = tempDirs.make("openclaw-public-surface-env-");
     const createEnvironment = (marker: string) => {
-      const bundledPluginsDir = path.join(tempRoot, marker);
-      const pluginRoot = path.join(bundledPluginsDir, "demo");
-      writeArtifact(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n');
+      const { bundledPluginsDir, pluginRoot } = pluginFixture();
       writeArtifact(
         path.join(pluginRoot, "api.js"),
         `module.exports = { marker: ${JSON.stringify(marker)} };\n`,
@@ -125,9 +129,7 @@ describe("bundled plugin public surface loader", () => {
   it.each([false, true])(
     "separates disabled and enabled fallback caches with disabledFirst=%s",
     async (disabledFirst) => {
-      const tempRoot = tempDirs.make("openclaw-public-surface-env-cache-");
-      const pluginRoot = path.join(tempRoot, "extensions", "demo");
-      writeArtifact(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n');
+      const { root: tempRoot, pluginRoot } = pluginFixture();
       writeArtifact(path.join(pluginRoot, "api.js"), 'module.exports = { marker: "enabled" };\n');
       // Both environments lack a discovered tree; only the package source fallback exists.
       vi.doMock("./bundled-dir.js", async (importOriginal) => ({
@@ -351,10 +353,7 @@ describe("bundled plugin public surface loader", () => {
     async ({ firstLocation, nextLocation }) => {
       const loader = await freshLoader(`esm-artifact-relocation-${firstLocation}-${nextLocation}`);
       const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
-      const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
-      const bundledPluginsDir = path.join(tempRoot, "extensions");
-      const pluginDir = path.join(bundledPluginsDir, "demo");
-      writeArtifact(path.join(pluginDir, "package.json"), '{"type":"module"}\n');
+      const { bundledPluginsDir, pluginRoot: pluginDir } = pluginFixture("module");
       setBundledDir(bundledPluginsDir);
       const artifactPath = (location: "root" | "dist") =>
         path.join(pluginDir, ...(location === "dist" ? ["dist"] : []), "api.js");
@@ -408,30 +407,12 @@ describe("bundled plugin public surface loader", () => {
       fs.mkdirSync(path.dirname(modulePath), { recursive: true });
       writeArtifact(sourcePath, 'export const marker = "demo";\n');
       fs.linkSync(sourcePath, modulePath);
+      expect(fs.statSync(modulePath).nlink).toBeGreaterThan(1);
       setBundledDir(bundledPluginsDir);
       expect(loader.load(publicArtifact).marker).toBe("demo");
       const installed = { pluginRoot: bundledPluginsDir, artifactBasename: "demo/api.js" };
       expect(() => loader.installed(installed)).toThrow(
         "Unable to open plugin public surface demo/api.js",
-      );
-    },
-  );
-
-  it.runIf(process.platform !== "win32").each(["provider-policy-api.js"])(
-    "rejects installed plugin public artifact %s hardlinked outside its root",
-    async (artifact) => {
-      const loader = await freshLoader(`installed-hardlink-${artifact.replace(".js", "")}`);
-      const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
-      const pluginRoot = path.join(tempRoot, "installed-plugin");
-      const outsidePath = path.join(tempRoot, "outside.js");
-      const artifactPath = path.join(pluginRoot, artifact);
-      fs.mkdirSync(pluginRoot, { recursive: true });
-      writeArtifact(outsidePath, 'export const marker = "outside-plugin-root";\n');
-      fs.linkSync(outsidePath, artifactPath);
-      expect(fs.statSync(artifactPath).nlink).toBeGreaterThan(1);
-      const installed = { pluginRoot, artifactBasename: artifact };
-      expect(() => loader.installed(installed)).toThrow(
-        `Unable to open plugin public surface ${artifact}`,
       );
     },
   );

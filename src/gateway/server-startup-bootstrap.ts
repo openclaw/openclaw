@@ -25,7 +25,7 @@ import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
-import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
+import { isTruthyEnvValue, isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
@@ -198,14 +198,14 @@ async function prepareGatewayServerBootstrapSelected(input: {
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
   const ambientEnvTriggers = opts.ambientEnvTriggers ?? "suppress";
 
-  logAcceptedEnvOption({
-    key: "OPENCLAW_RAW_STREAM",
-    description: "raw stream logging enabled",
-  });
-  logAcceptedEnvOption({
-    key: "OPENCLAW_RAW_STREAM_PATH",
-    description: "raw stream log path override",
-  });
+  if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
+    if (process.env.OPENCLAW_RAW_STREAM?.trim()) {
+      log.info("raw stream logging flag configured via OPENCLAW_RAW_STREAM");
+    }
+    if (process.env.OPENCLAW_RAW_STREAM_PATH?.trim()) {
+      log.info("raw stream log path override configured via OPENCLAW_RAW_STREAM_PATH");
+    }
+  }
   if (!minimalTestGateway && !opts.updateCanary) {
     await startupTrace.measure("runtime.agent-cli", () => prepareGatewayAgentCliShim());
   }
@@ -463,6 +463,13 @@ async function prepareGatewayServerBootstrapSelected(input: {
     ),
     preserveExistingOwnership: true,
   });
+  if (!minimalTestGateway && !opts.updateCanary) {
+    const { recoverConfiguredMcpDockerServers } = await import("../agents/mcp-docker-recovery.js");
+    await recoverConfiguredMcpDockerServers(
+      cfgAtStart,
+      startupConfigLoad.pluginMetadataSnapshot?.manifestRegistry,
+    );
+  }
   const preparations = [
     minimalTestGateway || opts.updateCanary
       ? Promise.resolve(undefined)

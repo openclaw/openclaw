@@ -5,7 +5,7 @@
  * share one implementation and one app-server client pool.
  */
 import { pathToFileURL } from "node:url";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { Server } from "@modelcontextprotocol/server";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

@@ -49,6 +49,7 @@ export type OpenAiCompatibleSpeechProviderOptions<
   defaultModel: string;
   defaultVoice: string;
   defaultBaseUrl: string;
+  defaultTimeoutMs?: number;
   envKey: string;
   responseFormats: readonly string[];
   defaultResponseFormat: string;
@@ -204,14 +205,14 @@ export function createOpenAiCompatibleSpeechProvider<
     label: options.label,
     autoSelectOrder: options.autoSelectOrder,
     defaultModel: options.defaultModel,
+    defaultTimeoutMs: options.defaultTimeoutMs,
     models: [...options.models],
     voices: [...options.voices],
     resolveConfig: ({ rawConfig }) => normalizeConfig(rawConfig),
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
-      const base = normalizeConfig(baseTtsConfig);
+      const next = normalizeConfig(baseTtsConfig);
       const responseFormat = normalizeResponseFormat(talkProviderConfig.responseFormat);
-      const next: OpenAiCompatibleSpeechProviderConfig<ExtraConfig> = { ...base };
       if (talkProviderConfig.apiKey !== undefined) {
         next.apiKey = normalizeResolvedSecretInputString({
           value: talkProviderConfig.apiKey,
@@ -226,7 +227,7 @@ export function createOpenAiCompatibleSpeechProvider<
       if (modelId !== undefined) {
         next.model = normalizeModel(modelId, options.defaultModel);
       }
-      next.voice = resolveConfiguredSpeechVoice(talkProviderConfig) ?? base.voice;
+      next.voice = resolveConfiguredSpeechVoice(talkProviderConfig) ?? next.voice;
       const speed = asFiniteNumber(talkProviderConfig.speed);
       if (speed !== undefined) {
         next.speed = speed;

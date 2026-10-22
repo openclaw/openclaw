@@ -37,7 +37,8 @@ import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts"
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
 import { settleChatPage, setNavigationContext, stubMatchMedia } from "./chat-page.test-support.ts";
-import { ChatPage } from "./chat-page.ts";
+import "./chat-page.tsx";
+import { registerChatPane } from "./chat-pane-elements.ts";
 import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 
@@ -64,7 +65,7 @@ type RenderedPane = HTMLElement & {
 };
 
 const paneTag = "openclaw-chat-pane";
-const paneIn = (page: ChatPage) =>
+const paneIn = (page: HTMLElementTagNameMap["openclaw-chat-page"]) =>
   expectDefined(page.querySelector<RenderedPane>(paneTag), paneTag);
 function command(detail: UiCommandDetail) {
   const event = new CustomEvent(UI_COMMAND_EVENT, { detail, cancelable: true });
@@ -90,6 +91,7 @@ function composer(pane: HTMLElement) {
   const textarea = document.createElement("textarea");
   combobox.append(textarea);
   pane.append(combobox);
+  Object.defineProperty(pane, "composerElement", { configurable: true, value: textarea });
   return textarea;
 }
 function unknownLayout(key: string) {
@@ -121,14 +123,17 @@ function expectPresentation(
   }).toMatchObject(expected);
 }
 
-async function showSession(page: ChatPage, sessionKey: string): Promise<void> {
+async function showSession(
+  page: HTMLElementTagNameMap["openclaw-chat-page"],
+  sessionKey: string,
+): Promise<void> {
   page.data = { sessionKey };
   await settleChatPage(page);
   await settleChatPage(page);
 }
 
 async function mountRetainedPage(sessionKey: string, ...warmSessionKeys: string[]) {
-  const page = new ChatPage();
+  const page = document.createElement("openclaw-chat-page");
   const navigation = setNavigationContext(page);
   page.data = { sessionKey };
   document.body.append(page);
@@ -177,7 +182,7 @@ describe("chat page retained sessions", () => {
       formFactor: "desktop",
       surface: "conversation",
     });
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     const navigation = setNavigationContext(page);
     const presentation = { visible: true, active: false };
     let notify = () => {};
@@ -216,7 +221,7 @@ describe("chat page retained sessions", () => {
 
   it("keeps route ownership on the selected split pane while dock input is active", async () => {
     const workSessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     const { context } = setNavigationContext(page);
     page.data = { sessionKey: workSessionKey, agentId: "main" };
     document.body.append(page);
@@ -253,7 +258,7 @@ describe("chat page retained sessions", () => {
       const previousHref = window.location.href;
       registerTestCleanup(() => window.history.replaceState({}, "", previousHref));
       window.history.replaceState({}, "", "/chat/main?draft=What+can+you+do%3F");
-      const page = new ChatPage();
+      const page = document.createElement("openclaw-chat-page");
       const { context, navigate, replace } = setNavigationContext(page);
       page.data = { sessionKey: routeKey };
       document.body.append(page);
@@ -438,53 +443,68 @@ describe("chat page retained sessions", () => {
     },
   );
 
-  it("hands route-owned focus to the final page across pane replacement", async () => {
-    const sourcePage = new ChatPage();
-    setNavigationContext(sourcePage);
-    sourcePage.data = {
-      sessionKey: "main",
-      draft: "What can you do?",
-      focusComposer: true,
-    };
-    const page = new ChatPage();
-    setNavigationContext(page);
-    page.data = { sessionKey: "main" };
+  it.each(["persistent focus", "transient focus", "pointer intent"] as const)(
+    "hands route-owned focus to the final page across pane replacement (%s)",
+    async (intent) => {
+      const sourcePage = document.createElement("openclaw-chat-page");
+      setNavigationContext(sourcePage);
+      sourcePage.data = {
+        sessionKey: "main",
+        draft: "What can you do?",
+        focusComposer: true,
+      };
+      const page = document.createElement("openclaw-chat-page");
+      setNavigationContext(page);
+      page.data = { sessionKey: "main" };
 
-    vi.useFakeTimers();
-    try {
-      document.body.append(sourcePage);
-      await settleChatPage(sourcePage);
-      await Promise.resolve();
+      vi.useFakeTimers();
+      try {
+        document.body.append(sourcePage);
+        await settleChatPage(sourcePage);
+        await Promise.resolve();
 
-      document.body.append(page);
-      await settleChatPage(page);
-      const pane = paneIn(page);
-      expect(pane.focusComposer).toBe(true);
+        document.body.append(page);
+        await settleChatPage(page);
+        const pane = paneIn(page);
+        expect(pane.focusComposer).toBe(true);
 
-      const textarea = composer(pane);
-      vi.advanceTimersByTime(250);
-      expect(document.activeElement).toBe(textarea);
+        const textarea = composer(pane);
+        vi.advanceTimersByTime(250);
+        expect(document.activeElement).toBe(textarea);
 
-      const replacementPane = document.createElement("openclaw-chat-pane") as RenderedPane;
-      replacementPane.active = true;
-      replacementPane.sessionKey = "main";
-      const replacementTextarea = composer(replacementPane);
-      pane.replaceWith(replacementPane);
+        const replacementPane = document.createElement("openclaw-chat-pane") as RenderedPane;
+        replacementPane.active = true;
+        replacementPane.sessionKey = "main";
+        const replacementTextarea = composer(replacementPane);
+        registerTestCleanup(registerChatPane(replacementPane));
+        pane.replaceWith(replacementPane);
 
-      vi.advanceTimersByTime(250);
-      expect(document.activeElement).toBe(replacementTextarea);
+        vi.advanceTimersByTime(250);
+        expect(document.activeElement).toBe(replacementTextarea);
 
-      const userTarget = document.createElement("button");
-      document.body.append(userTarget);
-      userTarget.focus();
-      vi.advanceTimersByTime(250);
-      expect(document.activeElement).toBe(userTarget);
-    } finally {
-      sourcePage.remove();
-      page.remove();
-      vi.useRealTimers();
-    }
-  });
+        const userTarget = document.createElement("button");
+        document.body.append(userTarget);
+        if (intent === "pointer intent") {
+          replacementTextarea.blur();
+          userTarget.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+        } else {
+          userTarget.focus();
+          expect(document.activeElement).toBe(userTarget);
+          if (intent === "transient focus") {
+            userTarget.blur();
+          }
+        }
+        vi.advanceTimersByTime(250);
+        expect(document.activeElement).toBe(
+          intent === "persistent focus" ? userTarget : document.body,
+        );
+      } finally {
+        sourcePage.remove();
+        page.remove();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("rejects a pane callback while a newer browser route is loading", async () => {
     const { navigation, page } = await mountRetainedPage("main");
@@ -625,7 +645,7 @@ describe("chat page retained sessions", () => {
     const commit = vi.fn(() => true);
     try {
       // The router advances history before a cold route replaces the visible Chat page.
-      window.history.pushState(null, "", "/agents");
+      window.history.pushState(null, "", "/sessions");
       expect(page.presented).toBe(true);
       runSessionNavigationIntent(paneB, {
         commit,
@@ -677,10 +697,8 @@ describe("chat page retained sessions", () => {
       });
 
       expect(returnToA).toHaveBeenCalledOnce();
-      expect(paneA.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
-      expect(paneA.hasAttribute("inert")).toBe(false);
-      expect(paneB.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
-      expect(paneB.hasAttribute("inert")).toBe(true);
+      expectPresentation(paneA, { visible: true, inert: false });
+      expectPresentation(paneB, { visible: false, inert: true });
     } finally {
       page.remove();
       history.replaceState(null, "", originalHref);
@@ -723,7 +741,7 @@ describe("chat page retained sessions", () => {
     "preserves captured global ownership when creating a split via $entry ($scope)",
     async ({ entry, scope }) => {
       const workSessionKey = "agent:main:work";
-      const page = new ChatPage();
+      const page = document.createElement("openclaw-chat-page");
       const { context } = setNavigationContext(page);
       context.agents.state.agentsList = {
         defaultId: "main",
@@ -776,7 +794,7 @@ describe("chat page retained sessions", () => {
   it.each(["canonical replacement", "explicit command"] as const)(
     "distinguishes an %s from implicit pane recovery",
     async (reason) => {
-      const page = new ChatPage();
+      const page = document.createElement("openclaw-chat-page");
       setNavigationContext(page);
       const key = "agent:main:12345678-90ab-cdef-1234-567890abcdef";
       const route = (title: string) =>
@@ -815,7 +833,7 @@ describe("chat page retained sessions", () => {
   it.each([false, true])(
     "fences the router read already pending when an unknown pane is focused (new choice: %s)",
     async (chooseAgain) => {
-      const page = new ChatPage();
+      const page = document.createElement("openclaw-chat-page");
       const { context } = setNavigationContext(page);
       const initial: SessionChatRouteData = { sessionKey: "agent:main:a" };
       const destination: SessionChatRouteData = { sessionKey: "agent:main:b" };

@@ -1,5 +1,5 @@
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
-import { registerOpenClawStateDatabaseLifecycleListener } from "../../state/openclaw-state-db-cache.js";
+import { registerOpenClawStatePathCacheInvalidation } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import type { WorkshopChange } from "./changes.kernel.js";
@@ -10,15 +10,7 @@ const stores = resolveGlobalMap<string, Store>(
   Symbol.for("openclaw.skillWorkshopChanges"),
   "close-and-restart",
 );
-registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind !== "opened") {
-    for (const [key, store] of stores) {
-      if (store.path === (event.identity?.canonicalPath ?? event.path)) {
-        stores.delete(key);
-      }
-    }
-  }
-});
+registerOpenClawStatePathCacheInvalidation(stores);
 
 function captureStore() {
   const context = captureOpenClawStateWorkerContext();
