@@ -1,4 +1,14 @@
-import { createMemo, createSignal, For, Show, untrack } from "solid-js";
+import {
+  createDeferred,
+  createMemo,
+  createSignal,
+  Errored,
+  For,
+  isPending,
+  Loading,
+  Show,
+  untrack,
+} from "solid-js";
 import "../../styles/lobster-pet.css";
 import { ConfigForm } from "../../components/config-form.render.tsx";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
@@ -8,6 +18,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { SettingsSegmented, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
@@ -218,7 +229,6 @@ export function Config(props: ConfigProps) {
       configBusy,
       formBusy,
       mutationAllowed,
-      showSchemaLoading: props.schemaLoading && !analysis.schema,
       showSectionTabs,
       showToolbar,
       showValidityWarning,
@@ -230,6 +240,35 @@ export function Config(props: ConfigProps) {
       sensitiveCount,
     };
   });
+  const schemaRead = createMemo(() => ({ completion: props.schemaRead }), {
+    equals: (previous, next) => previous.completion === next.completion,
+  });
+  const hasSchema = createMemo(() => Boolean(props.schema));
+  const readSchema = () => {
+    const hasAcceptedSchema = hasSchema();
+    return schemaRead().completion?.then((result) => {
+      if (!result.ok && !hasAcceptedSchema) {
+        throw new Error(result.error);
+      }
+      return result.ok ? undefined : result.error;
+    });
+  };
+  const schemaReady = createMemo(readSchema, { lazy: true });
+  // Initial readiness suspends; later reads retain accepted fields without holding owner updates.
+  const retainedSchemaReady = createDeferred(readSchema);
+  const readSchemaReady = () => (hasSchema() ? retainedSchemaReady() : schemaReady());
+  function SchemaError(props: { message: string; onRetry: () => void }) {
+    return (
+      <div class="config-content-callout">
+        <div class="callout danger" role="alert">
+          {props.message}{" "}
+          <button type="button" class="btn btn--sm" onClick={() => props.onRetry()}>
+            {t("common.retry")}
+          </button>
+        </div>
+      </div>
+    );
+  }
   function RawEditor() {
     const rawRef = createLiveValue(() => props.raw);
     // Resolve the raw branch once; a dynamic children factory recreates the textarea on each edit.
@@ -601,21 +640,44 @@ export function Config(props: ConfigProps) {
             state().include?.has("__appearance__") ? (
               <AppearanceSection {...props} />
             ) : null}
-            {state().showSchemaLoading ? (
-              <div class="config-loading">
-                <div class="config-loading__spinner" />
-                <span>{t("configView.loadingSchema")}</span>
-              </div>
-            ) : (
-              <FormEditor />
-            )}
-            {state().showSetup && !state().showSchemaLoading ? (
-              <SetupSection
-                schema={state().setupSchema!}
-                config={props}
-                disabled={state().formBusy || !props.formValue || !state().mutationAllowed}
-              />
-            ) : null}
+            <Errored
+              fallback={(error, reset) => (
+                <SchemaError
+                  message={formatUiError(error())}
+                  onRetry={() => {
+                    props.onRetrySchema?.();
+                    reset();
+                  }}
+                />
+              )}
+            >
+              <Loading
+                on={hasSchema() ? undefined : schemaRead()}
+                fallback={
+                  <div class="config-loading" aria-busy="true">
+                    <div class="config-loading__spinner" />
+                    <span>{t("configView.loadingSchema")}</span>
+                  </div>
+                }
+              >
+                <Show when={readSchemaReady()}>
+                  {(message) => (
+                    <SchemaError message={message()} onRetry={() => props.onRetrySchema?.()} />
+                  )}
+                </Show>
+                <span class="sr-only" role="status">
+                  {isPending(readSchemaReady) ? t("configView.loadingSchema") : ""}
+                </span>
+                <FormEditor />
+                {state().showSetup ? (
+                  <SetupSection
+                    schema={state().setupSchema!}
+                    config={props}
+                    disabled={state().formBusy || !props.formValue || !state().mutationAllowed}
+                  />
+                ) : null}
+              </Loading>
+            </Errored>
           </>
         ) : (
           <RawEditor />

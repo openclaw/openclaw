@@ -1,3 +1,4 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
@@ -44,6 +45,7 @@ export function createRuntimeConfigCapability(
   );
   const listeners = new Set<(state: RuntimeConfigState) => void>();
   const loads = new Map<"config" | "schema", Promise<unknown>>();
+  let schemaRead: Promise<Result<void, string>> | null = null;
   let disposed = false;
 
   const canCallConfigMethod = (
@@ -103,6 +105,14 @@ export function createRuntimeConfigCapability(
     await (loads.get(key) ?? run(task, key));
   };
 
+  const loadSchema = () => {
+    if (loads.has("schema") && schemaRead) {
+      return schemaRead;
+    }
+    // Retain the admitted completion, including failure, until retry or reconnect.
+    return run(() => (schemaRead = loadConfigSchema(state)), "schema");
+  };
+
   const appliedRefresh = createAppliedConfigRefreshOwner({
     shouldRefresh: () =>
       !disposed &&
@@ -135,7 +145,7 @@ export function createRuntimeConfigCapability(
         // A plugin change during a schema read needs one catch-up after that read.
         await pendingSchema;
         if (currentConfigConnectionEpoch(state) === epoch) {
-          await loadOnce("schema", () => loadConfigSchema(state));
+          await loadSchema();
         }
       });
     }
@@ -150,6 +160,7 @@ export function createRuntimeConfigCapability(
     mutate,
     resetLoads: () => {
       loads.clear();
+      schemaRead = null;
     },
     resetConfigLoad: () => {
       loads.delete("config");
@@ -174,14 +185,18 @@ export function createRuntimeConfigCapability(
     }
     return hasOperatorReadAccess(snapshot.hello?.auth ?? null);
   };
-  const ensureSchemaLoaded = () =>
-    state.configSchema || !canLoadConfigSchema()
-      ? Promise.resolve()
-      : loadOnce("schema", () => loadConfigSchema(state));
+  const ensureSchemaLoaded = async () => {
+    if (!state.configSchema && canLoadConfigSchema()) {
+      await loadSchema();
+    }
+  };
 
   return {
     get state() {
       return state;
+    },
+    get schemaRead() {
+      return schemaRead;
     },
     get canSet() {
       return canCallConfigMethod("config.set");
@@ -205,7 +220,7 @@ export function createRuntimeConfigCapability(
         appliedRefresh.reconcile();
       }
     },
-    refreshSchema: () => loadOnce("schema", () => loadConfigSchema(state)),
+    refreshSchema: loadSchema,
     patchForm: writes.patchForm,
     removeFormValue: writes.removeFormValue,
     setRaw: writes.setRaw,
