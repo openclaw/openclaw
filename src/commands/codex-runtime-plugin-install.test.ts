@@ -195,24 +195,21 @@ describe("Codex runtime plugin install repair", () => {
   });
 
   it("surfaces non-fatal Copilot repair notices to command callers", async () => {
-    const pluginId = "copilot";
-    const provider = "github-copilot";
     const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [`Repaired missing configured plugin "${pluginId}".`],
+      changes: ['Repaired missing configured plugin "copilot".'],
       warnings: [],
       notices: [reviewNotice],
     });
 
     const result = await repairModelSelectionRuntimePlugins({
-      cfg: providerRuntime(provider, pluginId, "https://provider.example.test"),
-      model: `${provider}/gpt-5.5`,
+      cfg: providerRuntime("github-copilot", "copilot", "https://provider.example.test"),
+      model: "github-copilot/gpt-5.5",
       env: {},
     });
 
-    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledOnce();
-    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginIds: [pluginId], env: {} }),
+    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ pluginIds: ["copilot"], env: {} }),
     );
     expect(result).toStrictEqual([reviewNotice]);
   });
@@ -307,8 +304,7 @@ describe("Codex runtime plugin install repair", () => {
     });
 
     expect(result).toEqual({ ok: true, cfg: installedConfig, codexInstalled: false });
-    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
-    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
+    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ entry: expect.objectContaining({ pluginId: "copilot" }) }),
     );
   });

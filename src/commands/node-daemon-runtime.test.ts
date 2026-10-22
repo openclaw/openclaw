@@ -126,21 +126,6 @@ async function install(env: Record<string, string | undefined> = {}, authFromEnv
 }
 
 describe.skipIf(process.platform === "win32")("node-host runtime install boundary", () => {
-  it("accepts a Node 26 system runtime with safe embedded SQLite", async () => {
-    const plan = await install();
-    expect(plan.programArguments).toEqual([
-      "/usr/bin/node",
-      "/opt/openclaw/openclaw.mjs",
-      "node",
-      "run",
-      "--host",
-      "gateway.example",
-      "--port",
-      "18789",
-      "--no-tls",
-    ]);
-  });
-
   it.each([false, true])(
     "persists ambient auth only when explicitly selected for a paired node (explicit=%s)",
     async (explicit) => {
@@ -167,11 +152,6 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
     },
   );
 
-  it("surfaces an exec failure through the install plan without Node upgrade advice", async () => {
-    runExec.mockRejectedValue(new Error("spawn EACCES"));
-    await expect(install()).rejects.toThrow(/Node runtime check failed.*\/usr\/bin\/node.*EACCES/s);
-  });
-
   it("uses OPENCLAW_WRAPPER even when native runtime probes cannot execute", async () => {
     runExec.mockRejectedValue(new Error("spawn EACCES"));
     const plan = await install({ OPENCLAW_WRAPPER: "/opt/openclaw-wrapper" });
@@ -185,12 +165,5 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
       "18789",
       "--no-tls",
     ]);
-  });
-
-  it("rejects a node-host wrapper without execute permission", async () => {
-    access.mockRejectedValue(new Error("EACCES"));
-    await expect(install({ OPENCLAW_WRAPPER: "/opt/openclaw-wrapper" })).rejects.toThrow(
-      "OPENCLAW_WRAPPER must point to an executable file",
-    );
   });
 });

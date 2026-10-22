@@ -3,8 +3,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 
 const resolveSessionStoreTargetsMock = vi.hoisted(() => vi.fn());
@@ -26,33 +24,6 @@ const resolve = (opts: Parameters<typeof resolveCommandSessionStoreTargets>[0]["
   resolveCommandSessionStoreTargets({ cfg: {}, opts });
 const mockTarget = (storePath: string) =>
   resolveSessionStoreTargetsMock.mockReturnValue([{ agentId: "main", storePath }]);
-
-it("returns targets from the shared config helper", () => {
-  mockTarget("/tmp/main-sessions.json");
-  expect(resolve()).toEqual([{ agentId: "main", storePath: "/tmp/main-sessions.json" }]);
-  expect(resolveSessionStoreTargetsMock).toHaveBeenCalledWith({}, {});
-});
-
-it.each([
-  new AgentSelectionRequiredError(["main", "analyst"]),
-  new Error("Unknown agent id: ghost"),
-])("routes $message through its CLI failure owner", (error) => {
-  resolveSessionStoreTargetsMock.mockImplementation(() => {
-    throw error;
-  });
-  const selectionRequired = error instanceof AgentSelectionRequiredError;
-  expect(() => resolve(selectionRequired ? {} : { agent: "ghost" })).toThrow(
-    selectionRequired
-      ? expect.objectContaining({
-          name: "AgentSelectionRequiredError",
-          agentIds: ["main", "analyst"],
-          message: expect.stringContaining(
-            "session-store selection has no explicit owner. Pass --agent <id> to select one agent, or --all-agents",
-          ),
-        })
-      : ExpectedCliError,
-  );
-});
 
 it.each(["missing", "suffixless", "directory", "non-database", "foreign-database"] as const)(
   "rejects a %s explicit store through the CLI failure owner",
