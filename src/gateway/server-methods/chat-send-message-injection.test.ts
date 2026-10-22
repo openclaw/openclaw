@@ -173,7 +173,6 @@ function makeStarterParams(params?: { entry?: unknown; sessionKey?: string; stor
     },
     session: {
       agentId: "main",
-      resolvedSessionModel: { provider: "openai", model: "test-model" },
       cfg: {},
       clientRunId: "run-1",
       entry: params?.entry as never,
@@ -690,6 +689,7 @@ describe("createChatSendMessageInjectionStarter", () => {
       },
       session: {
         agentId: "main",
+        resolvedSessionModel: { provider: "openai", model: "test-model" },
         cfg: {},
         entry: undefined,
         sessionKey,
