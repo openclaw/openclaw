@@ -4,7 +4,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { ensureModelSelectionRuntimePlugins } from "../commands/runtime-plugin-install.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
@@ -25,7 +24,6 @@ import { runProviderPluginAuthMethodUnpersisted } from "../plugins/provider-auth
 import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { resolveProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
 import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
-import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
   findSetupCredentialChoice,
@@ -45,6 +43,7 @@ import {
   waitForProviderAuth,
 } from "./setup-inference-core.js";
 import { prepareCustomSetupCredentials } from "./setup-inference-custom.js";
+import { resolveCurrentModelRefForSavedAuth } from "./setup-inference-saved-model.js";
 import {
   mergeSavedSetupInferenceConfig,
   prepareSetupModelRuntime,
@@ -339,28 +338,18 @@ export async function stageSavedAuthCandidate(
           "Choose this provider's endpoint and model again. Your saved sign-in is still available.",
       };
     }
-    const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(
-      ctx.cfg,
-      ctx.routeAgentId,
-      {},
-      ctx.snapshot,
-    );
-    const currentModelRef = currentRoute
-      ? splitTrailingAuthProfile(currentRoute.modelLabel).model
-      : "";
+    const currentModelRef = await resolveCurrentModelRefForSavedAuth({
+      config: ctx.cfg,
+      agentId: ctx.routeAgentId,
+      credentialProvider: credential.provider,
+      configSnapshot: ctx.snapshot,
+    });
     const savedModelRef = saved?.modelRef ?? loaded?.method.starterModel;
     const savedProvider = resolveProviderIdForAuth(credential.provider, {
       config: ctx.cfg,
       storedCredential: true,
     });
-    const modelRef =
-      ctx.params.modelRef?.trim() ||
-      (currentModelRef &&
-      resolveProviderIdForAuth(parseInferenceRef(currentModelRef).provider, {
-        config: ctx.cfg,
-      }) === savedProvider
-        ? currentModelRef
-        : savedModelRef);
+    const modelRef = ctx.params.modelRef?.trim() || currentModelRef || savedModelRef;
     const { validateConfigObjectRaw } = await import("../config/validation-core.js");
     const storedConfig = saved
       ? validateConfigObjectRaw(

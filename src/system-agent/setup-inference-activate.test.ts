@@ -708,9 +708,14 @@ describe("setup activation credentials and configuration", () => {
       });
       const profileId = saved.profile.profileId;
 
-      const result = await setup.activate(`saved-auth:${encodeURIComponent(profileId)}`, true, {
-        modelRef: undefined,
-      });
+      const detection = await setup.detect();
+      const candidate = detection.candidates.find(
+        ({ kind }) => kind === `saved-auth:${encodeURIComponent(profileId)}`,
+      );
+      assert.ok(candidate, "Setup did not discover the saved sign-in");
+      expect(candidate.modelRef).toBe(modelRef);
+
+      const result = await setup.activate(candidate.kind, true, { modelRef: candidate.modelRef });
 
       expect(result).toMatchObject({ ok: true, modelRef });
       expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
