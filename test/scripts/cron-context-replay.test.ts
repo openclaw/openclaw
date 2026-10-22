@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { anonymize, anonymizeParentRow } from "../../scripts/dev/cron-context-replay.mts";
 import { replayScheduledContextFixture } from "../../src/cron/execution-context.fixtures.test-support.js";
 import { resolveScheduledRequester } from "../../src/cron/execution-context.js";
+import { resolveCronRunToolsAllow } from "../../src/cron/tools-allow.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
 
 const parentKey = "agent:ops:dashboard:private-parent";
@@ -106,6 +107,58 @@ describe("cron context replay fixtures", () => {
       lifecycleRevision: "rev-2",
     });
     expect(replayScheduledContextFixture(fixture).status).toBe("pause");
+  });
+
+  it("replaces script and system event bodies but keeps their tool caps", () => {
+    const toolsAllow = ["write", "edit", "exec", "process", "web_search", "message"];
+    const script = storedJob({
+      payload: { kind: "script", script: "return 'private script'", toolsAllow },
+    });
+    const event = storedJob({
+      payload: { kind: "systemEvent", text: "private text", toolsAllow },
+    });
+
+    for (const job of [script, event]) {
+      const fixture = anonymize(job, "ops", 1);
+      expect(JSON.stringify(fixture)).not.toMatch(/private/);
+      expect(fixture.payload.kind).toBe(job.payload.kind);
+      expect(resolveCronRunToolsAllow(fixture)).toEqual(toolsAllow);
+    }
+  });
+
+  it.each([
+    { trigger: { script: "return 'private condition'" } },
+    {
+      runtimeAuthority: {
+        version: 1,
+        runtimeId: "codex",
+        namespace: "app",
+        payload: { secret: "private" },
+      },
+    },
+    { runtimeAuthorityRecoveryRequired: true },
+  ] as Partial<CronStoredJob>[])("keeps a restricted automatic tool cap for %j", (fields) => {
+    const job = storedJob({
+      owner: { agentId: "ops", sessionKey: parentKey, accountId: "private-account" },
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: parentKey,
+        ownerAccountId: "private-account",
+      },
+      payload: {
+        kind: "agentTurn",
+        message: "private prompt",
+        toolsAllow: ["read"],
+        toolsAllowIsDefault: true,
+      },
+      ...fields,
+    } as Partial<CronStoredJob>);
+    const fixture = anonymize(job, "ops", 1);
+
+    expect(resolveCronRunToolsAllow(job)).toEqual(["read"]);
+    expect(resolveCronRunToolsAllow(fixture)).toEqual(["read"]);
+    expect(JSON.stringify(fixture)).not.toMatch(/private/);
   });
 
   it("keeps a missing worktree", () => {

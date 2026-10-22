@@ -180,10 +180,50 @@ export function anonymizeParentRow(
   };
 }
 
+// Long agent-turn creator snapshots reduce to whether automations was allowed.
+function anonymizeAgentToolsAllow(toolsAllow: string[]): string[] {
+  if (toolsAllow.length <= 5) {
+    return toolsAllow;
+  }
+  return isRuntimeToolAllowed("automations", toolsAllow) ? ["read", "automations"] : ["read"];
+}
+
+// Every payload kind keeps its tool cap fields; prompts, text, argv and script
+// bodies become placeholders.
+function anonymizePayload(payload: CronStoredJob["payload"]): CronStoredJob["payload"] {
+  const tools = {
+    ...("toolsAllow" in payload && payload.toolsAllow
+      ? { toolsAllow: [...payload.toolsAllow] }
+      : {}),
+    ...("toolsAllowIsDefault" in payload && payload.toolsAllowIsDefault !== undefined
+      ? { toolsAllowIsDefault: payload.toolsAllowIsDefault }
+      : {}),
+  };
+  switch (payload.kind) {
+    case "agentTurn":
+      return {
+        kind: "agentTurn",
+        message: "fixture",
+        ...tools,
+        ...(tools.toolsAllow ? { toolsAllow: anonymizeAgentToolsAllow(tools.toolsAllow) } : {}),
+        ...(payload.externalContentSource
+          ? { externalContentSource: payload.externalContentSource }
+          : {}),
+      };
+    case "script":
+      return { kind: "script", script: "return null", ...tools };
+    case "systemEvent":
+      return { kind: "systemEvent", text: "fixture", ...tools };
+    case "command":
+      return { kind: "command", argv: ["true"] };
+  }
+}
+
 /**
- * Fixture jobs keep the fields the builder reads; identifiers, names, prompts
- * and paths become stable placeholders, so the shape stays a valid stored job.
- * Equal session keys stay equal, so parent and requester relationships survive.
+ * Fixture jobs keep the fields the builder and tool-cap resolver read;
+ * identifiers, names, prompts, scripts and paths become stable placeholders, so
+ * the shape stays a valid stored job. Equal session keys stay equal, so parent
+ * and requester relationships survive.
  */
 export function anonymize(job: CronStoredJob, agentId: string, index: number): CronStoredJob {
   const keys = new Map<string, string>();
@@ -195,32 +235,6 @@ export function anonymize(job: CronStoredJob, agentId: string, index: number): C
   };
   const channelRequester = job.toolsAllowProvenance?.channelRequester;
   const target = resolveCronSessionTargetSessionKey(job.sessionTarget);
-  const payload =
-    job.payload.kind === "agentTurn"
-      ? {
-          kind: "agentTurn" as const,
-          message: "fixture",
-          ...(job.payload.toolsAllow
-            ? {
-                // Long creator snapshots reduce to whether automations was allowed.
-                toolsAllow:
-                  job.payload.toolsAllow.length > 5
-                    ? isRuntimeToolAllowed("automations", job.payload.toolsAllow)
-                      ? ["read", "automations"]
-                      : ["read"]
-                    : [...job.payload.toolsAllow],
-              }
-            : {}),
-          ...(job.payload.toolsAllowIsDefault !== undefined
-            ? { toolsAllowIsDefault: job.payload.toolsAllowIsDefault }
-            : {}),
-          ...(job.payload.externalContentSource
-            ? { externalContentSource: job.payload.externalContentSource }
-            : {}),
-        }
-      : job.payload.kind === "command"
-        ? { kind: "command" as const, argv: ["true"] }
-        : job.payload;
   return {
     id: `fixture-job-${index}`,
     agentId: "main",
@@ -231,9 +245,28 @@ export function anonymize(job: CronStoredJob, agentId: string, index: number): C
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: target ? `session:${key(target)}` : job.sessionTarget,
     wakeMode: "now",
-    payload,
+    payload: anonymizePayload(job.payload),
     delivery: { mode: "none" },
     state: {},
+    ...(job.trigger?.script.trim()
+      ? {
+          trigger: {
+            script: "return null",
+            ...(job.trigger.once !== undefined ? { once: job.trigger.once } : {}),
+          },
+        }
+      : {}),
+    ...(job.runtimeAuthority
+      ? {
+          runtimeAuthority: {
+            version: 1,
+            runtimeId: job.runtimeAuthority.runtimeId,
+            namespace: job.runtimeAuthority.namespace,
+            payload: {},
+          },
+        }
+      : {}),
+    ...(job.runtimeAuthorityRecoveryRequired ? { runtimeAuthorityRecoveryRequired: true } : {}),
     ...(job.owner
       ? {
           owner: {
