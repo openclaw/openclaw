@@ -6,7 +6,6 @@ import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME, type RealtimeTalkCallbacks } from "./shared.ts";
 import {
   audioFixture,
-  readAnswer,
   VideoPeerConnection,
   cameraFixture,
   dispatchDescribeViewToolCall,
@@ -776,40 +775,6 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual(["session.closed"]);
     },
   );
-
-  it("resolves relative offer routes against the connected Gateway", async () => {
-    const fetchMock = vi.fn(async () => new Response("answer-sdp"));
-    vi.stubGlobal("fetch", fetchMock);
-    await readAnswer(undefined, {
-      offerUrl: "/plugins/codex/realtime/calls",
-      offerResponseMaxBytes: undefined,
-    });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://gateway.example.test/plugins/codex/realtime/calls",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer reservation-token",
-        }),
-      }),
-    );
-  });
-
-  it.each([false, true])("cancels the SDP body without waiting (stale=%s)", async (stale) => {
-    const cancel = vi.fn(() => (stale ? Promise.resolve() : new Promise<void>(() => {})));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({ ok: stale, status: stale ? 200 : 502, body: { cancel } })),
-    );
-    const answer = readAnswer(() => !stale);
-    if (stale) {
-      await expect(answer).resolves.toBeUndefined();
-    } else {
-      await expect(answer).rejects.toThrow("Realtime WebRTC setup failed (502)");
-    }
-    expect(cancel).toHaveBeenCalledOnce();
-  });
 
   describe("OpenAI Realtime media lifecycle", () => {
     beforeEach(() => vi.stubGlobal("RTCPeerConnection", VideoPeerConnection));

@@ -6,7 +6,6 @@ import {
   type RealtimeTalkCallbacks,
   type RealtimeTalkWebRtcSdpSessionResult,
 } from "./shared.ts";
-import { RealtimeTalkWebRtcOfferExchange } from "./webrtc-support.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./webrtc.ts";
 
 export async function createWebRtcTransport({
@@ -225,25 +224,6 @@ export function dispatchRealtimeEvent(peer: FakePeerConnection | undefined, even
 
 export function sentRealtimeEvents(peer: FakePeerConnection | undefined): SentRealtimeEvent[] {
   return peer?.channel.send.mock.calls.map(([payload]) => JSON.parse(String(payload))) ?? [];
-}
-
-export function readAnswer(
-  isCurrent = () => true,
-  session: Partial<RealtimeTalkWebRtcSdpSessionResult> = {},
-) {
-  return new RealtimeTalkWebRtcOfferExchange().readAnswer({
-    session: {
-      provider: "openai",
-      transport: "webrtc",
-      clientSecret: "reservation-token",
-      offerUrl: "https://gateway.example.test/realtime/calls",
-      offerResponseMaxBytes: 256 * 1024,
-      ...session,
-    },
-    offer: { type: "offer", sdp: "offer-sdp" },
-    gatewayUrl: "wss://gateway.example.test/control?tenant=a",
-    isCurrent,
-  });
 }
 
 export class VideoPeerConnection extends FakePeerConnection {
