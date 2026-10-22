@@ -23,12 +23,12 @@ function expectNoSeed(
 
 describe("pnpm image archive consumer", () => {
   it.for([
-    { platform: "win32", version: "12.12.1" },
-    { platform: "linux", version: "12.3.4" },
+    { platform: "win32", version: "12.15.0" },
+    { platform: "linux", version: "12.15.0" },
   ] as const)(
     "seeds $platform jobs from verified $version archives into private Corepack state",
     async ({ platform, version }, { command }) => {
-      const f = createPnpmArchiveFixture(command, { platform, version, image: true });
+      const f = createPnpmArchiveFixture(command, { platform, image: true });
       const homes: string[] = [];
       for (let run = 0; run < 2; run++) {
         const result = await f.run();
@@ -64,13 +64,13 @@ describe("pnpm image archive consumer", () => {
   );
 
   it.for([
-    { platform: "win32", version: "12.12.1", name: "pnpm-12.12.1.tgz" },
-    { platform: "linux", version: "12.3.4", name: "pnpm-12.3.4.tgz" },
-    { platform: "linux", version: "12.3.4", name: "exe.linux-x64-12.3.4.tgz" },
+    { platform: "win32", version: "12.15.0", name: "pnpm-12.15.0.tgz" },
+    { platform: "linux", version: "12.15.0", name: "pnpm-12.15.0.tgz" },
+    { platform: "linux", version: "12.15.0", name: "exe.linux-x64-12.15.0.tgz" },
   ] as const)(
     "delegates substituted $name on $platform to Corepack, ignoring adjacent trust markers",
-    async ({ platform, version, name }, { command }) => {
-      const f = createPnpmArchiveFixture(command, { platform, version, image: true });
+    async ({ platform, name }, { command }) => {
+      const f = createPnpmArchiveFixture(command, { platform, image: true });
       fs.writeFileSync(join(f.image, name), "bad archive");
       fs.writeFileSync(join(f.image, ".complete"), "");
       fs.writeFileSync(
@@ -84,10 +84,10 @@ describe("pnpm image archive consumer", () => {
   it.for(["different-version", "different-hash"])(
     "leaves Corepack preparation in control for %s despite valid cached archives",
     async (kind, { command }) => {
-      const f = createPnpmArchiveFixture(command, { version: "12.3.4", image: true });
+      const f = createPnpmArchiveFixture(command, { image: true });
       const requested =
         kind === "different-version"
-          ? f.spec.replace("12.3.4", "12.3.5")
+          ? f.spec.replace("12.15.0", "12.3.4")
           : f.spec.replace(/.$/u, "z");
       expectNoSeed(await f.run({}, requested), f.runner);
     },

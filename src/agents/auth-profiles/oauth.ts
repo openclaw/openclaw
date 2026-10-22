@@ -465,18 +465,21 @@ async function resolveApiKeyForProfileOwned(
     }
 
     const message = formatErrorMessage(surfacedCause);
-    const hint = await formatAuthDoctorHint({
-      cfg,
-      store: refreshedStore,
-      provider: cred.provider,
-      profileId,
-    });
+    const retryable = error instanceof OAuthRefreshFailureError && error.retryable === true;
+    const hint = retryable
+      ? undefined
+      : await formatAuthDoctorHint({
+          cfg,
+          store: refreshedStore,
+          provider: cred.provider,
+          profileId,
+        });
     const failure = new OAuthRefreshFailureError({
       provider: cred.provider,
       profileId,
       message:
         `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
-        "Please try again or re-authenticate." +
+        (retryable ? "Please try again shortly." : "Please try again or re-authenticate.") +
         (hint ? `\n\n${hint}` : ""),
       cause: error,
     });

@@ -716,7 +716,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.sessionDiscussionPanels.clear();
     this.taskSuggestionsRequestVersion += 1;
     this.setTaskSuggestions([]);
-    this.tasks.busyIds = new Set();
     this.tasks.operations = new Map();
     this.resetSessionSuggestions();
     this.resetSessionReactions();

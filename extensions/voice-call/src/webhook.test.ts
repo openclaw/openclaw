@@ -164,7 +164,7 @@ function createServer(...args: WebhookServerArgs) {
 function createFixture(
   config: VoiceCallConfigInput = {},
   testProvider = provider,
-  logger?: WebhookServerArgs[6],
+  logger?: WebhookServerArgs[5],
   state = createManager([]),
 ) {
   return {
@@ -173,7 +173,6 @@ function createFixture(
       createConfig(config),
       state.manager,
       testProvider,
-      undefined,
       undefined,
       undefined,
       logger,
@@ -941,7 +940,7 @@ describe("VoiceCallWebhookServer classic response routing", () => {
   function responseFixture(
     call: CallRecord,
     config = createConfig({ agentId: "main" }),
-    logger?: WebhookServerArgs[6],
+    logger?: WebhookServerArgs[5],
   ) {
     const speak = vi.fn(async () => ({ success: true }));
     const manager = {
@@ -949,7 +948,7 @@ describe("VoiceCallWebhookServer classic response routing", () => {
       getCall: (callId: string) => (callId === call.callId ? call : undefined),
       speak,
     } as unknown as CallManager;
-    const server = createServer(config, manager, provider, {}, undefined, {} as never, logger);
+    const server = createServer(config, manager, provider, {}, {} as never, logger);
     const handler = server as unknown as {
       handleInboundResponse: (callId: string, message: string) => Promise<void>;
     };

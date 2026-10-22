@@ -299,6 +299,11 @@ describe("ModelProvidersPage profile actions", () => {
       await page.updateComplete;
       expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
       expect(requestCount(request, "models.authLogout")).toBe(0);
+      expect(
+        [...page.querySelectorAll<HTMLButtonElement>(".model-providers__profile-logout")].every(
+          (button) => !button.disabled,
+        ),
+      ).toBe(true);
 
       for (const invalidate of [
         () => {
@@ -335,6 +340,12 @@ describe("ModelProvidersPage profile actions", () => {
       expect(page.querySelector(".model-providers__row > .callout")).toBeNull();
       expect(page.view.props.messages.anthropic).toBeUndefined();
       expect(requestCount(request, "models.authLogout")).toBe(1);
+      await waitForSolid(() =>
+        expect(
+          page.querySelector<HTMLButtonElement>('[aria-label="Log out work@example.com"]')
+            ?.disabled,
+        ).toBe(false),
+      );
 
       ({ modal } = await openConfirmation());
       expect(modal.querySelector('[role="alert"]')).toBeNull();
@@ -357,6 +368,12 @@ describe("ModelProvidersPage profile actions", () => {
         expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(1),
       );
       expect(requestCount(request, "models.authLogout")).toBe(2);
+      await waitForSolid(() =>
+        expect(
+          page.querySelector<HTMLButtonElement>('[aria-label="Log out personal@example.com"]')
+            ?.disabled,
+        ).toBe(false),
+      );
       expect(
         [...page.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
           (row) => row.dataset.profileId,
@@ -417,6 +434,10 @@ describe("ModelProvidersPage profile actions", () => {
       await waitForSolid(() =>
         expect(document.body.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
       );
+      // The unrelated defaults write stays held while this confirmation opens.
+      await drainPageUpdates(page);
+      expect(page.view.props.busy.defaults).toBe(true);
+      expect(runtimeConfig.patch).not.toHaveBeenCalled();
       document.body
         .querySelector<HTMLButtonElement>(".exec-approval-actions button.danger")!
         .click();

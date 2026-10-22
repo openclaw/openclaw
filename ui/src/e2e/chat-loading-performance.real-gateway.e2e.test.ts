@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -5,9 +6,11 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { appendTranscriptMessages } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
+import type { GatewayClient } from "../../../src/gateway/client.ts";
 import { encodePngRgba } from "../../../src/media/png-encode.js";
 import { setAvatar } from "../../../src/state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
+import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -118,8 +121,8 @@ const suite = createControlUiE2eSuite({
         },
       };
       await owner.state.writeConfig(config);
-      // Ephemeral CLI probes intentionally have no user profile. Seed the real
-      // shared-secret owner before a browser could adopt this machine's account name.
+      // Seed the shared-secret owner before setup clients or the browser could
+      // adopt this machine's account name.
       const profileOptions = { env: owner.env };
       const profile = ensureGatewayOwnerProfile("Synthetic Viewer", profileOptions);
       const viewerPixels = Buffer.alloc(64 * 64 * 4);
@@ -159,7 +162,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("loads the selected tail before restored Home and caches shared avatar bytes", async () => {
+  it("loads the selected tail before restored Home and caches shared avatar bytes", async (test) => {
     if (!instance) {
       throw new Error("Gateway fixture is not running");
     }
@@ -195,37 +198,80 @@ suite.define(() => {
         count: 150,
       })),
     ];
-    for (const session of sessions) {
-      const created = await call("sessions.create", {
-        key: session.key,
-        agentId: "main",
-        label: session.label,
-      });
-      expect(created.ok).toBe(true);
-      await appendTranscriptMessages(
-        {
-          agentId: "main",
-          sessionKey: session.key,
-          sessionId: String(created.sessionId),
-          env: owner.env,
-        },
-        {
-          config,
-          messages: Array.from({ length: session.count }, (_, index) => ({
-            message: {
-              role: index % 2 === 0 ? "user" : "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: `${session.label} message ${index + 1}.\n\n${"Synthetic transcript content for loading and pagination. ".repeat(72)}`,
-                },
-              ],
-              timestamp: 1_780_000_000_000 + index * 1000,
+    let setupClient: GatewayClient | undefined;
+    let failedAcquisitionCleanup: Promise<void> | undefined;
+    await suite.runScenario(test, {
+      retainedState: () => owner.state.root,
+      async run(signal) {
+        const client = await acquireGatewayTestClient(
+          {
+            url: owner.url,
+            token: owner.gatewayToken,
+            env: owner.env,
+            clientName: "cli",
+            mode: "cli",
+            role: "operator",
+            instanceId: randomUUID(),
+            scopes: ["operator.write"],
+            caps: ["ultrafast"],
+            deviceIdentity: null,
+            deviceAuthScope: owner.url,
+            sharedStateMode: "read-only",
+            requestTimeoutMs: 10_000,
+          },
+          {
+            signal,
+            timeoutMs: 10_000,
+            timeoutMessage: "Loading setup client did not connect",
+            closeMessage: "Loading setup client closed during connect",
+            verifyCleanup: (cleanup) => (failedAcquisitionCleanup = cleanup()),
+          },
+        );
+        setupClient = client;
+        for (const session of sessions) {
+          signal.throwIfAborted();
+          const created = await client.request(
+            "sessions.create",
+            {
+              key: session.key,
+              agentId: "main",
+              label: session.label,
             },
-          })),
-        },
-      );
-    }
+            { signal, retainSentResultOnAbort: true },
+          );
+          expect(created.ok).toBe(true);
+          signal.throwIfAborted();
+          await appendTranscriptMessages(
+            {
+              agentId: "main",
+              sessionKey: session.key,
+              sessionId: String(created.sessionId),
+              env: owner.env,
+            },
+            {
+              config,
+              messages: Array.from({ length: session.count }, (_, index) => ({
+                message: {
+                  role: index % 2 === 0 ? "user" : "assistant",
+                  content: [
+                    {
+                      type: "text",
+                      text: `${session.label} message ${index + 1}.\n\n${"Synthetic transcript content for loading and pagination. ".repeat(72)}`,
+                    },
+                  ],
+                  timestamp: 1_780_000_000_000 + index * 1000,
+                },
+              })),
+            },
+          );
+        }
+        signal.throwIfAborted();
+      },
+      async close() {
+        await failedAcquisitionCleanup;
+        await setupClient?.stopAndWait();
+      },
+    });
     const handoff = await cliJson(["dashboard", "--json"]);
     const url = new URL("/chat/main/12345678", suite.server.baseUrl);
     url.hash = new URL(String(handoff.browserUrl)).hash;

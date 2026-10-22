@@ -141,7 +141,6 @@ describe("voice-call realtime route ownership", () => {
         scheduler: createTestPluginServiceScheduler(),
         config,
         coreConfig: fullConfig,
-        fullConfig,
         agentRuntime: {} as never,
         stateRuntime: createStateRuntime(),
       });

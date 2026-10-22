@@ -5,7 +5,7 @@ import type {
   MigrationsMemoryApplyResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import "../../components/agent-select-registration.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import {

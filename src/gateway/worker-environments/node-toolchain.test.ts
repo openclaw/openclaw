@@ -151,7 +151,7 @@ it("selects the latest matching repository release and gives session commands it
   const f = fixture();
   const fetchUrls: string[] = [];
   const { home } = f;
-  const prepare = f.checkout("22\n", ["24.21.0", "22.20.0", "22.21.1"], undefined, fetchUrls);
+  const prepare = f.checkout("22\n", ["24.22.1", "22.20.0", "22.21.1"], undefined, fetchUrls);
   const setupPath = await prepare();
   expect(fetchUrls).toEqual([
     "https://nodejs.org/dist/index.json",
@@ -168,7 +168,7 @@ it("selects the latest matching repository release and gives session commands it
 
 it.each([
   ["16.8.0", "worker"],
-  ["26.1.0", "repository"],
+  ["26.12.1", "repository"],
 ])(
   "runs worker Corepack for repository Node %s under a Node its engines accept",
   async (version, runner) => {

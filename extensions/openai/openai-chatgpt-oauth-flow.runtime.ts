@@ -1,6 +1,7 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createOAuthLoginCancelledError,
+  createOAuthRefreshError,
   oauthErrorHtml,
   oauthSuccessHtml,
   parseOAuthAuthorizationInput,
@@ -64,6 +65,7 @@ function resolveOpenAICredentials(
         ? `OpenAI Codex token ${result.operation} failed (${facts.join("; ")}).`
         : undefined;
     throw Object.assign(new Error([result.summary, diagnostic].filter(Boolean).join("\n\n")), {
+      ...(result.oauthRefreshOutcome ? { oauthRefreshOutcome: result.oauthRefreshOutcome } : {}),
       oauthRefreshFailure: {
         summary: result.summary,
         ...(result.errorType ? { errorType: result.errorType } : {}),
@@ -74,7 +76,11 @@ function resolveOpenAICredentials(
   }
   const accountId = resolveOpenAICodexAuthIdentity({ access: result.access }).accountId;
   if (!accountId) {
-    throw new Error("Failed to extract accountId from token");
+    throw createOAuthRefreshError("Failed to extract accountId from token. Sign in again.", {
+      version: 1,
+      phase: "after-token-response",
+      outcome: "unknown",
+    });
   }
   return {
     access: result.access,

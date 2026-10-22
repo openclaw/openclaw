@@ -98,17 +98,17 @@ it("preserves an explicit caller leaf alongside a shared root", async () => {
   });
 });
 
-it("reuses an idle config cache while another config occupies its former scheduler slot", async () => {
+it("reuses a failed command's joined cache while a same-config lease and another config remain active", async () => {
   const { hold, visit } = cacheFixture();
-  const first = hold(joined, { ...spec, config: "a.config.ts" });
-  const peer = hold(joined, { ...spec, config: "b.config.ts" });
-  await first.finish();
+  const first = hold({ ...joined, code: 1 }, { ...spec, config: "a.config.ts" });
+  const peer = hold(joined, { ...spec, config: "a.config.ts" });
+  await expect(first.finish()).resolves.toMatchObject({ code: 1 });
   const third = hold(joined, { ...spec, config: "c.config.ts" });
-  await peer.finish();
   const reused = await visit({ ...spec, config: "a.config.ts" });
   expect(reused).toBe(first.path);
   expect(reused).not.toBe(third.path);
   expect(new Set([first.path, peer.path, third.path]).size).toBe(3);
+  await peer.finish();
 });
 
 it.each([true, false])(
@@ -138,20 +138,6 @@ it.each([true, false])(
     }
   },
 );
-
-it("holds concurrent leases until joined and reuses a failed command's completed slot", async () => {
-  const { hold, visit } = cacheFixture();
-  const first = hold({ groupJoined: true, code: 1 });
-  const second = hold({ groupJoined: true, code: 0 });
-  const paths = [first.path, second.path];
-  expect(new Set(paths).size).toBe(2);
-  await expect(first.finish()).resolves.toMatchObject({ code: 1 });
-  const reused = await visit();
-  expect(reused).toBe(first.path);
-  expect(reused).not.toBe(second.path);
-  expect(paths).not.toContain(await visit({ ...spec, config: "test/b.ts" }));
-  await second.finish();
-});
 
 it.each(["child-only", "rejected"])(
   "retires a %s lease without reusing its directory",

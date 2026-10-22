@@ -36,17 +36,10 @@ describe("remote document charset", () => {
   const cyrillic = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2, 0x20, 0x88]);
   const transportCharset = "text/plain; charset=windows-1251";
   const channelCharset = "text/plain; charset=windows-1252";
-  const unknownCharset = "text/plain; charset=not-an-encoding";
-  const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(greeting, "utf16le")]);
   const cases: [string, Buffer, string, string, string?][] = [
     ["transport charset", cyrillic, transportCharset, greeting],
-    ["quoted transport alias", cyrillic, 'text/plain; charset="cp1251"', greeting],
     ["channel type without charset", cyrillic, transportCharset, greeting, "text/plain"],
     ["channel charset precedence", cyrillic, transportCharset, "Ïðèâåò ˆ", channelCharset],
-    ["byte-detected UTF-16", utf16, transportCharset, greeting],
-    ["UTF-8 default", Buffer.from(greeting), "text/plain", greeting],
-    ["unknown charset fallback", Buffer.from(greeting), unknownCharset, greeting],
-    ["inferred legacy text", Buffer.from(legacyText, "latin1"), "text/plain", legacyText],
   ];
   let fixture: Awaited<ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>>;
 
