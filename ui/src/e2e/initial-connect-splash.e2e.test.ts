@@ -313,10 +313,10 @@ suite.define(() => {
     const workspaceModules = new Set([
       "/src/components/app-sidebar.tsx",
       "/src/components/browser/browser-panel.ts",
-      "/src/components/assistant-panel-content.ts",
+      "/src/components/assistant-panel-content-solid.tsx",
       "/src/pages/debug/debug-overlay-content.ts",
-      "/src/components/desktop/desktop-panel.ts",
-      "/src/components/terminal/terminal-panel-registration.ts",
+      "/src/components/desktop/desktop-panel-solid.tsx",
+      "/src/components/terminal/terminal-panel-registration.tsx",
       "/src/pages/chat/chat-page.tsx",
     ]);
     const requestedWorkspaceModules = new Set<string>();

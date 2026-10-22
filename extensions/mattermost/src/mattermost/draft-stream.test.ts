@@ -50,7 +50,6 @@ function createDraftStreamFixture(options: DraftStreamOptions = {}) {
   const stream = createMattermostDraftStream({
     client,
     channelId: "channel-1",
-    throttleMs: 0,
     ...streamOptions,
   });
   return { client, calls, requestMock, stream };
@@ -285,7 +284,7 @@ describe("createMattermostDraftStream", () => {
   });
 
   it("stop flushes the last pending update and ignores later ones", async () => {
-    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1", throttleMs: 1000 });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 
     stream.update("Working...");
     await stream.flush();
@@ -345,7 +344,7 @@ describe("createMattermostDraftStream", () => {
 
   it("does not resend after an update failure followed by stop", async () => {
     const warn = vi.fn();
-    const { requestMock, stream } = createDraftStreamFixture({ throttleMs: 1000, warn });
+    const { requestMock, stream } = createDraftStreamFixture({ warn });
 
     stream.update("Working...");
     await stream.flush();

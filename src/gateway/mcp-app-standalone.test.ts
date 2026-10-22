@@ -517,26 +517,38 @@ describe("MCP App standalone host", () => {
     expect(runtime.callTool).not.toHaveBeenCalled();
   });
 
-  it.each(["read-only", "unbound"])("denies server operations for a %s view", async (mode) => {
-    Object.assign(
-      view,
-      mode === "read-only" ? { readOnly: true } : { allowedAppToolNames: undefined },
-    );
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
-    const invoke = operations(issued.ticket);
-    if (mode === "read-only") {
-      const payload = await appRequest(issued.ticket);
-      expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
-        serverResources: false,
-      });
-    } else {
-      expect(await invoke({ method: "tools/list", params: {} })).toBe(403);
-    }
-    expect(await invoke(appCall())).toBe(403);
-    expect(await invoke(resourceRead)).toBe(403);
-    expect(runtime.callTool).not.toHaveBeenCalled();
-    expect(runtime.readResource).not.toHaveBeenCalled();
-  });
+  it.each(["read-only", "unbound", "rejected-authority"])(
+    "denies server operations for a %s view",
+    async (mode) => {
+      Object.assign(
+        view,
+        mode === "read-only"
+          ? { readOnly: true }
+          : mode === "unbound"
+            ? { allowedAppToolNames: undefined }
+            : {
+                authorizeAppInteraction: async () => {
+                  throw new Error("App interaction authority unavailable");
+                },
+              },
+      );
+      const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+      const invoke = operations(issued.ticket);
+      if (mode !== "unbound") {
+        const payload = await appRequest(issued.ticket);
+        expect(payload.res.statusCode).toBe(200);
+        expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
+          serverResources: false,
+        });
+      } else {
+        expect(await invoke({ method: "tools/list", params: {} })).toBe(403);
+      }
+      expect(await invoke(appCall())).toBe(403);
+      expect(await invoke(resourceRead)).toBe(403);
+      expect(runtime.callTool).not.toHaveBeenCalled();
+      expect(runtime.readResource).not.toHaveBeenCalled();
+    },
+  );
 
   it("revalidates expiry and enforces request concurrency through the ticket boundary", async () => {
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });

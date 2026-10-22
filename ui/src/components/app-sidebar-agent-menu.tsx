@@ -25,7 +25,6 @@ type SidebarAgentMenuParams = Omit<
 > & {
   position: { x: number; top: number; placement?: "right-start" };
   anchor?: HTMLElement;
-  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   basePath: string;
   rosterMode: boolean;
   creationDisabledReason: string | null;
@@ -138,7 +137,6 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
       class="sidebar-customize-menu sidebar-agent-menu"
       position={params.position}
       anchor={params.anchor}
-      tabFocusTarget={params.tabFocusTarget}
       label={menuLabel()}
       focusOnOpen={params.openMode !== "hover"}
       ref={params.ref}

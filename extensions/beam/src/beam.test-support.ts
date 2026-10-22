@@ -11,7 +11,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
-import type { ActiveSessionCatalog } from "openclaw/plugin-sdk/session-catalog-runtime";
+import * as sessionCatalogRuntime from "openclaw/plugin-sdk/session-catalog-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, assert, vi } from "vitest";
@@ -26,6 +26,7 @@ import {
 } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 export function beamTestHandler(
   store: BeamStore,
   options: Partial<Parameters<typeof createBeamRequestHandler>[0]> = {},
@@ -124,7 +125,7 @@ export function createBeamTestCatalog(
     onRead?: (threadId: string) => unknown;
     processHomeFallbackAllowed?: boolean;
   } = {},
-): ActiveSessionCatalog {
+): sessionCatalogRuntime.ActiveSessionCatalog {
   const id = params.id ?? "claude";
   return {
     pluginId: id,
@@ -170,18 +171,20 @@ export function createBeamTestCatalog(
   };
 }
 
-type RunnerOptions = Parameters<typeof createBeamMirrorRunner>[0];
+type RunnerOptions = Parameters<typeof createBeamMirrorRunner>[0] & {
+  listCatalogs?: () => sessionCatalogRuntime.ActiveSessionCatalog[];
+};
 export function createBeamTestRunner({
   endpoint,
   listCatalogs = () => [createBeamTestCatalog()],
   ...options
 }: Partial<RunnerOptions> & { endpoint?: string } = {}) {
+  vi.spyOn(sessionCatalogRuntime, "listActiveSessionCatalogs").mockImplementation(listCatalogs);
   return createBeamMirrorRunner({
     runtime: createBeamTestRuntime(beamTestMirrorConfig(endpoint ? { endpoint } : {})),
     logger: beamTestLogger,
     now: () => beamTestNow,
     signal: new AbortController().signal,
-    listCatalogs,
     ...options,
   });
 }
@@ -226,8 +229,8 @@ export function beamMirrorTestFixture() {
         : "{}";
       return new Response(body, { status: response.status?.(payload) ?? 200 });
     });
+    vi.stubGlobal("fetch", fetchFn);
     return {
-      fetchFn: fetchFn as typeof fetch,
       logger,
       listCatalogs: () => [testCatalog],
       ...overrides,

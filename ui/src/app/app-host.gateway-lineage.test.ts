@@ -4,9 +4,9 @@ import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
-import type { LoginGateElement } from "../components/login-gate.ts";
+import type { LoginGateElement } from "../components/login-gate-solid.tsx";
 import { listStoredChatOutboxes } from "../lib/chat/outbox-store-projection.ts";
-import "../components/login-gate.ts";
+import "../components/login-gate-solid.tsx";
 import { captureChatOutboxAdmission, storageTargetForComposer } from "../lib/chat/outbox-store.ts";
 import {
   createTestSessionCapability,

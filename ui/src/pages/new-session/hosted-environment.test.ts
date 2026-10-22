@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
@@ -205,7 +205,12 @@ it("describes Auto using the eligible host runtime while a hosted workspace is s
   expect(f.place.hostedEnvironment).toBeDefined();
   await f.gateway.refreshCloudProfiles();
   const element = renderPlace(f);
-  expect(element.textContent).toContain("Chooses the first eligible connected device");
+  document.body.append(element);
+  onTestFinished(() => element.remove());
+  element.querySelector<HTMLButtonElement>("#new-session-where-trigger")!.click();
+  await vi.waitFor(() =>
+    expect(element.textContent).toContain("Chooses the first eligible connected device"),
+  );
   expect(element.textContent).not.toContain("Chooses the least-busy connected device");
   f.place.selectDevice("", true);
   expect(f.place.autoDevice).toBe(true);

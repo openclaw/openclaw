@@ -6,7 +6,7 @@ import { de } from "../i18n/locales/de.ts";
 import * as clipboard from "../lib/clipboard.ts";
 import "../lib/toast-host.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { mountNativeLinkMenu } from "./native-link-menu.runtime.ts";
+import { mountNativeLinkMenu } from "./native-link-menu.runtime.tsx";
 import { settleTooltip, tooltipSurface } from "./tooltip.test-support.ts";
 
 const containers: HTMLElement[] = [];

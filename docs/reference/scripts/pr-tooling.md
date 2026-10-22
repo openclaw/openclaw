@@ -30,6 +30,7 @@ The standalone CI watcher and Crabbox entrypoint resolve missing third-party
 packages from the same tooling root when their checkout has no `node_modules`,
 with the same explicit-root identity checks and exact package versions. They
 never link an installation or resolve workspace packages from another checkout.
+The line-cap ratchet uses this same no-link, third-party-only admission and runs the package-owned oxlint CLI with the same Node executable.
 The wrapper still selects and verifies code against the existing trust anchor.
 Installed package versions must exactly match the anchor manifest. On mismatch,
 an explicitly selected, separate, clean `main` checkout is fetched, fast-forwarded,
@@ -186,6 +187,19 @@ counter means renewal occupied the worker; a completed-request counter can expla
 why a negative response budget alone did not fail earlier. Neither extends the
 lease or operation budget. The diagnostics do not change timeout or recovery
 behavior, and a successful retry does not establish the cause of an earlier failure.
+
+If a settled PR template clone loses its Git registration during provisioning,
+the clone owner removes the directory it created and keeps the caller's seed
+branch for retry. Older abandoned clones can be inspected with
+`scripts/pr gc --pr <number> --dry-run` and removed with `scripts/pr gc --pr <number>`,
+including while the PR is open. This recovery requires no PR registration, no
+`.local` artifacts, and an intact backlink to a registered template under the
+same repository's `.worktrees/.templates`. It checks process working directories
+and checks the clone against the PR's retained `temp/pr-<number>` seed using a
+temporary index, so later template refreshes cannot make a clean clone appear
+edited. Modified, untracked, and ignored files are preserved before revalidating
+the clone for removal. A missing seed, missing template metadata, and other
+ambiguous directories remain preserved; recovery never deletes their seed branches.
 
 ## Captured baseline evidence hashes
 

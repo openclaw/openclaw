@@ -2455,6 +2455,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-controls__model-option {
   order: var(--chat-model-rank, 0);
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 0px;
   justify-content: flex-start;
   /* Grid-item min-width:auto would size the provider group's track to the
      row's full content width (long name + meta), overflowing the 340px menu. */

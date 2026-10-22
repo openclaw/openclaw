@@ -25,12 +25,12 @@ type ChatPaneMobileHeaderNotice =
     };
 
 export type ChatPaneMobileHeaderProps = {
-  active?: boolean;
+  active: boolean;
   onHeaderRef?: (element: HTMLElement) => void | (() => void);
   title: string;
-  titlePending?: boolean;
+  titlePending: boolean;
   publicAccess?: Pick<ChatSessionSharingProps, "state">;
-  incognito?: boolean;
+  incognito: boolean;
   navDrawerOpen: boolean;
   onToggleNavigation: (source: HTMLElement) => void;
   onOpenDetails: (source: HTMLElement) => void;
@@ -113,7 +113,7 @@ export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
       tabindex={-1}
     >
       {/* Header registration follows the active layout without remounting its DOM. */}
-      <Show when={props.active !== false ? props.onHeaderRef : undefined} keyed>
+      <Show when={props.active ? props.onHeaderRef : undefined} keyed>
         {(register) => {
           onSettled(() => register(header));
           return undefined;

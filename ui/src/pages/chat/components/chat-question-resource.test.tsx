@@ -17,7 +17,7 @@ import {
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatQuestionResource } from "./chat-question-resource.tsx";
 // Load before the timed interaction: this regression covers context, not cold module transforms.
-import "../../../components/mcp-app-view-registration.ts";
+import "../../../components/mcp-app-view.tsx";
 
 const previewQuestion = {
   questionId: "part",

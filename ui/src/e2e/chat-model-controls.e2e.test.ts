@@ -76,6 +76,8 @@ suite.define(() => {
           elapsedMs: performance.now() - openStarted,
           scriptMs: metric("ScriptDuration", openBefore, openAfter),
           taskMs: metric("TaskDuration", openBefore, openAfter),
+          layoutMs: metric("LayoutDuration", openBefore, openAfter),
+          styleMs: metric("RecalcStyleDuration", openBefore, openAfter),
         }),
       );
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
@@ -143,6 +145,8 @@ suite.define(() => {
         elapsedMs: performance.now() - searchStarted,
         scriptMs: metric("ScriptDuration", searchBefore, searchAfter),
         taskMs: metric("TaskDuration", searchBefore, searchAfter),
+        layoutMs: metric("LayoutDuration", searchBefore, searchAfter),
+        styleMs: metric("RecalcStyleDuration", searchBefore, searchAfter),
       };
       console.log(JSON.stringify({ proof: "model-catalog-search-typing", ...searchTimings }));
       const result = picker.locator('[data-chat-model-option="example/model-999"]');

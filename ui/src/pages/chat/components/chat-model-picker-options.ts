@@ -1,4 +1,7 @@
-import { formatRawProviderLabel, providerDisplayLabel } from "../../../components/provider-icon.ts";
+import {
+  formatRawProviderLabel,
+  providerDisplayLabel,
+} from "../../../components/provider-icon-data.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";

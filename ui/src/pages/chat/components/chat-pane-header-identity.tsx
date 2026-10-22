@@ -1,12 +1,12 @@
 import { Show, createMemo, onSettled } from "solid-js";
-import { SessionColorDot } from "../../../components/session-color.ts";
+import { SessionColorDot } from "../../../components/session-color.tsx";
 import { GatewayStatus } from "../../../components/solid/gateway-status.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
-import "../../../components/workspace-icon.ts";
+import "../../../components/workspace-icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import {
   clearCompositionEnd,
