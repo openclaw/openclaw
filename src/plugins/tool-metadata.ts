@@ -47,7 +47,7 @@ export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): voi
 }
 
 /** Reads plugin ownership metadata for a concrete agent tool instance. */
-export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefined {
+export function getPluginToolMeta(tool: { name: string }): PluginToolMeta | undefined {
   return pluginToolMeta.get(tool);
 }
 

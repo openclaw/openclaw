@@ -54,6 +54,7 @@ import {
   CodexIncognitoPolicyChangeError,
   refreshCodexThreadInstructions,
 } from "./thread-policy.js";
+import { buildCodexThreadToolCatalogPatch } from "./thread-tool-catalog.js";
 
 type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
   params: CodexStartOrResumeThreadParams;
@@ -205,7 +206,9 @@ export async function releaseCodexBoundLiveThread(
       isCodexAppServerLiveThreadClaimed(client, options.threadId) ||
       isCodexAppServerLiveThreadProtected(client, options.threadId)
     ) {
-      throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
+      throw new AgentHarnessPreflightError(
+        `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
+      );
     }
     return await releaseCodexRetainedLiveThread({
       ...options,
@@ -559,6 +562,7 @@ export async function tryReuseCodexLiveThread(
       ? nativeThread?.modelProvider?.trim() || binding.modelProvider
       : binding.modelProvider;
     const bindingPatch = {
+      ...buildCodexThreadToolCatalogPatch(binding, params.dynamicTools, dynamicToolsFingerprint),
       cwd: params.cwd,
       model,
       modelProvider,

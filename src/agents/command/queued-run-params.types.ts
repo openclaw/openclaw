@@ -65,6 +65,8 @@ export type QueuedAgentRunParams = {
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   extraSystemPrompt?: string;
+  /** Exact producer-owned transient section; unannotated instructions remain persistent. */
+  extraSystemPromptTurnContext?: { start: number; text: string };
   /** Visible source replies must use the message tool when set to message_tool_only. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Action sink available for model-proposed follow-up tasks. */

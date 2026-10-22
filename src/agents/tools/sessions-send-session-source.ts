@@ -9,6 +9,19 @@ import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routi
 import { withSubagentSessionSource } from "../subagents/spawn/subagent-session-source.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
+/** Preserve the selected store owner and the entry captured for this communication. */
+export function sessionsSendEndpoint(
+  session: GatewaySessionStoreTargetWithStore,
+  entry: GatewaySessionStoreTargetWithStore["store"][string] | undefined,
+) {
+  return {
+    agentId: session.agentId,
+    sessionKey: session.canonicalKey,
+    storePath: session.readSource?.path ?? session.storePath,
+    entry,
+  };
+}
+
 export function withSessionsSendRequesterSource<T>(
   opts: SessionsSendToolOptions | undefined,
   consume: () => Promise<T>,

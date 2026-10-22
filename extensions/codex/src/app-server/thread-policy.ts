@@ -115,7 +115,7 @@ export async function restoreCodexThreadInstructionsAfterCompaction(
   }
 }
 
-async function injectCodexThreadDeveloperHandoff(
+export async function injectCodexThreadDeveloperHandoff(
   params: CodexThreadHandoffParams,
   text: string,
 ): Promise<void> {

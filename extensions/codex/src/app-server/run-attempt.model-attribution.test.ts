@@ -314,7 +314,12 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     });
     expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
     expect(requests.filter(({ method }) => method === "thread/unsubscribe")).toHaveLength(0);
-    expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+    const handoffs = requests.filter(({ method }) => method === "thread/inject_items");
+    const conversationHandoffs = handoffs.filter(({ params: requestParams }) =>
+      JSON.stringify(requestParams).includes("Current OpenClaw conversation instructions"),
+    );
+    expect(conversationHandoffs).toHaveLength(2);
+    expect(handoffs.filter((request) => !conversationHandoffs.includes(request))).toHaveLength(1);
   } finally {
     abort.abort("test cleanup");
     try {

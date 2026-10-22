@@ -15,7 +15,7 @@ import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plug
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
-import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import { copyAgentToolMetadata, type CoreToolDeclaration } from "./agent-tool-metadata.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import { rewrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
@@ -124,6 +124,7 @@ function prewarmOpenAISchema(
 
 type FinalizeAgentToolsOptions = {
   tools: AnyAgentTool[];
+  coreDeclarations?: readonly CoreToolDeclaration[];
   config?: OpenClawConfig;
   preparedModelRuntime?: { metadataSnapshot: PluginMetadataSnapshot };
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
@@ -195,18 +196,20 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, abortSignal))
     : withHooks;
   options.recordToolPrepStage?.("abort-wrappers");
-  const finalized = applyToolAvailabilityDescriptions(withAbort).map((tool, index) => {
-    const entry = entries?.[index];
-    if (
-      !entry ||
-      tool.description !== entry.descriptor.description ||
-      tool.parameters !== entry.finalSource ||
-      tool.outputSchema !== entry.outputSource
-    ) {
-      return tool;
-    }
-    return copyAgentToolMetadata(tool, { ...tool, ...entry.descriptor });
-  });
+  const finalized = applyToolAvailabilityDescriptions(withAbort, options.coreDeclarations).map(
+    (tool, index) => {
+      const entry = entries?.[index];
+      if (
+        !entry ||
+        tool.description !== entry.descriptor.description ||
+        tool.parameters !== entry.finalSource ||
+        tool.outputSchema !== entry.outputSource
+      ) {
+        return tool;
+      }
+      return copyAgentToolMetadata(tool, { ...tool, ...entry.descriptor });
+    },
+  );
   options.recordToolPrepStage?.("deferred-followup-descriptions");
   const registerCleanup = options.registerRunCleanup;
   if (!sessionId) {

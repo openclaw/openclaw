@@ -9,6 +9,8 @@ import {
   notifyNativeModelSourceWaiters,
 } from "./native-subagent-model-source.js";
 import type {
+  ChildState,
+  KnownChild,
   NativeModelBinding,
   NativeModelSource,
   NativePendingChild,
@@ -17,6 +19,7 @@ import type {
   ParentRegistrationHandle,
   ParentState,
 } from "./native-subagent-monitor-types.js";
+import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assignments.js";
 import type { CodexNativeSubagentSubmissionOwner } from "./native-subagent-submission-owner.js";
 import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 
@@ -67,6 +70,66 @@ type ParentDependencies = {
   pendingChildren: (state: ParentState) => NativePendingChild[];
   interruptModelExecution?: (threadId: string, turnId: string) => void;
 };
+
+export function listNativeRequesterParents(
+  source: ParentState,
+  parents: Iterable<ParentState>,
+): ParentState[] {
+  return [...parents].filter(
+    (state) =>
+      state === source ||
+      Boolean(
+        source.requesterSessionKey &&
+        state.requesterSessionKey === source.requesterSessionKey &&
+        state.agentId === source.agentId &&
+        source.historyOwner &&
+        state.historyOwner &&
+        matchesNativeAssignmentLifecycle(source.historyOwner, state.historyOwner),
+      ),
+  );
+}
+
+// Children whose completion is still owed to this requester: running, or
+// terminal with an undelivered result. Rotated parent threads of the same
+// requester lifecycle count, so earlier turns' children stay visible. Only a
+// parent with a requester and completion scope delivers a detached result.
+export function listNativePendingChildren(
+  source: ParentState,
+  params: {
+    parents: Iterable<ParentState>;
+    children: Iterable<ChildState>;
+    knownChildren: ReadonlyMap<string, KnownChild>;
+  },
+): NativePendingChild[] {
+  const parentThreadIds = new Set(
+    listNativeRequesterParents(source, params.parents)
+      .filter((state) => state.requesterSessionKey && state.completionScope)
+      .map((state) => state.parentThreadId),
+  );
+  const pending: NativePendingChild[] = [];
+  for (const child of params.children) {
+    if (
+      !parentThreadIds.has(child.parentThreadId) ||
+      child.settledWithoutCompletion ||
+      child.nativeCompletionDelivered ||
+      (child.terminal && !child.pendingCompletion)
+    ) {
+      continue;
+    }
+    // Codex V2 names a child by its agent path; V1 by the thread id in the run id.
+    const label = [...(params.knownChildren.get(child.childThreadId)?.agentPaths ?? [])].find(
+      (path) => path !== child.childThreadId,
+    );
+    pending.push({
+      runId: child.runId,
+      childSessionKey: child.runId,
+      ...(label ? { label } : {}),
+      state: child.terminal ? "completing" : "running",
+      wakeArmed: false,
+    });
+  }
+  return pending;
+}
 
 export function canNativeParentConsumeCompletion(state: ParentState, turnId?: string): boolean {
   if (

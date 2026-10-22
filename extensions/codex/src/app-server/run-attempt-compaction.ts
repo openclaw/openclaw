@@ -1,7 +1,12 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { invalidateCodexComputerFrame } from "./computer-context.js";
+import { getCodexInferenceThread } from "./inference-routing.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import { restoreCodexThreadInstructionsAfterCompaction } from "./thread-policy.js";
+import {
+  injectCodexThreadDeveloperHandoff,
+  restoreCodexThreadInstructionsAfterCompaction,
+} from "./thread-policy.js";
+import { buildCodexConversationTurnInstructions } from "./thread-prompt.js";
 
 /** Restore host-owned context after native compaction rebuilds a live thread. */
 export async function restoreCodexAttemptCompactionContext(
@@ -45,4 +50,20 @@ export async function restoreCodexAttemptCompactionContext(
     assertCurrent,
     withCurrent: connection.withCurrent,
   });
+  if (!getCodexInferenceThread(client, thread.threadId)) {
+    await injectCodexThreadDeveloperHandoff(
+      {
+        client,
+        threadId: thread.threadId,
+        timeoutMs: connection.appServer.requestTimeoutMs,
+        signal: runAbortController.signal,
+        assertCurrent,
+        withCurrent: connection.withCurrent,
+      },
+      buildCodexConversationTurnInstructions(
+        runtime.runtimeParams,
+        attemptTools.toolBridge.availableSpecs,
+      ),
+    );
+  }
 }

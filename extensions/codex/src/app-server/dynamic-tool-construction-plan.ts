@@ -41,6 +41,12 @@ export function createCodexHostToolSurface(
     : construct();
 }
 
+/** Observes this construction's exact host surface without changing its tools or authority. */
+export type CodexHostToolSurfaceObserver = (
+  tools: Awaited<ReturnType<typeof createCodexHostToolSurface>>,
+  runtimeToolAllowlist: string[] | undefined,
+) => void;
+
 /** Keeps node filesystem and process ownership on its native exec-server. */
 export function resolveCodexToolConstructionPlan(
   sandbox: OpenClawSandboxContext | undefined,

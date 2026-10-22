@@ -4,9 +4,11 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { fixture } from "./native-subagent-inventory.test-support.js";
 import {
   agentMessage,
+  childTurnCompletedNotification,
   closeAgentNotification,
   createClient,
   threadRead,
+  turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 
@@ -152,3 +154,88 @@ it("settles delayed close writes without consuming a replacement monitor's resum
   await f.settle(createClient());
   expect(f.deliver).toHaveBeenCalledOnce();
 });
+
+it.each(["current", "gateway-revoked"] as const)(
+  "joins the owned assignment acknowledgement before detached completion (%s)",
+  async (authority) => {
+    const f = await fixture();
+    const client = createClient();
+    const parent = await f.register(client);
+    const recordEntered = createDeferred<void>();
+    const acknowledgeRecord = createDeferred<void>();
+    const pending: { completion?: Promise<void> } = {};
+    onTestFinished(async () => {
+      acknowledgeRecord.resolve();
+      await pending.completion;
+      await parent.unregister();
+      client.close();
+      parent.closeCaller();
+    });
+    await parent.ready;
+    parent.bindTurn("parent-turn");
+    // Leave the first observed native turn for the completion notification path
+    // to persist. The foreground owner has already left when the child ends.
+    await f.spawn(client, false);
+    await parent.unregister();
+
+    const mutate = f.store.mutate.bind(f.store);
+    vi.spyOn(f.store, "mutate").mockImplementation(async (...args) => {
+      const applied = await mutate(...args);
+      const mutation = args[1];
+      if (
+        applied &&
+        mutation.kind === "record-native-subagent-assignment" &&
+        mutation.assignment.nativeTurnId === "child-turn"
+      ) {
+        // Use the actual mutation and its authority; hold only its successful
+        // acknowledgement. The monitor must join its owned producer even when
+        // this test store already exposes the committed row synchronously.
+        recordEntered.resolve();
+        await acknowledgeRecord.promise;
+      }
+      return applied;
+    });
+    await client.notify(turnStartedNotification("child-turn"));
+    const finished = () =>
+      childTurnCompletedNotification({
+        status: "completed",
+        items: [
+          {
+            id: "held-record-final",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "Result after the assignment acknowledgement.",
+          },
+        ],
+      });
+    const completion = client.notify(finished());
+    pending.completion = completion;
+    await recordEntered.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    expect
+      .soft(f.deliver, "Completion cannot escape its owned assignment write")
+      .not.toHaveBeenCalled();
+    if (authority === "gateway-revoked") {
+      // Revoke actual host-issued custody while the owner awaits its write.
+      parent.closeGateway();
+    }
+    acknowledgeRecord.resolve();
+    await completion;
+    if (authority === "gateway-revoked") {
+      expect(f.deliver).not.toHaveBeenCalled();
+    } else {
+      expect(f.deliver).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          childSessionKey: "codex-thread:child-thread",
+          expectedRequester: {
+            sessionId: f.identity.sessionId,
+            lifecycleRevision: f.historyOwner().lifecycleRevision,
+          },
+          result: "Result after the assignment acknowledgement.",
+        }),
+      );
+      await client.notify(finished());
+      expect(f.deliver).toHaveBeenCalledOnce();
+    }
+  },
+);

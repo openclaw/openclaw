@@ -27,6 +27,7 @@ import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/sessio
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import { bindCoreToolDeclaration } from "../agent-tool-metadata.js";
 import { bindRequesterYieldCronAuthority } from "../cron-creator-authority-context.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
 import { isSubagentSessionFromEntry } from "../subagents/spawn/subagent-depth-policy.js";
@@ -66,6 +67,7 @@ import {
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
 import {
   createSessionsSendSessionReaders,
+  sessionsSendEndpoint,
   withSessionsSendRequesterSource,
 } from "./sessions-send-session-source.js";
 import {
@@ -475,18 +477,8 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           ) {
             dispatchMessage = `${formatSystemTurnPrompt(RESTART_RECOVERY_INTERRUPTION_NOTE)}\n\n${dispatchMessage}`;
           }
-          const source = {
-            agentId: requesterSession.agentId,
-            sessionKey: requesterSession.canonicalKey,
-            storePath: requesterSession.readSource?.path ?? requesterSession.storePath,
-            entry: requesterSessionEntry,
-          };
-          const targetEndpoint = () => ({
-            agentId: targetSession.agentId,
-            sessionKey: targetSession.canonicalKey,
-            storePath: targetSession.readSource?.path ?? targetSession.storePath,
-            entry: targetSessionEntry,
-          });
+          const source = sessionsSendEndpoint(requesterSession, requesterSessionEntry);
+          const targetEndpoint = () => sessionsSendEndpoint(targetSession, targetSessionEntry);
           let communication: Awaited<ReturnType<typeof prepareSessionsSendCommunication>>;
           try {
             communication = await prepareSessionsSendCommunication({
@@ -611,12 +603,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 return prepareSessionsSendCommunication({
                   config: cfg,
                   source,
-                  target: {
-                    agentId: fallback.agentId,
-                    sessionKey: fallback.canonicalKey,
-                    storePath: fallback.readSource?.path ?? fallback.storePath,
-                    entry: fallback.store[fallback.canonicalKey],
-                  },
+                  target: sessionsSendEndpoint(fallback, fallback.store[fallback.canonicalKey]),
                   message,
                   dispatchMessage: sendParams.message,
                   inputProvenance,
@@ -689,5 +676,5 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
   };
   const execute = tool.execute;
   tool.execute = (...args) => withSessionsSendRequesterSource(opts, () => execute(...args));
-  return tool;
+  return bindCoreToolDeclaration(tool);
 }

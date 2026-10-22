@@ -76,6 +76,7 @@ import {
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
 import { mergeCodexNativeShellEnvironment } from "./thread-shell-environment.js";
+import { buildCodexThreadToolCatalogPatch } from "./thread-tool-catalog.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 export type CodexThreadRequestContext = Awaited<
@@ -337,9 +338,19 @@ export function buildCodexThreadBindingPolicy(
     | "contextEngineBinding"
     | "environmentSelectionFingerprint"
   >,
+  binding?: CodexAppServerThreadBinding,
 ) {
   return {
-    dynamicToolsFingerprint: preflight.dynamicToolsFingerprint,
+    ...buildCodexThreadToolCatalogPatch(
+      binding,
+      params.dynamicTools,
+      preflight.dynamicToolsFingerprint,
+    ),
+    // Resume cannot install declarations onto an older thread with an unknown catalog.
+    dynamicToolsFingerprint:
+      binding && binding.connectionScope !== "supervision" && !binding.dynamicToolsFingerprint
+        ? undefined
+        : preflight.dynamicToolsFingerprint,
     dynamicToolsContainDeferred: preflight.dynamicToolsContainDeferred,
     nativeSkillIsolationFingerprint: preflight.nativeSkillIsolationFingerprint,
     userMcpServersFingerprint: preflight.userMcpServersFingerprint,

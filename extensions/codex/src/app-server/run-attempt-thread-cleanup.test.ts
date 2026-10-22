@@ -56,6 +56,19 @@ function multiplexedClientFactory(
   });
 }
 
+// These cleanup scenarios all use an unconstrained synthetic native policy.
+// Answer each policy read, including optional hook discovery and tool admission.
+function createCleanupClientHarness() {
+  return createInferenceReadyClientHarness({
+    onWrite: (line, send) => {
+      const request = JSON.parse(line) as { id?: number; method?: string };
+      if (request.method === "configRequirements/read" && request.id !== undefined) {
+        send({ id: request.id, result: { requirements: null } });
+      }
+    },
+  });
+}
+
 setupRunAttemptTestHooks();
 
 describe("Codex app-server main thread cleanup", () => {
@@ -78,7 +91,7 @@ describe("Codex app-server main thread cleanup", () => {
     for (const label of ["a", "b"]) {
       await seedRunSessionOwnerForTest(`session-${label}`, `agent:main:session-${label}`);
     }
-    const harness = createInferenceReadyClientHarness();
+    const harness = createCleanupClientHarness();
     const clientStarted = createDeferred<void>();
     vi.spyOn(CodexAppServerClient, "start").mockImplementation(async () => {
       clientStarted.resolve();
@@ -106,12 +119,6 @@ describe("Codex app-server main thread cleanup", () => {
           result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
         });
       }
-      const requirements = await waitForHarnessRequest(
-        harness,
-        "configRequirements/read",
-        requestStart,
-      );
-      harness.send({ id: requirements.id, result: { requirements: null } });
       const threadId = `thread-${label}`;
       if (index < 2) {
         const start = await waitForHarnessRequest(harness, "thread/start", requestStart);
@@ -141,20 +148,24 @@ describe("Codex app-server main thread cleanup", () => {
         .map((write) => (JSON.parse(write) as { method: string }).method)
         .filter((method) => !["initialize", "initialized", "skills/list"].includes(method));
     expect(userRequestMethods()).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
       "thread/start",
       "turn/start",
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
       "thread/start",
       "turn/start",
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
       "turn/start",
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
@@ -191,12 +202,6 @@ describe("Codex app-server main thread cleanup", () => {
     const siblingRun = runCodexAppServerAttempt(siblingParams, {
       bindingStore: testCodexAppServerBindingStore,
     });
-    const siblingRequirements = await waitForHarnessRequest(
-      harness,
-      "configRequirements/read",
-      siblingRequestStart,
-    );
-    harness.send({ id: siblingRequirements.id, result: { requirements: null } });
     const siblingTurn = await waitForHarnessRequest(harness, "turn/start", siblingRequestStart);
     harness.send({ id: siblingTurn.id, result: turnStartResult("turn-5") });
     harness.send({
@@ -208,8 +213,9 @@ describe("Codex app-server main thread cleanup", () => {
       },
     });
     expect(readAttemptTerminal(await siblingRun).aborted).toBe(false);
-    expect(userRequestMethods().slice(-5)).toEqual([
+    expect(userRequestMethods().slice(-6)).toEqual([
       "thread/unsubscribe",
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
@@ -218,7 +224,7 @@ describe("Codex app-server main thread cleanup", () => {
   });
 
   it("preserves a quiet long-running native tool while a distinct shared-client turn completes", async () => {
-    const physical = createInferenceReadyClientHarness();
+    const physical = createCleanupClientHarness();
     const startClient = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(physical.client);
     const firstParams = createParams(
       path.join(tempDir, "concurrent-first.jsonl"),
@@ -365,7 +371,7 @@ describe("Codex app-server main thread cleanup", () => {
   });
 
   it("keeps native continuation active after a child result until the parent completes", async () => {
-    const physical = createInferenceReadyClientHarness();
+    const physical = createCleanupClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(physical.client);
     const params = createParams(
       path.join(tempDir, "child-result.jsonl"),
@@ -385,8 +391,6 @@ describe("Codex app-server main thread cleanup", () => {
         id: initialize.id,
         result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
       });
-      const requirements = await waitForHarnessRequest(physical, "configRequirements/read");
-      physical.send({ id: requirements.id, result: { requirements: null } });
       const thread = await waitForHarnessRequest(physical, "thread/start");
       physical.send({ id: thread.id, result: threadStartResult() });
       const turn = await waitForHarnessRequest(physical, "turn/start");
@@ -463,7 +467,7 @@ describe("Codex app-server main thread cleanup", () => {
     const sessionKey = "agent:main:dashboard:incognito-live-thread";
     // Dashboard incognito sessions keep an authoritative row in process-held SQLite.
     await seedRunSessionOwnerForTest("session-1", sessionKey);
-    const harness = createInferenceReadyClientHarness();
+    const harness = createCleanupClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
     const params = createParams(sessionFile, workspaceDir, sessionKey);
     params.disableTools = false;
@@ -477,8 +481,6 @@ describe("Codex app-server main thread cleanup", () => {
     });
     const capabilities = await waitForHarnessRequest(harness, "modelProvider/capabilities/read");
     harness.send({ id: capabilities.id, result: { imageGeneration: false, webSearch: true } });
-    const requirements = await waitForHarnessRequest(harness, "configRequirements/read");
-    harness.send({ id: requirements.id, result: { requirements: null } });
     const start = await waitForHarnessRequest(harness, "thread/start");
     expect(start.params).toEqual(expect.objectContaining({ ephemeral: true }));
     harness.send({ id: start.id, result: threadStartResult() });
@@ -582,9 +584,11 @@ describe("Codex app-server main thread cleanup", () => {
       ).rejects.toThrow(error.message);
       expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
         "modelProvider/capabilities/read",
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         "thread/start",
+        "thread/inject_items",
         "turn/start",
         ...(owner === "current" ? ["thread/unsubscribe"] : []),
       ]);
@@ -615,7 +619,7 @@ describe("Codex app-server main thread cleanup", () => {
     async ({ interruptFails }) => {
       const sessionFile = path.join(tempDir, "cancelled-start-session.jsonl");
       const workspaceDir = path.join(tempDir, "cancelled-start-workspace");
-      const harness = createInferenceReadyClientHarness();
+      const harness = createCleanupClientHarness();
       const abort = new AbortController();
       vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
 
@@ -693,6 +697,9 @@ describe("Codex app-server main thread cleanup", () => {
       if (method === "thread/start") {
         return threadStartResult();
       }
+      if (method === "thread/inject_items") {
+        return {};
+      }
       if (method === "turn/start") {
         throw startupError;
       }
@@ -722,6 +729,7 @@ describe("Codex app-server main thread cleanup", () => {
     expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
       "config/read",
       "thread/start",
+      "thread/inject_items",
       "turn/start",
       "turn/interrupt",
     ]);
@@ -736,7 +744,7 @@ describe("Codex app-server main thread cleanup", () => {
       const workspaceDir = path.join(tempDir, "cancelled-workspace");
       const sessionKey = "agent:main:dashboard:incognito-cancelled-turn";
       await seedRunSessionOwnerForTest("session-1", sessionKey);
-      const harness = createInferenceReadyClientHarness();
+      const harness = createCleanupClientHarness();
       const abort = new AbortController();
       const close = vi.spyOn(harness.client, "close");
       vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
@@ -757,8 +765,6 @@ describe("Codex app-server main thread cleanup", () => {
       });
       const capabilities = await waitForHarnessRequest(harness, "modelProvider/capabilities/read");
       harness.send({ id: capabilities.id, result: { imageGeneration: false, webSearch: true } });
-      const requirements = await waitForHarnessRequest(harness, "configRequirements/read");
-      harness.send({ id: requirements.id, result: { requirements: null } });
       const threadStart = await waitForHarnessRequest(harness, "thread/start");
       harness.send({ id: threadStart.id, result: threadStartResult() });
       const turnStart = await waitForHarnessRequest(harness, "turn/start");
@@ -848,7 +854,7 @@ describe("Codex app-server main thread cleanup", () => {
   );
 
   it("rejects late cancellation after failed finalization enters cleanup", async () => {
-    const harness = createInferenceReadyClientHarness();
+    const harness = createCleanupClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
     const abort = new AbortController();
     const params = createParams(
@@ -890,8 +896,8 @@ describe("Codex app-server main thread cleanup", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionKey = "agent:main:dashboard:incognito-failed-unsubscribe";
     await seedRunSessionOwnerForTest("session-1", sessionKey);
-    const contaminated = createInferenceReadyClientHarness();
-    const replacement = createInferenceReadyClientHarness();
+    const contaminated = createCleanupClientHarness();
+    const replacement = createCleanupClientHarness();
     const startClient = vi
       .spyOn(CodexAppServerClient, "start")
       .mockResolvedValueOnce(contaminated.client)
@@ -916,8 +922,6 @@ describe("Codex app-server main thread cleanup", () => {
       "modelProvider/capabilities/read",
     );
     contaminated.send({ id: capabilities.id, result: { imageGeneration: false, webSearch: true } });
-    const requirements = await waitForHarnessRequest(contaminated, "configRequirements/read");
-    contaminated.send({ id: requirements.id, result: { requirements: null } });
     const threadStart = await waitForHarnessRequest(contaminated, "thread/start");
     contaminated.send({ id: threadStart.id, result: threadStartResult() });
 
@@ -960,11 +964,6 @@ describe("Codex app-server main thread cleanup", () => {
       id: replacementCapabilities.id,
       result: { imageGeneration: false, webSearch: true },
     });
-    const replacementRequirements = await waitForHarnessRequest(
-      replacement,
-      "configRequirements/read",
-    );
-    replacement.send({ id: replacementRequirements.id, result: { requirements: null } });
     const replacementThread = await waitForHarnessRequest(replacement, "thread/start");
     replacement.send({ id: replacementThread.id, result: threadStartResult("thread-2") });
     const replacementTurn = await waitForHarnessRequest(replacement, "turn/start");

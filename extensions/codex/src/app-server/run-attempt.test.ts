@@ -48,10 +48,7 @@ import {
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./config.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
-import {
-  buildDynamicTools,
-  shouldEnableCodexAppServerNativeToolSurface,
-} from "./dynamic-tool-build.js";
+import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -113,12 +110,16 @@ import {
   setCodexTestModelSupportsTools,
   setCodexAppServerClientFactoryForTest,
   setupRunAttemptTestHooks,
+  startAttempt,
   tempDir,
   threadStartResult,
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
-import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
+import {
+  buildDynamicToolsForTest,
+  createCodexToolBridgeForTest,
+} from "./run-attempt-tool-catalog.test-support.js";
 import * as attemptTurnState from "./run-attempt-turn-state.js";
 import { setAgentWorkspaceForTest } from "./run-attempt-workspace.test-support.js";
 import { registerSettledFinalizationTests } from "./run-attempt.settled-finalization.test-support.js";
@@ -215,32 +216,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
   };
 }
 
-async function buildDynamicToolsForTest(
-  params: EmbeddedRunAttemptParams,
-  workspaceDir: string,
-  overrides: Partial<Parameters<typeof buildDynamicTools>[0]> = {},
-) {
-  const sandboxSessionKey = params.sessionKey;
-  if (!sandboxSessionKey) {
-    throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
-  }
-  return buildDynamicTools({
-    params,
-    resolvedWorkspace: workspaceDir,
-    effectiveWorkspace: workspaceDir,
-    effectiveCwd: params.cwd ?? workspaceDir,
-    sandboxSessionKey,
-    sandbox: { enabled: false, backendId: "docker" } as never,
-    nativeToolSurfaceEnabled: true,
-    runAbortController: new AbortController(),
-    sessionAgentId: "main",
-    policyAgentId: params.sandboxAgentId ?? "main",
-    pluginConfig: {},
-    onYieldDetected: () => undefined,
-    ...overrides,
-  });
-}
-
 async function buildCodexTurnContextForTest(
   params: EmbeddedRunAttemptParams,
   workspaceDir: string,
@@ -313,20 +288,6 @@ async function buildCodexTurnContextForTest(
   };
 }
 
-function createCodexToolBridgeForTest(
-  params: EmbeddedRunAttemptParams,
-  tools: RuntimeDynamicToolForTest[],
-  registeredTools: RuntimeDynamicToolForTest[] = tools,
-) {
-  const signal = new AbortController().signal;
-  return createCodexDynamicToolBridge({
-    tools,
-    registeredTools,
-    signal,
-    directToolNames: resolveCodexDynamicToolDirectNames(params, registeredTools, false),
-  });
-}
-
 async function startThreadWithDisabledNativeSurfaceForTest(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -370,7 +331,10 @@ async function startThreadWithDisabledNativeSurfaceForTest(
     client: { request } as never,
     params,
     cwd: workspaceDir,
-    dynamicTools: dynamicTools as never,
+    dynamicTools: createCodexDynamicToolBridge({
+      tools: dynamicTools,
+      signal: new AbortController().signal,
+    }).specs,
     appServer: createThreadLifecycleAppServerOptions(),
     developerInstructions: options.developerInstructions,
     nativeCodeModeEnabled: nativeToolSurfaceEnabled,
@@ -390,10 +354,6 @@ async function startThreadWithDisabledNativeSurfaceForTest(
 
   return { request, nativeToolSurfaceEnabled };
 }
-
-type RuntimeDynamicToolForTest = Parameters<
-  typeof createCodexDynamicToolBridge
->[0]["tools"][number];
 
 function flattenSpecsWithNamespace(
   specs: readonly CodexDynamicToolSpec[],
@@ -1039,7 +999,10 @@ describe("runCodexAppServerAttempt", () => {
           client: client as never,
           params,
           cwd: environment?.cwd ?? workspaceDir,
-          dynamicTools: dynamicTools as never,
+          dynamicTools: createCodexDynamicToolBridge({
+            tools: dynamicTools,
+            signal: new AbortController().signal,
+          }).specs,
           appServer,
           nativeCodeModeEnabled: nativeToolSurfaceEnabled,
           nativeCodeModeOnlyEnabled: false,
@@ -1762,7 +1725,8 @@ describe("runCodexAppServerAttempt", () => {
     await emitItem(harness, "started", { type: "contextCompaction", id: "compact-1" });
     await emitItem(harness, "completed", { type: "contextCompaction", id: "compact-1" });
     let planRestoreRequests = harness.requests.filter(
-      (request) => request.method === "thread/inject_items",
+      (request) =>
+        request.method === "thread/inject_items" && isUserHistoryInjection(request.params),
     );
     expect(planRestoreRequests[0]?.params).toMatchObject({
       threadId: "thread-1",
@@ -1813,7 +1777,8 @@ describe("runCodexAppServerAttempt", () => {
     await emitItem(harness, "started", { type: "contextCompaction", id: "compact-2" });
     await emitItem(harness, "completed", { type: "contextCompaction", id: "compact-2" });
     planRestoreRequests = harness.requests.filter(
-      (request) => request.method === "thread/inject_items",
+      (request) =>
+        request.method === "thread/inject_items" && isUserHistoryInjection(request.params),
     );
     expect(planRestoreRequests).toHaveLength(2);
     expect(planRestoreRequests[1]?.params).toMatchObject({
@@ -1866,7 +1831,10 @@ describe("runCodexAppServerAttempt", () => {
     await emitItem(harness, "started", { type: "contextCompaction", id: "compact-3" });
     await emitItem(harness, "completed", { type: "contextCompaction", id: "compact-3" });
     expect(
-      harness.requests.filter((request) => request.method === "thread/inject_items"),
+      harness.requests.filter(
+        (request) =>
+          request.method === "thread/inject_items" && isUserHistoryInjection(request.params),
+      ),
     ).toHaveLength(2);
 
     const result = await finishRun(run, harness);
@@ -3058,9 +3026,11 @@ describe("runCodexAppServerAttempt", () => {
       error,
     );
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       ...(transient ? ["thread/start"] : ["thread/read", "thread/resume", "thread/inject_items"]),
+      "thread/inject_items",
       "turn/start",
       "thread/unsubscribe",
     ]);
@@ -3113,12 +3083,15 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
       "thread/inject_items",
+      "thread/inject_items",
       "turn/start",
+      "thread/inject_items",
       "turn/start",
     ]);
     await expectRetainedSuccessfulThread(harness.client, "thread-existing");
@@ -3178,10 +3151,12 @@ describe("runCodexAppServerAttempt", () => {
     });
     await finishRun(run, harness, "thread-existing");
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
+      "thread/inject_items",
       "thread/inject_items",
       "turn/start",
     ]);
@@ -3972,12 +3947,14 @@ describe("runCodexAppServerAttempt", () => {
     const { result, requests, client } = await runSettledFailureClientReplacementTest();
     expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ["config/read", "configRequirements/read", "thread/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read", "thread/read"],
       [
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         "thread/read",
         "thread/resume",
+        "thread/inject_items",
         "thread/inject_items",
         "turn/start",
       ],
@@ -3990,8 +3967,8 @@ describe("runCodexAppServerAttempt", () => {
       runSettledFailureClientReplacementTest({ denyReplacementShell: true, requests }),
     ).rejects.toThrow("Codex native code mode requires shell_tool");
     expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ["config/read", "configRequirements/read", "thread/read"],
-      ["config/read", "configRequirements/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read", "thread/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read"],
     ]);
   });
 
@@ -4528,36 +4505,18 @@ describe("saved assistant occurrence settlement", () => {
   });
 });
 
-async function startAttempt(
-  requestImpl?: Parameters<typeof createStartedThreadHarness>[0],
-  options?: Parameters<typeof runCodexAppServerAttempt>[1],
-) {
-  vi.useFakeTimers({
-    toFake: ["Date", "setTimeout", "clearTimeout"],
-    shouldAdvanceTime: false,
-  });
-  const turnAccepted = createDeferred<void>();
-  const params = createTestParams();
-  params.onExecutionPhase = ({ phase }) => {
-    if (phase === "turn_accepted") {
-      turnAccepted.resolve();
-    }
-  };
-  const harness = createStartedThreadHarness(requestImpl);
-  const run = runCodexAppServerAttempt(params, options);
-  await Promise.race([
-    turnAccepted.promise,
-    run.then(() => {
-      throw new Error("Codex attempt ended before turn acceptance");
-    }),
-  ]);
-  return { harness, run };
+function isUserHistoryInjection(params: unknown): boolean {
+  return (
+    isJsonObject(params) &&
+    Array.isArray(params.items) &&
+    params.items.some((item) => isJsonObject(item) && item.role === "user")
+  );
 }
 
 describe("runCodexAppServerAttempt", () => {
   it("continues after bounded plan restoration fails", async () => {
-    const { harness, run } = await startAttempt(async (method) => {
-      if (method === "thread/inject_items") {
+    const { harness, run } = await startAttempt(async (method, input) => {
+      if (method === "thread/inject_items" && isUserHistoryInjection(input)) {
         throw new Error("injected test failure");
       }
       return undefined;
@@ -4572,7 +4531,9 @@ describe("runCodexAppServerAttempt", () => {
     await emitItem(harness, "started", { type: "contextCompaction", id: "compact-1" });
     await emitItem(harness, "completed", { type: "contextCompaction", id: "compact-1" });
 
-    const request = harness.requests.find((entry) => entry.method === "thread/inject_items");
+    const request = harness.requests.find(
+      (entry) => entry.method === "thread/inject_items" && isUserHistoryInjection(entry.params),
+    );
     const text = (
       request?.params as { items?: Array<{ content?: Array<{ text?: string }> }> } | undefined
     )?.items?.[0]?.content?.[0]?.text;

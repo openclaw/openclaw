@@ -62,7 +62,6 @@ import type { CodexDynamicToolsLoading } from "./config.js";
 import { createCodexAutomationsToolsAllowResolver } from "./dynamic-tool-automations-allowlist.js";
 import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
 import {
-  assertCodexDynamicToolInputMatchesSchema,
   createCodexDynamicToolSpecs,
   projectCodexDynamicTools,
   type CodexDynamicToolSchemaQuarantine,
@@ -73,6 +72,7 @@ import {
   type CodexDynamicToolHookContextBase,
   projectCodexExecutableDynamicToolSurface,
 } from "./dynamic-tool-executable-projection.js";
+import { assertCodexDynamicToolInputMatchesSchema } from "./dynamic-tool-input-validation.js";
 import {
   createFailedDynamicToolResponse,
   failedToolResult,
@@ -171,7 +171,7 @@ export function createCodexDynamicToolBridge(params: {
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools, { config: params.hookContext?.config })
     : availableProjection;
-  // Supervised thread declarations are native-owned and fingerprinted. Narrow
+  // Accepted thread declarations are native-owned and fingerprinted. Narrow
   // executors below, but never rewrite the catalog checked by thread-lifecycle-run.
   const inheritedSpecs = params.registeredSpecs ? [...params.registeredSpecs] : undefined;
   const inheritedNames = inheritedSpecs
@@ -179,9 +179,10 @@ export function createCodexDynamicToolBridge(params: {
     : undefined;
   const registrationNames =
     inheritedNames ?? new Set(registeredProjection.tools.map((entry) => entry.name));
-  const finalized = finalizeCodexToolAvailability(
-    availableProjection.tools.filter((entry) => registrationNames.has(entry.name)),
+  const currentEntries = availableProjection.tools.filter((entry) =>
+    registrationNames.has(entry.name),
   );
+  const finalized = finalizeCodexToolAvailability(currentEntries, inheritedSpecs);
   const availableTools = finalized.tools;
   const pluginLocalMediaTrustByToolName = new Map<string, ReadonlySet<string>>();
   for (const { name, tool } of availableTools) {

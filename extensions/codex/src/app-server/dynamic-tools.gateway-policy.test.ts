@@ -219,14 +219,35 @@ describe("Codex Gateway tool policy", () => {
       hookContext: { config },
     });
     expect(codexDynamicToolsFingerprint(resumed.specs)).toBe(savedFingerprint);
-    expect(flattenCodexDynamicToolFunctions(resumed.availableSpecs)).toMatchObject([
-      { name: "task", inputSchema: { properties: { action: { enum: ["read"] } } } },
-    ]);
+    // Current policy narrows the prepared schema. The saved catalog stays frozen,
+    // so neither action can execute through that incompatible declaration.
+    expect(resumed.availableSpecs).toEqual([]);
     expect(await call(resumed, "gateway", { action: "write" })).toMatchObject({ success: false });
     expect(admin.execute).not.toHaveBeenCalled();
-    expect(await call(resumed, "task", { action: "write" })).toMatchObject({ success: false });
+    for (const action of ["read", "write"]) {
+      expect(await call(resumed, "task", { action })).toMatchObject({ success: false });
+    }
     expect(task.execute).not.toHaveBeenCalled();
-    expect(await call(resumed, "task", { action: "read" })).toMatchObject({ success: true });
+    expect(codexDynamicToolsFingerprint(resumed.specs)).toBe(savedFingerprint);
+
+    // Model the successor's accepted schema without claiming native idle publication.
+    const successor = createCodexDynamicToolBridge({
+      tools: [task],
+      signal: new AbortController().signal,
+      hookContext: { config },
+    });
+    expect(flattenCodexDynamicToolFunctions(successor.specs)).toMatchObject([
+      { name: "task", inputSchema: { properties: { action: { enum: ["read"] } } } },
+    ]);
+    const published = createCodexDynamicToolBridge({
+      tools: [task],
+      registeredSpecs: successor.specs,
+      signal: new AbortController().signal,
+      hookContext: { config },
+    });
+    expect(await call(published, "task", { action: "write" })).toMatchObject({ success: false });
+    expect(task.execute).not.toHaveBeenCalled();
+    expect(await call(published, "task", { action: "read" })).toMatchObject({ success: true });
     expect(task.execute).toHaveBeenCalledOnce();
   });
 

@@ -55,6 +55,8 @@ vi.mock("./turn-params.js", async (importOriginal) => ({
     input: [{ type: "text", text: options.promptText, text_elements: [] }],
   }),
 }));
+// mock-isolation: Provider review owns acknowledgment/selection; context handoff has separate coverage.
+vi.mock("./thread-policy.js", () => ({ injectCodexThreadDeveloperHandoff: vi.fn() }));
 vi.mock("./trajectory.js", () => ({ recordCodexTrajectoryContext: vi.fn() }));
 vi.mock("./user-prompt-message.js", () => ({ buildCodexUserPromptMessage: vi.fn() }));
 

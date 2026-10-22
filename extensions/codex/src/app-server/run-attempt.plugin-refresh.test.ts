@@ -81,8 +81,10 @@ describe("managed Codex plugin refresh", () => {
         scenario === "host-persisted" || scenario === "admitted-continuation";
       const steeringAccepted = createDeferred<void>();
       const steeringImage = { type: "image" as const, data: STEERING_PNG, mimeType: "image/png" };
-      const steeringImagePath = path.join(tempDir, "steering.png");
+      const steeringImagePath = path.join(tempDir, "workspace", "steering.png");
       if (scenario === "admitted-continuation") {
+        // This admitted attachment belongs to the session, not its isolated temp parent.
+        await fs.mkdir(path.dirname(steeringImagePath), { recursive: true });
         await fs.writeFile(steeringImagePath, Buffer.from(STEERING_PNG, "base64"));
       }
       const events: string[] = [];

@@ -25,6 +25,7 @@ import {
 } from "../../sessions/session-controller.lifecycle.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import { bindCoreToolDeclaration } from "../agent-tool-metadata.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -212,7 +213,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     method: string,
     params: Record<string, unknown>,
   ) => gatewayRequest<T>({ method, params });
-  return {
+  return bindCoreToolDeclaration({
     label: "Sessions",
     name: "sessions",
     // Only session-stable facts pick the definition, so every turn of a session
@@ -719,5 +720,5 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         ),
       );
     }),
-  };
+  });
 }

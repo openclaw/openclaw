@@ -31,6 +31,7 @@ import { isCodexRemoteExecPlacementSandbox, type CodexPluginConfig } from "./con
 import {
   createCodexHostToolSurface,
   resolveCodexToolConstructionPlan,
+  type CodexHostToolSurfaceObserver,
 } from "./dynamic-tool-construction-plan.js";
 import {
   filterCodexDynamicTools,
@@ -144,8 +145,10 @@ export function shouldWarnCodexDynamicToolBuildStageSummary(
     summary.stages.some((stage) => stage.durationMs >= stageWarnMs)
   );
 }
+
 export async function buildDynamicTools(
   input: DynamicToolBuildParams,
+  onHostSurface?: CodexHostToolSurfaceObserver,
 ): Promise<OpenClawDynamicTool[]> {
   const { params } = input;
   const messagePolicyParams = input.ignoreDisableMessageTool
@@ -297,6 +300,7 @@ export async function buildDynamicTools(
       { cwd: input.effectiveCwd ?? input.effectiveWorkspace },
       input.resolveCronCreatorToolAuthority,
     );
+    onHostSurface?.(allTools, toolRunContext.runtimeToolAllowlist);
     toolBuildStages.mark("create-openclaw-coding-tools");
     const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
     const readableAllToolProjection = filterProviderNormalizableTools(allTools);

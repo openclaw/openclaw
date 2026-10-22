@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TranscriptToolCaller } from "../transcripts/provider-types.js";
+import { bindCoreToolDeclaration, type CoreToolDeclaration } from "./agent-tool-metadata.js";
 import { bindActiveOperatorTurnAuthority } from "./cron-creator-authority-context.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { TRANSCRIPTS_TOOL_DECLARATION } from "./tools/transcripts-tool-contract.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 
 function resolveTranscriptCaller(options: {
@@ -58,21 +60,25 @@ export function resolveTranscriptsTool(
   config: OpenClawConfig | undefined,
   agentId: string,
   options: Parameters<typeof resolveTranscriptCaller>[0] | undefined,
+  onDeclaration?: (declaration: CoreToolDeclaration) => void,
 ): AnyAgentTool | undefined {
   if (config?.transcripts?.enabled === false) {
     return undefined;
   }
+  onDeclaration?.(bindCoreToolDeclaration({ ...TRANSCRIPTS_TOOL_DECLARATION }));
   // Registration depends only on config so every turn of a session offers the
   // same tool surface; a turn without a caller identity is refused when it runs.
   const caller = resolveTranscriptCaller(options ?? {});
-  return createTranscriptsTool({
-    agentId,
-    ...(caller
-      ? {
-          caller: caller.caller,
-          ...(caller.assertCallerActive ? { assertCallerActive: caller.assertCallerActive } : {}),
-        }
-      : { callerUnavailable: true }),
-    config,
-  });
+  return bindCoreToolDeclaration(
+    createTranscriptsTool({
+      agentId,
+      ...(caller
+        ? {
+            caller: caller.caller,
+            ...(caller.assertCallerActive ? { assertCallerActive: caller.assertCallerActive } : {}),
+          }
+        : { callerUnavailable: true }),
+      config,
+    }),
+  );
 }

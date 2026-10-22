@@ -58,6 +58,7 @@ import {
 } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
+import { registerThreadNetworkProxyBindingTests } from "./thread-lifecycle-network-proxy.test-support.js";
 import { registerThreadPolicyRefreshTests } from "./thread-lifecycle-policy-refresh.test-support.js";
 import { registerRequiredRootThreadPolicyTests } from "./thread-lifecycle-rooted.test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
@@ -175,38 +176,6 @@ function createThreadLifecycleAppServerOptions(): LifecycleInput["appServer"] {
     codeModeOnly: false,
     loopDetectionPreToolUseRelay: true,
     connectionClass: "local-loopback",
-  };
-}
-
-function createNetworkProxyThreadLifecycleAppServerOptions() {
-  const configPatch = {
-    "features.network_proxy.enabled": true,
-    default_permissions: "openclaw-network",
-    permissions: {
-      "openclaw-network": {
-        filesystem: {
-          ":minimal": "read",
-          ":project_roots": {
-            ".": "write",
-          },
-        },
-        network: {
-          enabled: true,
-          domains: {
-            "api.openai.com": "allow",
-          },
-          proxy_url: "http://127.0.0.1:3128",
-        },
-      },
-    },
-  };
-  return {
-    ...createThreadLifecycleAppServerOptions(),
-    networkProxy: {
-      profileName: "openclaw-network",
-      configFingerprint: "test-network-proxy",
-      configPatch,
-    },
   };
 }
 
@@ -2807,6 +2776,38 @@ describe("Codex app-server thread lifecycle bindings", () => {
     }
   });
 
+  it("keeps unknown resumed catalogs receiptless through later warm reuse", async () => {
+    const { sessionFile, workspaceDir } = createPaths();
+    const threadId = "thread-unknown-catalog";
+    await writeCodexAppServerBinding(sessionFile, { threadId, cwd: workspaceDir });
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: createFixedThreadRequest(threadId, ["thread/resume"]),
+      persistedThreads: [threadId],
+    });
+    const input = {
+      client: fixture.client,
+      params: createParams(sessionFile, workspaceDir),
+      dynamicTools: [createNamedDynamicTool("synthetic_lookup")],
+    };
+    const resumed = await startOrResumeThread(input);
+    expect(resumed.threadId).toBe(threadId);
+    const afterResume = await readCodexAppServerBinding(sessionFile);
+    expect(afterResume?.dynamicToolsFingerprint).toBeUndefined();
+    expect(afterResume?.managedToolCatalog).toBeUndefined();
+    await retainThread(fixture.client, resumed);
+    const resumes = fixture.request.mock.calls.filter(([method]) => method === "thread/resume");
+    const reused = await startOrResumeThread(input);
+    expect(reused.threadId).toBe(threadId);
+    expect(
+      fixture.request.mock.calls.filter(([method]) => method === "thread/resume"),
+    ).toHaveLength(resumes.length);
+    const afterReuse = await readCodexAppServerBinding(sessionFile);
+    expect(afterReuse?.dynamicToolsFingerprint).toBeUndefined();
+    expect(afterReuse?.managedToolCatalog).toBeUndefined();
+    expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
+  });
+
   it("keeps the bound local provider when stale fingerprints force a fresh thread", async () => {
     const { sessionFile, workspaceDir } = createPaths();
     await writeCodexAppServerBinding(sessionFile, {
@@ -3418,36 +3419,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(binding?.threadId).toBe("thread-existing");
   });
 
-  it("starts a new thread when the network proxy config is not active on the binding", async () => {
-    const { sessionFile, workspaceDir } = createPaths();
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-    });
-    const appServer = createNetworkProxyThreadLifecycleAppServerOptions();
-    const request = createFixedThreadRequest("thread-network-proxy", ["thread/start"]);
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      appServer,
-    });
-
-    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
-    expect(requestCalls.map(([method]) => method)).toEqual([...PREFLIGHT_METHODS, "thread/start"]);
-    expect(requestCalls.find(([method]) => method === "thread/start")?.[1]).not.toHaveProperty(
-      "sandbox",
-    );
-    expect(requestCalls.find(([method]) => method === "thread/start")?.[1].config).toMatchObject(
-      appServer.networkProxy.configPatch,
-    );
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.threadId).toBe("thread-network-proxy");
-    expect(binding?.networkProxyProfileName).toBe("openclaw-network");
-    expect(binding?.networkProxyConfigFingerprint).toBe(appServer.networkProxy.configFingerprint);
+  registerThreadNetworkProxyBindingTests({
+    preflightMethods: PREFLIGHT_METHODS,
+    createPaths,
+    writeCodexAppServerBinding,
+    createThreadLifecycleAppServerOptions,
+    createFixedThreadRequest,
+    startOrResumeThread,
+    createParams,
   });
 
   it("replays compatible plugin app bindings on thread resume", async () => {

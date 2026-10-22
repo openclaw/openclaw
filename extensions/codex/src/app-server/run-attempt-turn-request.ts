@@ -29,6 +29,8 @@ import {
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { injectCodexThreadDeveloperHandoff } from "./thread-policy.js";
+import { buildCodexConversationTurnInstructions } from "./thread-prompt.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexParentLocalInstructions, buildTurnStartParams } from "./turn-params.js";
 import type { CodexThreadRouteReservation } from "./turn-router.js";
@@ -233,6 +235,7 @@ export async function prepareCodexAttemptTurnRequest(
                 memoryInstructions: workspaceBootstrapContext.memoryInstructions,
               }) ?? undefined),
           turnState.promptBuild.turnDeveloperInstructions,
+          buildCodexConversationTurnInstructions(runtimeParams, toolBridge.availableSpecs),
         ),
         signal: runAbortController.signal,
         assertCurrent: () => {
@@ -253,10 +256,25 @@ export async function prepareCodexAttemptTurnRequest(
         ...turnStartParams.responsesapiClientMetadata,
         [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
       };
-    } else if (workspaceBootstrapContext.personaFiles?.some((file) => file.personalUser)) {
-      embeddedAgentLog.warn(
-        "Personal USER.md was omitted: this Codex connection has no parent-only inference relay. Shared workspace persona is still delivered.",
+    } else {
+      // Native additionalContext deduplicates values even after compaction drops
+      // their history. Reuse the full developer handoff without changing thread policy.
+      await injectCodexThreadDeveloperHandoff(
+        {
+          client: turnClient,
+          threadId,
+          timeoutMs: turnAppServer.requestTimeoutMs,
+          signal: runAbortController.signal,
+          assertCurrent: assertTurnCurrent,
+          withCurrent: connection.withCurrent,
+        },
+        buildCodexConversationTurnInstructions(runtimeParams, toolBridge.availableSpecs),
       );
+      if (workspaceBootstrapContext.personaFiles?.some((file) => file.personalUser)) {
+        embeddedAgentLog.warn(
+          "Personal USER.md was omitted: this Codex connection has no parent-only inference relay. Shared workspace persona is still delivered.",
+        );
+      }
     }
     const continuation = await prepareCodexProviderReviewContinuation({
       acknowledgment: params.providerReviewAcknowledgment,

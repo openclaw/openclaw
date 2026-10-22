@@ -9,12 +9,20 @@ import {
   shouldRetireCodexStartupClient,
 } from "./attempt-client-cleanup.js";
 import { CodexAppServerStartupError, isCodexAppServerStartupError } from "./attempt-timeouts.js";
+import {
+  consumeCodexAppServerLiveThread,
+  ensureCodexAppServerClientRuntime,
+  protectCodexAppServerLiveThread,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import { isCodexAppServerIndeterminateTransportError } from "./client.js";
 import {
   CodexAppServerScopedRequestRejectedError,
   codexPrewriteRejectionCause,
 } from "./rpc-error.js";
 import { createClientHarness } from "./test-support.js";
+import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
+import { releaseCodexBoundLiveThread } from "./thread-lifecycle-warm.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 type Harness = ReturnType<typeof createClientHarness>;
@@ -64,6 +72,47 @@ function sendTurn(
 function rejectInterrupt(harness: Harness, id = lastRequest(harness).id) {
   harness.send({ id, error: { code: -32_600, message: "no active turn to interrupt" } });
 }
+
+it.each(["claimed", "protected"] as const)(
+  "preserves the foreground client after refusing to release a %s thread",
+  async (owner) => {
+    const harness = createClientHarness();
+    const threadId = "active-parent";
+    const abort = new AbortController();
+    const release = vi.fn(async () => {});
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+    await retainCodexAppServerLiveThread(harness.client, threadId, release, "original-policy");
+    const claim =
+      owner === "claimed"
+        ? await consumeCodexAppServerLiveThread(harness.client, threadId)
+        : undefined;
+    const unprotect =
+      owner === "protected" ? protectCodexAppServerLiveThread(harness.client, threadId) : undefined;
+    try {
+      const error = await releaseCodexBoundLiveThread({
+        client: harness.client,
+        threadId,
+        lifecycleTiming: createCodexThreadLifecycleTimingTracker(false),
+        signal: abort.signal,
+      }).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(AgentHarnessPreflightError);
+      // Foreground startup has no spawnedBy exemption. A refusal before any
+      // native write must not retire the client holding this conversation.
+      expect(shouldRetireCodexStartupClient(error, undefined, abort.signal)).toBe(false);
+      expect(harness.writes).toHaveLength(0);
+      expect(release).not.toHaveBeenCalled();
+      const retained = claim ?? (await consumeCodexAppServerLiveThread(harness.client, threadId));
+      expect(retained).toBeDefined();
+      expect(() => retained!.assertCurrent()).not.toThrow();
+      expect(harness.client.getCloseError()).toBeUndefined();
+      abort.abort();
+      expect(shouldRetireCodexStartupClient(error, undefined, abort.signal)).toBe(true);
+    } finally {
+      unprotect?.();
+      harness.client.close();
+    }
+  },
+);
 
 it.each([
   [

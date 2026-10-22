@@ -89,8 +89,10 @@ describe("Codex app-server skill catalog delivery", () => {
     const sessionKey = "agent:main:dashboard:incognito-skill-restore-failure";
     await seedRunSessionOwnerForTest("session-1", sessionKey);
     let failNextInject = false;
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "thread/inject_items" && failNextInject) {
+    const isSkillInjection = (method: string, params: unknown) =>
+      method === "thread/inject_items" && JSON.stringify(params).includes("available_skills");
+    const harness = createStartedThreadHarness(async (method, params) => {
+      if (isSkillInjection(method, params) && failNextInject) {
         failNextInject = false;
         throw new Error("inject_items unavailable");
       }
@@ -99,7 +101,7 @@ describe("Codex app-server skill catalog delivery", () => {
     const sessionFile = path.join(tempDir, "incognito-restore-failure-session.jsonl");
     const workspaceDir = path.join(tempDir, "incognito-restore-failure-workspace");
     const injectCount = () =>
-      harness.requests.filter(({ method }) => method === "thread/inject_items").length;
+      harness.requests.filter(({ method, params }) => isSkillInjection(method, params)).length;
     const runTurn = async (runId: string, catalog: string, options: { compact?: boolean } = {}) => {
       const params = createParams(sessionFile, workspaceDir, { sessionKey, runId });
       // Allow the real before_compaction history worker to start.
@@ -130,7 +132,9 @@ describe("Codex app-server skill catalog delivery", () => {
     expect(injectCount()).toBe(2);
 
     await runTurn("run-4", SECOND_CATALOG);
-    const injected = harness.requests.filter(({ method }) => method === "thread/inject_items");
+    const injected = harness.requests.filter(({ method, params }) =>
+      isSkillInjection(method, params),
+    );
     expect(injected).toHaveLength(3);
     expect(JSON.stringify(injected[2]?.params)).toContain(SECOND_CATALOG);
   });

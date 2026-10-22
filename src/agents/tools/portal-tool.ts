@@ -4,6 +4,7 @@ import type {
   PortalSummary,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { WRITE_SCOPE } from "../../gateway/operator-scopes.js";
+import { bindCoreToolDeclaration, type CoreToolDeclaration } from "../agent-tool-metadata.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -53,95 +54,103 @@ export function createAvailablePortalTools(
     /** A worker-placed session only ever reaches its own worker. */
     workerScoped?: boolean;
   } = {},
+  onDeclaration?: (declaration: CoreToolDeclaration) => void,
 ): AnyAgentTool[] {
   const target = options.sessionPortalTarget;
+  const declaration = bindCoreToolDeclaration({
+    name: "portal",
+    description: options.workerScoped ? SESSION_PORTAL_TOOL_DESCRIPTION : PORTAL_TOOL_DESCRIPTION,
+    parameters: options.workerScoped ? SessionPortalToolSchema : PortalToolSchema,
+  });
+  onDeclaration?.(declaration);
   // One definition for every turn keeps the session's prompt prefix stable; a
   // non-owner turn is limited to the conversation's worker, or refused.
   const ownerUnavailable = options.senderIsOwner === false && !target;
   return [
-    {
-      label: "Portal",
-      name: "portal",
-      description: options.workerScoped ? SESSION_PORTAL_TOOL_DESCRIPTION : PORTAL_TOOL_DESCRIPTION,
-      parameters: options.workerScoped ? SessionPortalToolSchema : PortalToolSchema,
-      outputSchema: PortalOutputSchema,
-      execute: async (_toolCallId, rawArgs) => {
-        if (ownerUnavailable) {
-          throw new ToolInputError(
-            "portal needs the owner's authority, and this turn was not started by the owner",
-          );
-        }
-        const params = rawArgs as Record<string, unknown>;
-        target?.assertCurrent();
-        const action = readToolStringParam(params, "action", { required: true });
-        const environmentId = readToolStringParam(params, "environmentId");
-        if (target && environmentId !== undefined) {
-          throw new ToolInputError(
-            "This portal tool is bound to the conversation's attached worker",
-          );
-        }
-        const environment = target
-          ? {
-              sessionKey: target.sessionKey,
-              agentId: target.agentId,
-              environmentId: target.environmentId,
-            }
-          : environmentId
-            ? { environmentId }
-            : {};
-        if (action === "list") {
-          // portal.list redacts the bearer URL for read-scope callers. Least-privilege
-          // resolution would make every list call read-scope, hiding the URL from a
-          // caller that can mint the same portal through action=open; ask with the
-          // write authority this tool already requires so the listing stays usable.
-          const result = target
-            ? await callInProcessGatewayTool<PortalListResult>("portal.session.list", environment)
-            : await callAgentToolGatewayRequest<PortalListResult>({
-                method: "portal.list",
-                params: environment,
-                scopes: [PORTAL_URL_SCOPE],
-              });
+    bindCoreToolDeclaration(
+      {
+        label: "Portal",
+        ...declaration,
+        outputSchema: PortalOutputSchema,
+        execute: async (_toolCallId, rawArgs) => {
+          if (ownerUnavailable) {
+            throw new ToolInputError(
+              "portal needs the owner's authority, and this turn was not started by the owner",
+            );
+          }
+          const params = rawArgs as Record<string, unknown>;
           target?.assertCurrent();
-          return formatPortalResult({ action: "list", result });
-        }
-        if (action === "close") {
-          const id = readToolStringParam(params, "id", { required: true });
-          const result = await callInProcessGatewayTool<PortalCloseResult>(
-            target ? "portal.session.close" : "portal.close",
-            { id, ...environment },
+          const action = readToolStringParam(params, "action", { required: true });
+          const environmentId = readToolStringParam(params, "environmentId");
+          if (target && environmentId !== undefined) {
+            throw new ToolInputError(
+              "This portal tool is bound to the conversation's attached worker",
+            );
+          }
+          const environment = target
+            ? {
+                sessionKey: target.sessionKey,
+                agentId: target.agentId,
+                environmentId: target.environmentId,
+              }
+            : environmentId
+              ? { environmentId }
+              : {};
+          if (action === "list") {
+            // portal.list redacts the bearer URL for read-scope callers. Least-privilege
+            // resolution would make every list call read-scope, hiding the URL from a
+            // caller that can mint the same portal through action=open; ask with the
+            // write authority this tool already requires so the listing stays usable.
+            const result = target
+              ? await callInProcessGatewayTool<PortalListResult>("portal.session.list", environment)
+              : await callAgentToolGatewayRequest<PortalListResult>({
+                  method: "portal.list",
+                  params: environment,
+                  scopes: [PORTAL_URL_SCOPE],
+                });
+            target?.assertCurrent();
+            return formatPortalResult({ action: "list", result });
+          }
+          if (action === "close") {
+            const id = readToolStringParam(params, "id", { required: true });
+            const result = await callInProcessGatewayTool<PortalCloseResult>(
+              target ? "portal.session.close" : "portal.close",
+              { id, ...environment },
+            );
+            target?.assertCurrent();
+            return formatPortalResult({ action: "close", id, result });
+          }
+          if (action !== "open") {
+            throw new ToolInputError(`Unknown portal action: ${action}`);
+          }
+          const port = readPositiveIntegerParam(params, "port", {
+            max: 65_535,
+            message: "port must be an integer from 1 to 65535",
+          });
+          if (port === undefined) {
+            throw new ToolInputError("port required");
+          }
+          const title = readToolStringParam(params, "title");
+          const description = readToolStringParam(params, "description", { allowEmpty: true });
+          const path = readToolStringParam(params, "path");
+          if (path !== undefined && !path.startsWith("/")) {
+            throw new ToolInputError("path must start with /");
+          }
+          const portal = await callInProcessGatewayTool<PortalSummary>(
+            target ? "portal.session.open" : "portal.open",
+            {
+              ...environment,
+              port,
+              ...(title !== undefined ? { title } : {}),
+              ...(description !== undefined ? { description } : {}),
+              ...(path !== undefined ? { path } : {}),
+            },
           );
           target?.assertCurrent();
-          return formatPortalResult({ action: "close", id, result });
-        }
-        if (action !== "open") {
-          throw new ToolInputError(`Unknown portal action: ${action}`);
-        }
-        const port = readPositiveIntegerParam(params, "port", {
-          max: 65_535,
-          message: "port must be an integer from 1 to 65535",
-        });
-        if (port === undefined) {
-          throw new ToolInputError("port required");
-        }
-        const title = readToolStringParam(params, "title");
-        const description = readToolStringParam(params, "description", { allowEmpty: true });
-        const path = readToolStringParam(params, "path");
-        if (path !== undefined && !path.startsWith("/")) {
-          throw new ToolInputError("path must start with /");
-        }
-        const portal = await callInProcessGatewayTool<PortalSummary>(
-          target ? "portal.session.open" : "portal.open",
-          {
-            ...environment,
-            port,
-            ...(title !== undefined ? { title } : {}),
-            ...(description !== undefined ? { description } : {}),
-            ...(path !== undefined ? { path } : {}),
-          },
-        );
-        target?.assertCurrent();
-        return formatPortalResult({ action: "open", result: portal });
+          return formatPortalResult({ action: "open", result: portal });
+        },
       },
-    },
+      declaration,
+    ),
   ];
 }

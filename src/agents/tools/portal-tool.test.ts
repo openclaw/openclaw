@@ -2,6 +2,7 @@ import { Value } from "typebox/value";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PortalSummary } from "../../../packages/gateway-protocol/src/index.js";
 import * as security from "../../security/dangerous-tools.js";
+import type { CoreToolDeclaration } from "../agent-tool-metadata.js";
 import * as gateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createAvailablePortalTools } from "./portal-tool.js";
@@ -45,6 +46,32 @@ function recorder(summary: PortalSummary = portal) {
   return { calls, requestScopes };
 }
 
+it("declares the canonical global portal while refusing a non-owner invocation", async () => {
+  const recorded = recorder();
+  const declarations: CoreToolDeclaration[] = [];
+  const tools = createAvailablePortalTools({ senderIsOwner: false }, (declaration) =>
+    declarations.push(declaration),
+  );
+  expect(tools).toHaveLength(1);
+  await expect(tools[0]!.execute("open", { action: "open", port: 3000 })).rejects.toThrow(
+    "needs the owner",
+  );
+  expect(declarations).toHaveLength(1);
+  const owner = createAvailablePortalTools({ senderIsOwner: true })[0]!;
+  expect(declarations[0]).toEqual({
+    name: owner.name,
+    description: owner.description,
+    parameters: owner.parameters,
+  });
+  expect(
+    Value.Check(declarations[0]!.parameters, {
+      action: "open",
+      port: 3000,
+      environmentId: "other",
+    }),
+  ).toBe(true);
+  expect(recorded.calls).toEqual([]);
+});
 it("keeps a restricted tool on its captured worker and refuses host or alternate target selection", async () => {
   const recorded = recorder();
   let current = true;

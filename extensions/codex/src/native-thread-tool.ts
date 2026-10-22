@@ -136,11 +136,8 @@ function redactNativeThreadResponse(value: unknown): unknown {
   return redacted;
 }
 
-/** Builds the native Codex thread tool only for owner runs with native-home access. */
+/** Stable registration follows native-home policy; execution requires the current owner. */
 export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAgentTool | null {
-  if (options.context.senderIsOwner !== true) {
-    return null;
-  }
   const configured = readCodexPluginConfig(options.getPluginConfig());
   if (configured.appServer?.homeScope !== "user" && configured.supervision?.enabled !== true) {
     return null;
@@ -153,6 +150,10 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       "Manage native Codex threads: list, read, fork, rename, archive (confirm:true), unarchive. When supervision is enabled, raw transcript reads and every mutation require their matching supervision policy option.",
     parameters: CodexThreadsParamsSchema,
     async execute(_toolCallId, rawParams) {
+      options.context.assertInvocationCurrent?.();
+      if (options.context.senderIsOwner !== true) {
+        throw new Error("Codex management tools require an owner-authorized sender.");
+      }
       const runtimeConfig = () =>
         options.context.getRuntimeConfig?.() ??
         options.context.runtimeConfig ??

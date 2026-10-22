@@ -1,4 +1,5 @@
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { labelRuntimeContextText } from "../../llm/types.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { appendCurrentInboundContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { buildAgentInternalEventContext } from "../internal-events.js";
@@ -93,7 +94,7 @@ function foldRuntimeEventContext(
   return appendCurrentInboundContext(
     params.currentInboundContext,
     fragments,
-    projectRuntimeContextFragments(fragments),
+    labelRuntimeContextText(projectRuntimeContextFragments(fragments)),
   );
 }
 

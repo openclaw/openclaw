@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
@@ -12,9 +13,10 @@ import {
   childTurnCompletedNotification,
   createClient,
   createRuntime,
+  directSpawnItem,
   nativeCompletionNotification,
-  notifyChildStarted,
   registerParent,
+  turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 
@@ -52,16 +54,20 @@ describe("native completion durable receipts", () => {
       await parent.ready;
       parent.bindTurn("parent-turn");
       await f.spawn(client);
+      expect(parent.listPendingChildren()).toMatchObject([{ state: "running" }]);
       await client.notify(completedChild());
       retirement = parent.unregister();
       await entered.promise;
       observer = await f.register(client);
       observer.bindTurn("observer-turn");
+      // Restoration joins the held retirement. Observe the native receipt on
+      // the admitted registration before releasing that write and joining ready.
       await client.notify(nativeCompletionNotification({ turnId: "observer-turn", result }));
       release.resolve();
       // Restoration drains the retirement write, so release the test gate before awaiting it.
       await observer.ready;
       await retirement;
+      await observer.ready;
       await observer.unregister();
       expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual(
         [],
@@ -108,10 +114,11 @@ describe("native completion durable receipts", () => {
       await parent.ready;
       parent.bindTurn("parent-turn");
       await f.spawn(client);
+      expect(parent.listPendingChildren()).toMatchObject([{ state: "running" }]);
       await parent.unregister();
       await client.notify(completedChild());
-      expect(failedReads).toBe(1);
       expect(f.deliver).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ result }));
+      expect(failedReads).toBe(1);
       expect(
         mutations.mock.calls.filter(
           ([, mutation]) => mutation.kind === "consume-native-subagent-assignment",
@@ -142,6 +149,20 @@ describe("native completion settlement", () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const client = createClient();
       const runtime = createRuntime();
+      const retainCustody = (): AgentHarnessCompletionCustody => {
+        const lifetime = new AbortController();
+        return {
+          signal: lifetime.signal,
+          isCurrent: () => !lifetime.signal.aborted,
+          retain: () => {
+            lifetime.signal.throwIfAborted();
+            return retainCustody();
+          },
+          settleExecution: () => {},
+          release: () => lifetime.abort(),
+        };
+      };
+      runtime.captureAgentHarnessCompletionCustody.mockImplementation(async () => retainCustody());
       const entered = createDeferred<void>();
       const delivery = createDeferred<{ delivered: false; path: "none" }>();
       runtime.deliverAgentHarnessCompletion.mockImplementationOnce(async () => {
@@ -158,7 +179,15 @@ describe("native completion settlement", () => {
       let retirement: Promise<void> | undefined;
       try {
         parent.bindTurn("parent-turn");
-        await notifyChildStarted(client);
+        await client.notify({
+          method: "item/completed",
+          params: {
+            threadId: "parent-thread",
+            turnId: "parent-turn",
+            item: directSpawnItem("v2", "parent-thread", "child-thread"),
+          },
+        });
+        await client.notify(turnStartedNotification("child-turn", { threadId: "child-thread" }));
         await parent.unregister();
         expect(releasePin).not.toHaveBeenCalled();
         completion = client.notify(completedChild());
@@ -168,8 +197,9 @@ describe("native completion settlement", () => {
         expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ result }),
         );
-        const canAdmit =
-          runtime.deliverAgentHarnessCompletion.mock.calls[0]?.[0].isSourceSessionAdmissionAllowed;
+        const acceptedDelivery = runtime.deliverAgentHarnessCompletion.mock.calls[0]?.[0];
+        const canAdmit = acceptedDelivery?.isSourceSessionAdmissionAllowed;
+        expect(acceptedDelivery?.completionCustody?.isCurrent()).toBe(true);
         expect(canAdmit?.()).toBe(true);
         if (change === "retirement") {
           retirement = monitor.retireParent("parent-thread");
@@ -187,12 +217,14 @@ describe("native completion settlement", () => {
           // A receipt cannot revoke admission while its accepted handoff is in flight.
           expect(canAdmit?.()).toBe(true);
           expect(releasePin).toHaveBeenCalledOnce();
+          expect(acceptedDelivery?.completionCustody?.isCurrent()).toBe(true);
         }
         delivery.resolve({ delivered: false, path: "none" });
         await completion;
         await retirement;
         expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
         if (change === "retired-turn-receipt") {
+          expect(acceptedDelivery?.completionCustody?.isCurrent()).toBe(true);
           expect(releasePin).toHaveBeenCalledOnce();
           expect(canAdmit?.()).toBe(true);
           expect(observer?.listPendingChildren()).toMatchObject([{ state: "completing" }]);
@@ -206,6 +238,7 @@ describe("native completion settlement", () => {
         }
         expect(canAdmit?.()).toBe(false);
         expect(releasePin).toHaveBeenCalledOnce();
+        expect(acceptedDelivery?.completionCustody?.isCurrent()).toBe(false);
         expect(vi.getTimerCount()).toBe(0);
       } finally {
         delivery.resolve({ delivered: false, path: "none" });

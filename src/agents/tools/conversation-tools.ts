@@ -11,6 +11,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { bindCoreToolDeclaration } from "../agent-tool-metadata.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -136,7 +137,7 @@ export function createHostedConversationTools(
     agentId: sessionAgentId,
     agentSessionId: options?.sessionId,
   };
-  return [
+  const tools: AnyAgentTool[] = [
     {
       label: "Conversations",
       name: "conversations_list",
@@ -184,6 +185,9 @@ export function createHostedConversationTools(
       outputSchema: ConversationTurnResultSchema,
       execute: conversationMessageExecutor("turn", conversationOptions),
     },
+  ];
+  return [
+    ...tools.map((tool) => bindCoreToolDeclaration(tool)),
     // Keep the in-process caller so materialized agent roots retain their creation stamp.
     createSessionsSendTool({
       ...options,

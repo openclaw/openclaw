@@ -1,3 +1,4 @@
+// Real lifecycle and ownership with synthetic native responses and an in-memory binding store.
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -282,15 +283,25 @@ it.each(["legacy", "native restoration", "temporary"] as const)(
   },
 );
 
-it.each(["unchanged", "skills", "generic policy", "safe deny"] as const)(
+it.each(["unchanged", "skills", "generic policy", "conversation context", "safe deny"] as const)(
   "preserves the restricted incognito owner for %s",
   async (change) => {
     const { fixture, attempt, idle, calls, start } = await createFixture();
     attempt.sessionKey = "agent:main:dashboard:incognito-restricted";
+    if (change === "conversation context") {
+      attempt.extraSystemPrompt = "Original conversation context.\n\nPersistent policy.";
+      attempt.extraSystemPromptTurnContext = { start: 0, text: "Original conversation context." };
+    }
     const continueWith = (policy?: typeof change) =>
       start(
         {
           ...(policy ? { runId: "incognito-follow-up" } : {}),
+          ...(policy === "conversation context"
+            ? {
+                extraSystemPrompt: "Changed conversation context.\n\nPersistent policy.",
+                extraSystemPromptTurnContext: { start: 0, text: "Changed conversation context." },
+              }
+            : {}),
           ...(policy === "safe deny"
             ? { pluginHarnessToolPolicySafeDeniedTools: ["image_generate"] }
             : {}),
@@ -302,10 +313,25 @@ it.each(["unchanged", "skills", "generic policy", "safe deny"] as const)(
       );
     const first = await continueWith();
     await idle(first, "warm");
-    const rejected = change === "generic policy" || change === "safe deny";
+    const rejected =
+      change === "generic policy" || change === "conversation context" || change === "safe deny";
     if (rejected) {
+      const before = fixture.request.mock.calls.length;
       await expect(continueWith(change)).rejects.toBeInstanceOf(CodexIncognitoPolicyChangeError);
       expect(hasCodexAppServerLiveThread(fixture.client, first.threadId)).toBe(true);
+      expect(
+        fixture.request.mock.calls
+          .slice(before)
+          .filter(([method]) =>
+            [
+              "thread/start",
+              "thread/resume",
+              "thread/inject_items",
+              "thread/unsubscribe",
+              "turn/start",
+            ].includes(method),
+          ),
+      ).toEqual([]);
     }
     const next = await continueWith(rejected ? undefined : change);
     expect(next).toMatchObject({ threadId: first.threadId, lifecycle: { action: "resumed" } });
@@ -347,4 +373,18 @@ it("does not isolate an unrestricted scheduled turn", async () => {
   );
   expect(next).toMatchObject({ threadId: first.threadId, lifecycle: { action: "resumed" } });
   expect(next.lifecycle.preserveExistingBinding).toBeUndefined();
+});
+
+it("keeps default generic policy and annotated context without a relay", async () => {
+  const { attempt, start, calls } = await createFixture();
+  attempt.extraSystemPrompt = "Current conversation context.\n\nPersistent operator policy.";
+  attempt.extraSystemPromptTurnContext = { start: 0, text: "Current conversation context." };
+  const first = await start();
+  expect(calls("thread/start")[0]?.[1]).toMatchObject({
+    developerInstructions: expect.stringContaining("OpenClaw has dynamic tools"),
+  });
+  expect(calls("thread/start")[0]?.[1]).toMatchObject({
+    developerInstructions: expect.stringContaining(attempt.extraSystemPrompt),
+  });
+  await first.liveThreadOwnership?.release(first.threadId);
 });

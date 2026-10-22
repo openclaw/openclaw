@@ -1,6 +1,47 @@
 import type { EmbeddedForegroundPromptContext } from "./params.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+/** Preserve the caller-owned reply and stream callbacks at attempt dispatch. */
+export function projectEmbeddedReplyCallbacks(
+  run: Pick<
+    EmbeddedRunAttemptParams,
+    | "replyOperation"
+    | "shouldEmitToolResult"
+    | "shouldEmitToolOutput"
+    | "onPartialReply"
+    | "onAssistantMessageStart"
+    | "onBlockReply"
+    | "onBlockReplyFlush"
+    | "blockReplyBreak"
+    | "blockReplyChunking"
+    | "onReasoningStream"
+    | "streamReasoningInNonStreamModes"
+    | "onReasoningEnd"
+    | "onToolResult"
+    | "onAgentToolResult"
+    | "onAgentEvent"
+  >,
+) {
+  return {
+    replyOperation: run.replyOperation,
+    shouldEmitToolResult: run.shouldEmitToolResult,
+    shouldEmitToolOutput: run.shouldEmitToolOutput,
+    onPartialReply: run.onPartialReply,
+    onAssistantMessageStart: run.onAssistantMessageStart,
+    onBlockReply: run.onBlockReply,
+    onBlockReplyFlush: run.onBlockReplyFlush,
+    blockReplyBreak: run.blockReplyBreak,
+    blockReplyChunking: run.blockReplyChunking,
+    onReasoningStream: run.onReasoningStream,
+    streamReasoningInNonStreamModes: run.streamReasoningInNonStreamModes,
+    onReasoningEnd: run.onReasoningEnd,
+    onToolResult: run.onToolResult,
+    onAgentToolResult: run.onAgentToolResult,
+    onAgentEvent: async (event: Parameters<NonNullable<typeof run.onAgentEvent>>[0]) =>
+      run.onAgentEvent?.(event),
+  };
+}
+
 export function projectEmbeddedMessageContext(run: Partial<EmbeddedForegroundPromptContext>) {
   return {
     requesterOrigin: run.requesterOrigin,

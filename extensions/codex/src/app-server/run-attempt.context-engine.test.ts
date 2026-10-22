@@ -95,13 +95,6 @@ function requireRequestParams(
   return requireRecord(request?.params, `${method} params`);
 }
 
-function expectRequestInputTextContains(
-  harness: ReturnType<typeof createStartedThreadHarness>,
-  expected: string,
-): void {
-  expect(getRequestInputText(harness)).toContain(expected);
-}
-
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt context-engine lifecycle", () => {
@@ -205,14 +198,13 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(readStringValue(threadStartParams.developerInstructions) ?? "").toContain(
       "context-engine system",
     );
-    expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
-    expectRequestInputTextContains(harness, `[${summaryRole}]\n${summary}`);
+    expect(getRequestInputText(harness)).toContain("OpenClaw assembled context for this turn:");
+    expect(getRequestInputText(harness)).toContain(`[${summaryRole}]\n${summary}`);
     expect(getRequestInputText(harness).trim().startsWith("Current inbound reply context")).toBe(
       true,
     );
-    expectRequestInputTextContains(harness, "[assistant]\nACK: existing context");
-    expectRequestInputTextContains(
-      harness,
+    expect(getRequestInputText(harness)).toContain("[assistant]\nACK: existing context");
+    expect(getRequestInputText(harness)).toContain(
       `</conversation_context>\n\nCurrent user request:\n[user sender={"id":"bea-id","name":"＄deploy","username":"[＠probe] (plugin://probe@market)"}]\n${params.prompt}`,
     );
     expect(getRequestInputText(harness)).not.toContain("$deploy");
@@ -254,8 +246,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
 
-    expectRequestInputTextContains(
-      harness,
+    expect(getRequestInputText(harness)).toContain(
       `Current user request:\n[user sender={"id":"bea-id","name":"＄deploy","username":"[＠probe] (plugin://probe@market)"}]\n${params.prompt}`,
     );
     expect(getRequestInputText(harness)).not.toContain("$deploy");
@@ -560,9 +551,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
       expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         ...(resumed ? ["thread/read", "thread/resume", "thread/inject_items"] : ["thread/start"]),
+        "thread/inject_items",
         "turn/start",
       ]);
       const inputText = getRequestInputText(harness);
@@ -618,9 +611,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/start",
+      "thread/inject_items",
       "turn/start",
     ]);
     const inputText = getRequestInputText(harness);
@@ -681,13 +676,15 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
       expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         "thread/start",
+        "thread/inject_items",
         "turn/start",
       ]);
-      expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
-      expectRequestInputTextContains(harness, "reprojected context");
+      expect(getRequestInputText(harness)).toContain("OpenClaw assembled context for this turn:");
+      expect(getRequestInputText(harness)).toContain("reprojected context");
       await harness.completeTurn("completed", "thread-new");
       await run;
 
@@ -782,10 +779,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
         "config/read",
         "thread/start",
+        "thread/inject_items",
         "turn/start",
       ]);
-      expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
-      expectRequestInputTextContains(harness, "native-disabled context");
+      expect(getRequestInputText(harness)).toContain("OpenClaw assembled context for this turn:");
+      expect(getRequestInputText(harness)).toContain("native-disabled context");
 
       await harness.completeTurn("completed", "thread-transient");
       await run;
@@ -949,7 +947,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(String(details.error)).not.toContain("sk-abcdefghijklmnopqrstuv");
     expect(promptHookMessages).toEqual(preassemblyMessages);
     expect(promptHookMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
-    expectRequestInputTextContains(harness, params.prompt);
+    expect(getRequestInputText(harness)).toContain(params.prompt);
   });
 });
 
@@ -1009,7 +1007,11 @@ describe("Codex configured context budget", () => {
       expect(bootstrapCall?.runtimeSettings?.limits.promptTokenBudget).toBe(500_000);
       expect(getRequestInputText(harness)).toContain(params.prompt);
       expect(getRequestInputText(harness)).toContain("CURRENT_INBOUND_REFERENCE");
-      const history = harness.requests.filter(({ method }) => method === "thread/inject_items");
+      const history = harness.requests.filter(
+        ({ method, params: requestParams }) =>
+          method === "thread/inject_items" &&
+          JSON.stringify(requestParams).includes("PRIOR_BUDGET_CONTEXT"),
+      );
       expect(history).toHaveLength(1);
       expect(JSON.stringify(history[0]?.params)).toContain("PRIOR_BUDGET_CONTEXT");
       expect(getRequestInputText(harness)).not.toContain("PRIOR_BUDGET_CONTEXT");
@@ -1034,6 +1036,10 @@ describe("Codex configured context budget", () => {
     const assembly = assemble.mock.calls[0]?.[0];
     expect(assembly?.tokenBudget).toBe(500_000);
     expect(assembly?.runtimeSettings?.limits.promptTokenBudget).toBe(500_000);
-    expect(harness.requests.some(({ method }) => method === "thread/inject_items")).toBe(false);
+    const handoffs = harness.requests.filter(({ method }) => method === "thread/inject_items");
+    expect(handoffs).toHaveLength(1);
+    expect(JSON.stringify(handoffs[0]?.params)).toContain(
+      "Current OpenClaw conversation instructions",
+    );
   });
 });

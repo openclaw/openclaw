@@ -1,4 +1,5 @@
 // Focused public test contracts for native agent-runtime adapters.
+export { prepareConversationTurnContextContract } from "./test-helpers/agents/conversation-turn-context.js";
 
 export { setHostToolFactoryForTest } from "./test-helpers/agents/host-tool-factory.js";
 export {

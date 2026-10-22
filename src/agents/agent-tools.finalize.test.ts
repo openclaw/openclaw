@@ -3,6 +3,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
+import { bindCoreToolDeclaration } from "./agent-tool-metadata.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { getBeforeToolCallHookContext } from "./before-tool-call-metadata.js";
@@ -65,6 +66,23 @@ async function published(tools: () => AnyAgentTool[], options: Options = {}) {
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
 describe("finalized tool descriptor snapshots", () => {
+  it("retains declared scheduler guidance across warm descriptor reuse without granting its executor", async () => {
+    const parameters = schema();
+    const shell = () => bindCoreToolDeclaration(tool(parameters, { name: "exec" }));
+    const coreDeclarations = [shell(), tool(schema(), { name: "automations" })];
+    const cold = attempt([shell()], { coreDeclarations });
+    expect(cold.tool().description).toContain(
+      "No sleep loops for reminders/follow-ups; use automations.",
+    );
+    await cold.settle();
+    const warm = attempt([shell()], { coreDeclarations });
+    expect(warm.tool().description).toBe(cold.tool().description);
+    expect(warm.tool().name).toBe("exec");
+    await warm.settle();
+    const withoutScheduler = attempt([shell()], { coreDeclarations: [shell()] });
+    expect(withoutScheduler.tool().description).not.toContain("use automations");
+  });
+
   it("reuses Tool Search schemas while binding the current catalog and configured limit", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const controls = (searchDefaultLimit = 1) => {

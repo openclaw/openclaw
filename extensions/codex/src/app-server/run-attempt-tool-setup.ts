@@ -18,6 +18,7 @@ import {
   resolveCodexMessageToolProvider,
   shouldWarnCodexDynamicToolBuildStageSummary,
 } from "./dynamic-tool-build.js";
+import { buildDynamicToolDeclarations } from "./dynamic-tool-declarations.js";
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoadingForRuntime,
@@ -31,6 +32,7 @@ import type { NativePendingChild } from "./native-subagent-monitor-types.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
 import { requestPluginApprovalOutcome } from "./plugin-approval-roundtrip.js";
+import { selectCodexProtectedThreadToolCatalog } from "./protected-thread-tool-catalog.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import { isCodexResponsesOAuth } from "./responses-oauth.js";
 import { emitCodexAppServerEvent, runCodexCleanupStep } from "./run-attempt-lifecycle.js";
@@ -329,7 +331,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     });
     const registeredTools = nativeSpecs
       ? []
-      : await buildDynamicTools({
+      : await buildDynamicToolDeclarations({
           ...commonToolParams,
           ignoreDisableMessageTool: true,
           ignoreRuntimePlan: true,
@@ -516,7 +518,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ? { turnSourceThreadId: params.currentThreadTs }
         : {}),
     };
-    const toolBridge = createCodexDynamicToolBridge({
+    const bridgeOptions: Parameters<typeof createCodexDynamicToolBridge>[0] = {
       assertCurrentAsync: runtime.nativeExecutionPolicy.assertCurrent,
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
@@ -536,7 +538,20 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         isHostScopedAgentToolActive("openclaw"),
       ),
       hookContext,
-    });
+    };
+    let toolBridge = createCodexDynamicToolBridge(bridgeOptions);
+    if (!nativeSpecs) {
+      const acceptedCatalog = await selectCodexProtectedThreadToolCatalog(
+        runtime,
+        toolBridge.specs,
+      );
+      if (acceptedCatalog) {
+        toolBridge = createCodexDynamicToolBridge({
+          ...bridgeOptions,
+          registeredSpecs: acceptedCatalog,
+        });
+      }
+    }
     const captureCronCreatorToolAllowlist = async () => {
       await captureFinalCodexCronCreatorToolAllowlist(
         cronCreatorToolAllowlist,

@@ -549,14 +549,23 @@ describe("Codex attempt subscription recovery", () => {
       );
       expect(compact).not.toHaveBeenCalled();
       expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         "thread/read",
         "thread/resume",
         "thread/inject_items",
+        "thread/inject_items",
         "turn/start",
         ...(!nativeOwned ? ["thread/unsubscribe"] : []),
       ]);
+      expect(
+        harness.requests.filter(
+          ({ method, params: requestParams }) =>
+            method === "thread/inject_items" &&
+            JSON.stringify(requestParams).includes("Current OpenClaw conversation instructions"),
+        ),
+      ).toHaveLength(1);
       const savedBinding = await readCodexAppServerBinding(sessionFile);
       if (nativeOwned) {
         expect(savedBinding).toMatchObject({ threadId: "thread-old", preserveNativeModel: true });

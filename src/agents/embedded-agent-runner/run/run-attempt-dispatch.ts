@@ -36,7 +36,10 @@ import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.j
 import { resolveEmbeddedAttemptBasePrompt } from "./helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
-import { projectEmbeddedMessageContext } from "./shared-run-context.js";
+import {
+  projectEmbeddedMessageContext,
+  projectEmbeddedReplyCallbacks,
+} from "./shared-run-context.js";
 import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
@@ -554,27 +557,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onAttemptTimeout: attemptControls.onAttemptTimeout,
     onAttemptAbort: attemptControls.onAttemptAbort,
     onSettledTurn,
-    replyOperation: params.replyOperation,
-    shouldEmitToolResult: params.shouldEmitToolResult,
-    shouldEmitToolOutput: params.shouldEmitToolOutput,
-    onPartialReply: params.onPartialReply,
-    onAssistantMessageStart: params.onAssistantMessageStart,
-    onBlockReply: params.onBlockReply,
-    onBlockReplyFlush: params.onBlockReplyFlush,
-    blockReplyBreak: params.blockReplyBreak,
-    blockReplyChunking: params.blockReplyChunking,
-    onReasoningStream: params.onReasoningStream,
-    streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
-    onReasoningEnd: params.onReasoningEnd,
-    onToolResult: params.onToolResult,
-    onAgentToolResult: params.onAgentToolResult,
-    onAgentEvent: async (event) => params.onAgentEvent?.(event),
+    ...projectEmbeddedReplyCallbacks(params),
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
     onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
     onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
+    extraSystemPromptTurnContext: params.extraSystemPromptTurnContext,
     gitCoauthorPrompt,
     preparedTtsPreferences: params.preparedTtsPreferences,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

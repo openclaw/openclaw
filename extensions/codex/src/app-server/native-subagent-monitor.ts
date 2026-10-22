@@ -69,7 +69,6 @@ import type {
   NativeModelToolInputRequest,
   NativeModelSourceCapture,
   NativeModelSourceRequest,
-  NativePendingChild,
   NativeSubagentMonitorClient,
   NativeSubagentMonitorRuntime,
   NativeTurnObservation,
@@ -88,6 +87,8 @@ import {
 } from "./native-subagent-notification.js";
 import {
   canNativeParentConsumeCompletion,
+  listNativePendingChildren,
+  listNativeRequesterParents,
   observeNativeParentTurn,
   registerNativeSubagentParent,
   type NativeParentRegistration,
@@ -185,6 +186,7 @@ class Monitor {
       parents: this.parentStates,
       retiredParents: this.retiredParentStates,
       unregisterChild: (child) => this.unregisterChild(child),
+      drainAssignments: (state) => this.assignments.drain(state),
       abandon: (state, child, assertCurrent) =>
         this.assignments.abandon(state, child, assertCurrent),
       settleNestedCompletion: (state, child, assertCurrent) =>
@@ -517,7 +519,12 @@ class Monitor {
         this.drainPendingChildAdmissionEvidence(state, owner, turnId, true),
       clearAdmissions: () => this.clearUnconsumablePendingChildAdmissionEvidence(),
       prune: (state) => this.pruneParentIfUnused(state),
-      pendingChildren: (state) => this.listPendingChildren(state),
+      pendingChildren: (state) =>
+        listNativePendingChildren(state, {
+          parents: this.parentStates.values(),
+          children: this.childStates.values(),
+          knownChildren: this.knownChildren,
+        }),
       interruptModelExecution: this.interruptModelExecution,
     });
   }
@@ -956,7 +963,7 @@ class Monitor {
 
   retireParent(parentThreadIdInput: string): Promise<void> {
     const current = this.parentStates.get(parentThreadIdInput.trim());
-    const states = current ? this.requesterParents(current) : [];
+    const states = current ? listNativeRequesterParents(current, this.parentStates.values()) : [];
     // Revoke the whole captured lineage before cleanup can admit another completion.
     for (const state of states) {
       this.retiredParentStates.add(state);
@@ -2287,56 +2294,6 @@ class Monitor {
     release?.();
   }
 
-  private requesterParents(source: ParentState): ParentState[] {
-    return [...this.parentStates.values()].filter(
-      (state) =>
-        state === source ||
-        Boolean(
-          source.requesterSessionKey &&
-          state.requesterSessionKey === source.requesterSessionKey &&
-          state.agentId === source.agentId &&
-          source.historyOwner &&
-          state.historyOwner &&
-          matchesNativeAssignmentLifecycle(source.historyOwner, state.historyOwner),
-        ),
-    );
-  }
-
-  // Children whose completion is still owed to this requester: running, or
-  // terminal with an undelivered result. Rotated parent threads of the same
-  // requester lifecycle count, so earlier turns' children stay visible. Only a
-  // parent with a requester and completion scope delivers a detached result.
-  private listPendingChildren(source: ParentState): NativePendingChild[] {
-    const parentThreadIds = new Set(
-      this.requesterParents(source)
-        .filter((state) => state.requesterSessionKey && state.completionScope)
-        .map((state) => state.parentThreadId),
-    );
-    const pending: NativePendingChild[] = [];
-    for (const child of this.childStates.values()) {
-      if (
-        !parentThreadIds.has(child.parentThreadId) ||
-        child.settledWithoutCompletion ||
-        child.nativeCompletionDelivered ||
-        (child.terminal && !child.pendingCompletion)
-      ) {
-        continue;
-      }
-      // Codex V2 names a child by its agent path; V1 by the thread id in the run id.
-      const label = [...(this.knownChildren.get(child.childThreadId)?.agentPaths ?? [])].find(
-        (path) => path !== child.childThreadId,
-      );
-      pending.push({
-        runId: child.runId,
-        childSessionKey: child.runId,
-        ...(label ? { label } : {}),
-        state: child.terminal ? "completing" : "running",
-        wakeArmed: false,
-      });
-    }
-    return pending;
-  }
-
   private hasParentWork(state: ParentState): boolean {
     if (this.cancellationReservations.has(state)) {
       return true;
@@ -2388,7 +2345,7 @@ class Monitor {
     if (this.parentStates.get(source.parentThreadId) !== source) {
       return;
     }
-    const states = this.requesterParents(source);
+    const states = listNativeRequesterParents(source, this.parentStates.values());
     // Keep idle rotated registrations as retirement locators until their
     // requester's retained child, model, or accepted write owners settle.
     if (states.some((state) => this.hasParentWork(state))) {

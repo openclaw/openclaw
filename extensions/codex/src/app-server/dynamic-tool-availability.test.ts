@@ -53,6 +53,125 @@ async function expectCollectionRejected(bridge: ReturnType<typeof createBridge>)
 }
 
 describe("Codex collector availability", () => {
+  it.each([false, true])(
+    "prepares the surviving collector cohort (reader changed: %s)",
+    async (readerChanged) => {
+      const accepted = createCodexDynamicToolBridge({
+        tools: createCollectorTools(),
+        signal: new AbortController().signal,
+      }).specs;
+      const acceptedBytes = JSON.stringify(accepted);
+      const current = createCollectorTools();
+      const spawn = current.find((tool) => tool.name === "sessions_spawn")!;
+      const reader = current.find((tool) => tool.name === "agents_wait")!;
+      const execute = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "fresh collector executor" }],
+        details: {},
+      }));
+      spawn.execute = execute;
+      if (readerChanged) {
+        reader.description += " Changed reader contract.";
+      }
+      const bridge = createCodexDynamicToolBridge({
+        tools: current,
+        registeredSpecs: accepted,
+        signal: new AbortController().signal,
+      });
+      const result = await bridge.handleToolCall({
+        threadId: "synthetic-parent",
+        turnId: "synthetic-turn",
+        callId: "surviving-collector",
+        tool: spawn.name,
+        arguments: { task: "Inspect the synthetic collector source." },
+      });
+      expect(result).toMatchObject(
+        readerChanged ? { success: false, executionStarted: false } : { success: true },
+      );
+      expect(execute).toHaveBeenCalledTimes(readerChanged ? 0 : 1);
+      if (readerChanged) {
+        expect(bridge.availableTools).toEqual([]);
+        expect(JSON.stringify(result.contentItems)).toContain("not available for this turn");
+      }
+      expect(bridge.specs).toEqual(accepted);
+      expect(JSON.stringify(accepted)).toBe(acceptedBytes);
+    },
+  );
+
+  it("rejects a prepared schema mutated in place without a description change", async () => {
+    const initial = createCodexDynamicToolBridge({
+      tools: createCollectorTools(),
+      signal: new AbortController().signal,
+    });
+    const spawn = initial.availableTools.find((tool) => tool.name === "sessions_spawn")!;
+    const schema = structuredClone(spawn.parameters);
+    const description = spawn.description;
+    // Exercise the real collector preparer with a mutable schema owner and
+    // fixed description; pointer equality cannot attest its finalized schema.
+    Object.defineProperties(spawn, {
+      parameters: {
+        get: () => schema,
+        set: (prepared: typeof schema) => {
+          Object.assign(schema, prepared);
+        },
+      },
+      description: { get: () => description, set: () => {} },
+    });
+    const execute = vi.fn(async () => ({ content: [], details: {} }));
+    spawn.execute = execute;
+    const bridge = createCodexDynamicToolBridge({
+      tools: [spawn],
+      registeredSpecs: initial.specs,
+      signal: new AbortController().signal,
+    });
+    expect(spawn.parameters).toBe(schema);
+    expect(schema).not.toHaveProperty("properties.collect");
+    expect(spawn.description).toBe(description);
+    await expect(
+      bridge.handleToolCall({
+        threadId: "synthetic-parent",
+        turnId: "synthetic-turn",
+        callId: "mutated-in-place",
+        tool: spawn.name,
+        arguments: { task: "Inspect the synthetic collector source." },
+      }),
+    ).resolves.toMatchObject({ success: false, executionStarted: false });
+    expect(execute).not.toHaveBeenCalled();
+    expect(bridge.specs).toEqual(initial.specs);
+  });
+
+  it("rejects a declaration changed by final preparation", async () => {
+    const tools = createCollectorTools();
+    const initial = createCodexDynamicToolBridge({
+      tools,
+      loading: "direct",
+      signal: new AbortController().signal,
+    });
+    const spawn = tools.find((tool) => tool.name === "sessions_spawn")!;
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "effect" }],
+      details: {},
+    }));
+    spawn.execute = execute;
+    const accepted = initial.specs.filter(
+      (spec) => spec.type === "function" && spec.name === spawn.name,
+    );
+    const bridge = createCodexDynamicToolBridge({
+      tools: [spawn],
+      registeredSpecs: accepted,
+      signal: new AbortController().signal,
+    });
+    expect(
+      await bridge.handleToolCall({
+        threadId: "parent",
+        turnId: "turn",
+        callId: "prepared",
+        tool: spawn.name,
+        arguments: { task: "synthetic" },
+      }),
+    ).toMatchObject({ success: false });
+    expect(execute).not.toHaveBeenCalled();
+    expect(bridge.specs).toEqual(accepted);
+  });
   it("retains a genuine restored discovery control without admitting a same-name tool", async () => {
     const config = {
       tools: {
@@ -126,12 +245,20 @@ describe("Codex collector availability", () => {
         registeredSpecs: nativeSpecs,
         loading,
       });
-      expect([resumed.specs, resumed.availableSpecs]).toEqual([nativeSpecs, nativeSpecs]);
-      expect(resumed.availableTools.map((tool) => tool.name)).toEqual(["sessions_spawn"]);
-      expectUncollectableSpawn(
-        resumed.availableTools.find((tool) => tool.name === "sessions_spawn"),
-      );
-      await expectCollectionRejected(resumed);
+      expect(resumed.specs).toEqual(nativeSpecs);
+      expect(codexDynamicToolsFingerprint(resumed.specs)).toBe(nativeFingerprint);
+      // Default-on preparation changes the accepted declaration, not just its callable arguments.
+      expect(resumed.availableSpecs).toEqual([]);
+      expect(resumed.availableTools).toEqual([]);
+      const rejected = await resumed.handleToolCall({
+        callId: "uncollectable-upgrade",
+        threadId: "thread",
+        turnId: "turn",
+        tool: "sessions_spawn",
+        arguments: { task: "inspect", collect: true },
+      });
+      expect(rejected.success).toBe(false);
+      expect(JSON.stringify(rejected.contentItems)).toMatch(/not available for this turn/);
 
       const tools = createCollectorTools();
       const initial = createBridge(tools, { registeredTools: tools, loading });
@@ -189,11 +316,16 @@ describe("Codex collector availability", () => {
       registeredTools,
       ...(kind === "registered-surface" ? { registeredSpecs } : {}),
     });
-    expectUncollectableSpawn(bridge.availableTools.find((tool) => tool.name === "sessions_spawn"));
+    const executable = bridge.availableTools.find((tool) => tool.name === "sessions_spawn");
     if (kind === "registered-surface") {
+      expect(executable).toBeUndefined();
       expect(bridge.specs).toEqual(registeredSpecs);
-      expect(bridge.availableSpecs).toEqual(registeredSpecs);
+      expect(codexDynamicToolsFingerprint(bridge.specs)).toBe(
+        codexDynamicToolsFingerprint(registeredSpecs),
+      );
+      expect(bridge.availableSpecs).toEqual([]);
     } else {
+      expectUncollectableSpawn(executable);
       for (const specs of [bridge.availableSpecs, bridge.specs]) {
         const spec = functions(specs).find((tool) => tool.name === "sessions_spawn");
         expectUncollectableSpawn({ parameters: spec?.inputSchema, description: spec?.description });
@@ -208,6 +340,18 @@ describe("Codex collector availability", () => {
         expect.arrayContaining([expect.objectContaining({ tool: "agents_wait" })]),
       );
     }
-    await expectCollectionRejected(bridge);
+    if (kind === "registered-surface") {
+      const result = await bridge.handleToolCall({
+        callId: "uncollectable",
+        threadId: "thread",
+        turnId: "turn",
+        tool: "sessions_spawn",
+        arguments: { task: "inspect", collect: true },
+      });
+      expect(result.success).toBe(false);
+      expect(JSON.stringify(result.contentItems)).toMatch(/not available for this turn/);
+    } else {
+      await expectCollectionRejected(bridge);
+    }
   });
 });
