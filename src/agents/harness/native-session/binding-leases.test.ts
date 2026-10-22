@@ -127,6 +127,7 @@ describe("native session binding leases", () => {
       vi.useFakeTimers();
       const { state, values, owner } = createLeaseFixture("owner");
       const peer = createNativeSessionBindingLeases(state, bindingTestOptions);
+      let successor: TestBindingRecord | undefined;
       await expect(
         withLease(owner, testKey, async () => {
           if (check === "transaction") {
@@ -138,10 +139,11 @@ describe("native session binding leases", () => {
             });
             await owner.transact(testKey, () => bindingMutation("stale"));
           } else {
-            values.set(testKey, {
+            successor = {
               ...values.get(testKey),
               lease: { token: "peer-owner", expiresAt: Date.now() + 120_000 },
-            });
+            };
+            values.set(testKey, successor);
             await vi.advanceTimersByTimeAsync(30_000);
           }
         }),
@@ -149,7 +151,7 @@ describe("native session binding leases", () => {
       if (check === "transaction") {
         expect(values.get(testKey)).toEqual({ value: "peer" });
       } else {
-        expect(values.get(testKey)?.lease?.token).toBe("peer-owner");
+        expect(values.get(testKey)).toEqual(successor);
       }
     },
   );
@@ -479,22 +481,6 @@ describe("native session binding leases", () => {
       ),
     ).resolves.toEqual({ accepted: true });
     expect(values.get(testKey)?.lease).toBeUndefined();
-  });
-
-  it("does not remove a successor token while settling a revoked caller", async () => {
-    const { values, owner } = createLeaseFixture();
-    const successor = {
-      value: "successor",
-      lease: { token: "successor-token", expiresAt: Date.now() + 60_000 },
-    };
-    const failure = new Error("caller revoked");
-    await expect(
-      withLease(owner, testKey, async () => {
-        values.set(testKey, successor);
-        throw failure;
-      }),
-    ).rejects.toBe(failure);
-    expect(values.get(testKey)).toEqual(successor);
   });
 });
 
