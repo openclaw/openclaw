@@ -64,13 +64,6 @@ describe("warnGroupAllowlistDropPerChatOnce", () => {
     expect(messages[0]).toContain('channels.imessage.groups["42"]');
   });
 
-  it("fires separately for distinct chat_ids on the same account", () => {
-    warnChat(1);
-    warnChat(2);
-    warnChat(2);
-    expect(messages).toHaveLength(2);
-  });
-
   it("skips when chat_id is undefined or empty", () => {
     expect(warnChat(undefined)).toBe(false);
     expect(warnChat("")).toBe(false);

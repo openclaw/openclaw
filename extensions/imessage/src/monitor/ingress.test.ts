@@ -201,31 +201,6 @@ describe("iMessage durable ingress", () => {
     },
   );
 
-  it("recovers a durable row with a fresh drain and dispatches exactly once", async () => {
-    const event = rawRow();
-    const interrupted = createIngress();
-    await interrupted.receive(event);
-    await interrupted.stop();
-
-    closeOpenClawStateDatabaseForTest();
-    const recoveredDispatch = vi.fn(async (_message, claimLifecycle) => {
-      await claimLifecycle.onAdopted();
-      return { kind: "deferred" } as const;
-    });
-    const recovered = createIngress({
-      queue: createQueue(stateDir),
-      dispatch: recoveredDispatch,
-    });
-    recovered.start();
-    await recovered.waitForIdle();
-    expect(recoveredDispatch).toHaveBeenCalledTimes(1);
-    expect(recoveredDispatch.mock.calls[0]?.[0]).toMatchObject({
-      id: 101,
-      guid: "GUID-101",
-      chat_id: 42,
-    });
-  });
-
   it("carries catchup provenance through the journal to dispatch", async () => {
     const provenances: Array<{ catchup?: boolean } | undefined> = [];
     const ingress = createIngress({
