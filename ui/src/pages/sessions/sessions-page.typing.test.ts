@@ -57,6 +57,11 @@ function listRequest<P>(list: (params?: P) => unknown, methods: Record<string, (
   return mockSessionRequests({ "sessions.list": list, ...methods });
 }
 const subscribed = () => ({ subscribed: true });
+function escape(input: HTMLInputElement) {
+  const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  input.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(true);
+}
 
 async function mountPage(
   client: GatewayBrowserClient,
@@ -289,13 +294,7 @@ describe("Sessions page typing and detail ownership", () => {
         clear.focus();
         clear.click();
       } else {
-        const event = new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        });
-        input().dispatchEvent(event);
-        expect(event.defaultPrevented).toBe(true);
+        escape(input());
       }
       await page.updateComplete;
       expect(document.activeElement).toBe(input());
@@ -318,13 +317,7 @@ describe("Sessions page typing and detail ownership", () => {
         "active",
         true,
       ]);
-      const emptyEscape = new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-      });
-      input().dispatchEvent(emptyEscape);
-      expect(emptyEscape.defaultPrevented).toBe(true);
+      escape(input());
       expect(page.querySelector(".sessions-filter-popover")?.matches(":popover-open")).toBe(false);
       expect(requests).toHaveLength(count + 1);
     },
@@ -763,12 +756,20 @@ const emptySearch = () =>
   vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ results: [], sessions: [] });
 
 describe("Sessions transcript search", () => {
-  it("submits one trimmed bounded search across agents and renders its status outside the roster", async () => {
+  it("submits bounded cross-agent search and retains transcript results across metadata filtering", async () => {
     const response = createDeferred<SearchResponse>();
     const request = vi.fn<GatewayBrowserClient["request"]>().mockReturnValue(response.promise);
-    const { page, find } = await mountSearch(request, true);
-    page.updateTranscriptSearchQuery("  launch code  ");
-    const pending = page.runTranscriptSearch();
+    const { page, managed, find } = await mountSearch(request, true);
+    find<HTMLButtonElement>("trigger")!.click();
+    await page.updateComplete;
+    editInput(find<HTMLInputElement>("input input")!, "  launch code  ");
+    await page.updateComplete;
+    await vi.waitFor(() =>
+      expect(
+        find("form")?.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled,
+      ).toBe(false),
+    );
+    find("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     const { agentId: _agentId, ...allAgents } = scope;
     expect(request).toHaveBeenCalledWith(...searchCall("launch code", allAgents));
@@ -780,7 +781,9 @@ describe("Sessions transcript search", () => {
       truncated: true,
       archivedTranscriptsExcluded: 3,
     });
-    await pending;
+    await vi.waitFor(() =>
+      expect(find("snippet")?.textContent).toBe("The <launch code> is ready."),
+    );
     await page.updateComplete;
     expect(page.transcriptSearchQuery).toBe("launch code");
     expect(find("result-header strong")?.textContent).toBe(row.label);
@@ -799,6 +802,26 @@ describe("Sessions transcript search", () => {
       "chat",
       expect.objectContaining({ pathname: "/chat/main/content" }),
     );
+    editInput(searchInput(page), "metadata-only");
+    await page.updateComplete;
+    expect(find("result-header strong")?.textContent).toBe(row.label);
+    await vi.waitFor(() =>
+      expect(managed.refreshList).toHaveBeenCalledWith(
+        expect.objectContaining({ search: "metadata-only" }),
+      ),
+    );
+    const [query] = managed.subscribeList.mock.calls.at(-1)!;
+    managed.publish(query, {
+      result: sessionsResult([metadata], 2),
+      agentId: null,
+      loading: false,
+      error: null,
+    });
+    await page.updateComplete;
+    expect(page.result?.sessions.map(({ key }) => key)).toEqual([metadata.key]);
+    expect(find("result-header strong")?.textContent).toBe(row.label);
+    expect(find("snippet")?.textContent).toBe("The <launch code> is ready.");
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("skips empty queries but submits search without method advertisement", async () => {
@@ -960,45 +983,5 @@ describe("Sessions transcript search", () => {
     expect(find("empty")).not.toBeNull();
     refresh.resolve();
     await vi.waitFor(() => expect(page.refreshing).toBe(false));
-  });
-
-  it("keeps transcript titles independent of metadata filtering", async () => {
-    const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue(matches());
-    const { page, managed, find } = await mountSearch(request);
-    find<HTMLButtonElement>("trigger")!.click();
-    await vi.waitFor(() => expect(find("input input")).not.toBeNull());
-    const heading = () => find("result-header strong")?.textContent;
-    const submit = () =>
-      find("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    const input = find<HTMLInputElement>("input input")!;
-    editInput(input, "needle");
-    await page.updateComplete;
-    await vi.waitFor(() =>
-      expect(
-        find("form")?.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled,
-      ).toBe(false),
-    );
-    submit();
-    await vi.waitFor(() => expect(heading()).toBe(row.label));
-    editInput(searchInput(page), "metadata-only");
-    await page.updateComplete;
-    expect(heading()).toBe(row.label);
-    await vi.waitFor(() =>
-      expect(managed.refreshList).toHaveBeenCalledWith(
-        expect.objectContaining({ search: "metadata-only" }),
-      ),
-    );
-    const [query] = managed.subscribeList.mock.calls.at(-1)!;
-    managed.publish(query, {
-      result: sessionsResult([metadata], 2),
-      agentId: "main",
-      loading: false,
-      error: null,
-    });
-    await page.updateComplete;
-    expect(page.result?.sessions.map(({ key }) => key)).toEqual([metadata.key]);
-    expect(heading()).toBe(row.label);
-    expect(find("snippet")?.textContent).toBe("needle");
-    expect(request).toHaveBeenCalledOnce();
   });
 });
