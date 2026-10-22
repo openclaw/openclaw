@@ -26,7 +26,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/acp/translator.cancel-scoping.test.ts",
   "src/acp/translator.commentary-producer.test.ts",
   "src/acp/translator.commentary.test.ts",
-  "src/acp/translator.disconnects.test.ts",
   "src/acp/translator.error-kind.test.ts",
   "src/acp/translator.event-ledger.test.ts",
   "src/acp/translator.final-snapshots.test.ts",
