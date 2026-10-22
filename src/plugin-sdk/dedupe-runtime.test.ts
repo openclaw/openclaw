@@ -43,8 +43,7 @@ it("re-primes memory with the persisted timestamp when provided", async () => {
   const { cache } = createCache(() => store, 60_000, timestampOf);
   expect(await cache.lookup("k")).toBe(true);
   vi.setSystemTime(1_000_000 + 2_000);
-  expect(cache.peek("k")).toBe(false);
-  expect(await cache.lookup("k")).toBe(false);
+  expect([cache.peek("k"), await cache.lookup("k")]).toEqual([false, false]);
 });
 
 it("keeps legacy persistent expirations authoritative in non-expiring memory", async () => {
@@ -118,8 +117,7 @@ it("disables persistence after an open failure and never rejects", async () => {
   });
   const { cache, logError } = createCache(openStore, 60_000);
   await expect(cache.register("k", { at: 1 })).resolves.toBeUndefined();
-  expect(cache.peek("k")).toBe(true);
-  expect(await cache.lookup("missing")).toBe(false);
+  expect([cache.peek("k"), await cache.lookup("missing")]).toEqual([true, false]);
   expect(openStore).toHaveBeenCalledTimes(1);
   expect(logError).toHaveBeenCalledTimes(1);
 });

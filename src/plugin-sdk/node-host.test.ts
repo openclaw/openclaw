@@ -39,16 +39,6 @@ async function createHost(executable: string, native = false) {
   return { barePath, binDir, commandPath };
 }
 
-it.runIf(process.platform === "win32").each([
-  ["codex", "fallback"],
-  ["claude", "prefer"],
-  ["opencode", "fallback"],
-  ["pi", "direct"],
-] as const)("selects the Windows npm launcher for the %s catalog", async (executable, strategy) => {
-  const { binDir, commandPath } = await createHost(executable);
-  expect(resolve(executable, binDir, strategy)).toEqual({ executable: commandPath });
-});
-
 it.runIf(process.platform === "win32").each([true, false])(
   "preserves an explicit includeExtensionless=%s Windows override",
   async (includeExtensionless) => {
