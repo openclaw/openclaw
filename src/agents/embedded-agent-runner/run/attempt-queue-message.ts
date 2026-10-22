@@ -92,6 +92,7 @@ async function steerWithTranscriptLifecycle(
   options: EmbeddedAgentQueueMessageOptions,
   canInject?: () => boolean,
   prepareInjection?: () => Promise<void>,
+  closedSignal?: AbortSignal,
 ): Promise<void> {
   const {
     abortSignal,
@@ -134,6 +135,7 @@ async function steerWithTranscriptLifecycle(
       notifyQueueObserver(unsubscribe);
       notifyQueueObserver(unsubscribePersistenceFailure);
       abortSignal?.removeEventListener("abort", onAbort);
+      closedSignal?.removeEventListener("abort", onClosed);
       notifyQueueObserver(onQueueSettled);
       if (err !== undefined) {
         reject(toErrorObject(err, "Non-Error rejection"));
@@ -238,10 +240,16 @@ async function steerWithTranscriptLifecycle(
         );
       },
     );
-    if (abortRequested) {
+    if (abortRequested || closedSignal?.aborted) {
       acceptanceOpen = false;
       reportAcceptance(false);
-      finish(new Error("queued steering message was cancelled before acceptance"));
+      finish(
+        new Error(
+          closedSignal?.aborted
+            ? "active session is finalizing"
+            : "queued steering message was cancelled before acceptance",
+        ),
+      );
       return;
     }
     const steering = activeSession.steer(
@@ -289,7 +297,18 @@ async function steerWithTranscriptLifecycle(
         `queued steering message was cancelled before ${accepted ? "delivery" : "acceptance"}`,
       );
     }
+    function onClosed() {
+      rejectAfterCancellation(
+        "active session stopped accepting steering before queued steering message was committed to the transcript",
+      );
+    }
     abortSignal?.addEventListener("abort", onAbort, { once: true });
+    // Receiving-run closure still owns withdrawal after admission-only callers
+    // have returned and released their own cancellation signal.
+    closedSignal?.addEventListener("abort", onClosed, { once: true });
+    if (closedSignal?.aborted) {
+      onClosed();
+    }
   });
 }
 
@@ -320,6 +339,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   canInject?: () => boolean,
   authority?: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
   prepareInjection?: () => Promise<void>,
+  closedSignal?: AbortSignal,
 ): Promise<void | EmbeddedAgentQueueMessageResult> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
   const mayAnswerPendingQuestion = options?.allowPendingUserInputAnswer !== false;
@@ -376,7 +396,14 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     return;
   }
   try {
-    await steerWithTranscriptLifecycle(activeSession, text, options, canInject, prepareInjection);
+    await steerWithTranscriptLifecycle(
+      activeSession,
+      text,
+      options,
+      canInject,
+      prepareInjection,
+      closedSignal,
+    );
   } catch (error) {
     if (error instanceof EmbeddedSteeringAcceptedUnconfirmedError) {
       return { transcriptCommit: "unconfirmed", errorMessage: error.message };

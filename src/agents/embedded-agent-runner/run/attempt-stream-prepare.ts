@@ -482,6 +482,7 @@ function prepareStream(
         canInjectMessage,
         questionAuthority(assertCurrent, authorityKind, toolAuthorityPreparation),
         prepareCurrent,
+        admission.closedSignal,
       );
     } finally {
       activeQueueAdmissions--;
