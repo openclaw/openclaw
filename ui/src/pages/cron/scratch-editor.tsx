@@ -3,7 +3,12 @@ import {
   affects,
   createMemo,
   createOptimistic,
+  createSignal,
   createStore,
+  Errored,
+  isPending,
+  latest,
+  Loading,
   onSettled,
   refresh,
   Show,
@@ -90,18 +95,22 @@ function ScratchFields(props: {
   const [view, setView] = createStore<{
     snapshot: CronScratchGetResult | null;
     draft: string;
-    loading: boolean;
     message: string;
     conflict: boolean;
     redacted: boolean;
   }>({
     snapshot: null,
     draft: "",
-    loading: false,
     message: "",
     conflict: false,
     redacted: false,
   });
+  const [readReceipt, setReadReceipt] = createSignal<Promise<void>>();
+  const read = createMemo(() => readReceipt());
+  const readResult = () => {
+    latest(read);
+    return null;
+  };
   let pending = false;
   let disposed = false;
   onSettled(() => () => {
@@ -110,7 +119,7 @@ function ScratchFields(props: {
   const sizeBytes = createMemo(() => new TextEncoder().encode(view.draft).length);
   const snapshotRead = createMemo(() => view.snapshot);
   const [saving, setSaving] = createOptimistic(false);
-  const disabled = () => saving() || view.loading || !props.connected || view.conflict;
+  const disabled = () => saving() || isPending(read) || !props.connected || view.conflict;
   const isCurrent = () => !disposed && props.isCurrent();
   const presentSave = action(function* (
     result: Promise<void>,
@@ -175,8 +184,10 @@ function ScratchFields(props: {
     }
     // Guard duplicate admission synchronously; signals publish on the next Solid flush.
     pending = true;
+    if (isSave) {
+      setReadReceipt(undefined);
+    }
     setView((state) => {
-      state.loading = !isSave;
       state.message = "";
     });
     return (async () => {
@@ -217,86 +228,103 @@ function ScratchFields(props: {
         });
       } catch (error) {
         if (isCurrent()) {
+          if (!isSave) {
+            throw error;
+          }
           setView((state) => {
             state.message = formatUiError(error);
           });
         }
       } finally {
         pending = false;
-        if (isCurrent()) {
-          setView((state) => {
-            state.loading = false;
-          });
-        }
       }
     })();
   }
 
+  function loadScratch() {
+    if (!pending && isCurrent()) {
+      void setReadReceipt(request());
+    }
+  }
+
   return (
-    <section class="settings-section">
-      <details>
-        <summary class="settings-section__heading">{t("cron.scratch.title")}</summary>
-        <p class="settings-section__desc">{t("cron.scratch.help")}</p>
-        <button
-          type="button"
-          class="btn btn--sm"
-          disabled={saving() || view.loading || !props.connected}
-          onClick={() => void request()}
-        >
-          {t(view.snapshot ? "cron.scratch.reload" : "cron.scratch.load")}
-        </button>
-        <Show when={snapshotRead()}>
-          <Show when={!snapshotRead()?.scratch}>
-            <p class="cron-help">{t("cron.scratch.empty")}</p>
-          </Show>
-          <label class="field">
-            <span>{t("cron.scratch.content")}</span>
-            <textarea
-              class="settings-input mono"
-              rows={8}
-              value={view.draft}
-              readonly={disabled() || view.redacted}
-              maxlength={snapshotRead()?.maxBytes}
-              onInput={(event) => {
-                const draft = event.currentTarget.value;
-                setView((state) => {
-                  state.draft = draft;
-                });
-              }}
-            />
-          </label>
-          <p class="cron-help">
-            {t("cron.scratch.limit", {
-              bytes: String(sizeBytes()),
-              max: String(snapshotRead()?.maxBytes),
-            })}
-          </p>
-          <Show when={view.redacted}>
-            <p class="cron-help">{t("cron.scratch.redacted")}</p>
-          </Show>
+    <Loading>
+      <section class="settings-section">
+        <details>
+          <summary class="settings-section__heading">{t("cron.scratch.title")}</summary>
+          <p class="settings-section__desc">{t("cron.scratch.help")}</p>
           <button
             type="button"
             class="btn btn--sm"
-            disabled={disabled() || view.redacted || sizeBytes() > (snapshotRead()?.maxBytes ?? 0)}
-            onClick={() => void save(view.draft)}
+            disabled={saving() || isPending(read) || !props.connected}
+            onClick={loadScratch}
           >
-            {t("cron.scratch.save")}
-          </button>{" "}
-          <button
-            type="button"
-            class="btn btn--sm danger"
-            disabled={disabled() || !snapshotRead()?.scratch}
-            onClick={() => void save(null)}
-          >
-            {t("cron.scratch.clear")}
+            {t(view.snapshot ? "cron.scratch.reload" : "cron.scratch.load")}
           </button>
-        </Show>
-        <Show when={view.message}>
-          <p class="cron-help" role="status">
-            {view.message}
-          </p>
-        </Show>
-      </details>
-    </section>
+          <Show when={snapshotRead()}>
+            <Show when={!snapshotRead()?.scratch}>
+              <p class="cron-help">{t("cron.scratch.empty")}</p>
+            </Show>
+            <label class="field">
+              <span>{t("cron.scratch.content")}</span>
+              <textarea
+                class="settings-input mono"
+                rows={8}
+                value={view.draft}
+                readonly={disabled() || view.redacted}
+                maxlength={snapshotRead()?.maxBytes}
+                onInput={(event) => {
+                  const draft = event.currentTarget.value;
+                  setView((state) => {
+                    state.draft = draft;
+                  });
+                }}
+              />
+            </label>
+            <p class="cron-help">
+              {t("cron.scratch.limit", {
+                bytes: String(sizeBytes()),
+                max: String(snapshotRead()?.maxBytes),
+              })}
+            </p>
+            <Show when={view.redacted}>
+              <p class="cron-help">{t("cron.scratch.redacted")}</p>
+            </Show>
+            <button
+              type="button"
+              class="btn btn--sm"
+              disabled={
+                disabled() || view.redacted || sizeBytes() > (snapshotRead()?.maxBytes ?? 0)
+              }
+              onClick={() => void save(view.draft)}
+            >
+              {t("cron.scratch.save")}
+            </button>{" "}
+            <button
+              type="button"
+              class="btn btn--sm danger"
+              disabled={disabled() || !snapshotRead()?.scratch}
+              onClick={() => void save(null)}
+            >
+              {t("cron.scratch.clear")}
+            </button>
+          </Show>
+          <Errored
+            fallback={(error) => (
+              <p class="cron-help" role="status">
+                {formatUiError(error())}
+              </p>
+            )}
+          >
+            {readResult()}
+          </Errored>
+          <Show when={view.message}>
+            <p class="cron-help" role="status">
+              {view.message}
+            </p>
+          </Show>
+        </details>
+      </section>
+    </Loading>
   );
 }

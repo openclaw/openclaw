@@ -608,6 +608,36 @@ describe("opencode-go provider plugin", () => {
     expect(await captureGoWirePayload(level, { model, ...controls }, api)).toEqual({ model });
   });
 
+  it.each([
+    "https://opencode.ai/inference/go/openai/v1",
+    "https://proxy.example.test/v1",
+    undefined,
+  ])("retains Kimi policy when URL %s needs no patch", (baseUrl) => {
+    const model = makeRuntimeModel("kimi-k2.7-code", { baseUrl });
+    expect(
+      provider.normalizeResolvedModel?.({ provider: "opencode-go", modelId: model.id, model }),
+    ).toEqual({ ...model, reasoning: false, compat: { supportsReasoningEffort: false } });
+    const unchanged = makeRuntimeModel("synthetic-model", { baseUrl });
+    expect(
+      provider.normalizeResolvedModel?.({
+        provider: "opencode-go",
+        modelId: unchanged.id,
+        model: unchanged,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("projects URL transport patches without leaking model context", () => {
+    const model = makeRuntimeModel("synthetic-model", {
+      headers: { "x-synthetic": "retained" },
+    });
+    expect(provider.normalizeTransport?.({ ...model, config: {} })).toEqual({
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/inference/go/openai/v1",
+    });
+    expect(model.baseUrl).toBe("https://opencode.ai/zen/go/v1");
+  });
+
   it("canonicalizes stale OpenCode Go base URLs", async () => {
     const normalizeModel = (id: string, overrides: Partial<Parameters<StreamFn>[0]>) =>
       provider.normalizeResolvedModel?.({

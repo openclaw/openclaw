@@ -2,7 +2,7 @@ import { createMemo, createSignal } from "solid-js";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { readFileDraft } from "./chat-file-drafts.ts";
 import type {
   SidebarContent,
@@ -20,15 +20,6 @@ export function isHtmlDocument(mimeType: string, filename: string): boolean {
     mimeType.split(";", 1)[0]?.trim().toLowerCase() === "text/html" || /\.html?$/i.test(filename)
   );
 }
-
-// Text attachments retain their registration loader until their reader cutover lands.
-export const htmlPreviewElement = {
-  tagName: "openclaw-chat-html-preview",
-  get label() {
-    return t("chat.detailPanel.renderPreview");
-  },
-  loadModule: () => import("./chat-html-preview-element.tsx"),
-};
 
 /** Owns preview toggles; each selected file/line request restores its initial mode. */
 export function createFileHtmlPreview(

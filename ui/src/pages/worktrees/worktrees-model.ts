@@ -18,6 +18,9 @@ import { gcManagedWorktrees } from "../../lib/worktrees/gc-worktrees.ts";
 /** Request admission stays synchronous while Solid projects this page's presentation. */
 export class WorktreesModel {
   records: WorktreeRecord[] = [];
+  listLoaded = false;
+  listRead: { result: Promise<void> } = { result: Promise.resolve() };
+  private presentationLifetime = Promise.withResolvers<void>();
   error: string | null = null;
   operation: "row" | "create" | "gc" | null = null;
   createOpen = false;
@@ -31,6 +34,7 @@ export class WorktreesModel {
       scope.client.request<WorktreesListResult>("worktrees.list", {}, { signal }),
     onComplete: (result) => {
       this.records = result.worktrees.toSorted((a, b) => b.lastActiveAt - a.lastActiveAt);
+      this.listLoaded = true;
     },
     onError: (error) => {
       this.error = formatUiError(error);
@@ -61,6 +65,7 @@ export class WorktreesModel {
       Pick<
         WorktreesModel,
         | "records"
+        | "listLoaded"
         | "error"
         | "operation"
         | "createOpen"
@@ -77,9 +82,15 @@ export class WorktreesModel {
 
   invalidateRequests() {
     // Gateway binding retires both reads before a replacement scope can publish.
+    this.presentationLifetime.resolve();
+    this.presentationLifetime = Promise.withResolvers<void>();
     this.listRequest.cancel();
     this.branchesRequest.cancel();
     this.update({ operation: null });
+  }
+
+  get retired() {
+    return this.presentationLifetime.promise;
   }
 
   get loading() {
@@ -102,7 +113,10 @@ export class WorktreesModel {
     if (!options.preserveError) {
       this.error = null;
     }
-    await this.listRequest.run(scope);
+    const pending = this.listRequest.run(scope);
+    this.listRead = { result: Promise.race([pending, this.retired]) };
+    this.publish();
+    await pending;
   }
 
   private async runOperation(scope: GatewayConnectionScope, action: () => Promise<unknown>) {

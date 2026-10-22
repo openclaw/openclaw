@@ -2,6 +2,11 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadGitHubDetail } from "./detail.js";
 import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
+import {
+  githubJson as json,
+  queuedFetch as fetchResponses,
+  requestUrl,
+} from "./preview.test-support.js";
 import type { GitHubTarget } from "./targets.js";
 import { parseGitHubTarget } from "./targets.js";
 
@@ -15,12 +20,6 @@ function target(kind: "issue" | "pull" | "commit" = "issue", commitSha = sha): G
   return kind === "commit"
     ? { kind, owner: "octocat", repo, sha: commitSha }
     : { kind, owner: "octocat", repo, number: 1 };
-}
-function json(value: unknown, status = 200, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(value), {
-    status,
-    headers: { "Content-Type": "application/json", ...headers },
-  });
 }
 function item(overrides: Record<string, unknown> = {}) {
   return {
@@ -111,21 +110,11 @@ function revocableIdentity() {
   return { selected, revoke };
 }
 
-function requestUrl(input: Parameters<typeof fetch>[0]): string {
-  return input instanceof Request ? input.url : input.toString();
-}
 function requestPath(input: Parameters<typeof fetch>[0]): string {
   return new URL(requestUrl(input)).pathname;
 }
 function fullPull() {
   return item({ comments: 1, review_comments: 1, changed_files: 1 });
-}
-function fetchResponses(...responses: Response[]) {
-  const fetchMock = vi.fn<typeof fetch>();
-  for (const response of responses) {
-    fetchMock.mockResolvedValueOnce(response);
-  }
-  return fetchMock;
 }
 function expectStatus(pending: Promise<unknown>, statusCode: number) {
   return expect(pending).rejects.toMatchObject({ statusCode });
@@ -141,6 +130,17 @@ function reader(
     caller = selected,
     transport = fetcher,
   ) => loadGitHubDetail(input, caller, transport, refresh, section);
+}
+
+function fixture(
+  kind: "issue" | "pull" | "commit" = "issue",
+  payload: unknown = item(),
+  intercept?: Parameters<typeof authenticatedFetch>[1],
+) {
+  const input = target(kind);
+  const selected = identity();
+  const fetchMock = authenticatedFetch(payload, intercept);
+  return { input, selected, fetchMock, read: reader(input, selected, fetchMock) };
 }
 
 function authenticatedFetch(
@@ -184,11 +184,9 @@ describe("GitHub detail selected read identity", () => {
   it.each(["pull", "commit"] as const)(
     "uses the prepared credential for the entire %s document and refresh",
     async (kind) => {
-      const selected = identity();
-      const input = target(kind);
       const payload = kind === "commit" ? commit({}, 1) : fullPull();
-      const fetchMock = authenticatedFetch(payload);
-      const first = await loadGitHubDetail(input, selected, fetchMock);
+      const { selected, fetchMock, read } = fixture(kind, payload);
+      const first = await read();
       expect(first).toMatchObject({
         partial: false,
         comments: expect.arrayContaining([expect.any(Object)]),
@@ -208,9 +206,8 @@ describe("GitHub detail selected read identity", () => {
           { label: "Branch", value: "feature → main" },
         ]);
       }
-      const cached = await loadGitHubDetail(input, selected, fetchMock);
-      expect(cached).toBe(first);
-      await loadGitHubDetail(input, selected, fetchMock, true);
+      expect(await read()).toBe(first);
+      await read(undefined, true);
       for (const [, options] of fetchMock.mock.calls) {
         expect(options?.headers).toHaveProperty("Authorization", "Bearer " + selected.token);
       }
@@ -223,9 +220,8 @@ describe("GitHub detail selected read identity", () => {
   );
 
   it("keeps an exhausted anonymous quota separate from the selected credential", async () => {
-    const input = target();
     const authorized = vi.fn();
-    const fetchMock = authenticatedFetch(item(), (_, options) => {
+    const { input, fetchMock, read } = fixture("issue", item(), (_, options) => {
       if (new Headers(options?.headers).has("Authorization")) {
         authorized();
         return undefined;
@@ -233,7 +229,7 @@ describe("GitHub detail selected read identity", () => {
       return json({}, 403, { "x-ratelimit-remaining": "0", "retry-after": "3600" });
     });
     await expectStatus(loadGitHubDetail(input, undefined, fetchMock), 429);
-    await expect(loadGitHubDetail(input, identity(), fetchMock)).resolves.toMatchObject({
+    await expect(read()).resolves.toMatchObject({
       title: "Read me",
     });
     expect(authorized).toHaveBeenCalledTimes(3);
@@ -359,29 +355,27 @@ describe("GitHub detail selected read identity", () => {
   });
 
   it("separates selected credential scopes and rotations", async () => {
-    const input = target();
     const first = identity("first");
     const second = identity("second");
     const rotated = { ...first, token: "rotated-token" };
-    const fetchMock = authenticatedFetch(item(), (path, options) => {
+    const { read } = fixture("issue", item(), (path, options) => {
       if (path.endsWith("/issues/1")) {
         return json(item({ title: new Headers(options?.headers).get("Authorization") }));
       }
       return undefined;
     });
     for (const selected of [first, second, rotated]) {
-      await expect(loadGitHubDetail(input, selected, fetchMock)).resolves.toMatchObject({
+      await expect(read(undefined, false, selected)).resolves.toMatchObject({
         title: "Bearer " + selected.token,
       });
     }
   });
 
   it("retains a completed authenticated refresh after an older request finishes first", async () => {
-    const input = target();
     const responses = [createDeferred<Response>(), createDeferred<Response>()];
     const started = [createDeferred<void>(), createDeferred<void>()];
     let itemRequests = 0;
-    const fetchMock = authenticatedFetch(item(), (path) => {
+    const { read } = fixture("issue", item(), (path) => {
       if (path.endsWith("/issues/1")) {
         const index = itemRequests++;
         started[index]?.resolve();
@@ -393,15 +387,15 @@ describe("GitHub detail selected read identity", () => {
       }
       return undefined;
     });
-    const first = loadGitHubDetail(input, identity(), fetchMock);
+    const first = read();
     await started[0]!.promise;
-    const refreshed = loadGitHubDetail(input, identity(), fetchMock, true);
+    const refreshed = read(undefined, true, identity());
     await started[1]!.promise;
     responses[0]!.resolve(json(item({ body: "Old body" })));
     await expect(first).resolves.toMatchObject({ body: "Old body" });
     responses[1]!.resolve(json(item({ body: "Refreshed body" })));
     await expect(refreshed).resolves.toMatchObject({ body: "Refreshed body" });
-    await expect(loadGitHubDetail(input, identity(), fetchMock)).resolves.toMatchObject({
+    await expect(read(undefined, false, identity())).resolves.toMatchObject({
       body: "Refreshed body",
     });
     expect(itemRequests).toBe(2);
@@ -580,23 +574,8 @@ describe("GitHub detail public read boundary", () => {
     });
   });
 
-  it("preserves complete nonempty comments and renamed file patches", async () => {
-    const comment = commentItem({ user: null });
-    const fetchMock = publicFetch(
-      item({ comments: 1, changed_files: 1 }),
-      json([comment]),
-      json([file({ status: "renamed", previous_filename: "old.ts" })]),
-    );
-    const detail = await loadGitHubDetail(target("pull"), undefined, fetchMock);
-    expect(detail).toMatchObject({
-      partial: false,
-      comments: [{ author: "ghost", body: comment.body, bodyTruncated: false }],
-      files: [{ previousPath: "old.ts", patch: file().patch, patchTruncated: false }],
-    });
-  });
-
-  it("merges discussion and review replies chronologically with exact diff and original-line context", async () => {
-    const discussion = commentItem({ id: 3, created_at: "2026-09-13T12:01:00Z" });
+  it("renders complete discussion, review context and renamed files", async () => {
+    const discussion = commentItem({ id: 3, created_at: "2026-09-13T12:01:00Z", user: null });
     const diffHunk = "@@ -12,3 +12,3 @@\n-old\n+new";
     const review = commentItem({
       html_url: "https://github.com/octocat/repo/pull/1#discussion_r1",
@@ -619,15 +598,17 @@ describe("GitHub detail public read boundary", () => {
       diff_hunk: diffHunk,
     });
     const fetchMock = publicFetch(
-      item({ comments: 1, review_comments: 2 }),
+      item({ comments: 1, review_comments: 2, changed_files: 1 }),
       json([discussion]),
       json([review, reply]),
+      json([file({ status: "renamed", previous_filename: "old.ts" })]),
     );
     const detail = await loadGitHubDetail(target("pull"), undefined, fetchMock);
     expect(detail).toMatchObject({
       partial: false,
       commentsTotal: 3,
       commentsTruncated: false,
+      files: [{ previousPath: "old.ts", patch: file().patch, patchTruncated: false }],
       comments: [
         {
           id: "discussion_r1",
@@ -641,7 +622,13 @@ describe("GitHub detail public read boundary", () => {
             diffTruncated: false,
           },
         },
-        { id: "issuecomment-1", url: discussion.html_url, body: discussion.body },
+        {
+          id: "issuecomment-1",
+          url: discussion.html_url,
+          body: discussion.body,
+          author: "ghost",
+          bodyTruncated: false,
+        },
         {
           id: "discussion_r2",
           label: "Review comment",
@@ -894,10 +881,7 @@ describe("progressive GitHub documents", () => {
   });
 
   it("rechecks current visibility and caller authority when sections reuse a settled overview", async () => {
-    const upstream = authenticatedFetch();
-    const input = target("pull");
-    const selected = identity("progressive-authority");
-    const read = reader(input, selected, upstream);
+    const { selected, read } = fixture("pull");
     await read("overview");
     selected.assertSelected = () => {
       throw new Error("Reader retired");
@@ -908,21 +892,19 @@ describe("progressive GitHub documents", () => {
     const privateRepo = vi.fn<typeof fetch>(async () =>
       json({ id: 123, private: true, visibility: "private" }),
     );
-    await expect(
-      read("discussion", false, identity("progressive-authority"), privateRepo),
-    ).rejects.toMatchObject({ statusCode: 404 });
+    await expect(read("discussion", false, identity(), privateRepo)).rejects.toMatchObject({
+      statusCode: 404,
+    });
     expect(privateRepo).toHaveBeenCalledTimes(1);
     // A completed source never retains the first caller's assertions.
-    await expect(read("checks", false, identity("progressive-authority"))).resolves.toMatchObject({
+    await expect(read("checks", false, identity())).resolves.toMatchObject({
       revision: sha,
       checks: { state: "neutral" },
     });
   });
 
   it("does not label updated issue discussion with a cached overview revision", async () => {
-    const input = target("issue");
-    const selected = identity("progressive-issue-update");
-    const read = reader(input, selected, authenticatedFetch());
+    const { selected, read } = fixture();
     const overview = await read("overview");
     const updatedAt = "2026-10-17T00:00:00Z";
     const discussion = await read(
@@ -938,10 +920,7 @@ describe("progressive GitHub documents", () => {
   it.each(["issue", "commit"] as const)(
     "defers only supported %s sections and binds them to the source revision",
     async (kind) => {
-      const input = target(kind);
-      const fetchMock = authenticatedFetch(kind === "commit" ? commit() : item());
-      const selected = identity("progressive-" + kind);
-      const read = reader(input, selected, fetchMock);
+      const { read } = fixture(kind, kind === "commit" ? commit() : item());
       const overview = await read("overview");
       expect(overview.revision).toBe(kind === "commit" ? sha : date);
       expect(overview.deferredSections).toEqual(

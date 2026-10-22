@@ -7,6 +7,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { changedServerUiPrefs } from "../../app/server-prefs-intent.ts";
 import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
@@ -28,6 +29,7 @@ import {
   waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -618,6 +620,40 @@ it("leaves Appearance while a camera selection is unresolved", async () => {
   expect(view.container.querySelector("[data-settings-camera]")).toBeNull();
 });
 
+it("leaves Talk while a native voice edit is unresolved and still accepts its outcome", async () => {
+  const snapshot = createNativeDeviceSettingsSnapshot();
+  const pending = Promise.withResolvers<unknown>();
+  const post = vi
+    .fn<(message: { type: string }) => Promise<unknown>>()
+    .mockResolvedValue(undefined);
+  vi.stubGlobal("webkit", { messageHandlers: { openclawDeviceSettings: { postMessage: post } } });
+  vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
+  const capability = createNativeDeviceSettingsCapability()!;
+  const view = mountConfigPage(configContext({ nativeDeviceSettings: capability }), {
+    pageId: "talk",
+  });
+  try {
+    const wake = view.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    post.mockReturnValueOnce(pending.promise);
+    wake.click();
+    await waitForSolid(() => expect(view.container.textContent).toContain("Saving"));
+    expect(capability.snapshot?.voice.wakeEnabled).toBe(false);
+
+    view.update({ pageId: "notifications" });
+    await waitForSolid(() => {
+      expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
+      expect(view.container.querySelector("openclaw-talk-settings")).toBeNull();
+    });
+    const accepted = structuredClone(snapshot);
+    accepted.voice.wakeEnabled = true;
+    pending.resolve(accepted);
+    await waitForSolid(() => expect(capability.snapshot?.voice.wakeEnabled).toBe(true));
+    expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
+  } finally {
+    capability.dispose();
+  }
+});
+
 it("leaves the settings route before a camera switch settles and still records its outcome", async () => {
   const pending = deferred();
   switchActiveRealtimeTalkCameras.mockReturnValueOnce(pending.promise);
@@ -876,7 +912,7 @@ it("retries a rejected update status read without hiding policy controls", async
   });
 });
 
-it("stages policy changes through patchForm and confirms Update now before overlays", async () => {
+it("stages policy changes through patchForm and confirms Update Gateway… before overlays", async () => {
   const patchForm = vi.fn();
   const updateActions = {
     captureUpdateTarget: () => () => true,
@@ -904,13 +940,16 @@ it("stages policy changes through patchForm and confirms Update now before overl
   });
   const { container } = mountConfigPage(context, { pageId: "updates" });
   const restoreDialogPolyfill = installDialogPolyfill();
-  const updateButton = () => container.querySelector<HTMLButtonElement>(".btn.primary")!;
+  const updateButton = () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Update Gateway…",
+    )!;
   const status = () => container.querySelector(".settings-status")?.textContent;
 
   context.overlays.snapshot.updateStatusRefreshing = true;
   publishConfigSource(context.overlays);
   const checkingButton = updateButton();
-  expect(checkingButton.textContent?.trim()).toBe("Update now");
+  expect(checkingButton.textContent?.trim()).toBe("Update Gateway…");
   expect(checkingButton).toMatchObject({ disabled: true, title: "Checking for updates…" });
   expect(status()).toContain("Checking for updates…");
   expect(container.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(

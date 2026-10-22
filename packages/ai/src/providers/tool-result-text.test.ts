@@ -32,16 +32,10 @@ it("keeps structured fallback and inclusion after block sanitation", () => {
   ]).toEqual([expected, `head\n${expected}`]);
 });
 
-it("preserves explicit continuation text beyond 8000 UTF-16 units", () => {
-  const text = `${"x".repeat(8_000)}😀\n[More content follows. Use offset=225 to continue.]\n`;
-  const blocks = [textBlock(text)];
-  expect(extract(blocks, withStructured)).toBe(text);
-  expect(extract(blocks)).toBe(text);
-});
-
 it("bounds and redacts aggregate structured additions without truncating explicit text", () => {
   const explicit = `${"numbered file row\n".repeat(900)}[Use offset=225 to continue.]\n`;
   const tail = "  final explicit block 😀  ";
+  expect(extract([textBlock(explicit), textBlock(tail)])).toBe(`${explicit}\n${tail}`);
   const result = extract(
     [
       {

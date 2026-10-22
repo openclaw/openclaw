@@ -2,11 +2,16 @@ import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "./client.js";
-import { Command, type CommandOptions, type DiscordCommand } from "./commands.js";
+import type { DiscordCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
 import { parseCustomId, type BaseMessageInteractiveComponent } from "./components.base.js";
 import { DiscordError } from "./rest.js";
-import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
+import {
+  attachRestMock,
+  createInternalTestClient,
+  createTestCommand,
+  createTestHashStore,
+} from "./test-builders.test-support.js";
 
 type AnyListener = Client["listeners"][number];
 
@@ -14,15 +19,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
-
-function createTestCommand(name: string, options?: CommandOptions): DiscordCommand {
-  return new (class extends Command {
-    name = name;
-    override description = `${name} command`;
-    override options = options;
-    run() {}
-  })();
-}
 
 function liveCommand(options: Record<string, unknown>[], extra: Record<string, unknown> = {}) {
   return {
@@ -54,28 +50,18 @@ describe("ComponentRegistry", () => {
 
   it("resolves wildcard parser entries by component type", () => {
     const registry = new ComponentRegistry<BaseMessageInteractiveComponent>();
-    const button = {
-      type: ComponentType.Button,
-      customId: "__button_wildcard__",
-      customIdParser: wildcardParser("__button_wildcard__"),
+    const components = [ComponentType.Button, ComponentType.StringSelect].map((type) => ({
+      type,
+      customId: `__wildcard_${type}__`,
+      customIdParser: wildcardParser(`__wildcard_${type}__`),
       run() {},
-    };
-    const select = {
-      type: ComponentType.StringSelect,
-      customId: "__select_wildcard__",
-      customIdParser: wildcardParser("__select_wildcard__"),
-      run() {},
-    };
-
-    registry.register(button);
-    registry.register(select);
-
-    expect(registry.resolve("occomp:cid=one", { componentType: ComponentType.Button })).toBe(
-      button,
-    );
-    expect(registry.resolve("occomp:cid=one", { componentType: ComponentType.StringSelect })).toBe(
-      select,
-    );
+    }));
+    for (const component of components) {
+      registry.register(component);
+    }
+    for (const component of components) {
+      expect(registry.resolve("occomp:cid=one", { componentType: component.type })).toBe(component);
+    }
   });
 });
 
@@ -169,18 +155,19 @@ describe("Client.deployCommands", () => {
   });
 
   it("patches changed option localization maps", async () => {
-    const option = () => ({
+    const option = {
       type: 3 as const,
       name: "value",
       description: "Value",
       name_localizations: { de: "wert" },
       description_localizations: { de: "Wert" },
-    });
-    const client = createInternalTestClient([createTestCommand("one", [option()])]);
+    };
+    const command = createTestCommand("one", [option]);
+    const client = createInternalTestClient([command]);
     const get = vi.fn(async () => [
       liveCommand([
         {
-          ...option(),
+          ...option,
           name_localizations: { de: "alter-wert" },
           description_localizations: { de: "Alter Wert" },
         },
@@ -195,7 +182,7 @@ describe("Client.deployCommands", () => {
         name: "one",
         description: "one command",
         type: ApplicationCommandType.ChatInput,
-        options: [option()],
+        options: [option],
         integration_types: [0, 1],
         contexts: [0, 1, 2],
         default_member_permissions: null,
@@ -206,13 +193,7 @@ describe("Client.deployCommands", () => {
   });
 
   it("skips unchanged command deploys across client restarts using the hash store", async () => {
-    const hashes = new Map<string, string>();
-    const commandDeployHashStore = {
-      lookup: async (key: string) => hashes.get(key),
-      register: async (key: string, value: string) => {
-        hashes.set(key, value);
-      },
-    };
+    const { store: commandDeployHashStore } = createTestHashStore();
     const deploy = async () => {
       const client = createInternalTestClient([createTestCommand("one")], {
         commandDeployHashStore,

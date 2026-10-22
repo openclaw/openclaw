@@ -16,6 +16,7 @@ import {
   setupAgentsHomePageTest,
   workflowOperator,
 } from "./agents-home-page.test-helpers.ts";
+import type { ClawCatalogEntry } from "./claws-catalog-client.ts";
 
 beforeEach(setupAgentsHomePageTest);
 afterEach(cleanupAgentsHomePageTest);
@@ -167,6 +168,124 @@ describe("Claws discovery", () => {
     search!.value = "workflow";
     search!.dispatchEvent(new Event("input", { bubbles: true }));
     await vi.waitFor(() => expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
+  });
+
+  it("retries the selected package's catalog read while retaining its route", async () => {
+    const { request, setClawsEnabled, find } = createDetail({ clawsEnabled: false });
+    const original = request.getMockImplementation()!;
+    const pending = createDeferredCore<{ entries: ClawCatalogEntry[] }>();
+    const recovered = createDeferredCore<{ entries: ClawCatalogEntry[] }>();
+    let attempts = 0;
+    request.mockImplementation((method, params, options) => {
+      if (
+        method === "claws.catalog.search" &&
+        params &&
+        typeof params === "object" &&
+        Reflect.get(params, "limit") === 100
+      ) {
+        return ++attempts === 1 ? pending.promise : recovered.promise;
+      }
+      return original(method, params, options);
+    });
+    setClawsEnabled(true);
+    await waitForSolid(() => expect(attempts).toBe(1));
+    const back = find(".plugin-catalog-detail__back");
+    expect(back?.getAttribute("href")).toBe("/claws");
+    expect(find(".plugin-catalog-detail--loading")).not.toBeNull();
+    expect(find("[data-claws-confirm]")).toBeNull();
+    pending.reject(new Error("Catalog temporarily unavailable"));
+    await waitForSolid(() =>
+      expect(find("[role=alert]")?.textContent).toContain("Catalog temporarily unavailable"),
+    );
+    find("[role=alert] button")!.click();
+    await waitForSolid(() => expect(attempts).toBe(2));
+    expect(find("[role=alert]")).toBeNull();
+    expect(find(".plugin-catalog-detail__back")).toBe(back);
+    expect(find("[data-claws-confirm]")).toBeNull();
+    recovered.resolve({ entries: [workflowOperator] });
+    await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
+    expect(request).toHaveBeenCalledWith("claws.catalog.search", {
+      query: workflowOperator.packageName,
+      limit: 100,
+    });
+  });
+
+  it("retires a pending catalog reply when the package route changes", async () => {
+    const { request, setClawsEnabled, setPackageName, find } = createDetail({
+      clawsEnabled: false,
+    });
+    const original = request.getMockImplementation()!;
+    const retired = createDeferredCore<{ entries: ClawCatalogEntry[] }>();
+    request.mockImplementation((method, params, options) => {
+      if (
+        method === "claws.catalog.search" &&
+        params &&
+        typeof params === "object" &&
+        Reflect.get(params, "query") === workflowOperator.packageName
+      ) {
+        return retired.promise;
+      }
+      return original(method, params, options);
+    });
+    setClawsEnabled(true);
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith("claws.catalog.search", {
+        query: workflowOperator.packageName,
+        limit: 100,
+      }),
+    );
+    setPackageName("@openclaw/missing");
+    await waitForSolid(() => expect(find("[role=alert]")).not.toBeNull());
+    const error = find("[role=alert]")?.textContent;
+    retired.resolve({ entries: [workflowOperator] });
+    await retired.promise;
+    await nextTurn();
+    flush();
+    expect(find("[role=alert]")?.textContent).toBe(error);
+    expect(find(".plugin-capabilities")).toBeNull();
+    expect(find("[data-claws-confirm]")).toBeNull();
+    expect(request.mock.calls.some(([method]) => method === "claws.catalog.detail")).toBe(false);
+  });
+
+  it("refreshes a selected Claw after reconnect and ignores the retired catalog reply", async () => {
+    const { request, setPhase, find } = createDetail({ clawsEnabled: true });
+    await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
+    const original = request.getMockImplementation()!;
+    const stale = createDeferredCore<{ entries: ClawCatalogEntry[] }>();
+    let searches = 0;
+    request.mockImplementation((method, params, options) => {
+      if (
+        method === "claws.catalog.search" &&
+        params &&
+        typeof params === "object" &&
+        Reflect.get(params, "limit") === 100 &&
+        ++searches === 1
+      ) {
+        return stale.promise;
+      }
+      return original(method, params, options);
+    });
+    setPhase("reconnecting");
+    flush();
+    setPhase("connected");
+    await waitForSolid(() => expect(searches).toBe(1));
+    setPhase("reconnecting");
+    flush();
+    setPhase("connected");
+    await waitForSolid(() =>
+      expect(
+        request.mock.calls.filter(([method]) => method === "claws.catalog.detail"),
+      ).toHaveLength(2),
+    );
+    await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
+    stale.resolve({ entries: [{ ...workflowOperator, installs: 0, latestVersion: "9.9.9" }] });
+    await stale.promise;
+    await nextTurn();
+    flush();
+    expect(request.mock.calls.filter(([method]) => method === "claws.catalog.detail")).toHaveLength(
+      2,
+    );
+    expect(find(".plugin-capabilities")).not.toBeNull();
   });
 
   it("retries a failed detail read without replacing the shell or admitting Add early", async () => {

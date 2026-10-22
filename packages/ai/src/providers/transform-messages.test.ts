@@ -1,8 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import type { ProviderMessage, ProviderModel } from "../provider-types.js";
+import { createAssistantOutput } from "../transports/assistant-output.js";
 import type { AssistantMessage, Message, ToolResultMessage } from "../types.js";
-import { createZeroUsage } from "../usage.test-support.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -17,6 +17,13 @@ function image(data: string, mimeType = "image/png") {
   return { type: "image" as const, data, mimeType };
 }
 const user = (content: string, timestamp = 1): Message => ({ role: "user", content, timestamp });
+const call = (id = "call_1", async?: boolean) => ({
+  type: "toolCall" as const,
+  id,
+  name: "lookup",
+  arguments: {},
+  ...(async ? { async } : {}),
+});
 function toolResult(
   content: ToolResultMessage["content"],
   toolCallId = "call_1",
@@ -31,11 +38,7 @@ function makeAssistant(
   overrides: Partial<AssistantMessage> = {},
 ): AssistantMessage {
   return {
-    role: "assistant",
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createZeroUsage(),
+    ...createAssistantOutput(model),
     timestamp: 2,
     content,
     stopReason,
@@ -46,14 +49,7 @@ function makeAssistant(
 it("replays missing synchronous and delayed asynchronous results with their original timestamps", () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
   const messages: Message[] = [
-    makeAssistant(
-      [
-        { type: "toolCall", id: "sync", name: "lookup", arguments: {} },
-        { type: "toolCall", id: "async", name: "lookup", arguments: {}, async: true },
-      ],
-      "toolUse",
-      { timestamp: 0 },
-    ),
+    makeAssistant([call("sync"), call("async", true)], "toolUse", { timestamp: 0 }),
     makeAssistant([text("later fragment")], "stop", { timestamp: 3 }),
   ];
   const first = transformMessages(messages, model);
@@ -80,43 +76,26 @@ it("keeps host-sanitized repetition history through provider replay", () => {
   expect(transformMessages([message], model)).toEqual([message]);
 });
 
-it("replaces partial text with one marker between unrelated user turns", () => {
-  const before = user("summarize the incident");
-  const after = user("what is the weather?", 3);
-  const failed = makeAssistant([text("Starting the incident summary")], "aborted");
-
-  const transformed = transformMessages([before, failed, after], model);
-
-  expect(transformed).toEqual([
-    before,
-    { ...failed, content: [text(EXPECTED_FAILURE_MARKER)] },
-    after,
-  ]);
-  expect(failed.content).toEqual([text("Starting the incident summary")]);
-});
-
-it("drops a failed tool-call turn even when it also contains partial text", () => {
-  const prompt = user("run it");
-  const failed = makeAssistant(
-    [
-      text("Starting the lookup"),
-      { type: "toolCall", id: "call-1", name: "lookup", arguments: {} },
-    ],
-    "aborted",
-  );
-
-  expect(transformMessages([prompt, failed], model)).toEqual([prompt]);
-});
-
-it("drops the no-content placeholder with hidden reasoning across a model change", () => {
-  const failed = makeAssistant(
-    [text(NO_CONTENT_PLACEHOLDER), { type: "thinking", thinking: "hidden partial reasoning" }],
-    "aborted",
-    { model: "source-model" },
-  );
-  const prompt = user("what is the weather?", 3);
-  expect(transformMessages([failed, prompt], model)).toEqual([prompt]);
-});
+it.each(["partial text", "partial tool-call turn", "placeholder with hidden reasoning"])(
+  "replays aborted %s without unfinished work",
+  (kind) => {
+    const placeholder = kind === "placeholder with hidden reasoning";
+    const marker = kind === "partial text";
+    const content: AssistantMessage["content"] = placeholder
+      ? [text(NO_CONTENT_PLACEHOLDER), { type: "thinking", thinking: "hidden partial reasoning" }]
+      : [text("Starting the incident summary"), ...(marker ? [] : [call("call-1")])];
+    const before = placeholder ? [] : [user("summarize the incident")];
+    const after = marker || placeholder ? [user("what is the weather?", 3)] : [];
+    const failed = makeAssistant(content, "aborted", placeholder ? { model: "source-model" } : {});
+    const original = structuredClone(failed);
+    expect(transformMessages([...before, failed, ...after], model)).toEqual([
+      ...before,
+      ...(marker ? [{ ...failed, content: [text(EXPECTED_FAILURE_MARKER)] }] : []),
+      ...after,
+    ]);
+    expect(failed).toEqual(original);
+  },
+);
 it("preserves native same-model reasoning on a length stop", () => {
   const assistant = makeAssistant(
     [{ type: "thinking", thinking: "partial reasoning", thinkingSignature: "signed-reasoning" }],
@@ -212,11 +191,10 @@ it.each([
   ["asynchronous call", true, " call_1 ", "call_1"],
   ["asynchronous result", true, "call_1", " call_1 "],
 ] as const)("pairs padded %s ids", (_name, async, id, toolCallId) => {
-  const assistant = makeAssistant(
-    [{ type: "toolCall", id, name: "lookup", arguments: {}, ...(async ? { async } : {}) }],
-    "toolUse",
-    { model: async ? "source-model" : model.id, timestamp: 1 },
-  );
+  const assistant = makeAssistant([call(id, async)], "toolUse", {
+    model: async ? "source-model" : model.id,
+    timestamp: 1,
+  });
   const messages: Message[] = [
     assistant,
     ...(async ? [{ ...assistant, content: [text("later answer")] }] : []),
@@ -231,9 +209,7 @@ it.each([
     "toolResult",
     ...(async ? ["assistant"] : []),
   ]);
-  expect(transformed[0]?.content).toEqual([
-    { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
-  ]);
+  expect(transformed[0]?.content).toEqual([call()]);
   expect(transformed[1]).toMatchObject({
     role: "toolResult",
     toolCallId: "call_1",

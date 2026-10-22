@@ -1,7 +1,10 @@
 /**
  * Canonical persisted auth profile loading, runtime metadata, and store merging.
  */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -52,13 +55,6 @@ function groupProfileIdsByProvider(profiles: AuthProfileStore["profiles"]): Map<
   return grouped;
 }
 
-function findOrderEntryKey(
-  order: AuthProfileStore["order"] | undefined,
-  providerKey: string,
-): string | undefined {
-  return Object.keys(order ?? {}).find((key) => normalizeProviderId(key) === providerKey);
-}
-
 function mergeProfileOrderWithOverridePrecedence(params: {
   baseOrder: AuthProfileStore["order"] | undefined;
   overrideOrder: AuthProfileStore["order"] | undefined;
@@ -73,8 +69,8 @@ function mergeProfileOrderWithOverridePrecedence(params: {
   for (const [providerKey, overrideProfileIds] of groupProfileIdsByProvider(
     params.overrideProfiles,
   )) {
-    const baseOrderKey = findOrderEntryKey(params.baseOrder, providerKey);
-    const overrideOrderKey = findOrderEntryKey(params.overrideOrder, providerKey);
+    const baseOrderKey = findNormalizedProviderKey(params.baseOrder, providerKey);
+    const overrideOrderKey = findNormalizedProviderKey(params.overrideOrder, providerKey);
     const mergedOrderKey = overrideOrderKey ?? baseOrderKey;
     if (!mergedOrderKey) {
       continue;

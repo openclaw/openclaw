@@ -471,6 +471,7 @@ describe("grouped plugin settings", () => {
         capture: () => scope,
         isCurrent: (candidate: unknown) => candidate === scope,
       } as unknown as GatewayPageBinding;
+      const presentationLifetime = new Promise<void>(() => {});
       await update({
         resolveCredential: (field) =>
           field.path.at(-1) === "apiKey"
@@ -482,6 +483,7 @@ describe("grouped plugin settings", () => {
                   baseHash: "revision",
                   gateway,
                   canInspect: true,
+                  getPresentationLifetime: () => presentationLifetime,
                   onCommit: async (path, next) => {
                     field.onPatch(path, next);
                     return true;

@@ -5,6 +5,7 @@ import {
 } from "@openclaw/ai/internal/runtime";
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import {
   asPositiveFiniteNumber,
   finiteSecondsToTimerSafeMilliseconds,
@@ -107,10 +108,7 @@ function findConfiguredProviderConfig(
   }
   const providers = cfg?.models?.providers;
   return (
-    providers?.[normalizedProvider] ||
-    Object.entries(providers ?? {}).find(
-      ([key]) => key.trim().toLowerCase() === normalizedProvider,
-    )?.[1]
+    providers?.[normalizedProvider] || findNormalizedProviderValue(providers, normalizedProvider)
   );
 }
 

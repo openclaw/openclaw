@@ -39,8 +39,6 @@ export type SkillsState = {
   skillEdits: Record<string, string>;
   skillMessages: Record<string, SkillMessage>;
   clawhubSearchResults: ClawHubSearchResult[] | null;
-  clawhubSearchLoading: boolean;
-  clawhubSearchError: string | null;
   clawhubIconUrls: Record<string, string>;
   clawhubDetail: ClawHubSkillDetail | null;
   clawhubDetailRef: string | null;

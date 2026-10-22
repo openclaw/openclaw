@@ -3,7 +3,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { ExecutionIdentityAdmissionFacts } from "./execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "./execution-identity-spawn-admission.js";
-import { prepareExecutionIdentityContextAtAdmission } from "./execution-identity.test-support.js";
+import {
+  executionIdentityFacts,
+  prepareExecutionIdentityContextAtAdmission,
+} from "./execution-identity.test-support.js";
 
 afterEach(closeOpenClawStateDatabaseForTest);
 
@@ -19,13 +22,7 @@ function prepareContext(
   const { spawnLineage, spawnMissingEvidence = [], ...admissionOverrides } = overrides;
   const admissionFacts: ExecutionIdentityAdmissionFacts = executionIdentitySpawnAdmission({
     operation: "attach",
-    value: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-      runtime: { kind: "embedded" },
-      ...admissionOverrides,
-    },
+    value: executionIdentityFacts(runId, admissionOverrides),
     extra: executionIdentitySpawnAdmission({
       operation: "serialize",
       value: spawnLineage,
@@ -95,10 +92,9 @@ describe("execution identity child lineage", () => {
     );
   });
 
-  it("keeps attribution visible when parent evidence and ACP callbacks are unavailable", () => {
+  it("keeps lineage attribution and deduplicates missing parent, invoker, and ACP evidence", () => {
     const context = prepareContext("acp-child", {
       ingress: { kind: "acp", boundary: "sessions_spawn.acp", state: "present" },
-      invoker: { state: "present", kind: "agent", rawPrincipalRef: "parent-agent" },
       spawnLineage: {
         parentAgentId: "parent-agent",
         relation: "sessions_spawn",
@@ -113,6 +109,7 @@ describe("execution identity child lineage", () => {
         "lineage.parent-execution",
         "lineage.parent-run",
         "acp.native-action-callback",
+        "invoker.principal",
       ],
     });
 
@@ -121,17 +118,10 @@ describe("execution identity child lineage", () => {
     expect(context.lineage).not.toHaveProperty("parentContextId");
     expect(context.missingEvidence).toEqual([
       "acp.native-action-callback",
+      "invoker.principal",
       "lineage.parent-context",
       "lineage.parent-execution",
       "lineage.parent-run",
     ]);
-  });
-
-  it("deduplicates sorted missing invoker evidence across admission and spawn lineage", () => {
-    const context = prepareContext("missing-invoker", {
-      spawnMissingEvidence: ["invoker.principal", "acp.native-action-callback"],
-    });
-
-    expect(context.missingEvidence).toEqual(["acp.native-action-callback", "invoker.principal"]);
   });
 });
