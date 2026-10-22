@@ -722,7 +722,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header">
           <div>
-            <div class="page-title">{titleForRoute("devices", t)}</div>
+            <h1 class="page-title">{titleForRoute("devices", t)}</h1>
             <div class="page-subtitle">
               {subtitleForRoute("devices", t)} <LearnMoreLink url={DEVICES_DOCS_URL} />
             </div>

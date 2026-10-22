@@ -129,8 +129,6 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
   );
   return (
     <>
-      {props.devicesError ? <div class="callout danger">{props.devicesError}</div> : undefined}
-      {props.lastError ? <div class="callout danger">{props.lastError}</div> : undefined}
       {pending().length > 0 ? (
         <SettingsSection title={t("devices.inventory.pendingApproval")} count={pending().length}>
           <PendingDeviceRows {...props} />

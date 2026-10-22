@@ -89,10 +89,7 @@ export async function loadArtifactSidebarContent(
   if (blob) {
     if (mimeType.startsWith("image/")) {
       // Workspace previews outlive the ticket, so retain the image in the existing data URL form.
-      imageSource = await readBlobAsDataUrl(blob, {
-        readError: "Artifact image could not be decoded",
-        invalidResultError: "Artifact image could not be decoded",
-      });
+      imageSource = await readBlobAsDataUrl(blob, "Artifact image could not be decoded");
     } else if (isTextAttachment(mimeType, title)) {
       text = await blob.text();
     }

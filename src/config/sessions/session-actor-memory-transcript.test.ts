@@ -371,7 +371,7 @@ describe("memory actor transcript", () => {
     expect(rebased.receipt.transcript.appendedMessages[0]?.effectiveParentId).toBe("first");
     expect(rebased.value).toMatchObject({ sequences: [3] });
     const branched = await write({
-      message: { role: "assistant", content: "Branch" },
+      message: { role: "assistant", content: "Branch", idempotencyKey: "branch" },
       eventId: "branch",
       parentId: "user-1",
     });
@@ -380,6 +380,18 @@ describe("memory actor transcript", () => {
       "user-1",
       "branch",
     ]);
+    const facts = await actor.storage!.read(
+      {
+        type: "session.transcript.messageFacts",
+        input: {
+          scope: { agentId: "main", storePath: path, sessionKey, sessionId },
+          idempotencyKeys: ["first", "branch"],
+          activeBranchOnly: true,
+        },
+      },
+      authority,
+    );
+    expect([...facts.facts.existingIdempotencyKeys]).toEqual(["branch"]);
     const before = actor.snapshot(authority);
     expect(
       await append(

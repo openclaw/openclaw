@@ -32,6 +32,9 @@ export function AgentMemoryView(props: { state: AgentMemoryState }) {
               )}
             </span>
             <button
+              role="switch"
+              aria-checked={model().header.dreamingOn ? "true" : "false"}
+              aria-label={t("dreaming.header.toggle")}
               class={[
                 "dreams__phase-toggle",
                 { "dreams__phase-toggle--on": model().header.dreamingOn },

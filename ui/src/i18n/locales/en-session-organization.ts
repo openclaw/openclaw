@@ -360,6 +360,7 @@ const enSessionOrganization = {
     removeFromGroup: "Remove from group",
     moveBackToGroups: "Move back to Groups",
     groupMenu: en.sessionsView.groupMenu,
+    groupOptions: en.sessionsView.groupOptions,
     newSessionInGroup: en.sessionsView.newSessionInGroup,
     groupDefaultsMenu: "New session defaults",
     groupDefaultsFailed: "Could not save the group defaults.",

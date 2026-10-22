@@ -361,7 +361,6 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
         <div
           id="plugin-settings-panel"
           role="tabpanel"
-          tabindex="0"
           aria-labelledby={`plugin-settings-tab-${props.tab}`}
         >
           {body}

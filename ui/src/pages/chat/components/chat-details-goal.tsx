@@ -119,11 +119,11 @@ function GoalEditDialog(props: {
           </div>
         </Show>
         <openclaw-modal-actions class="exec-approval-actions">
-          <button class="btn primary" type="submit" disabled={pending() || unchanged()}>
-            {t("chat.goals.save")}
-          </button>
           <button class="btn" type="button" disabled={pending()} onClick={() => props.finish()}>
             {t("common.cancel")}
+          </button>
+          <button class="btn primary" type="submit" disabled={pending() || unchanged()}>
+            {t("chat.goals.save")}
           </button>
         </openclaw-modal-actions>
       </form>

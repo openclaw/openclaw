@@ -440,14 +440,14 @@ async function prepareOwnedModelsListResult({
       });
       const credential = evaluation.selectedCredential;
       const route = evaluation.selectedRoute;
-      const serviceTierObservation =
+      const serviceTierObservations =
         projectionIsCurrent() &&
         evaluation.availability === true &&
         speedPolicy.supportsServiceTierRecovery &&
         credential &&
         credential.source !== "harness" &&
         route
-          ? accountCatalog?.readServiceTierObservation({
+          ? accountCatalog?.readServiceTierObservations({
               identityKey: credential.identityKey,
               modelId: entry.id,
               runtimeId: preparedEntry.agentRuntime?.id ?? "openclaw",
@@ -462,7 +462,14 @@ async function prepareOwnedModelsListResult({
           ? { supportsServiceTierRecovery: true }
           : {}),
         ...(serviceTiers === undefined ? {} : { serviceTiers }),
-        ...(serviceTierObservation ? { serviceTierObservation } : {}),
+        ...(serviceTierObservations?.length
+          ? {
+              serviceTierObservation: serviceTierObservations.at(-1),
+              serviceTierObservations: serviceTierObservations.toSorted((a, b) =>
+                a.requestedTier.localeCompare(b.requestedTier),
+              ),
+            }
+          : {}),
         ...(projectedAvailability === undefined ? {} : { available: projectedAvailability }),
         ...(projectedAvailability === false && evaluation.unavailableReason
           ? {
