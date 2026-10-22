@@ -4,15 +4,12 @@ import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
-import {
-  SettingsRow,
-  SettingsSection,
-  SettingsToggleRow,
-} from "../../components/solid/settings-ui.tsx";
+import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
+import { NativeVoiceControls } from "./talk-device-controls.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -158,41 +155,13 @@ export function VoiceWakeEditor(props: {
   );
 }
 
-const voiceToggles = [
-  "wakeEnabled",
-  "wakeTriggersTalkMode",
-  "pushToTalkEnabled",
-  "talkShiftToStopEnabled",
-  "talkPhaseSoundsEnabled",
-  "realtimeRelayEnabled",
-  "triggerChime",
-  "sendChime",
-  "talkEnabled",
-  "talkButtonEnabled",
-  "talkBackgroundEnabled",
-  "speakerphoneEnabled",
-] as const;
-
 function DeviceVoiceSettings(props: {
+  presentationRetired: () => Promise<void>;
   capability: NativeDeviceSettingsCapability;
   snapshot: NativeDeviceSettingsSnapshot;
 }) {
   const voice = () => props.snapshot.voice;
   const microphone = () => voice().microphone;
-  const microphoneOptions = createMemo(() => {
-    const current = microphone();
-    const options = [
-      { value: "", label: t("configPage.deviceTalk.systemDefault") },
-      ...(current?.devices.map(({ id, name }) => ({ value: id, label: name })) ?? []),
-    ];
-    if (current?.selectedId && !current.devices.some(({ id }) => id === current.selectedId)) {
-      options.push({
-        value: current.selectedId,
-        label: t("configPage.deviceTalk.disconnectedMicrophone", { id: current.selectedId }),
-      });
-    }
-    return options;
-  });
   const languageOptions = createMemo(() =>
     (voice().locale?.available ?? []).map(({ id, name }) => ({ value: id, label: name })),
   );
@@ -203,39 +172,11 @@ function DeviceVoiceSettings(props: {
   });
   return (
     <>
-      <For each={voiceToggles} keyed={(key) => key}>
-        {(key) => (
-          <>
-            {voice()[key()] !== undefined && (
-              <SettingsToggleRow
-                title={t(`configPage.deviceTalk.${key()}`)}
-                checked={voice()[key()] ?? false}
-                disabled={key() === "wakeEnabled" && !voice().supported && !voice().wakeEnabled}
-                description={
-                  key() === "wakeEnabled" && !voice().supported
-                    ? t(
-                        props.snapshot.device.platform === "macos"
-                          ? "configPage.deviceTalk.unsupported"
-                          : "configPage.deviceTalk.unsupportedDevice",
-                      )
-                    : key() === "realtimeRelayEnabled"
-                      ? t("configPage.deviceTalk.realtimeRelayHint")
-                      : undefined
-                }
-                onChange={(value) => props.capability.set(`voice.${key()}`, value)}
-              />
-            )}
-          </>
-        )}
-      </For>
-      {microphone() && (
-        <SettingsSelectRow
-          title={t("configPage.deviceTalk.microphone")}
-          value={microphone()?.selectedId ?? ""}
-          options={microphoneOptions()}
-          onChange={(value) => props.capability.set("voice.microphone", value || null)}
-        />
-      )}
+      <NativeVoiceControls
+        capability={props.capability}
+        snapshot={props.snapshot}
+        presentationRetired={props.presentationRetired}
+      />
       {locale() && (
         <SettingsSelectRow
           title={t("configPage.deviceTalk.primaryLanguage")}
@@ -339,6 +280,7 @@ function DeviceVoiceSettings(props: {
 }
 
 export function DeviceTalk(props: {
+  presentationRetired: () => Promise<void>;
   capability?: NativeDeviceSettingsCapability | null;
   snapshot?: NativeDeviceSettingsSnapshot | null;
 }) {
@@ -351,6 +293,7 @@ export function DeviceTalk(props: {
           <Loading on={props.capability} fallback={<SettingsRow title={t("common.loading")} />}>
             {(props.snapshot ?? initialSnapshot()) && (
               <DeviceVoiceSettings
+                presentationRetired={props.presentationRetired}
                 capability={props.capability}
                 snapshot={(props.snapshot ?? initialSnapshot())!}
               />
