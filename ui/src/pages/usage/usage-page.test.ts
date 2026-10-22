@@ -187,6 +187,19 @@ describe("UsagePage cache convergence", () => {
     },
   );
 
+  it("reloads committed totals before applying a partial-refresh failure", async () => {
+    const request = usageRequest(() => cacheSnapshot("fresh").result);
+    const { context, page } = await loadUsagePage(request);
+    expect(usageCalls(request)).toHaveLength(1);
+
+    context.publishUsage({ usageUpdatedAt: Date.now() + 1 });
+    context.publishUsage({ usageUpdatedAt: Date.now() + 2, usageRefreshFailed: true });
+    await settleUsageTimers(page);
+
+    expect(usageCalls(request)).toHaveLength(2);
+    expect(textOf(page, ".usage-cache-warning.warning")).toContain("Automatic checks paused");
+  });
+
   it("preserves failure until publication after changing the query's date", async () => {
     let snapshot = cacheSnapshot("partial");
     const request = usageRequest(() => ({

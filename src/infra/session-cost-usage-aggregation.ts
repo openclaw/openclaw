@@ -39,8 +39,14 @@ export async function refreshCostUsageCacheForAgent(params: {
     if (result.kind !== "refresh") {
       throw new Error("Invalid usage refresh worker result");
     }
-    if (result.changed || result.failedFiles?.length) {
-      publishSessionCostUsageUpdated(agentId, Boolean(result.failedFiles?.length));
+    // Publish the healthy commit first: an already-open Usage page only reloads
+    // when the success watermark advances. Failure remains a separate health
+    // signal and must not hide the totals committed by the same refresh.
+    if (result.changed) {
+      publishSessionCostUsageUpdated(agentId);
+    }
+    if (result.failedFiles?.length) {
+      publishSessionCostUsageUpdated(agentId, true);
     }
     if (result.remainingFiles?.length) {
       params.onRemaining?.(result.remainingFiles);

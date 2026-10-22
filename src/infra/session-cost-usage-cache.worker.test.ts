@@ -773,7 +773,12 @@ it("isolates a malformed transcript event to its session", async ({ onTestFinish
     expect(failures).toHaveLength(1);
     expect(failures[0]?.value).toMatchObject({ agentId });
     expect(failures[0]?.value.sessionFile).toContain("sqlite:main:corrupt-session:");
-    expect(published).toHaveBeenCalledExactlyOnceWith({
+    expect(published).toHaveBeenCalledTimes(2);
+    expect(published).toHaveBeenNthCalledWith(1, {
+      agentId,
+      usageUpdatedAt: expect.any(Number),
+    });
+    expect(published).toHaveBeenNthCalledWith(2, {
       agentId,
       usageUpdatedAt: expect.any(Number),
       usageRefreshFailed: true,
