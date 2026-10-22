@@ -1,5 +1,15 @@
 import { createDeferred } from "@solidjs/signals";
-import { createMemo, Errored, For, Loading, Show } from "solid-js";
+import {
+  action,
+  affects,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  Loading,
+  refresh,
+  Show,
+} from "solid-js";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -10,7 +20,7 @@ import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
-import type { ProjectBrowserFocus } from "./draft-place-browser.ts";
+import type { BrowserProjectRegistration, ProjectBrowserFocus } from "./draft-place-browser.ts";
 import { parentFolderDisplayName } from "./path.ts";
 import { SessionPicker } from "./picker.tsx";
 import { PlaceBrowser } from "./place-browser.tsx";
@@ -115,6 +125,63 @@ export function ProjectChip(props: {
     }
     return source.pending ? source.pending.then(() => source.browser.projects) : source.projects;
   });
+  const browser = createMemo(() => props.params.place.browser);
+  const connectionEpoch = createMemo(() => props.params.gateway.connectionEpoch);
+  const registration = createMemo(() => {
+    const owner = browser();
+    const epoch = connectionEpoch();
+    const [saving, setSaving] = createOptimistic(false);
+    return { browser: owner, epoch, projects, saving, setSaving };
+  });
+  const presentRegistration = action(function* (
+    presentation: ReturnType<typeof registration>,
+    pending: Promise<void>,
+    receipt: BrowserProjectRegistration,
+  ) {
+    if (
+      presentation.browser === props.params.place.browser &&
+      presentation.epoch === props.params.gateway.connectionEpoch &&
+      receipt.isCurrent()
+    ) {
+      presentation.setSaving(true);
+      affects(presentation.projects);
+    }
+    yield Promise.race([pending, receipt.retired]);
+    if (
+      presentation.browser === props.params.place.browser &&
+      presentation.epoch === props.params.gateway.connectionEpoch &&
+      props.params.gateway.connected &&
+      presentation.browser.projectsReady &&
+      presentation.browser.projectRead === null
+    ) {
+      // The owner already reloaded; do not rejoin a held catalog after the browser closes.
+      yield refresh(presentation.projects);
+    }
+  });
+  const registerProject = async (path: string) => {
+    const presentation = registration();
+    let receipt: BrowserProjectRegistration | undefined;
+    const pending = presentation.browser.registerBrowserProject(path, (started) => {
+      receipt = started;
+    });
+    if (!receipt) {
+      return pending;
+    }
+    // Publish the admitted owner operation before joining its presentation action.
+    await Promise.resolve();
+    try {
+      await presentRegistration(presentation, pending, receipt);
+    } catch (error) {
+      if (
+        presentation.browser === props.params.place.browser &&
+        presentation.epoch === props.params.gateway.connectionEpoch &&
+        receipt.isCurrent()
+      ) {
+        presentation.browser.browser.error = formatUiError(error);
+        props.params.onChange();
+      }
+    }
+  };
   const localProjects = createMemo(() => {
     // Retired catalogs clear immediately; a live refresh keeps local filtering responsive.
     const accepted = !props.nativeTerminal && projectsReady() ? projects() : [];
@@ -185,15 +252,16 @@ export function ProjectChip(props: {
       {props.params.place.browser.browserOpen ? (
         <PlaceBrowser
           pathRef={(node) => props.focus && (props.focus.path = node)}
+          registeringProject={
+            registration().saving() || props.params.place.browser.browserRegistering
+          }
           params={{
             browser: props.params.place.browser.browser,
             id: "new-session-place-browser",
             label: view().browserLabel,
             registerProjectPath: props.params.place.browser.browserProjectPath,
-            registeringProject: props.params.place.browser.browserRegistering,
             onBack: () => props.params.place.browser.showRoot(),
-            onRegisterProject: (path) =>
-              void props.params.place.browser.registerBrowserProject(path),
+            onRegisterProject: (path) => void registerProject(path),
             onClose: () => props.params.place.browser.close(),
             onApplyFolder: applyFolder,
           }}

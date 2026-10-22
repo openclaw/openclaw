@@ -11,7 +11,7 @@ import {
 } from "./browser/chrome.executables.js";
 import * as install from "./browser/extension-install-fixture.test-support.js";
 import { useExtensionInstallFixture } from "./browser/extension-install.test-support.js";
-import { noteChromeMcpBrowserReadiness } from "./doctor-browser.js";
+import { collectBrowserReadinessFindings } from "./doctor-browser.js";
 
 vi.mock("./browser/chrome.executables.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./browser/chrome.executables.js")>()),
@@ -47,7 +47,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-type BrowserConfig = NonNullable<Parameters<typeof noteChromeMcpBrowserReadiness>[0]["browser"]>;
+type BrowserConfig = NonNullable<Parameters<typeof collectBrowserReadinessFindings>[0]["browser"]>;
 function withProfile(
   profile: NonNullable<BrowserConfig["profiles"]>[string],
   name = "work",
@@ -90,19 +90,23 @@ async function diagnose(browser: BrowserConfig, overrides: DoctorHost = {}) {
     .mockReset()
     .mockImplementation(host.resolveChromeExecutable);
   vi.mocked(readBrowserVersion).mockReset().mockImplementation(host.readVersion);
-  const noteFn = vi.fn();
-  await noteChromeMcpBrowserReadiness(
-    { browser: { extensionRelay: { allowLegacyAuth: false }, ...browser } },
-    { noteFn },
-  );
-  return { noteFn, text: noteFn.mock.calls.map(([message]) => String(message)).join("\n") };
+  const findings = await collectBrowserReadinessFindings({
+    browser: { extensionRelay: { allowLegacyAuth: false }, ...browser },
+  });
+  return {
+    findings,
+    text: findings.map((finding) => `${finding.message}\n${finding.fixHint}`).join("\n"),
+  };
 }
 
 it("warns while legacy Browser Relay Authentication remains enabled", async () => {
-  const { noteFn } = await diagnose({ extensionRelay: { allowLegacyAuth: true } });
-  expect(noteFn).toHaveBeenCalledWith(
-    expect.stringContaining("browser.extensionRelay.allowLegacyAuth=true"),
-    "Browser relay authentication",
+  const { findings } = await diagnose({ extensionRelay: { allowLegacyAuth: true } });
+  expect(findings).toContainEqual(
+    expect.objectContaining({
+      category: "recommended",
+      severity: "warning",
+      message: expect.stringContaining("browser.extensionRelay.allowLegacyAuth=true"),
+    }),
   );
 });
 
@@ -110,8 +114,7 @@ it("warns when Chrome MCP is configured but Chrome is missing", async () => {
   const { text } = await diagnose({ defaultProfile: "user" }, { platform: "darwin" });
   expect(text).toContain("Google Chrome was not found");
   expect(text).toContain("brave://inspect/#remote-debugging");
-  expect(text).toContain("System browser profile cookie import is enabled");
-  expect(text).toContain("System browser profile discovery skipped");
+  expect(text).not.toContain("System browser profile cookie import");
 });
 
 it.each<[string, BrowserConfig, "managed" | "mcp" | false]>([
@@ -213,21 +216,25 @@ it("checks effective executables once per path and names only profiles missing a
     "/custom/chrome",
     "/global/missing-chrome",
   ]);
-  expect(text).toContain("No Chromium-based browser executable");
+  expect(text).toContain("A configured browser executable could not be used");
+  expect(text).toContain("Correct browser.executablePath");
   expect(text).toContain("profile(s) are configured: fallback.");
-  expect(text).not.toMatch(/custom|shared/);
+  expect(text).not.toContain("custom");
+  expect(text).not.toContain("shared");
 });
 
 it.each([
   ["143.0.7499.4", "linux", "too old"],
   ["144.0.7534.0", "win32", "Detected Chrome Google Chrome 144.0.7534.0"],
 ] as const)("reports Chrome MCP compatibility for %s", async (version, platform, expected) => {
-  const { noteFn, text } = await diagnose(withProfile(mcpProfile), {
+  const { findings, text } = await diagnose(withProfile(mcpProfile), {
     platform,
     resolveChromeExecutable: () => ({ kind: "chrome", path: "/chrome" }),
     readVersion: () => `Google Chrome ${version}`,
   });
-  expect(noteFn).toHaveBeenCalledTimes(1);
+  expect(findings).toHaveLength(1);
+  expect(findings[0]?.category).toBe(version.startsWith("143") ? "fix-now" : "recommended");
+  expect(findings[0]?.severity).toBe(version.startsWith("143") ? "warning" : "info");
   expect(text).toContain(expected);
   if (version.startsWith("143")) {
     expect(text).toContain("Chrome 144+");
@@ -235,7 +242,7 @@ it.each([
 });
 
 it("skips Chrome auto-detection when profiles use explicit userDataDir", async () => {
-  const { noteFn, text } = await diagnose(
+  const { findings, text } = await diagnose(
     withProfile({ ...mcpProfile, userDataDir: "/profiles/brave" }),
     {
       resolveChromeExecutable: () => {
@@ -243,7 +250,8 @@ it("skips Chrome auto-detection when profiles use explicit userDataDir", async (
       },
     },
   );
-  expect(noteFn).toHaveBeenCalled();
+  expect(findings).toHaveLength(1);
+  expect(findings[0]).toMatchObject({ category: "recommended", severity: "info" });
   expect(text).toContain("explicit Chromium user data directory");
   expect(text).toContain("brave://inspect/#remote-debugging");
 });
@@ -300,21 +308,17 @@ it.each([
   const value = await protectedProfiles(platform, installed);
   Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
   for (const allowSystemProfileImport of [false, undefined, true]) {
-    const noteFn = vi.fn();
-    await noteChromeMcpBrowserReadiness(
-      { browser: { allowSystemProfileImport, extensionRelay: { allowLegacyAuth: false } } },
-      { noteFn },
-    );
+    const findings = await collectBrowserReadinessFindings({
+      browser: { allowSystemProfileImport, extensionRelay: { allowLegacyAuth: false } },
+    });
     expect(value.accesses()).toEqual([]);
-    const notes = noteFn.mock.calls.map(([message]) => String(message)).join("\n");
-    if (platform === "darwin") {
-      expect(notes).toContain(
-        `cookie import is ${allowSystemProfileImport === false ? "disabled" : "enabled"}`,
-      );
-      expect(notes).toContain("profile discovery skipped");
-      expect(notes).not.toContain("cookie databases found:");
-    }
+    const notes = findings.map((finding) => `${finding.message}\n${finding.fixHint}`).join("\n");
+    expect(notes).not.toContain("cookie databases found:");
+    expect(notes).not.toContain("System browser profile cookie import");
     if (installed) {
+      expect(findings).toContainEqual(
+        expect.objectContaining({ category: "recommended", severity: "info" }),
+      );
       expect(notes).toContain("native bootstrap was not inspected");
       expect(notes).toContain("openclaw browser extension status --json");
       expect(notes).not.toContain("not fully registered");
