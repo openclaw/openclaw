@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../src/gateway/control-ui-bootstrap-contract.ts";
 import { captureSessionRowGeneration } from "../src/gateway/session-row-identity.js";
@@ -21,6 +21,7 @@ import { shareSidebarSessionRows } from "../src/gateway/session-row-presentation
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { isChatHistoryState } from "../ui/src/lib/protocol-validators.generated/history-state.js";
 import { createColdLoadProbeInitScript } from "../ui/src/test-helpers/control-ui-cold-load-probes.ts";
+import type { MockGatewayWindow } from "../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import {
   createControlUiMockBootstrapConfig,
   installControlUiMockBootstrapDocument,
@@ -507,15 +508,18 @@ const dirty = explicitBuildId
 const bundleDir = values["bundle-dir"]
   ? path.resolve(values["bundle-dir"])
   : path.join(artifactDir, "ui");
-if (gatewayUrl && !explicitBuildId) {
-  const html = await readFile(path.join(bundleDir, "index.html"), "utf8");
+async function readBundleBuildId(directory: string): Promise<string> {
+  const html = await readFile(path.join(directory, "index.html"), "utf8");
   const identity = html.match(
     /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(\{.*?\});<\/script>/su,
   )?.[1];
   if (!identity) {
-    throw new Error("Gateway benchmarking requires a bundle with embedded build identity");
+    throw new Error("Prebuilt benchmarking requires a bundle with embedded build identity");
   }
-  buildId = normalizeControlUiBuildInfo(JSON.parse(identity)).buildId;
+  return normalizeControlUiBuildInfo(JSON.parse(identity)).buildId;
+}
+if (values["bundle-dir"] && !explicitBuildId) {
+  buildId = await readBundleBuildId(bundleDir);
 }
 const server = gatewayUrl
   ? undefined
@@ -529,12 +533,20 @@ const comparisonBundleDirs = values["compare-bundle-dir"].map((directory) =>
 const parkedBaselineDir = path.join(artifactDir, "baseline-bundle");
 const bundleSlots = [parkedBaselineDir, ...comparisonBundleDirs];
 let activeBundle = 0;
-async function selectComparisonBundle(index: number) {
+async function selectComparisonBundle(index: number, page?: Page) {
   if (!comparisonBundleDirs.length || activeBundle === index) {
     return;
   }
   await server!.replaceBuild(bundleSlots[index]!, bundleSlots[activeBundle]!);
   activeBundle = index;
+  buildId = explicitBuildId ?? (await readBundleBuildId(bundleDir));
+  await page?.evaluate((id) => {
+    const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+    if (!gateway) {
+      throw new Error("Mock Gateway is not installed");
+    }
+    gateway.setServerBuildId(id);
+  }, buildId);
 }
 const dashboardFont = values["dashboard-widget"]
   ? await readFile("ui/public/fonts/space-grotesk-latin.woff2")
@@ -1116,7 +1128,7 @@ try {
     snapshotSaves.push(snapshotSave);
     for (let index = 1; index < bundleSlots.length; index++) {
       await restoreColdLoadWarmState(page, warmStorage);
-      await selectComparisonBundle(index);
+      await selectComparisonBundle(index, page);
       await page.reload({ waitUntil: "domcontentloaded" });
       await settle();
       await expandSidebar();
@@ -1143,7 +1155,7 @@ try {
       await route.fallback();
     });
   }
-  await selectComparisonBundle(0);
+  await selectComparisonBundle(0, page);
   for (let run = 0; run < runs; run++) {
     const cpuPhases: Record<string, ColdLoadCpuTables> = {};
     async function recordCpu(phase: string, profile: Parameters<typeof mapColdLoadCpuProfile>[0]) {
@@ -1176,7 +1188,7 @@ try {
     if (!firstLoad) {
       await restoreColdLoadWarmState(page, warmStates[bundleIndex]!);
     }
-    await selectComparisonBundle(bundleIndex);
+    await selectComparisonBundle(bundleIndex, page);
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
         ? "delta"
@@ -1500,8 +1512,17 @@ try {
         deltas: number;
         milliseconds: Record<string, number>;
       }> = [];
+      const streamingTrace: unknown[] = [];
+      collectedTrace = streamingTrace;
       if (cpuProfile) {
         await cdp.send("Profiler.start");
+      }
+      if (traced) {
+        await cdp.send("Tracing.start", {
+          categories:
+            "toplevel,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline.stack,v8",
+          transferMode: "ReportEvents",
+        });
       }
       if (values["streaming-allocations"]) {
         await cdp.send("HeapProfiler.startSampling", {
@@ -1581,6 +1602,17 @@ try {
       }
       if (cpuProfile) {
         await recordCpu("streaming", (await cdp.send("Profiler.stop")).profile);
+      }
+      if (traced) {
+        const complete = new Promise<void>((resolve) => {
+          cdp.once("Tracing.tracingComplete", () => resolve());
+        });
+        await cdp.send("Tracing.end");
+        await complete;
+        await writeFile(
+          path.join(artifactDir, `run-${run + 1}.streaming.trace.json`),
+          JSON.stringify({ traceEvents: streamingTrace }),
+        );
       }
       streaming = {
         ...(await page.evaluate(() => Reflect.get(window, "__streamingReply").finish())),

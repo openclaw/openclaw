@@ -39,7 +39,7 @@ import {
 } from "./sidebar-layout.ts";
 
 // mock-isolation: isolate board data and presentation without registering the real board renderer.
-vi.mock("../../components/board/board-view.ts", () => {
+vi.mock("../../components/board/board-view.tsx", () => {
   if (!customElements.get("openclaw-board-view")) {
     customElements.define("openclaw-board-view", class extends HTMLElement {});
   }

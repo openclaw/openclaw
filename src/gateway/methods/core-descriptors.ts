@@ -141,8 +141,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   // Resolve identity before the router captures the caller's profile guard.
   ["users.self", "users", "operator.read", "<=2026.7", PROFILE_DEPENDENT],
   ["users.linkEmail", "users", "operator.admin", "<=2026.7", PROFILE_DEPENDENT],
-  ["users.setDisplayName", "users", "operator.write", "<=2026.7", PROFILE_DEPENDENT],
-  ["users.setAvatar", "users", "operator.write", "<=2026.7", PROFILE_DEPENDENT],
+  ["users.setDisplayName", "users", "operator.read", "<=2026.7", PROFILE_DEPENDENT],
+  ["users.setAvatar", "users", "operator.read", "<=2026.7", PROFILE_DEPENDENT],
   ["users.setRole", "users", "operator.admin", "2026.8", PROFILE_DEPENDENT],
   ["users.listAuthLinks", "users", "operator.read", "2026.8", PROFILE_DEPENDENT],
   ["users.listModelAccounts", "users", "operator.read", "2026.8", PROFILE_DEPENDENT],

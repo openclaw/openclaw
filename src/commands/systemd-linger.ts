@@ -27,14 +27,13 @@ async function readGatewayServiceLingerStatus(env: NodeJS.ProcessEnv) {
 export async function ensureSystemdUserLingerInteractive(params: {
   runtime: RuntimeEnv;
   prompter?: LingerPrompter;
-  env?: NodeJS.ProcessEnv;
   reason?: string;
   requireConfirm?: boolean;
 }): Promise<void> {
   if (process.platform !== "linux") {
     return;
   }
-  const env = params.env ?? process.env;
+  const env = process.env;
   const prompter: LingerPrompter = params.prompter ?? { note };
   const title = "Systemd";
   if (!(await isSystemdUserServiceAvailable())) {
@@ -92,12 +91,11 @@ export async function ensureSystemdUserLingerInteractive(params: {
 
 export async function ensureSystemdUserLingerNonInteractive(params: {
   runtime: RuntimeEnv;
-  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   if (process.platform !== "linux") {
     return;
   }
-  const env = params.env ?? process.env;
+  const env = process.env;
   if (!(await isSystemdUserServiceAvailable())) {
     return;
   }

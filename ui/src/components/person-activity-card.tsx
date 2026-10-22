@@ -42,7 +42,7 @@ import {
   HovercardControlsContext,
 } from "./portaled-hovercard-focus.ts";
 import { Icon } from "./solid/icon.tsx";
-import "./viewer-facepile.ts";
+import "./solid/viewer-facepile.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 

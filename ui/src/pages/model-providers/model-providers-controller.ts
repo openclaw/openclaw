@@ -292,7 +292,6 @@ export function createModelProviders(
         gateway.isRouteDataCurrent(data)
       ) {
         supplemental.adoptCoreData(data.client, data.data);
-        core.adopt();
         if (!catalogCurrent) {
           retryCatalog();
         }
@@ -593,11 +592,8 @@ export function createModelProviders(
       connected: gatewaySnapshot.phase === "connected",
       loading: state.data === null && !rosterError && !noSelectableAgents,
       refreshing: core.loading,
-      coreReceipt: core.receipt,
-      scopeError: rosterError ?? (noSelectableAgents ? t("agents.noAgents") : null),
       error: rosterError ?? (noSelectableAgents ? t("agents.noAgents") : data.error),
       providerUsageFailed: data.providerUsageFailed,
-      supplementalLoading: loaderPending || supplemental.loading,
       updatedAt: data.updatedAt,
       onOpenUsage: () => context.navigate("usage"),
       credentialAgentLabel: agentLabel,

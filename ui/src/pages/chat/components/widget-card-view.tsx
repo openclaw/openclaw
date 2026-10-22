@@ -358,7 +358,7 @@ function PreviewFrame(props: {
   );
 }
 
-const loadMcpAppView = () => import("../../../components/mcp-app-view-registration.ts");
+const loadMcpAppView = () => import("../../../components/mcp-app-view.tsx");
 
 const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.tsx");
 

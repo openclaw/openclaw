@@ -142,6 +142,11 @@ function requestHost(
     } satisfies GenerationWorkerCallback,
     [],
   );
+  const progressSignal = context?.progressSignal;
+  if (progressSignal) {
+    Atomics.add(progressSignal, 0, 1);
+    Atomics.notify(progressSignal, 0);
+  }
   const deadline = performance.now() + 15_000;
   for (;;) {
     // SAFETY: This private port is transferred only to the matching host callback protocol.
@@ -259,6 +264,9 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
               command.entryFile,
               (run) => run(),
               (filename) => mapSource(command.captureId, filename),
+              undefined,
+              undefined,
+              command.bundledReloadSource,
             ),
           );
           const captureRecovery = artifact.captureRecoverySource.bind(artifact);

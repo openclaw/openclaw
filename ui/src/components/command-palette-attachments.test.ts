@@ -57,8 +57,7 @@ function createLoading(context?: ApplicationContext) {
         context,
         commandPaletteElement: COMMAND_PALETTE_ELEMENT,
         lazyCustomElements: createLazyCustomElementRequests(),
-        chatNavigationOptions: () => undefined,
-        navigate: () => {},
+        shellNavigation: { chatNavigationOptions: () => undefined, navigate: () => {} },
       },
       { request: () => {}, clear: () => {}, cancel: () => {}, pending: () => false },
     ).loading;

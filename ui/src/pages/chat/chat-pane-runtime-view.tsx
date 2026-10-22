@@ -137,7 +137,14 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       runtime.start();
     }
     const context = runtime.context;
+    // The pane retains mobile presentation while its optional host is absent.
+    onSettled(() => runtime.observeMobileViewport());
     const parentSession = projectOwner(runtime.parentSession, (owner) => owner.read(), Object.is);
+    const transcriptPosition = projectOwner(
+      runtime.transcript,
+      (owner) => owner.isPositionSettled,
+      Object.is,
+    );
     const repository = createMemo(() => {
       const target = runtime.repository.target;
       return target
@@ -232,7 +239,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       runtime.questionPromptState,
       state && chatGoalOperations(state),
       runtime.activeSessionResources,
-      runtime.transcript,
       runtime.sessionCompanionThreads,
       nativeGatewaysCapability(),
       lazySidebarElements,
@@ -248,6 +254,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         publication()?.read();
         repository()?.read();
         parentSession.read();
+        transcriptPosition.read();
         progress.read();
         realtime()?.read();
         theme.preferences.read();

@@ -35,8 +35,7 @@ function loaderHost<T extends object>(elements: T) {
     elements,
     commandPaletteElement: COMMAND_PALETTE_ELEMENT,
     lazyCustomElements: createLazyCustomElementRequests(),
-    chatNavigationOptions: () => undefined,
-    navigate: () => {},
+    shellNavigation: { chatNavigationOptions: () => undefined, navigate: () => {} },
   };
 }
 function mountLoading(state: ShellCommandPaletteOwner["loading"], onClose: () => void) {

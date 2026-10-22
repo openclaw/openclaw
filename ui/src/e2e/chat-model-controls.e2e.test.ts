@@ -76,6 +76,8 @@ suite.define(() => {
           elapsedMs: performance.now() - openStarted,
           scriptMs: metric("ScriptDuration", openBefore, openAfter),
           taskMs: metric("TaskDuration", openBefore, openAfter),
+          layoutMs: metric("LayoutDuration", openBefore, openAfter),
+          styleMs: metric("RecalcStyleDuration", openBefore, openAfter),
         }),
       );
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
@@ -143,6 +145,8 @@ suite.define(() => {
         elapsedMs: performance.now() - searchStarted,
         scriptMs: metric("ScriptDuration", searchBefore, searchAfter),
         taskMs: metric("TaskDuration", searchBefore, searchAfter),
+        layoutMs: metric("LayoutDuration", searchBefore, searchAfter),
+        styleMs: metric("RecalcStyleDuration", searchBefore, searchAfter),
       };
       console.log(JSON.stringify({ proof: "model-catalog-search-typing", ...searchTimings }));
       const result = picker.locator('[data-chat-model-option="example/model-999"]');
@@ -215,13 +219,59 @@ suite.define(() => {
         taskMs: metric("TaskDuration", selectionBefore, selectionAfter),
       };
       console.log(JSON.stringify({ proof: "model-catalog-selection", ...selectionTimings }));
-      await cdp.detach();
       if (route === "chat") {
         expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
           expectedSessionId: "session:agent:main:main",
           model: "example/model-999",
         });
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        const sessions = page.locator('[data-navigation-view="sessions"]');
+        if ((await sessions.getAttribute("aria-pressed")) !== "true") {
+          await sessions.click();
+        }
+        await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe("true");
+        const toggleSidebar = async () => {
+          for (const pressed of ["false", "true"]) {
+            await sessions.click();
+            await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe(pressed);
+            await page.locator(".shell").evaluate(async (shell) => {
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+              });
+              await Promise.all(shell.getAnimations().map((animation) => animation.finished));
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              });
+            });
+          }
+        };
+        await toggleSidebar();
+        const requestsBeforeToggle = (await gateway.getRequests("models.list")).length;
+        const toggleBefore: typeof before = await cdp.send("Performance.getMetrics");
+        const toggleStarted = performance.now();
+        await toggleSidebar();
+        const toggleAfter: typeof before = await cdp.send("Performance.getMetrics");
+        expect(await trigger.textContent()).toContain("Model 0999");
+        expect((await gateway.getRequests("models.list")).length).toBe(requestsBeforeToggle);
+        const toggleTimings = {
+          route,
+          models: models.length,
+          viewport: contextOptions.viewport,
+          elapsedMs: performance.now() - toggleStarted,
+          scriptMs: metric("ScriptDuration", toggleBefore, toggleAfter),
+          taskMs: metric("TaskDuration", toggleBefore, toggleAfter),
+          layoutMs: metric("LayoutDuration", toggleBefore, toggleAfter),
+          styleMs: metric("RecalcStyleDuration", toggleBefore, toggleAfter),
+        };
+        console.log(JSON.stringify({ proof: "model-catalog-sidebar-toggle", ...toggleTimings }));
+        if (artifactDir) {
+          await writeFile(
+            `${artifactDir}/sidebar-timings.json`,
+            `${JSON.stringify(toggleTimings, null, 2)}\n`,
+          );
+        }
       }
+      await cdp.detach();
     });
   });
 

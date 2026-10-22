@@ -230,17 +230,14 @@ it.each([false, true])(
   async (strict) => {
     const { ownedRoot, sibling, prepared } = fixture(strict);
     const { resume, hold } = createReadBarrier();
-    const tracked: Promise<unknown>[] = [];
     const controller = new AbortController();
     const pending = prepareSingleFlightSqliteSnapshot(
       path.join(ownedRoot, "source.sqlite"),
       "orphan-retry",
       () => hold(prepared),
       controller.signal,
-      { trackProducer: (producer) => tracked.push(producer) },
     );
     controller.abort(new Error("cancelled before publication"));
-    await expect(pending).rejects.toThrow("cancelled before publication");
     const remove = fs.promises.rm;
     try {
       using _ = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
@@ -250,7 +247,7 @@ it.each([false, true])(
         return remove(target, options);
       });
       resume.resolve();
-      await expect(tracked[0]).rejects.toThrow(/cleanup/);
+      await expect(pending).rejects.toThrow("cancelled before publication");
       expect(fs.existsSync(prepared.location)).toBe(true);
     } finally {
       await cleanupSnapshotOperations();

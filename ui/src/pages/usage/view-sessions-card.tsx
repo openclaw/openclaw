@@ -2,7 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { For, Show, createMemo, createSignal } from "solid-js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
-import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";

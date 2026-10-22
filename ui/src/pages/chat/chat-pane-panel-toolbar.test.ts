@@ -14,6 +14,7 @@ import {
 import {
   chatPaneHeaderSessionMenu,
   mountChatPaneHeader,
+  openNativeMenu,
   renderPaneHeaderInto,
 } from "./components/chat-pane-header.test-support.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
@@ -181,12 +182,7 @@ it("retains focused session menu controls through header refresh and restores fo
   const menu = mounted.container.querySelector("openclaw-chat-header-session-menu")!;
   await menu.updateComplete;
   const trigger = menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!;
-  trigger.click();
-  await waitForSolid(() =>
-    expect(menu.querySelector(".chat-header-session-menu__panel")?.matches(":popover-open")).toBe(
-      true,
-    ),
-  );
+  await openNativeMenu(menu, "submenu:advanced");
   menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')!.click();
   await waitForSolid(() =>
     expect(menu.querySelector('[data-value="submenu:open-in"]')).not.toBeNull(),

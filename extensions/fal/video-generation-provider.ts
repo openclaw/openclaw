@@ -1,3 +1,4 @@
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   readGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
@@ -144,10 +145,6 @@ function readFalCompletedQueueResult(payload: unknown) {
   };
 }
 
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
-
 function isFalSeedance2Model(model: string): boolean {
   return SEEDANCE_2_VIDEO_MODELS.includes(model as (typeof SEEDANCE_2_VIDEO_MODELS)[number]);
 }
@@ -170,7 +167,7 @@ function resolveFalReferenceUrl(
   if (!asset?.buffer) {
     throw new Error(`fal ${label} is missing media data.`);
   }
-  return toDataUrl(asset.buffer, normalizeOptionalString(asset.mimeType) ?? defaultMimeType);
+  return toImageDataUrl({ buffer: asset.buffer, mimeType: asset.mimeType, defaultMimeType });
 }
 
 function applyFalSeedanceControls(
@@ -233,7 +230,7 @@ function buildFalVideoRequestBody(
     requestBody.image_url =
       normalizeOptionalString(input.url) ??
       (input.buffer
-        ? toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png")
+        ? toImageDataUrl({ buffer: input.buffer, mimeType: input.mimeType })
         : undefined);
   }
   // MiniMax Live on fal currently documents prompt + optional image_url only.

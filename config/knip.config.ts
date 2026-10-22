@@ -146,6 +146,9 @@ const repositoryScriptEntries = [
   "scripts/perf/heap-headroom.ts!",
   // Maintainers invoke this isolated Doctor metadata-retention benchmark by path.
   "scripts/perf/doctor-metadata-retention.ts!",
+  // The connected-idle benchmark runs by path and loads its instrumentation with --import.
+  "scripts/perf/idle-gateway-measure.ts!",
+  "scripts/perf/idle-gateway-measure-preload.mjs!",
   // Worker-environment shutdown proof invokes this measurement CLI by path.
   "scripts/perf/worker-environment-shutdown-measure.ts!",
   // The branch-rotation guide invokes the driver, which loads its IPC preload by path.
@@ -967,7 +970,6 @@ const config = {
     "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
     // The presentation fixture and focused UI tests consume these seams;
     // the full-tree companion scan continues to audit their actual consumers.
-    "ui/src/components/provider-icon.ts": ["exports"],
     "ui/src/components/terminal/terminal-panel.ts": ["types"],
     "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],

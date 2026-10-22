@@ -256,9 +256,16 @@ runtime-store slots. Non-bundled instances also own a captured source artifact.
 Package plugins capture their package inputs when the instance is created.
 Standalone files capture their entry and statically known inputs
 without copying the surrounding workspace. Bundled runtime and setup modules,
-including TypeScript source entries, share the host's code identity; each inventory
-still owns its registered callbacks and cleanup. Loading edited bundled code requires
-a Gateway restart; rebuild first when the installation loads compiled output.
+including TypeScript source entries, share the host's code identity during ordinary
+inventory loading; each inventory owns its registered callbacks and cleanup.
+Explicit reload captures the selected plugin's code and plugin-only build chunks
+while retaining canonical host and SDK modules. Rebuild before reload when the
+installation loads compiled output. Changes to host or SDK code require a Gateway restart.
+
+Source preparation workers wake synchronous host readers after posting results,
+callback requests, and consumption acknowledgements. The shared sequence is a
+progress hint only: the host still services the transport and checks the actual
+task receipt and deadline. Readers retain bounded polling for worker failures.
 
 Doctor retains an unexecuted source snapshot across its maintenance phases.
 Each phase admits fresh callback instances with private module files and settles

@@ -276,6 +276,27 @@ async function settingsSection(
   await waitForControlUiRoute(page, { routeId, pathname: path });
 }
 
+async function prepareModelPicker(page: Page) {
+  await prepareChat(page);
+  await page.locator(`${activePane} .agent-chat__input textarea`).first().click();
+  const trigger = page.locator(`${activePane} [data-chat-model-select]`);
+  await trigger.waitFor({ state: "visible" });
+  await trigger.click();
+  await page.locator('[data-chat-model-option="example/model-999"]').waitFor({ state: "attached" });
+  await trigger.click();
+}
+
+async function searchModels(page: Page) {
+  await page.locator("[data-chat-model-search]").pressSequentially(modelQuery);
+  await page.locator('[data-chat-model-option="example/model-999"]').waitFor();
+  await page.waitForFunction(
+    () =>
+      [...document.querySelectorAll<HTMLElement>("[data-chat-model-option]")].filter((option) =>
+        option.checkVisibility(),
+      ).length === 1,
+  );
+}
+
 export const interactionScenarios: readonly InteractionScenario[] = [
   {
     id: "session-switch",
@@ -387,28 +408,23 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     id: "model-picker-open-search",
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "The 1,000-model picker opens and filters to Warm model 0999.",
-    prepare: async (page) => {
-      await prepareChat(page);
-      await page.locator(`${activePane} .agent-chat__input textarea`).first().click();
-      const trigger = page.locator(`${activePane} [data-chat-model-select]`);
-      await trigger.waitFor({ state: "visible" });
-      await trigger.click();
-      await page
-        .locator('[data-chat-model-option="example/model-999"]')
-        .waitFor({ state: "attached" });
-      await trigger.click();
-    },
+    prepare: prepareModelPicker,
     run: async (page) => {
       await page.locator(`${activePane} [data-chat-model-select]`).click();
-      await page.locator("[data-chat-model-search]").pressSequentially(modelQuery);
-      await page.locator('[data-chat-model-option="example/model-999"]').waitFor();
-      await page.waitForFunction(
-        () =>
-          [...document.querySelectorAll<HTMLElement>("[data-chat-model-option]")].filter((option) =>
-            option.checkVisibility(),
-          ).length === 1,
-      );
+      await searchModels(page);
     },
+  },
+  {
+    id: "model-picker-search",
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected: "The already-open 1,000-model picker filters to Warm model 0999.",
+    prepare: async (page) => {
+      await prepareModelPicker(page);
+      await page.locator(`${activePane} [data-chat-model-select]`).click();
+      await page.locator("[data-chat-model-search]").waitFor();
+      await frames(page);
+    },
+    run: searchModels,
   },
   ...(["sessions", "cron"] as const).map((route): InteractionScenario => ({
     id: `${route}-open`,

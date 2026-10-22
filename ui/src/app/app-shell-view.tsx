@@ -346,7 +346,7 @@ export function ApplicationShell(props: {
               retryContext={view().context}
               retryEnabled={view().gatewayConnected}
               retentionScope={view().presentationScope}
-              onNotFound={props.host.recoverNotFoundRoute}
+              onNotFound={() => props.host.shellNavigation.recoverNotFoundRoute()}
               notFoundRecoveryReady={view().gatewayConnected}
             />
           </ShellLayoutProvider>
@@ -429,11 +429,11 @@ export function ApplicationShell(props: {
             onClose: () => view().context.overlays.closeDevicePairSetup(),
             onManageDevices: () => {
               view().context.overlays.closeDevicePairSetup();
-              props.host.navigate("devices");
+              props.host.shellNavigation.navigate("devices");
             },
             onGetApps: () => {
               view().context.overlays.closeDevicePairSetup();
-              props.host.navigate("apps");
+              props.host.shellNavigation.navigate("apps");
             },
           }}
         />
