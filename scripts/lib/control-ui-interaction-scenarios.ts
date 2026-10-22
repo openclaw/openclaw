@@ -24,28 +24,16 @@ export type InteractionScenario = {
   run: (page: Page, gateway: MockGatewayControls) => Promise<void>;
 };
 
-export function createInteractionFixture(
-  buildId: string,
-  version: string,
-): ControlUiMockGatewayScenario {
+export function createInteractionFixture(buildId: string, version: string) {
   const sessions = Array.from({ length: 1_000 }, (_, index) => ({
     key: sessionKeys[index] ?? `agent:main:interaction-${index}`,
     sessionId: `interaction-session-${index}`,
+    agentId: "main",
     kind: "direct" as const,
     label: `Interaction ${String(index).padStart(4, "0")}`,
     updatedAt: 1_800_000_000_000 - index * 1_000,
     childOwnerSessionKeys: [],
   }));
-  const list = (rows: typeof sessions) => ({
-    ts: 1_800_000_000_000,
-    path: "",
-    count: rows.length,
-    totalCount: rows.length,
-    hasMore: false,
-    nextOffset: null,
-    defaults: { model: "model-0", modelProvider: "example", contextTokens: 128_000 },
-    sessions: rows,
-  });
   const jobs: CronJob[] = Array.from({ length: 500 }, (_, index) => ({
     id: `interaction-job-${index}`,
     name: `Warm automation ${String(index).padStart(4, "0")}`,
@@ -103,18 +91,6 @@ export function createInteractionFixture(
       contextWindow: 128_000,
     })),
     methodResponses: {
-      "sessions.list": {
-        cases: [
-          ...Array.from({ length: sessionQuery.length }, (_, index) => {
-            const search = sessionQuery.slice(0, index + 1);
-            return {
-              match: { search },
-              response: list(sessions.filter((row) => row.label.includes(search))),
-            };
-          }),
-          { response: list(sessions) },
-        ],
-      },
       "cron.list": cronListResponseFixture([
         ...cronCases,
         ...Array.from({ length: 10 }, (_, index) => ({
@@ -133,7 +109,7 @@ export function createInteractionFixture(
         nextOffset: null,
       },
     },
-  };
+  } satisfies ControlUiMockGatewayScenario;
 }
 
 async function frames(page: Page) {
@@ -332,9 +308,20 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     id: "sidebar-toggle",
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "The 1,000-session sidebar closes and reopens.",
-    prepare: async (page) => {
+    prepare: async (page, gateway) => {
       await prepareChat(page);
       await navigation(page, "sessions");
+      const more = page.locator(
+        ".sidebar-session-pagination--roster > .sidebar-session-pagination__button",
+      );
+      for (const offset of [200, 400, 600, 800]) {
+        await more.click();
+        await gateway.waitForRequest("sessions.list", {
+          match: { source: "sidebar", offset, limit: 200 },
+        });
+        await frames(page);
+      }
+      await more.waitFor({ state: "hidden" });
     },
     run: async (page) => {
       if (await page.locator(".shell--mobile-nav").count()) {
@@ -426,7 +413,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
   ...(["sessions", "cron"] as const).map((route): InteractionScenario => ({
     id: `${route}-open`,
     route: "/new",
-    expected: `The warm ${route} route opens from the Pages navigation.`,
+    expected: `The warm ${route} route opens its default window from the Pages navigation.`,
     prepare: async (page, gateway) => warmRoute(page, gateway, route),
     run: async (page, gateway) => {
       await (await routeLink(page, route)).click();

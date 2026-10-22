@@ -5,6 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type CDPSession, type Page } from "playwright";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -12,6 +13,7 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import { mapColdLoadCpuProfile, summarizeCpuProfile } from "./lib/control-ui-cold-load-trace.ts";
 import {
   createInteractionFixture,
@@ -31,6 +33,7 @@ const { values } = parseArgs({
     viewport: { type: "string", default: "both" },
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
+    "invalidation-tracking": { type: "boolean", default: false },
   },
 });
 const pairs = Number(values.pairs);
@@ -144,6 +147,7 @@ try {
         collection: values.trace
           ? "CDP trace + 1ms CPU profiler (overhead included)"
           : "untraced CDP metrics",
+        invalidationTracking: values.trace && values["invalidation-tracking"],
         fixture: { sessions: 1000, messagesPerSession: 400, models: 1000, cronJobs: 500 },
         acceptance:
           "For fixed steps: >=10 serial AB pairs per viewport, all median/p95/min/max cells reviewed; any >20% regression stops landing. No boot growth beyond 64 B.",
@@ -192,10 +196,24 @@ try {
           let profiling = false;
           const events: unknown[] = [];
           try {
-            const gateway = await installMockGateway(
-              page,
-              createInteractionFixture(slot.build.buildId, slot.build.version),
-            );
+            const fixture = createInteractionFixture(slot.build.buildId, slot.build.version);
+            const sessions = createTeamScaleSidebarListOwner({
+              rows: fixture.sessions,
+              viewerProfileId: "interaction-viewer",
+              now: 1_800_000_000_000,
+              defaults: { model: "model-0", modelProvider: "example", contextTokens: 128_000 },
+              owners: [],
+            });
+            const gateway = await installMockGateway(page, fixture, {
+              requestHandlers: {
+                "sessions.list": (params) => {
+                  if (!isRecord(params)) {
+                    throw new Error("Expected sessions.list query parameters");
+                  }
+                  return sessions.list(params).result;
+                },
+              },
+            });
             await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
             await scenario.prepare(page, gateway);
             await page.evaluate(() => document.fonts.ready.then(() => undefined));
@@ -207,7 +225,12 @@ try {
                 events.push(...value),
               );
               await cdp.send("Tracing.start", {
-                categories: "toplevel,blink.user_timing,devtools.timeline",
+                categories: [
+                  "toplevel,blink.user_timing,devtools.timeline",
+                  ...(values["invalidation-tracking"]
+                    ? ["disabled-by-default-devtools.timeline.invalidationTracking"]
+                    : []),
+                ].join(","),
                 transferMode: "ReportEvents",
               });
               tracing = true;
