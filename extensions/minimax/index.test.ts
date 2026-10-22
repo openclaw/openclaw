@@ -9,7 +9,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { MINIMAX_OAUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import type {
+  ModelProviderConfig,
+  ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import minimaxPlugin from "./index.js";
@@ -43,9 +46,13 @@ const cnApi = "https://api.minimaxi.com/anthropic";
 const currentCnApi = "https://api.minimax.cn/anthropic";
 const globalToken = "https://account.minimax.io/oauth2/token";
 const cnToken = "https://account.minimaxi.com/oauth2/token";
-const modelConfig = (baseUrl: string, provider = "minimax-portal") => ({
-  models: { providers: { [provider]: { baseUrl, models: [] } } },
-});
+function modelConfig(
+  baseUrl: string,
+  provider = "minimax-portal",
+  extra: Partial<ModelProviderConfig> = {},
+) {
+  return { models: { providers: { [provider]: { baseUrl, models: [], ...extra } } } };
+}
 const portalOutcome = (profileId: string | undefined, status: "ready" | "unavailable") => [
   { provider: "minimax-portal", profileId, status },
 ];
@@ -57,6 +64,15 @@ function catalogContext(overrides: Partial<ProviderCatalogContext> = {}): Provid
     resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
     ...overrides,
   };
+}
+
+function runCatalog(provider: ProviderPlugin, overrides: Partial<ProviderCatalogContext>) {
+  return runProviderCatalog({ provider, ...catalogContext(overrides) });
+}
+
+function expectCatalogHeaders(key: string | null, bearer: string | null) {
+  const headers = new Headers(vi.mocked(fetch).mock.calls[0]?.[1]?.headers);
+  expect([headers.get("x-api-key"), headers.get("authorization")]).toEqual([key, bearer]);
 }
 
 async function registeredProviders(baseUrl?: string) {
@@ -140,17 +156,12 @@ describe("minimax provider hooks", () => {
           : new Response(null, { status: 401 }),
       );
       vi.stubGlobal("fetch", fetchMock);
-      const result = await runProviderCatalog({
-        ...catalogContext(),
-        provider: apiProvider,
+      const result = await runCatalog(apiProvider, {
         config: {
           models: {
             providers: {
-              minimax: { baseUrl, ...(api ? { api } : {}), models: [] },
-              "minimax-portal": {
-                baseUrl: "https://other-account.example.com/anthropic",
-                models: [],
-              },
+              ...modelConfig(baseUrl, "minimax", { api }).models.providers,
+              ...modelConfig("https://other-account.example.com/anthropic").models.providers,
             },
           },
         },
@@ -164,9 +175,7 @@ describe("minimax provider hooks", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock.mock.calls[0]?.[0]).toBe(expectedEndpoint);
-      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-      expect(headers.get("x-api-key")).toBe(api ? null : "selected-api-key");
-      expect(headers.get("authorization")).toBe(api ? "Bearer selected-api-key" : null);
+      expectCatalogHeaders(api ? null : "selected-api-key", api ? "Bearer selected-api-key" : null);
       expect(result).toMatchObject({
         provider: {
           baseUrl: expectedBaseUrl,
@@ -185,13 +194,7 @@ describe("minimax provider hooks", () => {
 
     const catalog = await portalProvider.catalog?.run(
       catalogContext({
-        config: {
-          models: {
-            providers: {
-              "minimax-portal": { baseUrl: globalApi, apiKey: "explicit-key", models: [] },
-            },
-          },
-        },
+        config: modelConfig(globalApi, "minimax-portal", { apiKey: "explicit-key" }),
         resolveProviderAuth: () => ({
           apiKey: MINIMAX_OAUTH_MARKER,
           discoveryApiKey: "oauth-token",
@@ -204,21 +207,16 @@ describe("minimax provider hooks", () => {
     const provider = catalog && "provider" in catalog ? catalog.provider : undefined;
     expect(provider?.apiKey).toBe("explicit-key");
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.minimax.io/anthropic/v1/models");
-    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-    expect(headers.get("x-api-key")).toBe("explicit-key");
-    expect(headers.get("authorization")).toBeNull();
+    expectCatalogHeaders("explicit-key", null);
   });
 
   it.each([undefined, "oauth"] as const)(
     "keeps selected profile mode %s coherent through the shared catalog wrapper",
     async (mode) => {
-      const fetchMock = vi.mocked(fetch);
       const legacyToken = mode === undefined;
       const apiKey = mode === "oauth" ? MINIMAX_OAUTH_MARKER : "MINIMAX_API_KEY";
 
-      const result = await runProviderCatalog({
-        provider: portalProvider,
-        ...catalogContext(),
+      const result = await runCatalog(portalProvider, {
         resolveProviderApiKey: () => ({
           apiKey,
           discoveryApiKey: legacyToken ? undefined : "selected-profile-credential",
@@ -237,9 +235,7 @@ describe("minimax provider hooks", () => {
       expect(result?.outcomes).toMatchObject(portalOutcome("minimax-portal:selected", "ready"));
       const provider = result && "provider" in result ? result.provider : undefined;
       expect(provider?.apiKey).toBe(apiKey);
-      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-      expect(headers.get("x-api-key")).toBeNull();
-      expect(headers.get("authorization")).toBe("Bearer selected-profile-credential");
+      expectCatalogHeaders(null, "Bearer selected-profile-credential");
     },
   );
 
@@ -250,9 +246,7 @@ describe("minimax provider hooks", () => {
   ] as const)(
     "does not complete matching markers with %s",
     async (_name, selectedProfileId, resolvedProfileId, mode) => {
-      const result = await runProviderCatalog({
-        provider: portalProvider,
-        ...catalogContext(),
+      const result = await runCatalog(portalProvider, {
         resolveProviderApiKey: () => ({
           apiKey: "MINIMAX_OAUTH_TOKEN",
           profileId: selectedProfileId,
@@ -468,10 +462,7 @@ describe("minimax provider hooks", () => {
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       expect(url).toBe("https://api.minimax.io/v1/token_plan/remains");
       return Response.json({
-        data: {
-          current_interval_total_count: 100,
-          current_interval_usage_count: 98,
-        },
+        data: { current_interval_total_count: 100, current_interval_usage_count: 98 },
       });
     });
 

@@ -265,6 +265,7 @@ const { values } = parseArgs({
     face: { type: "string", default: "dashboard" },
     "short-route": { type: "boolean", default: false },
     "full-uuid-route": { type: "boolean", default: false },
+    "off-roster-route": { type: "boolean", default: false },
     "frame-gap-ms": { type: "string", default: "4" },
     "sidebar-view": { type: "string", default: "sessions" },
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
@@ -577,6 +578,7 @@ const fixture = createControlUiTeamScaleFixture({
     : undefined,
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
+  offRosterSession: values["off-roster-route"],
   transcriptMessages,
   dashboardWidgetFontUrl: dashboardFont
     ? `http://127.0.0.1:${address.port}${dashboardFontPath}`
@@ -910,7 +912,7 @@ try {
       }
       await page
         .locator('.sidebar-rail [data-sidebar-entry^="session:"]')
-        .nth(29)
+        .nth(fixture.counts.pinned - 1)
         .waitFor({ state: "attached" });
       await page.locator('[data-sidebar-entry="plugin:team-scale-7/overview"]').waitFor();
       if (sidebarView === "online") {
@@ -1103,6 +1105,7 @@ try {
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
     const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
       sessionKey: fixture.selectedSessionKey,
+      offRosterSession: values["off-roster-route"],
       sidebarView: sidebarView === "online" ? "online" : "sessions",
     };
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
@@ -2054,6 +2057,7 @@ try {
         face,
         shortRoute: values["short-route"],
         fullUuidRoute: values["full-uuid-route"],
+        offRosterRoute: values["off-roster-route"],
         frameGapMs,
         captureMs,
         sessionEventDurationMs,

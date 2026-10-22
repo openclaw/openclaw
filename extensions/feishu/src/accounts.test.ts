@@ -65,17 +65,15 @@ describe("Feishu account resolution", () => {
       },
     });
 
-    // By exact raw key ...
-    const byKey = resolveFeishuAccount({ cfg, accountId: "sales.eu" });
-    expect(byKey.appId).toBe("app-sales");
-    expect(byKey.config.tools?.perm).toBe(false);
-
-    // ... and by its normalized alias. A normalized alias must never
-    // silently inherit the root account's credentials or tool policy.
-    const byAlias = resolveFeishuAccount({ cfg, accountId: "sales-eu" });
-    expect(byAlias.accountId).toBe("sales-eu");
-    expect(byAlias.appId).toBe("app-sales");
-    expect(byAlias.config.tools?.perm).toBe(false);
+    expect(resolveFeishuAccount({ cfg, accountId: "sales.eu" })).toMatchObject({
+      appId: "app-sales",
+      config: { tools: { perm: false } },
+    });
+    expect(resolveFeishuAccount({ cfg, accountId: "sales-eu" })).toMatchObject({
+      accountId: "sales-eu",
+      appId: "app-sales",
+      config: { tools: { perm: false } },
+    });
   });
 
   it("resolves env SecretRef objects in inspect mode", () => {

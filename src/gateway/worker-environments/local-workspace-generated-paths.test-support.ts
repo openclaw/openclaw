@@ -169,8 +169,8 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
   const accepted = (await readLocalWorkspaceProjection(owner.worktree.id))!;
   expect(accepted).toMatchObject({
     pending_ref: null,
-    baseline_json: after.raw,
-    baseline_ref: after.ref,
+    baseline_json: null,
+    checkpoint_json: null,
   });
   // The next ordinary turn must parse the accepted byte/digest pair and synchronize both copies.
   await withLocalWorkspaceProjection(owner, (state) => state.prepare());

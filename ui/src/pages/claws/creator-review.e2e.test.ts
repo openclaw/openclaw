@@ -170,17 +170,18 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
           .toBe("true");
         expect(await dialog.locator("openclaw-modal-actions button").count()).toBe(2);
         await dialog.locator(".btn__spinner").waitFor({ state: "visible" });
+        await dialog.getByRole("button", { name: "Ask for changes" }).click();
+        await dialog.waitFor({ state: "detached" });
         await gateway.rejectDeferred("claws.drafts.publish", {
           code: "UNAVAILABLE",
           message: "The package upload was interrupted.",
         });
-        await dialog.getByRole("alert").waitFor();
-        expect(await dialog.getByRole("alert").textContent()).toContain(
+        const publicationError = page.getByRole("alert");
+        await publicationError.waitFor();
+        expect(await publicationError.textContent()).toContain(
           "The package upload was interrupted.",
         );
-        expect(await dialog.getByRole("button", { name: "Publish to ClawHub" }).isDisabled()).toBe(
-          true,
-        );
+        expect(await page.getByRole("button", { name: "Review Claw package" }).count()).toBe(0);
         await gateway.setMethodResponse("claws.drafts.review", {
           ...reviewed,
           reviewToken: "e".repeat(64),
@@ -190,7 +191,7 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
           ),
           files: reviewed.files.filter((file) => file.path !== "workspace/checklist.md"),
         });
-        await dialog.getByRole("button", { name: "Refresh review" }).click();
+        await publicationError.getByRole("button", { name: "Retry review" }).click();
         await expect
           .poll(async () => (await gateway.getRequests("claws.drafts.review")).length)
           .toBe(4);

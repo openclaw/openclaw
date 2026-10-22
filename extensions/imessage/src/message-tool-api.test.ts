@@ -44,10 +44,7 @@ describe("iMessage message-tool artifact", () => {
     await fs.writeFile(cliPath, '#!/bin/sh\nexec ssh bot@messages-mac imsg "$@"\n');
     await resolveIMessageRemoteHost({ cliPath });
 
-    const discovery = describeMessageTool({
-      cfg: { channels: { imessage: { cliPath } } } as never,
-      currentChannelId: "chat_id:1",
-    });
+    const discovery = discover({ cfg: { channels: { imessage: { cliPath } } } });
 
     expect(discovery?.schema?.properties).toMatchObject({
       pollOptionId: { description: expect.stringContaining("Required for Remote Mac") },
@@ -55,37 +52,30 @@ describe("iMessage message-tool artifact", () => {
     });
   });
 
-  it.each([
-    {
-      chatType: "group",
-      expectedActions: [
-        "react",
-        "unsend",
-        "reply",
-        "sendWithEffect",
+  it.each(["group", "direct"] as const)(
+    "discovers supported actions for a %s numeric current chat",
+    (chatType) => {
+      cacheStatus({ selectors: { editMessage: true, retractMessagePart: true } });
+      const groupActions = [
         "renameGroup",
         "setGroupIcon",
         "addParticipant",
         "removeParticipant",
         "leaveGroup",
-        "upload-file",
-      ],
-    },
-    {
-      chatType: "direct",
-      expectedActions: ["react", "unsend", "reply", "sendWithEffect", "upload-file"],
-    },
-  ] as const)(
-    "discovers supported actions for a $chatType numeric current chat",
-    ({ chatType, expectedActions }) => {
-      cacheStatus({ selectors: { editMessage: true, retractMessagePart: true } });
-
+      ];
       expect(
         discover({
           chatType,
           cfg: { channels: { imessage: { cliPath: "imsg", actions: { edit: false } } } },
         })?.actions,
-      ).toStrictEqual(expectedActions);
+      ).toStrictEqual([
+        "react",
+        "unsend",
+        "reply",
+        "sendWithEffect",
+        ...(chatType === "group" ? groupActions : []),
+        "upload-file",
+      ]);
     },
   );
 

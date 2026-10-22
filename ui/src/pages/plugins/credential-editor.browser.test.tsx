@@ -58,11 +58,13 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
     capture: () => scope,
     isCurrent: (candidate: unknown) => candidate === scope,
   } as unknown as GatewayPageBinding;
+  let presentationLifetime = Promise.withResolvers<void>();
   const context: Context = {
     pluginId: "example",
     baseHash: "revision",
     gateway,
     canInspect: true,
+    getPresentationLifetime: () => presentationLifetime.promise,
     onCommit: vi.fn().mockResolvedValue(true),
     onDiscard: vi.fn().mockResolvedValue(true),
   };
@@ -77,6 +79,8 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
     disabled: false,
     descriptionId: "credential-help",
   };
+  let connectionEpoch = gateway.epoch;
+  let connectionClient = gateway.client;
   const [props, setProps] = createSignal({ field: { ...field }, context: { ...context } });
   const { container } = mountSolid(() => (
     <>
@@ -91,6 +95,20 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
     contextChanges: Partial<Context> = {},
     fieldChanges: Partial<typeof field> = {},
   ) => {
+    const nextGateway = contextChanges.gateway ?? context.gateway;
+    if (
+      nextGateway.epoch !== connectionEpoch ||
+      nextGateway.client !== connectionClient ||
+      (contextChanges.gateway && contextChanges.gateway !== context.gateway) ||
+      (contextChanges.pluginId && contextChanges.pluginId !== context.pluginId) ||
+      contextChanges.canInspect === false ||
+      (fieldChanges.path && JSON.stringify(fieldChanges.path) !== JSON.stringify(field.path))
+    ) {
+      presentationLifetime.resolve();
+      presentationLifetime = Promise.withResolvers<void>();
+    }
+    connectionEpoch = nextGateway.epoch;
+    connectionClient = nextGateway.client;
     Object.assign(context, contextChanges);
     Object.assign(field, fieldChanges);
     setProps({ field: { ...field }, context: { ...context } });
@@ -179,7 +197,7 @@ it.each(["button", "modal"])("blocks %s dismissal during Save", async (dismissal
   }
   flush();
   expect(modal(editor)).not.toBeNull();
-  expect(button(editor, "Cancel").disabled).toBe(true);
+  await vi.waitFor(() => expect(button(editor, "Cancel").disabled).toBe(true));
   pending.resolve(true);
   await vi.waitFor(() => expect(modal(editor)).toBeNull());
 });

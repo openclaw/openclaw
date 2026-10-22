@@ -17,20 +17,21 @@ function rosterFinding(detail?: string) {
 describe("security audit rosterless configs", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  function makeAuditPaths(label: string) {
-    const rootDir = tempDirs.make(`openclaw-audit-${label}-`);
+  function audit(options: Parameters<typeof runSecurityAuditCore>[0]) {
+    const rootDir = tempDirs.make("openclaw-audit-roster-");
     const stateDir = path.join(rootDir, "state");
     const workspaceDir = path.join(rootDir, "workspace");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.mkdirSync(workspaceDir, { recursive: true });
-    return {
+    return runSecurityAuditCore({
       stateDir,
       workspaceDir,
       configPath: path.join(stateDir, "openclaw.json"),
       env: {},
       includeFilesystem: true,
       includeChannelSecurity: false,
-    };
+      ...options,
+    });
   }
 
   function makeEscapingWorkspace(rootDir: string, name: string) {
@@ -49,22 +50,17 @@ describe("security audit rosterless configs", () => {
   }
 
   it("uses the explicit audit workspace without resolving a missing roster default", async () => {
-    await expect(
-      runSecurityAuditCore({ ...makeAuditPaths("rosterless"), config: {} }),
-    ).resolves.toEqual(expect.objectContaining({ findings: expect.any(Array) }));
+    await expect(audit({ config: {} })).resolves.toEqual(
+      expect.objectContaining({ findings: expect.any(Array) }),
+    );
   });
 
   it("distinguishes an authored empty roster from an absent pre-roster source", async () => {
-    const baseOptions = {
-      ...makeAuditPaths("authored-empty-roster"),
-      config: { agents: { entries: { main: {} } } },
-    };
-
-    const sourceConfig = { agents: { entries: {} } };
-    const authoredEmpty = await runSecurityAuditCore({ ...baseOptions, sourceConfig });
+    const config = { agents: { entries: { main: {} } } };
+    const authoredEmpty = await audit({ config, sourceConfig: { agents: { entries: {} } } });
     expect(authoredEmpty.findings).toContainEqual(rosterFinding("found 0"));
 
-    const absent = await runSecurityAuditCore({ ...baseOptions, sourceConfig: {} });
+    const absent = await audit({ config, sourceConfig: {} });
     expect(absent.findings).not.toContainEqual(rosterFinding());
   });
 
@@ -72,10 +68,7 @@ describe("security audit rosterless configs", () => {
     const config: OpenClawConfigWithLegacyRoster = {
       agents: { ownership: "explicit", entries: { alpha: { default: true }, beta: {} } },
     };
-    const report = await runSecurityAuditCore({
-      ...makeAuditPaths("explicit-roster-with-default"),
-      config,
-    });
+    const report = await audit({ config });
 
     expect(report.findings).toContainEqual(rosterFinding("Expected no"));
   });

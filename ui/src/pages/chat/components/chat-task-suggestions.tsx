@@ -30,7 +30,6 @@ export type TaskSuggestionAcceptance =
 
 export type ChatTaskSuggestionTrayProps = {
   taskSuggestions?: TaskSuggestion[];
-  taskSuggestionBusyIds?: ReadonlySet<string>;
   taskSuggestionCopiedIds?: ReadonlySet<string>;
   taskSuggestionAcceptance?: (taskId: string) => TaskSuggestionAcceptance | undefined;
   activeTaskSuggestionId?: string;
@@ -107,9 +106,9 @@ function TaskSuggestionCard(props: {
   active: boolean;
   view: ChatTaskSuggestionTrayProps;
 }) {
-  const busy = () => props.view.taskSuggestionBusyIds?.has(props.suggestion.id) ?? false;
   const canAccept = () => props.view.canAcceptTaskSuggestions === true;
   const acceptance = () => props.view.taskSuggestionAcceptance?.(props.suggestion.id);
+  const busy = () => acceptance()?.phase === "starting";
   const failure = () => {
     const value = acceptance();
     return value?.phase === "failed" ? value : undefined;
@@ -125,7 +124,7 @@ function TaskSuggestionCard(props: {
     );
   // Native edits and manual disclosure state survive unrelated owner refreshes.
   const repositoryCwd = createMemo(() => repository()?.cwd ?? "");
-  const instructionsOpen = createMemo(() => Boolean(acceptance()) || busy());
+  const instructionsOpen = createMemo(() => Boolean(acceptance()));
   const pathRef = createScrollStateRef(
     (element, state) => element.toggleAttribute("data-overflow-right", !state.atEnd),
     { presented: () => props.active, horizontal: true, content: cwd },

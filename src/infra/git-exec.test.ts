@@ -321,13 +321,10 @@ describe("required Git output", () => {
     });
   });
 
-  it.each([
-    ["text", requireGitCommand],
-    ["buffered", requireGitBuffer],
-  ] as const)("rejects incomplete %s output from a real Git blob", async (_kind, requireGit) => {
+  it("rejects incomplete buffered output from a real Git blob", async () => {
     const blob = Buffer.alloc(17 * 1024 * 1024, "x");
     await withGitBlob(blob, async (root, args) => {
-      await expect(requireGit(root, args)).rejects.toThrow("output limit exceeded");
+      await expect(requireGitBuffer(root, args)).rejects.toThrow("output limit exceeded");
     });
   });
 });

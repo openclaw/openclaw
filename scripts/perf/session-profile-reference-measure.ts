@@ -15,7 +15,6 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "108" },
     output: { type: "string" },
     golden: { type: "string" },
-    "archive-filters": { type: "boolean", default: false },
   },
 });
 const iterations = parseStrictIntegerOption({
@@ -27,7 +26,7 @@ const iterations = parseStrictIntegerOption({
 const stateDir = await mkdtemp(path.join(tmpdir(), "session-profile-reference-"));
 process.env.OPENCLAW_STATE_DIR = stateDir;
 
-const [registry, filters, targets, contexts, selections, work, profiles, database, lists] =
+const [registry, filters, targets, contexts, selections, work, profiles, database] =
   await Promise.all([
     import("../../src/agents/subagents/registry/subagent-registry-state.js"),
     import("../../src/gateway/session-list-filters.js"),
@@ -37,7 +36,6 @@ const [registry, filters, targets, contexts, selections, work, profiles, databas
     import("../../src/shared/synchronous-work.js"),
     import("../../src/state/user-profile-list.js"),
     import("../../src/state/openclaw-state-db.js"),
-    import("../../src/gateway/session-utils-list.js"),
   ]);
 const inspector = new Session();
 let owner: ReturnType<typeof contexts.createSessionRowProjectionContext> | undefined;
@@ -146,23 +144,13 @@ try {
     },
     { name: "ordinary-list", opts: {} },
   ];
-  const archiveCases: typeof cases = ([undefined, false, true, "all"] as const).flatMap(
-    (archived) =>
-      [false, true].flatMap((includePeople) =>
-        [undefined, identityId(43)].map((involvingProfileId) => ({
-          name: `archive-${archived}/people-${includePeople}/person-${involvingProfileId ?? "none"}`,
-          opts: { archived, includePeople, involvingProfileId, limit: 25, offset: 10 },
-        })),
-      ),
-  );
   const requests = ["all", "first", "second"].flatMap((viewer, viewerIndex) =>
-    (values["archive-filters"] ? archiveCases : cases).map(({ name, opts }) => ({
+    cases.map(({ name, opts }) => ({
       name: `${viewer}/${name}`,
       params: {
         cfg,
         entries: selected.entries,
         entriesSorted: true,
-        partitions: selected.partitions,
         getTarget: selected.get,
         involvementKeys: selected.involvementKeys,
         getRowContext: () => context,
@@ -183,41 +171,25 @@ try {
     }
   }
   const page = { offset: 0, limit: 25, ownerLimit: 25 };
-  const run = (index: number) => {
-    const params = requests[index]!.params;
-    return values["archive-filters"]
-      ? work.runSynchronousWork(lists.selectSessionEntries({ ...params, retained: new WeakMap() }))
-      : work.runSynchronousWork(filters.filterSessionEntries(params, page));
-  };
-  inspector.connect();
-  await inspector.post("HeapProfiler.collectGarbage");
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32_768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
-  const coldStarted = process.threadCpuUsage();
-  run(0);
-  const coldCpu = process.threadCpuUsage(coldStarted);
-  const { profile: coldProfile } = await inspector.post("HeapProfiler.stopSampling");
+  const run = (index: number) =>
+    work.runSynchronousWork(filters.filterSessionEntries(requests[index]!.params, page));
   const golden = requests.map(({ name, params }, index) => ({
     name,
     opts: params.opts,
     result: run(index),
   }));
-  if (!values["archive-filters"]) {
-    assert.equal(golden.length, 27);
-    assert.equal(golden[3]!.result.involvingProfileId, identityId(43));
-    assert.equal(golden[4]!.result.involvingProfileId, identityId(3));
-    assert.equal(golden[5]!.result.involvingProfileId, undefined);
-    assert.equal(golden[12]!.result.involvingProfileId, undefined);
-    assert.equal(golden[21]!.result.involvingProfileId, identityId(43));
-    assert.equal(golden[6]!.result.totalCount, 0);
-  }
+  assert.equal(golden.length, 27);
+  assert.equal(golden[3]!.result.involvingProfileId, identityId(43));
+  assert.equal(golden[4]!.result.involvingProfileId, identityId(3));
+  assert.equal(golden[5]!.result.involvingProfileId, undefined);
+  assert.equal(golden[12]!.result.involvingProfileId, undefined);
+  assert.equal(golden[21]!.result.involvingProfileId, identityId(43));
+  assert.equal(golden[6]!.result.totalCount, 0);
   const warmupOperations = requests.length * 2;
   for (let index = 0; index < warmupOperations; index++) {
     run(index % requests.length);
   }
+  inspector.connect();
   await inspector.post("HeapProfiler.collectGarbage");
   await inspector.post("HeapProfiler.startSampling", {
     samplingInterval: 32_768,
@@ -261,11 +233,6 @@ try {
     allocationBytesPerOperation: allocatedBytes(profile.head) / iterations,
     samplingInterval: 32_768,
     includesCollectedObjects: true,
-    coldFirstRequest: {
-      name: requests[0]!.name,
-      cpuMs: (coldCpu.user + coldCpu.system) / 1_000,
-      allocationBytes: allocatedBytes(coldProfile.head),
-    },
   };
   if (values.golden) {
     await writeJson(values.golden, golden);

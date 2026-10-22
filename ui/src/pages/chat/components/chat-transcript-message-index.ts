@@ -1,23 +1,28 @@
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { agentRunFrameActiveStatusParts, chatItemGroups } from "../chat-agent-run-grouping.ts";
+import {
+  agentRunFrameActiveStatusParts,
+  chatItemGroups,
+  coalesceAgentRunFrames,
+} from "../chat-agent-run-grouping.ts";
+import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import {
-  assistantGroupCanOwnActiveRunStatus,
   type buildCachedChatItems,
-  coalesceActivityRuns,
-  coalesceAgentRunFrames,
-  coalesceStreamRuns,
-  collapseCompletedTurnWork,
   findLiveStreamIndex,
   getExpansionStateVersion,
   getChatItemsGeneration,
-  persistedMessageEntryId,
   setExpansionState,
 } from "../chat-thread.ts";
 import { isInterSessionMessage, isSessionActivityGroup } from "../chat-turn-boundary.ts";
+import {
+  coalesceActivityRuns,
+  coalesceStreamRuns,
+  collapseCompletedTurnWork,
+} from "../chat-turn-presentation.ts";
 import { readLiveTerminalRevision } from "../terminal-message-identity.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
 import type { StreamGroupPart } from "./chat-message-stream-view.tsx";

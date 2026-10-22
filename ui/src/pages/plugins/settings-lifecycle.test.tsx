@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { flush } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
@@ -20,7 +20,7 @@ function setting(container: ParentNode, key: string) {
   return container.querySelector(`[data-setting="${key}"]`)!;
 }
 
-function mount(overrides: Partial<DetailProps>) {
+function mount(overrides: Partial<DetailProps>, setup?: (props: DetailProps) => void) {
   const props: DetailProps = {
     connected: true,
     loading: false,
@@ -33,6 +33,8 @@ function mount(overrides: Partial<DetailProps>) {
     mutationBlockedReason: null,
     configBusy: false,
     configSchemaLoading: false,
+    configRead: undefined,
+    configSchemaRead: undefined,
     configError: null,
     canEditConfig: true,
     configValue: {},
@@ -40,7 +42,7 @@ function mount(overrides: Partial<DetailProps>) {
     configUnsupportedPaths: [],
     pluginId: "workboard",
     inspection: null,
-    inspectionError: null,
+    inspectionRead: { receipt: () => null, value: () => null },
     configSchema: null,
     hostControlsSchema: null,
     backHref: "/settings/plugins",
@@ -60,7 +62,10 @@ function mount(overrides: Partial<DetailProps>) {
     onRefresh: vi.fn(),
     ...overrides,
   };
-  const { container } = mountSolid(() => renderPluginSettingsDetail(props));
+  const { container } = mountSolid(() => {
+    setup?.(props);
+    return renderPluginSettingsDetail(props);
+  });
   flush();
   return { container, find: queryWithin(container), props };
 }
@@ -83,6 +88,23 @@ it("does not offer enablement or Settings for an uninstalled plugin", () => {
     result: createResult(createPlugin({ installed: false, state: "not-installed" })),
   });
   expect(find('[aria-label="Enable Workboard"], [aria-label="Settings"]')).toBeNull();
+});
+
+it("retains the focused Uninstall button when inspection arrives", () => {
+  let publishInspection!: () => void;
+  const { find } = mount({ result: createResult(createPlugin({ removable: true })) }, (props) => {
+    const [inspection, setInspection] = createSignal<DetailProps["inspection"]>(null);
+    Object.defineProperty(props, "inspection", { get: inspection });
+    publishInspection = () => setInspection(createInspectResult());
+  });
+  const button = find<HTMLButtonElement>('[aria-label="Uninstall Workboard"]')!;
+  button.focus();
+  expect(document.activeElement).toBe(button);
+  publishInspection();
+  flush();
+  expect(find('[aria-label="Uninstall Workboard"]')).toBe(button);
+  expect(button.isConnected).toBe(true);
+  expect(document.activeElement).toBe(button);
 });
 
 it("does not dispatch enablement when setup is missing", () => {

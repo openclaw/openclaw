@@ -8,6 +8,7 @@ import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { catalogModel, configAuth } from "./model-catalog-fixtures.test-support.ts";
 import { requestRaw, resolveConfigMutation } from "./model-providers.test-support.ts";
 import {
   expectText,
@@ -28,12 +29,7 @@ const snapshot = (config: object, hash: string) => ({
   raw: JSON.stringify(config),
   valid: true,
 });
-const model = (id: string, name: string, provider = "fixture") => ({
-  id,
-  name,
-  provider,
-  available: true,
-});
+const model = (id: string, name: string, provider = "fixture") => catalogModel(provider, id, name);
 const defaultsConfig = (modelRef: string) => ({ agents: { defaults: { model: modelRef } } });
 const option = (picker: Locator, value: string) =>
   picker.locator(`[role="option"][data-value="${value}"]`);
@@ -56,7 +52,7 @@ suite.define(() => {
           "models.list": pendingCatalog,
           "models.authStatus": {
             ts: 1,
-            providers: [{ provider: "fixture", profiles: [], apiKey: { source: "config" } }],
+            providers: [configAuth("fixture")],
           },
         },
       });
@@ -146,11 +142,7 @@ suite.define(() => {
             "models.list": initialCatalog,
             "models.authStatus": {
               ts: 1,
-              providers: ["healthy", "broken"].map((provider) => ({
-                provider,
-                profiles: [],
-                apiKey: { source: "config" },
-              })),
+              providers: ["healthy", "broken"].map(configAuth),
             },
           },
         });

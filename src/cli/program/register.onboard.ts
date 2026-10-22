@@ -64,34 +64,25 @@ function resolveRecommendationAgentOption(command: Command): string | undefined 
   );
 }
 
-function extractCliFlags(cliOption: string): string[] {
-  return cliOption
+// Provider manifests can add auth flags; keep duplicate CLI aliases out of Commander.
+const seenCliFlags = new Set<string>();
+const ONBOARD_AUTH_FLAGS: ReturnType<typeof resolveProviderOnboardAuthFlags> = [];
+for (const flag of resolveProviderOnboardAuthFlags()) {
+  const cliFlags = flag.cliOption
     .split(/[ ,|]+/)
     .filter((part) => part.startsWith("-"))
     .map((part) => {
       const equalsIndex = part.indexOf("=");
       return equalsIndex === -1 ? part : part.slice(0, equalsIndex);
     });
-}
-
-function resolveOnboardAuthFlags() {
-  // Provider manifests can add auth flags; keep duplicate CLI aliases out of Commander.
-  const seenCliFlags = new Set<string>();
-  const flags: ReturnType<typeof resolveProviderOnboardAuthFlags> = [];
-  for (const flag of resolveProviderOnboardAuthFlags()) {
-    const cliFlags = extractCliFlags(flag.cliOption);
-    if (cliFlags.some((cliFlag) => seenCliFlags.has(cliFlag))) {
-      continue;
-    }
-    for (const cliFlag of cliFlags) {
-      seenCliFlags.add(cliFlag);
-    }
-    flags.push(flag);
+  if (cliFlags.some((cliFlag) => seenCliFlags.has(cliFlag))) {
+    continue;
   }
-  return flags;
+  for (const cliFlag of cliFlags) {
+    seenCliFlags.add(cliFlag);
+  }
+  ONBOARD_AUTH_FLAGS.push(flag);
 }
-
-const ONBOARD_AUTH_FLAGS = resolveOnboardAuthFlags();
 
 export function registerOnboardAuthOptions(command: Command): Command {
   command

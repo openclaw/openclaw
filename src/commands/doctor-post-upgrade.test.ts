@@ -68,23 +68,20 @@ async function writePluginFixture(params: {
 }) {
   const pluginDir = path.join(root, params.location ?? "user-plugins", params.id);
   await fs.mkdir(pluginDir, { recursive: true });
-  for (const [relativePath, contents] of Object.entries(params.files ?? {})) {
-    const pathname = path.join(pluginDir, relativePath);
-    await fs.mkdir(path.dirname(pathname), { recursive: true });
-    await fs.writeFile(pathname, contents, "utf-8");
-  }
+  const files = { ...params.files };
   const hasPackageJson =
     Object.hasOwn(params, "packageJson") || params.packageJsonRaw !== undefined;
   if (hasPackageJson) {
-    await fs.writeFile(
-      path.join(pluginDir, "package.json"),
-      params.packageJsonRaw ?? JSON.stringify(params.packageJson),
-      "utf-8",
-    );
+    files["package.json"] = params.packageJsonRaw ?? JSON.stringify(params.packageJson);
   }
   const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
   if (params.manifest !== false) {
-    await fs.writeFile(manifestPath, JSON.stringify(params.manifest ?? { id: params.id }), "utf-8");
+    files["openclaw.plugin.json"] = JSON.stringify(params.manifest ?? { id: params.id });
+  }
+  for (const [relativePath, contents] of Object.entries(files)) {
+    const pathname = path.join(pluginDir, relativePath);
+    await fs.mkdir(path.dirname(pathname), { recursive: true });
+    await fs.writeFile(pathname, contents, "utf-8");
   }
   await writePersistedInstalledPluginIndex(
     {
@@ -133,9 +130,7 @@ it("returns a structured finding when the installed plugin index is missing", as
 });
 
 it("reports unreadable plugin packages as structured errors without losing JSON console diagnostics", async () => {
-  const stderrSpy = vi
-    .spyOn(process.stderr, "write")
-    .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+  const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   await writePluginFixture({
     id: "broken",
     manifest: false,

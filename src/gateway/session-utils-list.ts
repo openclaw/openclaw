@@ -34,7 +34,7 @@ import {
   type SessionListFilterParams,
   type SessionListFilteredEntries,
 } from "./session-list-filters.js";
-import { sortAndLimitSessionEntries, type SessionListEntry } from "./session-list-order.js";
+import { sortAndLimitSessionEntries, type SessionEntryPair } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -51,6 +51,7 @@ import {
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
+import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
@@ -77,8 +78,8 @@ export function* selectSessionEntries(
     !params.opts.includeOwnerSessionCounts;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
-    const entries: SessionListEntry[] = [];
-    const ownerEntries: SessionListEntry[] = [];
+    const entries: SessionEntryPair[] = [];
+    const ownerEntries: SessionEntryPair[] = [];
     const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
     let totalCount = 0;
     let activityExpiresAt = Infinity;
@@ -92,7 +93,10 @@ export function* selectSessionEntries(
       if (!part) {
         part = yield* filterSessionEntries({
           ...params,
-          entries: () => partition.entries.values(),
+          entries: (archived) =>
+            Array.from(partition.entries.values()).filter(([, entry]) =>
+              matchesSessionArchiveFilter(entry, archived),
+            ),
         });
         part.entries = yield* sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy);
         part.ownerEntries = yield* sortAndLimitSessionEntries(
@@ -368,7 +372,7 @@ export function prepareSessionRowSelection(
   };
 }
 
-export function filterAndSortSessionEntries(params: SessionListFilterParams): SessionListEntry[] {
+export function filterAndSortSessionEntries(params: SessionListFilterParams): SessionEntryPair[] {
   return withAgentRosterFactsBatch(params.cfg, () =>
     runSynchronousWork(
       selectSessionEntries({
@@ -391,7 +395,7 @@ export async function prepareSessionSearchIdentityNames(
   });
   const scope = projection.state.scope(opts);
   const agentIds = new Set(scope.agentId ? [scope.agentId] : listAgentIds(prepared.cfg));
-  for (const [key] of prepared.entries()) {
+  for (const [key] of prepared.entries("all")) {
     const agentId = prepared.getTarget(key)?.agentId;
     if (agentId) {
       agentIds.add(agentId);
@@ -433,7 +437,10 @@ export function prepareProjectedSessionList(params: {
         projection.physicalPaths,
       )
     : undefined;
-  const { presentation } = prepareSessionRowPublication(projection, now)(client, projectRun);
+  const presentation = prepareSessionRowPublication(projection, now)(
+    client,
+    projectRun,
+  ).getPresentation();
   const prepared = prepareSessionRowSelection(projection, opts, {
     key: exactKey,
     now,

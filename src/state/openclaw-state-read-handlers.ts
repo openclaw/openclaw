@@ -118,6 +118,7 @@ export function readOpenClawStateDatabaseCommand(
           | "meetingTranscripts.export"
           | "gatewayOwnerLease.read"
           | "agentDatabaseRegistry.read"
+          | "localWorkspace.manifest"
           | "subagents.sessionList";
       }
   >,

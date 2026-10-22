@@ -67,7 +67,13 @@ it("shows first-read readiness and retries a failed read through the cron owner"
     expect(ui.retry()?.disabled).toBe(false);
   });
   ui.retry()!.click();
-  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+  await waitForSolid(() => {
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(ui.panel()?.getAttribute("aria-busy")).toBe("true");
+    expect(ui.text()).toContain("Loading automations…");
+    expect(ui.text()).not.toContain("Couldn't load automations.");
+    expect(ui.retry()).toBeNull();
+  });
   retry.resolve(
     cronJobsListResponse([createCronJob("recovered", "Recovered automation")], { limit: 20 }),
   );

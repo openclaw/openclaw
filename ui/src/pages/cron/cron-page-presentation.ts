@@ -245,6 +245,9 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     capture: presentation,
     isCurrent: isCurrentPresentation,
     retire: retirePresentation,
+    get retired() {
+      return presentationLifetime.promise;
+    },
     dispose() {
       presentationLifetime.resolve();
       stopModelSuggestions?.();

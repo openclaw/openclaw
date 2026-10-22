@@ -1,13 +1,16 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import YAML from "yaml";
 import { resolveFrozenTelegramScenarioOmissions } from "../../scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts";
 import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 import { privateLocalOnlyPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
 const PREPARE_PACKAGE_PATH = path.resolve(
@@ -19,6 +22,36 @@ const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 const exactMarker = "telegram-reply-chain-exact-marker";
 
 const mkTempRoot = () => tempDirs.make("openclaw-npm-telegram-live-");
+
+function frozenSource(files: Record<string, string>) {
+  // The resolver writes overlays beside the checkout; keep both under tracked cleanup.
+  const fixtureRoot = mkTempRoot();
+  const root = path.join(fixtureRoot, "target");
+  mkdirSync(root);
+  for (const [file, source] of Object.entries(files)) {
+    writeFixture(root, file, source);
+  }
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  git("init", "-q");
+  git("add", ".");
+  git(...gitIdentity, "commit", "-qm", "target", "--allow-empty");
+  const sha = git("rev-parse", "HEAD");
+  const output = path.join(fixtureRoot, "github.env");
+  const qualify = (selectedSha = sha) => {
+    execFileSync(process.execPath, [resolver, root], {
+      env: { ...process.env, OPENCLAW_SELECTED_SHA: selectedSha, GITHUB_ENV: output },
+      stdio: "pipe",
+    });
+    return Object.fromEntries(
+      read(output)
+        .trim()
+        .split("\n")
+        .map((line) => line.split(/[=](.*)/su, 2)),
+    );
+  };
+  return { sha, qualify };
+}
 
 function writeFixture(
   root: string,
@@ -38,12 +71,6 @@ function expectText(text: string, included: string[], excluded: string[] = []) {
   for (const value of excluded) {
     expect(text).not.toContain(value);
   }
-}
-
-function dockerEnv(source: string) {
-  const start = source.indexOf("docker_env=(");
-  const end = source.indexOf(")\n\nforward_env_if_set", start);
-  return { start, end, text: source.slice(start, end) };
 }
 
 function runHotpathCandidate(consentSupported: boolean) {
@@ -124,17 +151,17 @@ it("installs the package candidate before forwarding runtime secrets", () => {
 });
 
 it("uses unique direct-run output dirs by default", () => {
-  const repoRoot = mkTempRoot();
-  const firstDir = testing.resolvePackageTelegramOutputDir({}, repoRoot);
-  const secondDir = testing.resolvePackageTelegramOutputDir({}, repoRoot);
+  const root = mkTempRoot();
+  const firstDir = testing.resolvePackageTelegramOutputDir({}, root);
+  const secondDir = testing.resolvePackageTelegramOutputDir({}, root);
 
-  expect(path.dirname(firstDir)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
+  expect(path.dirname(firstDir)).toBe(path.join(root, ".artifacts", "qa-e2e"));
   expect(path.basename(firstDir)).toMatch(/^npm-telegram-live-[a-z0-9]+-[a-f0-9]{8}$/u);
   expect(secondDir).not.toBe(firstDir);
   expect(
     testing.resolvePackageTelegramOutputDir(
       { OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: ".artifacts/custom" },
-      repoRoot,
+      root,
     ),
   ).toBe(".artifacts/custom");
 });
@@ -166,55 +193,14 @@ it("requires Convex leases instead of static credentials", () => {
   );
 });
 
-it("mounts configured output paths before entering the container", () => {
-  expectText(script, [
-    '*) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;',
-    'mkdir -p "$OUTPUT_DIR_HOST"',
-    'printf \'schema=1\\nexit_code=%s\\nlive_output=job_log\\n\' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"',
-    "trap cleanup EXIT",
-    '-v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER"',
-  ]);
-  expectText(
-    dockerEnv(script).text,
-    ['-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"'],
-    [
-      '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"',
-      '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"',
-    ],
-  );
-});
-
-it("uses the container temp root for OpenClaw runtime scratch files", () => {
-  const { start, end, text } = dockerEnv(script);
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  expect(text).toContain("-e TMPDIR=/tmp");
-});
-
-it("forwards destructive downgrade approval only through the explicit env list", () => {
-  const { end, text } = dockerEnv(script);
-  const forwardingStart = script.indexOf("for key in \\", end);
-  const forwardingEnd = script.indexOf("; do", forwardingStart);
-
-  expect(text).not.toContain("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS");
-  expect(script.slice(forwardingStart, forwardingEnd)).toContain(
-    "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
-  );
-});
-
-it("isolates the trusted private QA harness from the installed package candidate", () => {
+// Mount/env isolation is exercised through captured Docker calls below.
+it("links runtime dependencies from the trusted QA harness", () => {
   expectText(
     script,
     [
+      '*) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;',
       'cp "$ROOT_DIR/package.json" "$harness_package_json"',
       'node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.mts" "$harness_package_json"',
-      '-v "$harness_package_json:/app/package.json:ro"',
-      '-v "$harness_package_json:/app/extensions/qa-lab/node_modules/openclaw/package.json:ro"',
-      '-v "$ROOT_DIR/node_modules:/trusted-harness/node_modules:ro"',
-      '-v "$ROOT_DIR/.agents:/app/.agents:ro"',
-      ...["dist", "packages", "extensions", "taxonomy.yaml", "qa/scenarios"].map(
-        (entry) => `-v "$ROOT_DIR/${entry}:/app/${entry}:ro"`,
-      ),
       "for dependency_dir in /trusted-harness/node_modules/*",
       "for workspace_dir in /app/packages/* /app/extensions/*",
       'link_harness_dependency "$workspace_dir" "$workspace_name"',
@@ -225,7 +211,6 @@ it("isolates the trusted private QA harness from the installed package candidate
       'cp "$openclaw_package_dir/package.json" /app/package.json',
       "/app/node_modules/openclaw/package.json",
       "link_installed_package_dependency",
-      '-v "$ROOT_DIR:/app',
     ],
   );
 });
@@ -351,32 +336,13 @@ it.each([
 it.each([[], ["telegram-policy-hot-reload"]])(
   "qualifies default policy reload scenarios from the selected source (%j)",
   (...supported: string[]) => {
-    const root = mkTempRoot();
-    const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
     const policyScenarios = ["telegram-policy-hot-reload", "telegram-group-policy-hot-reload"];
-    for (const id of supported) {
-      writeFixture(root, `qa/scenarios/channels/${id}.yaml`, `scenario:\n  id: ${id}\n`);
-    }
-    git("init", "-q");
-    git("add", ".");
-    git(
-      ..."-c user.name=Fixture -c user.email=fixture@example.test commit -qm target --allow-empty".split(
-        " ",
+    const { qualify } = frozenSource(
+      Object.fromEntries(
+        supported.map((id) => [`qa/scenarios/channels/${id}.yaml`, `scenario:\n  id: ${id}\n`]),
       ),
     );
-    const output = path.join(root, "github.env");
-    const qualifier = path.resolve(
-      TEST_DIR,
-      "../../scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts",
-    );
-    const qualify = (sha: string) =>
-      execFileSync(process.execPath, [qualifier, root], {
-        env: { ...process.env, OPENCLAW_SELECTED_SHA: sha, GITHUB_ENV: output },
-        stdio: "pipe",
-      });
-    qualify(git("rev-parse", "HEAD").trim());
-    const omissions = readFileSync(output, "utf8").trim().split("=")[1];
-    const env = { OPENCLAW_NPM_TELEGRAM_OMIT_DEFAULT_SCENARIOS: omissions };
+    const env = qualify();
     const resolve = (ids: readonly string[]) =>
       ids.length ? [...ids] : ["channel-canary", ...policyScenarios];
     expect(testing.resolvePackageTelegramScenarios(env, resolve).resolvedScenarioIds).toEqual([
@@ -541,4 +507,206 @@ it.each([
       { OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES: allowFailures },
     ),
   ).resolves.toBe(false);
+});
+
+const scenarioPath = "qa/scenarios/channels/telegram-repeated-command-authorization.yaml";
+const trusted = readFileSync(path.join(repoRoot, scenarioPath), "utf8");
+const silent = "              - waitForNoOutbound:\n                  quietMs: 3000\n";
+const explicit =
+  "              - waitForOutbound:\n" +
+  "                  conversation: { id: telegram-command-room, kind: channel }\n" +
+  "                  textIncludes: You are not authorized to use this command.\n" +
+  "                  timeoutMs: 60000\n";
+const read = (file: string) => readFileSync(file, "utf8");
+const gitIdentity = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test"];
+const resolver = path.join(
+  repoRoot,
+  "scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts",
+);
+
+function resolveFixture(source: string, selectedSha?: string) {
+  const { sha, qualify } = frozenSource({ [scenarioPath]: source });
+  return { sha, env: qualify(selectedSha) };
+}
+
+function captureSuiteMounts(overlay?: string) {
+  const { result, runs } = captureDocker({ OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO: overlay ?? "" });
+  assert.equal(result.status, 0, result.stderr);
+  return runs[1]!;
+}
+
+it("mounts a source-qualified trusted denial action without changing restored command proof", () => {
+  // Frozen YAML selects the contract but must never supply executable expressions.
+  const { sha, env } = resolveFixture(
+    trusted.replace(silent, explicit).replace("title:", "# target-only-untrusted-content\ntitle:"),
+  );
+  const overlay = env.OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO;
+  assert.ok(overlay);
+  const actual = read(overlay);
+  expect(actual).toContain(`# Frozen package source ${sha}: explicit authorization denial.`);
+  expect(actual).not.toContain("target-only-untrusted-content");
+  expect(YAML.parse(actual)).toEqual(YAML.parse(trusted.replace(silent, explicit)));
+  expect(env.OPENCLAW_NPM_TELEGRAM_OMIT_DEFAULT_SCENARIOS).not.toContain(
+    "telegram-repeated-command-authorization",
+  );
+  const mounts = captureSuiteMounts(overlay);
+  const baseIndex = mounts.indexOf(`${repoRoot}/qa/scenarios:/app/qa/scenarios:ro`);
+  expect(baseIndex).toBeGreaterThan(0);
+  expect(mounts.indexOf(`${overlay}:/app/${scenarioPath}:ro`)).toBeGreaterThan(baseIndex);
+});
+
+it("keeps current silent denial on the normal trusted scenario mount", () => {
+  const { env } = resolveFixture(trusted);
+  expect(env.OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO).toBeUndefined();
+  expect(captureSuiteMounts().filter((arg) => arg.includes(scenarioPath))).toEqual([]);
+});
+
+it("refuses unknown source contracts and mismatched selected source identities", () => {
+  expect(() => resolveFixture(trusted.replace(silent, ""))).toThrow();
+  expect(() => resolveFixture(trusted.replace(silent, explicit), "0".repeat(40))).toThrow();
+  expect(() => captureSuiteMounts("/missing/frozen-scenario.yaml")).toThrow();
+});
+
+const scenario = "telegram-published-upgrade-bindings";
+const published = "openclaw@2026.9.6";
+const candidatePath = "/package-under-test/candidate.tgz";
+function upgradeFixture() {
+  const root = tempDirs.make("openclaw-telegram-upgrade-");
+  const candidate = path.join(root, "candidate.tgz");
+  writeFileSync(candidate, "package fixture");
+  const executable = (name: string, source: string) =>
+    writeFileSync(path.join(root, name), source, { mode: 0o755 });
+  const run = (env: NodeJS.ProcessEnv, args = [DOCKER_SCRIPT_PATH]) =>
+    spawnSync("bash", args, {
+      encoding: "utf8",
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        PATH: `${root}${path.delimiter}${process.env.PATH}`,
+        OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ: candidate,
+        OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR: "",
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "",
+        OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE: "mock-openai",
+        OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC: published,
+        ...env,
+      },
+    });
+  return { root, candidate, executable, run };
+}
+
+it.each([false, true])("uses the published registry only for baseline install=%s", (baseline) => {
+  const { executable, run } = upgradeFixture();
+  const start = script.indexOf('npm_install_timeout="');
+  const install = script.slice(start, script.indexOf("\ncommand -v openclaw", start));
+  executable("npm", '#!/bin/bash\nprintf "%s" "$NPM_CONFIG_REGISTRY"\n');
+  const result = run(
+    {
+      OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "0",
+      OPENCLAW_NPM_TELEGRAM_INSTALL_PUBLISHED_BASELINE: baseline ? "1" : "0",
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL: "https://candidate.invalid",
+      OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org",
+      NPM_CONFIG_REGISTRY: "https://candidate.invalid",
+    },
+    [
+      "-c",
+      `set -euo pipefail\nsource scripts/e2e/lib/prepublish-plugin-registry.sh\ninstall_source=${published}\n${install}`,
+    ],
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toBe(baseline ? "https://registry.npmjs.org" : "https://candidate.invalid");
+});
+
+it.each([
+  [`${scenario},channel-canary`, published, "must run alone"],
+  [`channel-canary,\n${scenario}`, published, "must run alone"],
+  [scenario, "openclaw@latest", "exact published baseline"],
+  [scenario, published, "deterministic mock-openai", "live-frontier"],
+])(
+  "rejects invalid upgrade requests: %s",
+  (scenarios, spec, message, providerMode = "mock-openai") => {
+    const result = upgradeFixture().run({
+      OPENCLAW_NPM_TELEGRAM_SCENARIOS: scenarios,
+      OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC: spec,
+      OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE: providerMode,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(message);
+    expect(result.stdout).not.toContain("Docker");
+  },
+);
+
+function captureDocker(env: NodeJS.ProcessEnv = {}) {
+  const { root, candidate, executable, run } = upgradeFixture();
+  const callsPath = path.join(root, "docker.jsonl");
+  executable(
+    "docker",
+    `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'run' && args.includes('-i')) fs.readFileSync(0);
+fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
+`,
+  );
+  const result = run({
+    DOCKER_CALLS: callsPath,
+    OPENCLAW_SKIP_DOCKER_BUILD: "1",
+    OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO: "",
+    OPENCLAW_NPM_TELEGRAM_SCENARIOS: "",
+    OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: path.join(root, "output"),
+    OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: "convex",
+    OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: "ci",
+    OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.invalid",
+    OPENCLAW_QA_CONVEX_SECRET_CI: "synthetic-fixture-secret",
+    OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "",
+    ...env,
+  });
+  const runs = existsSync(callsPath)
+    ? readFileSync(callsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[])
+        .filter((args) => args[0] === "run")
+    : [];
+  return { root, candidate, result, runs };
+}
+
+it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", (upgrade) => {
+  const { root, candidate, result, runs } = captureDocker({
+    OPENCLAW_NPM_TELEGRAM_SCENARIOS: upgrade ? scenario : "",
+    OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: upgrade ? "1" : "",
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(runs).toEqual([
+    expect.arrayContaining([
+      `OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE=${upgrade ? published : candidatePath}`,
+      `OPENCLAW_NPM_TELEGRAM_INSTALL_PUBLISHED_BASELINE=${upgrade ? "1" : "0"}`,
+    ]),
+    expect.arrayContaining([
+      "OPENCLAW_QA_CONVEX_SECRET_CI",
+      `OPENCLAW_NPM_TELEGRAM_UPGRADE_CANDIDATE=${upgrade ? candidatePath : ""}`,
+      "TMPDIR=/tmp",
+      "OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR=.artifacts/qa-e2e/npm-telegram-live-output",
+      `${path.join(root, "output")}:/app/.artifacts/qa-e2e/npm-telegram-live-output`,
+      `${repoRoot}/node_modules:/trusted-harness/node_modules:ro`,
+      ...["dist", "packages", "extensions", ".agents", "taxonomy.yaml", "qa/scenarios"].map(
+        (entry) => `${repoRoot}/${entry}:/app/${entry}:ro`,
+      ),
+    ]),
+  ]);
+  expect(runs[0]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
+  expect(runs[1]?.includes(`${candidate}:${candidatePath}:ro`)).toBe(upgrade);
+  expect(runs[0]?.includes("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS")).toBe(false);
+  expect(runs[1]?.includes("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS")).toBe(upgrade);
+  const harness = runs[1]!.find((arg) => arg.endsWith(":/app/package.json:ro"));
+  expect(harness).toBeDefined();
+  expect(runs[1]).toContain(
+    harness!.replace(
+      ":/app/package.json:ro",
+      ":/app/extensions/qa-lab/node_modules/openclaw/package.json:ro",
+    ),
+  );
+  expect(runs[1]?.some((arg) => arg.startsWith(`${repoRoot}:/app`))).toBe(false);
+  expect(readFileSync(path.join(root, "output/run-metadata.txt"), "utf8")).toBe(
+    "schema=1\nexit_code=0\nlive_output=job_log\n",
+  );
 });

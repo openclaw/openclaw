@@ -103,11 +103,7 @@ export const whatsappDeliveryScenarios = {
     marker: "WHATSAPP_QA_STATUS_LIFECYCLE",
     buildRun: (token) => ({
       afterReply: async (_reply, context) => {
-        const reactions = await waitForWhatsAppSutReactionSequenceToTrigger(context, {
-          emojis: ["👀", "✅"],
-          observedAfter: context.requestStartedAt,
-          timeoutMs: 60_000,
-        });
+        const reactions = await waitForWhatsAppSutReactionSequenceToTrigger(context, ["👀", "✅"]);
         return `status reaction lifecycle observed ${reactions
           .map((reaction) => reaction.reaction?.emoji ?? "<unknown>")
           .join(" -> ")}`;

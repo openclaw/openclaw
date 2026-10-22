@@ -30,14 +30,15 @@ function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {
     configLoading: false,
     configSaving: false,
     configDirty: false,
+    presentationRetired: Promise.withResolvers<void>().promise,
     filter: "",
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
     onToggle: () => false,
     onClear: () => undefined,
     onDisableAll: () => false,
-    onConfigReload: () => undefined,
-    onConfigSave: () => undefined,
+    onConfigReload: async () => undefined,
+    onConfigSave: async () => undefined,
     ...overrides,
   };
 }

@@ -43,6 +43,9 @@ export async function requestChatSend(
     assertUploadsEnabled(state.uploadConfig);
   }
   const sessionKey = params.sessionKey ?? state.sessionKey;
+  if (sessionKey === state.sessionKey && state.isRouteSessionPending?.()) {
+    throw new Error(t("chat.thread.loading"));
+  }
   const selectedAgentId = params.agentId
     ? normalizeAgentId(params.agentId)
     : resolveUiSelectedSessionAgentId(state);

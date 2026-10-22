@@ -49,7 +49,7 @@ function provenance() {
     tooling: {
       xcode: "Xcode 26.6 Build version 17F113",
       fastlane: "2.236.1",
-      node: "v24.16.0",
+      node: "v24.22.1",
     },
   };
 }

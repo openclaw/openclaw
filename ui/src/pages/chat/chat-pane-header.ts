@@ -48,7 +48,7 @@ import { ChatPaneNativeSessionActions } from "./chat-pane-native-session-actions
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
-import { projectSubagentStatus } from "./chat-subagent-wait.ts";
+import { countRunningSubagents } from "./chat-subagent-wait.ts";
 import { isChatRunWorking } from "./components/chat-composer.tsx";
 import type { ChatDetails, ChatDetailsViewProps } from "./components/chat-details.tsx";
 import "./components/chat-header-session-menu.ts";
@@ -145,7 +145,23 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     terminal: () => this.headerWorkspace?.onToggleTerminal?.(),
     browser: () => this.headerWorkspace?.onToggleBrowser?.(),
     desktop: () => this.headerWorkspace?.onToggleDesktop?.(),
-    discussion: () => this.resolveSessionDiscussionAction()?.onToggle(),
+    discussion: () => {
+      const discussion = this.resolveSessionDiscussionAction();
+      if (!discussion) {
+        return;
+      }
+      // Cached menu actions follow the pane's current desktop/mobile presentation.
+      if (
+        this.usesMobileHost &&
+        this.state &&
+        !this.isSlotShown(this.state.sidebarLayout, "discussion")
+      ) {
+        this.openSessionDiscussionSlot();
+        this.navigateMobileHost({ area: "panels", slot: "discussion" });
+      } else {
+        discussion.onToggle();
+      }
+    },
     changes: () => this.headerWorkspace?.onOpenDiff?.(),
     files: () => this.headerWorkspace?.onToggleCollapsed(),
     companion: () => this.requestSessionRail("toggle"),
@@ -239,7 +255,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       agentsList: this.context.agents.state.agentsList,
       hello: this.context.gateway.snapshot.hello,
     });
-    const archiveAllowed = Boolean(row && this.canArchiveHeaderSession(row));
     const deleteAllowed = Boolean(
       row &&
       !isNativeCatalogAdoptionSessionKey(row.key) &&
@@ -305,18 +320,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
                 ? "chat.sessionDiscussion.hide"
                 : "chat.sessionDiscussion.show",
             ),
-            onToggle: () => {
-              const admitted = this.resolveSessionDiscussionAction();
-              if (!admitted) {
-                return;
-              }
-              if (isPanelVisible("discussion")) {
-                admitted.onToggle();
-              } else {
-                this.openSessionDiscussionSlot();
-                this.navigateMobileHost({ area: "panels", slot: "discussion" });
-              }
-            },
           }
         : nativeDiscussion;
     const currentLayout = sidebarLayout ?? this.state?.sidebarLayout;
@@ -349,7 +352,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           callbacks: this.headerPanelCallbacks,
           desktopPanelAvailable,
           discussion,
-          usesMobileHost: this.usesMobileHost,
           sessionRailVisible,
           subagentsVisible,
           processesVisible,
@@ -546,14 +548,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       panelMenuActions,
       layoutMenuActions,
       dashboardWidgetMenu: boardWidgetMenu,
-      runningSubagentCount: projectSubagentStatus(
-        {
-          ...this.projectChildRoster(this.resolveChatReadTarget()),
-          selectedSession: row,
-          messages: this.state?.chatMessages ?? [],
-        },
-        false,
-      ).running,
+      runningSubagentCount: countRunningSubagents({
+        ...this.projectChildRoster(this.resolveChatReadTarget()),
+        selectedSession: row,
+      }),
       sidebarLayout: currentLayout,
       panelDefinitions,
       onLayoutChange: (layout, options) => this.state?.updateSidebarLayout(layout, options),
@@ -658,7 +656,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               actionDisabledReasons,
               forkDisabled: this.state.sessionsLoading || row.modelSelectionLocked === true,
               forkFromLastCompleted: row.hasActiveRun === true,
-              archiveAllowed,
+              archiveAllowed: this.canArchiveHeaderSession(row),
               archiveShortcut: this.active && this.presented && !this.onboarding,
               deleteAllowed,
               onOpen: this.onHeaderMenuOpen,

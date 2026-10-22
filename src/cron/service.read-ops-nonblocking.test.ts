@@ -86,7 +86,6 @@ function createService(deps: Partial<CronServiceDeps> = {}, now = nowMs) {
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
     runSessionEvent,
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });
@@ -368,9 +367,8 @@ describe("CronService read operations", () => {
     const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => ({
       status: "ok",
     }));
-    const requestHeartbeat = vi.fn();
     const now = Date.parse("2025-12-13T00:00:00.000Z");
-    const deps = { runSessionEvent, requestHeartbeat };
+    const deps = { runSessionEvent };
     const first = createService(deps, now);
 
     await first.cron.start();
@@ -393,7 +391,6 @@ describe("CronService read operations", () => {
     await second.cron.status();
 
     expect(runSessionEvent).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeat).not.toHaveBeenCalled();
   });
 
   it("re-arms a stale service after a missing remove reloads an earlier job", async () => {

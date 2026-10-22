@@ -1,5 +1,5 @@
 import { Show, type Element } from "solid-js";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { BoardSessionSurface, type BoardSessionSurfaceProps } from "./board-session-surface.tsx";

@@ -135,6 +135,11 @@ main-session turns continue through normal restart recovery with the original
 operator restrictions. If the original authority is unavailable, the task stays
 owed instead of running with broader permissions.
 
+If a recovered requester finishes without a durable final reply, completion
+delivery records the failure and keeps the child result. It does not queue another
+model turn just to report that failed recovery. Inspect the retained result and
+continue explicitly after resolving the original error.
+
 Completion replay uses the same captured requester identity as the original
 input. Optional fields absent from that identity stay absent after reload, so
 an already committed completion is reconciled without appending another notice.

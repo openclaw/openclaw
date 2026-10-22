@@ -26,7 +26,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
 import type { PortUsage } from "../../infra/ports-types.js";
-import { sleep } from "../../utils.js";
+import { sleep, tryParseJson } from "../../utils.js";
 import type {
   GatewayPortHealthSnapshot,
   UnavailablePluginHealthSummary,
@@ -89,20 +89,16 @@ type GatewayHttpReadiness = {
 };
 
 function readGatewayFailingChannels(response: { statusCode: number; body: string } | null) {
-  try {
-    const readiness = asOptionalRecord(JSON.parse(response?.body ?? ""));
-    const failing = readiness?.failing;
-    return response?.statusCode === 503 &&
-      readiness?.ready === false &&
-      readiness.coreReady === true &&
-      Array.isArray(failing) &&
-      failing.length > 0 &&
-      failing.every((id): id is string => typeof id === "string" && id.trim().length > 0)
-      ? failing
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const readiness = asOptionalRecord(tryParseJson(response?.body ?? ""));
+  const failing = readiness?.failing;
+  return response?.statusCode === 503 &&
+    readiness?.ready === false &&
+    readiness.coreReady === true &&
+    Array.isArray(failing) &&
+    failing.length > 0 &&
+    failing.every((id): id is string => typeof id === "string" && id.trim().length > 0)
+    ? failing
+    : undefined;
 }
 
 /** Waits for the unauthenticated HTTP(S) readiness contracts reported by service start. */

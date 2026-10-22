@@ -65,11 +65,7 @@ it("detects syntax suppressions without counting prose", () => {
 
   expect(report.summary).toMatchObject({
     findingCount: 6,
-    kindCounts: {
-      "as-any": 3,
-      "expect-error": 1,
-      "type-assertion-any": 2,
-    },
+    kindCounts: { "as-any": 3, "expect-error": 1, "type-assertion-any": 2 },
     scannedFileCount: 2,
     touchedFileCount: 1,
   });

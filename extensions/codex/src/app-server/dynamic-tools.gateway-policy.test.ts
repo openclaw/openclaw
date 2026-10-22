@@ -148,29 +148,10 @@ describe("Codex Gateway tool policy", () => {
       expect(flattenCodexDynamicToolFunctions(registeredBridge.specs)).toMatchObject([
         { name: "message" },
       ]);
-
-      const fallbackBridge = createCodexDynamicToolBridge({
-        tools: [taskTool("message")],
-        registeredTools: [poisonedName, poisonedSchema, taskTool("message")],
-        registeredFallbackTools: [poisonedName, poisonedSchema, poisonedExecute],
-        signal: new AbortController().signal,
-        hookContext: scopedContext,
-      });
-      expect(flattenCodexDynamicToolFunctions(fallbackBridge.availableSpecs)).toMatchObject([
-        { name: "message" },
-      ]);
-      expect(flattenCodexDynamicToolFunctions(fallbackBridge.specs)).toMatchObject([
-        { name: "message" },
-      ]);
-      expect(fallbackBridge.telemetry.quarantinedTools.map(({ tool }) => tool)).toEqual([
-        "tool[0]",
-        "fuzzplugin_unreadable_schema",
-        "fuzzplugin_unreadable_execute",
-      ]);
     },
   );
 
-  it.each(["available", "registered", "fallback"] as const)(
+  it.each(["available", "registered"] as const)(
     "rejects missing action policy for %s tools instead of quarantining it",
     (source) => {
       const task = taskTool();
@@ -178,7 +159,6 @@ describe("Codex Gateway tool policy", () => {
         createCodexDynamicToolBridge({
           tools: source === "available" ? [task] : [],
           registeredTools: source === "registered" ? [task] : undefined,
-          registeredFallbackTools: source === "fallback" ? [task] : undefined,
           signal: new AbortController().signal,
           hookContext: { config: { tools: { gatewayPolicy: { allow: ["task"] } } } },
         }),
@@ -222,7 +202,7 @@ describe("Codex Gateway tool policy", () => {
     },
   );
 
-  it("preserves saved declarations while denying restored and fallback callbacks", async () => {
+  it("preserves saved declarations while denying unavailable restored callbacks", async () => {
     const task = taskTool();
     const admin = taskTool("gateway");
     const oldBridge = createCodexDynamicToolBridge({
@@ -235,7 +215,6 @@ describe("Codex Gateway tool policy", () => {
     const resumed = createCodexDynamicToolBridge({
       tools: [task],
       registeredSpecs: oldBridge.specs,
-      registeredFallbackTools: [admin],
       signal: new AbortController().signal,
       hookContext: { config },
     });
@@ -266,7 +245,6 @@ describe("Codex Gateway tool policy", () => {
     const replacement = createCodexDynamicToolBridge({
       tools: [task],
       registeredSpecs: bridge.specs,
-      registeredFallbackTools: [task],
       signal: new AbortController().signal,
     });
     expect(replacement.availableTools).toEqual([]);

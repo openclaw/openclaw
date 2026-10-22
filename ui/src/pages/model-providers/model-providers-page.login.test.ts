@@ -392,8 +392,19 @@ describe("Models provider login", () => {
       },
       { timeoutMs: null },
     );
-    expect(page.querySelector('input[type="password"][name="wizard-text"]')).not.toBeNull();
+    const input = page.querySelector<HTMLInputElement>(
+      'input[type="password"][name="wizard-text"]',
+    )!;
+    expect(input).not.toBeNull();
     await submitCredential(page);
+    await waitForSolid(() => expect(input.disabled).toBe(true));
+    expect(page.querySelector('input[name="wizard-text"]')).toBe(input);
+    expect(input.value).toBe("synthetic-test-credential");
+    expect(
+      [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
+        (button) => button.textContent?.trim() === "Cancel",
+      )?.disabled,
+    ).toBe(false);
 
     const dismissal = new CustomEvent("modal-cancel", { bubbles: true, cancelable: true });
     page.querySelector("openclaw-modal-dialog")!.dispatchEvent(dismissal);
@@ -894,7 +905,7 @@ describe("Models provider login", () => {
     let controller!: ModelProviderLogin;
     const view = mountSolid(() => {
       controller = createModelProviderLogin({
-        getScope: () => ({ context, agentId }),
+        getScope: () => ({ context, agentId, connectionEpoch: 1 }),
         canStart: () => true,
         canContinue: () => true,
         refresh: async () => undefined,
@@ -938,7 +949,7 @@ describe("Models provider login", () => {
     let controller!: ModelProviderLogin;
     const view = mountSolid(() => {
       controller = createModelProviderLogin({
-        getScope: () => ({ context, agentId: "writer", authStatus }),
+        getScope: () => ({ context, agentId: "writer", connectionEpoch: 1, authStatus }),
         canStart: () => true,
         canContinue: () => true,
         refresh: async () => undefined,
@@ -980,7 +991,7 @@ describe("Models provider login", () => {
       const view = mountSolid(
         () => {
           controller = createModelProviderLogin({
-            getScope: () => ({ context, agentId: "writer" }),
+            getScope: () => ({ context, agentId: "writer", connectionEpoch: 1 }),
             canStart: () => true,
             canContinue: () => true,
             refresh: async () => undefined,

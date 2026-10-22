@@ -35,6 +35,7 @@ export type GeneratedAvatar = AgentsAvatarGenerateResult;
 type Candidate = { name: string; description: string; dataUrl: string };
 type Mode = "bot" | "generate" | "upload";
 type Preparation = { paletteId: string } | { prompt: string };
+type PreparedAvatar = Candidate | { paletteId: string; dataUrl: string };
 
 export type AvatarPickerFooterState = {
   mode: Mode;
@@ -78,6 +79,25 @@ export function AvatarPicker(props: AvatarPickerProps) {
     generated: Boolean(candidate()),
     busy: busy(),
   });
+  const prepare = async (request: Preparation): Promise<PreparedAvatar> => {
+    if ("paletteId" in request) {
+      const { loadLobsterImage } = await import("../../components/lobster-image.ts");
+      const image = await loadLobsterImage(request.paletteId);
+      if (!image) {
+        throw new Error(t("agents.identity.imageUnusable"));
+      }
+      return {
+        paletteId: request.paletteId,
+        dataUrl: requireImage(imageToAvatarDataUrl(image, image.naturalWidth, image.naturalHeight)),
+      };
+    }
+    const generated = await props.onGenerate(request.prompt);
+    return {
+      name: generated.name,
+      description: generated.description,
+      dataUrl: requireImage(await svgToAvatarDataUrl(generated.svg)),
+    };
+  };
 
   // Each mode selection retires its action state, even when an old transport is still pending.
   const command = createMemo(() => {
@@ -85,33 +105,21 @@ export function AvatarPicker(props: AvatarPickerProps) {
     const [busy, setBusy] = createOptimistic(false);
     const [completion, setCompletion] = createSignal<Promise<void>>();
     const result = createMemo(() => completion()?.then(() => null));
-    const perform = action(async function* (request: Preparation, current: number) {
+    const perform = action(function* (preparation: Promise<PreparedAvatar>, current: number) {
       setBusy(true);
-      if ("paletteId" in request) {
-        const { loadLobsterImage } = await import("../../components/lobster-image.ts");
-        const image = await loadLobsterImage(request.paletteId);
-        if (!image) {
-          throw new Error(t("agents.identity.imageUnusable"));
-        }
-        const dataUrl = requireImage(
-          imageToAvatarDataUrl(image, image.naturalWidth, image.naturalHeight),
-        );
-        yield;
-        if (operation === current && !props.disabled) {
-          props.onSelect(dataUrl);
-          setSelected(request.paletteId);
-        }
+      const prepared: PreparedAvatar = yield preparation;
+      if (operation !== current || props.disabled) {
+        return;
+      }
+      if ("paletteId" in prepared) {
+        props.onSelect(prepared.dataUrl);
+        setSelected(prepared.paletteId);
       } else {
-        const generated = await props.onGenerate(request.prompt);
-        const dataUrl = requireImage(await svgToAvatarDataUrl(generated.svg));
-        yield;
-        if (operation === current && !props.disabled) {
-          if (props.footerGeneration) {
-            props.onSelect(dataUrl);
-            setSelected(null);
-          }
-          setCandidate({ name: generated.name, description: generated.description, dataUrl });
+        if (props.footerGeneration) {
+          props.onSelect(prepared.dataUrl);
+          setSelected(null);
         }
+        setCandidate(prepared);
       }
     });
     return {
@@ -120,7 +128,8 @@ export function AvatarPicker(props: AvatarPickerProps) {
       run(request: Preparation) {
         const current = ++operation;
         setCandidate(null);
-        const pending = perform(request, current);
+        const preparation = prepare(request);
+        const pending = perform(preparation, current);
         // The result reader mounts after the action settles; handle rejection until then.
         void pending.catch(() => undefined);
         void setCompletion(pending);

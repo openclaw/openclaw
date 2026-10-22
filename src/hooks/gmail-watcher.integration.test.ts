@@ -11,6 +11,7 @@ import {
 import { withinTest } from "../../test/helpers/promise.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { startGmailWatcher, stopGmailWatcher } from "./gmail-watcher.js";
+import { createGmailConfig } from "./gmail.test-support.js";
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
@@ -79,20 +80,10 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
 
     vi.stubEnv("PATH", `${tmpDir}:${process.env["PATH"] ?? ""}`);
     const result = await withinTest(
-      startGmailWatcher(
-        {
-          hooks: {
-            enabled: true,
-            token: "integration-token",
-            gmail: {
-              account: "integration@example.com",
-              topic: "projects/integration/topics/gmail",
-              pushToken: "integration-push-token",
-            },
-          },
-        },
-        { scheduler: createTestGatewayScheduler(), signal },
-      ),
+      startGmailWatcher(createGmailConfig("integration@example.com"), {
+        scheduler: createTestGatewayScheduler(),
+        signal,
+      }),
       signal,
     );
 

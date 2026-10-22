@@ -99,7 +99,10 @@ async function listenApp(
 it("serializes first creation, preserves the winner and cancels queued writes without shared state", async () => {
   const { root, env } = fixture();
   const first = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(123), 456);
-  const second = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(789), 999);
+  const second = {
+    ...storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(789), 999),
+    private_key_pem: "competing-candidate",
+  };
   const controller = new AbortController();
   const one = runClientCredentialOperationAsync(env, { kind: "identity.create", identity: first });
   const two = runClientCredentialOperationAsync(env, { kind: "identity.create", identity: second });

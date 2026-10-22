@@ -50,8 +50,7 @@ it("creates the base dir and returns early for invalid install ids", async () =>
       error: "bad id",
     });
 
-    const baseDirStat = await fs.stat(baseDir);
-    expect(baseDirStat.isDirectory()).toBe(true);
+    expect((await fs.stat(baseDir)).isDirectory()).toBe(true);
     expect(assertCanonicalPathWithinBaseMock).not.toHaveBeenCalled();
   });
 });

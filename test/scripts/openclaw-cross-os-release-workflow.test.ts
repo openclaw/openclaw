@@ -108,14 +108,14 @@ function matrixEntry(osId: "ubuntu" | "windows" | "macos", suite: string, node26
     macos: ["macos", "macOS", "xcode-27"],
   }[osId];
   return {
-    artifact_name: artifact + (node26 ? "-node26.1.0" : ""),
+    artifact_name: artifact + (node26 ? "-node26.12.1" : ""),
     display_name: display,
-    node_version: node26 ? "26.1.0" : "24.21.0",
+    node_version: node26 ? "26.12.1" : "24.22.1",
     lane: suite.endsWith("fresh") ? "fresh" : "upgrade",
     os_id: osId,
     runner,
     suite,
-    suite_label: suite.replace("-", " ") + (node26 ? " (Node 26.1.0)" : ""),
+    suite_label: suite.replace("-", " ") + (node26 ? " (Node 26.12.1)" : ""),
   };
 }
 
@@ -168,10 +168,7 @@ describe("cross-OS release checks workflow", () => {
           matrix.include
             .filter((entry) => entry.os_id === osId && entry.suite === suite)
             .map((entry) => entry.node_version),
-        ).toEqual([
-          osId === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.21.0",
-          "26.1.0",
-        ]);
+        ).toEqual(["24.22.1", "26.12.1"]);
       }
     }
     for (const [osId, suite] of [
@@ -247,18 +244,18 @@ describe("cross-OS release checks workflow", () => {
       expect(step(prepare, setupName).with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
       const expression = String(step(consumer, setupName).with?.["node-version"]);
       for (const [osId, suite, nodeVersion, expected] of [
-        ["windows", "packaged-fresh", "26.1.0", "26.1.0"],
-        ["windows", "packaged-fresh", "24.16.0", "24.16.0"],
-        ["ubuntu", "packaged-upgrade", "26.1.0", "26.1.0"],
+        ["windows", "packaged-fresh", "26.12.1", "26.12.1"],
+        ["windows", "packaged-fresh", "24.22.1", "24.22.1"],
+        ["ubuntu", "packaged-upgrade", "26.12.1", "26.12.1"],
         // The public workflow_ref input can select a pre-field tooling revision.
-        ["windows", "packaged-fresh", undefined, "24.16.0"],
-        ["windows", "packaged-upgrade", undefined, "24.19.0"],
-        ["macos", "packaged-fresh", undefined, "24.19.0"],
+        ["windows", "packaged-fresh", undefined, "24.22.1"],
+        ["windows", "packaged-upgrade", undefined, "24.22.1"],
+        ["macos", "packaged-fresh", undefined, "24.22.1"],
       ]) {
         expect(
           runInNewContext(expression.replace(/^\$\{\{(.*)\}\}$/u, "$1"), {
             matrix: { os_id: osId, suite, node_version: nodeVersion },
-            env: { NODE_VERSION: "24.19.0" },
+            env: { NODE_VERSION: "24.22.1" },
           }),
           `${setupName}: ${osId}/${suite}/${nodeVersion ?? "legacy"}`,
         ).toBe(expected);
@@ -810,7 +807,7 @@ describe("cross-OS release checks workflow", () => {
         {
           ...matrixEntry("windows", "packaged-fresh"),
           runner: "windows-2025",
-          node_version: "24.16.0",
+          node_version: "24.22.1",
         },
         { ...matrixEntry("windows", "packaged-fresh", true), runner: "windows-2025" },
       ],

@@ -138,9 +138,10 @@ const { persistAuthProfileBatch } = await vi.importActual<
 >("../agents/auth-profiles/upsert-with-lock.js");
 
 const runtime = createTestRuntime();
+type AddOptions = Parameters<typeof agentsAddCommand>[0];
 const apiKey = (key: string) => createApiKeyCredential("openai", key);
 const keyProfile = (profileId: string, key: string) => ({ profileId, credential: apiKey(key) });
-const add = (options: Parameters<typeof agentsAddCommand>[0] = {}, hasAutomationFlags?: boolean) =>
+const add = (options: AddOptions = {}, hasAutomationFlags?: boolean) =>
   agentsAddCommand(options, { hasAutomationFlags });
 function expectUnused(...mocks: Array<{ mock: { calls: unknown[] } }>) {
   for (const mock of mocks) {
@@ -257,32 +258,27 @@ describe("agents add command", () => {
     expectUnused(runtime.error, runtime.exit, writeConfig);
   }
 
-  it.each([
-    {
-      name: "a missing workspace with automation flags",
-      options: { name: "Work" },
-      message: `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
-    },
-    {
-      name: "a missing name after a valid workspace",
-      options: { workspace: "/tmp/work" },
-      message: `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
-    },
-    {
-      name: "an unrepresentable non-interactive name",
-      options: { name: "агент✨", workspace: "/tmp/work" },
-      message:
-        'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.',
-    },
-    {
-      name: "reserved system-agent id openclaw",
-      options: { name: "openclaw", workspace: "/tmp/reserved" },
-      message: `"openclaw" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
-    },
-  ])("rejects $name through the root failure owner before mutation", async (testCase) => {
+  it.each<[AddOptions, string]>([
+    [
+      { name: "Work" },
+      `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
+    ],
+    [
+      { workspace: "/tmp/work" },
+      `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
+    ],
+    [
+      { name: "агент✨", workspace: "/tmp/work" },
+      'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.',
+    ],
+    [
+      { name: "openclaw", workspace: "/tmp/reserved" },
+      `"openclaw" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
+    ],
+  ])("rejects automated creation %j before mutation", async (options, message) => {
     readConfig.mockResolvedValue({ ...baseConfigSnapshot });
 
-    await expectRootFailure(add(testCase.options, true), testCase.message);
+    await expectRootFailure(add(options, true), message);
     expect(createAgent).not.toHaveBeenCalled();
   });
 

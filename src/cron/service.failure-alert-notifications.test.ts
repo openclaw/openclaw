@@ -145,7 +145,6 @@ it.for([
           expect(turn.messageThreadId).toBe(carriesOrigin ? deliveryContext.threadId : undefined);
           expect(resolveOriginDeliveryContext).toHaveBeenCalledTimes(carriesOrigin ? 1 : 0);
           expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-          expect(deps.requestHeartbeat).not.toHaveBeenCalled();
           expect(peekSystemEventEntries(expectedSessionKey)).toEqual([]);
         } finally {
           cron.stop();

@@ -13,8 +13,14 @@ const { probeLineBotMock, monitorLineProviderMock } = vi.hoisted(() => ({
   monitorLineProviderMock: vi.fn(async () => ({ stop: async () => {} })),
 }));
 
-vi.mock("./probe.runtime.js", () => ({ probeLineBot: probeLineBotMock }));
-vi.mock("./monitor.runtime.js", () => ({ monitorLineProvider: monitorLineProviderMock }));
+vi.mock("./probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./probe.js")>()),
+  probeLineBot: probeLineBotMock,
+}));
+vi.mock("./monitor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor.js")>()),
+  monitorLineProvider: monitorLineProviderMock,
+}));
 
 async function startWithProbe(probe: LineProbeResult, account = lineAccount()) {
   probeLineBotMock.mockResolvedValue(probe);
@@ -34,8 +40,8 @@ describe("lineGatewayAdapter.startAccount", () => {
   });
 
   afterAll(() => {
-    vi.doUnmock("./probe.runtime.js");
-    vi.doUnmock("./monitor.runtime.js");
+    vi.doUnmock("./probe.js");
+    vi.doUnmock("./monitor.js");
     vi.resetModules();
   });
 

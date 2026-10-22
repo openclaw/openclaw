@@ -632,3 +632,40 @@ it("seals unsent steering without erasing an earlier consumed dispatch", async (
   ).rejects.toThrow("steering queue cancelled");
   expect(onLateAccepted).toHaveBeenCalledWith(false);
 });
+
+it("steers a human image control without cancelling the pending Codex question", async () => {
+  const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
+  const params = createSteeringParams();
+  const run = runCodexAppServerAttempt(params, {
+    pluginConfig: { appServer: { mode: "yolo" } },
+  });
+  await run.waitForTurnAccepted();
+  const handle = registeredRun(params.sessionId);
+  if (!handle) {
+    throw new Error("Expected the actual published Codex backend");
+  }
+  const cancellations =
+    activeRunRegistrationMocks.cancelPendingAgentQuestionForSession.mock.calls.length;
+  const accepted = vi.fn();
+  const delivery = handle.queueMessage("inspect this without answering the question", {
+    debounceMs: 0,
+    images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
+    isInboundUserMessage: true,
+    allowPendingUserInputAnswer: false,
+    onQueueAccepted: accepted,
+  });
+  try {
+    await waitForMethod("turn/steer");
+    const steer = requests.findLast((entry) => entry.method === "turn/steer");
+    await notify(consumedUser(steerClientId(steer)));
+    await delivery;
+    expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+    expect(activeRunRegistrationMocks.cancelPendingAgentQuestionForSession).toHaveBeenCalledTimes(
+      cancellations,
+    );
+    expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(1);
+  } finally {
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  }
+});

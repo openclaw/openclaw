@@ -541,7 +541,7 @@ describe("profile avatar HTTP endpoint", () => {
   });
 
   it.each(["resolve", "reject"])(
-    "waits for overflow cancellation to %s before releasing the reader and responding",
+    "rejects overflow without waiting for best-effort cancellation to %s",
     async (outcome) => {
       const profileId = `profile-gravatar-oversized-${outcome}`;
       setProfile(profileId, [`oversized-avatar-${outcome}@example.test`]);
@@ -563,12 +563,12 @@ describe("profile avatar HTTP endpoint", () => {
       const handling = serveProfile(profileId, res, fetchImpl);
       try {
         await cancellationStarted.promise;
-        // Drain promise work so fire-and-forget cleanup cannot pass by being unobserved.
-        await new Promise<void>((resolve) => {
-          process.nextTick(resolve);
-        });
-        expect(res.end).not.toHaveBeenCalled();
-        expect(body.locked).toBe(true);
+        await expect(handling).resolves.toBe(true);
+        expect(res.response.statusCode).toBe(502);
+        expect(res.end).toHaveBeenCalledExactlyOnceWith(
+          JSON.stringify({ ok: false, error: { type: "avatar_upstream_unavailable" } }),
+        );
+        expect(body.locked).toBe(false);
         expect(cancel).toHaveBeenCalledExactlyOnceWith(undefined);
 
         if (outcome === "resolve") {
@@ -576,12 +576,7 @@ describe("profile avatar HTTP endpoint", () => {
         } else {
           cancellation.reject(new Error("Gravatar cancellation failed"));
         }
-        await expect(handling).resolves.toBe(true);
-        expect(res.response.statusCode).toBe(502);
-        expect(res.end).toHaveBeenCalledExactlyOnceWith(
-          JSON.stringify({ ok: false, error: { type: "avatar_upstream_unavailable" } }),
-        );
-        expect(body.locked).toBe(false);
+        await cancellation.promise.catch(() => undefined);
         expect(cancel).toHaveBeenCalledExactlyOnceWith(undefined);
       } finally {
         cancellation.resolve();

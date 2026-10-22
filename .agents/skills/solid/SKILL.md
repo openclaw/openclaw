@@ -83,6 +83,13 @@ requires a verified Git rename. Never raise a baseline to admit new debt. See
 the [refactor checklist](references/refactor-checklist.md) for replacements and
 the permitted survivors.
 
+The guard also bans JSX `classList` and hand-written `createComponent` outside
+the explicit context-adapter allowlist. Component/view `onCleanup` and manual
+stored/chained import loaders have shrink-only baselines; computation cleanup
+and reactive primitives remain allowed. Saving flags require recipe review:
+trace the co-written `createOptimistic(false)` rather than infer busy state
+from `isPending` or a nearby optimistic declaration.
+
 More, each with its root cause: [lessons learned](references/lessons.md).
 
 ## Testing

@@ -256,7 +256,7 @@ export async function archiveConfirmedSessionsWithUndo(
   host: SessionActionHost,
   rows: readonly SessionActionRow[],
   scope: SidebarSessionMutationScope,
-) {
+): Promise<"completed" | "stale" | { status: "failed"; error: unknown } | void> {
   if (rows.length === 0 || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
@@ -271,9 +271,20 @@ export async function archiveConfirmedSessionsWithUndo(
     return;
   }
   const pendingRows = pending.map(({ row }) => row);
+  let failure: { status: "failed"; error: unknown } | undefined;
+  const initialHost: SessionActionHost = {
+    ...outcomeHost,
+    sessionData: {
+      ...outcomeHost.sessionData,
+      publishSessionMutationError: (candidate, error) => {
+        failure = { status: "failed", error };
+        outcomeHost.sessionData.publishSessionMutationError(candidate, error);
+      },
+    },
+  };
   let archivedRows: SessionActionRow[] | null;
   try {
-    archivedRows = await patchSessionRows(outcomeHost, pendingRows, { archived: true }, scope, {
+    archivedRows = await patchSessionRows(initialHost, pendingRows, { archived: true }, scope, {
       sessionScope: true,
     });
   } finally {
@@ -282,7 +293,7 @@ export async function archiveConfirmedSessionsWithUndo(
     }
   }
   if (!archivedRows || archivedRows.length === 0) {
-    return;
+    return failure ?? "stale";
   }
   const archived = archivedRows.map((session) => ({ session, pinned: session.pinned }));
   showToast({
@@ -295,6 +306,7 @@ export async function archiveConfirmedSessionsWithUndo(
     // Keep a partial-failure notice readable before presenting successful-only Undo.
     fifo: true,
   });
+  return failure ?? "completed";
 }
 
 function archiveUndoAction(

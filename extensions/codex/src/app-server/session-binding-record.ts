@@ -332,6 +332,7 @@ export function readPluginAppPolicyContext(value: unknown): PluginAppPolicyConte
     const { destructiveApprovalMode } = validated;
     const policy = {
       allowDestructiveActions: validated.allowDestructiveActions,
+      ...(validated.readOnlyTools !== undefined ? { readOnlyTools: validated.readOnlyTools } : {}),
       ...(validated.allowOpenWorld !== undefined
         ? { allowOpenWorld: validated.allowOpenWorld }
         : {}),

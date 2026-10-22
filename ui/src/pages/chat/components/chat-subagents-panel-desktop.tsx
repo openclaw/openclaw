@@ -15,6 +15,7 @@ import "../../../styles/session-panel-rail.css";
 import "./chat-subagents-working.css";
 import "./chat-subagents-panel-desktop.css";
 import type { SubagentsPanelRow } from "../subagents-panel-data.ts";
+import type { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -43,7 +44,7 @@ export type ChatSubagentsPanelDesktopProps = {
   doneExpanded?: boolean;
   onDoneExpandedChange?: (expanded: boolean) => void;
   onRefresh: () => void;
-  onStop: (row: SubagentsPanelRow) => void;
+  createStop: ReturnType<typeof createSubagentsPresentation>["createStop"];
   onOpen: (row: SubagentsPanelRow) => void;
   renderElapsed: (row: SubagentsPanelRow) => JSX.Element;
 };
@@ -77,10 +78,11 @@ export function SubagentDesktopAvatar(props: { sessionKey: string; working?: boo
 function DesktopRow(props: {
   row: SubagentsPanelRow;
   onOpen: (row: SubagentsPanelRow, source: HTMLButtonElement) => void;
-  onStop: (row: SubagentsPanelRow) => void;
+  createStop: ReturnType<typeof createSubagentsPresentation>["createStop"];
   renderElapsed: ChatSubagentsPanelDesktopProps["renderElapsed"];
   registerOpen: (key: string, button: HTMLButtonElement) => () => void;
 }) {
+  const stop = props.createStop(() => props.row);
   const name = () => resolveSessionDisplayName(props.row.session.key, props.row.session);
   const group = () => groupFor(props.row);
   const ended = () => endedWithoutFinishing(props.row.session);
@@ -101,7 +103,7 @@ function DesktopRow(props: {
       .filter(Boolean)
       .join(" · ");
   const stopLabel = () =>
-    props.row.stopping
+    stop.stopping()
       ? t("chat.subagentsPanel.stopping")
       : t("chat.subagentsPanel.stop", { name: name() });
   return (
@@ -167,12 +169,12 @@ function DesktopRow(props: {
           type="button"
           aria-label={stopLabel()}
           title={props.row.stopAccess.allowed ? stopLabel() : props.row.stopAccess.reason}
-          disabled={props.row.stopping || !props.row.canStop}
-          onClick={() => props.onStop(props.row)}
+          disabled={stop.stopping() || !props.row.canStop}
+          onClick={() => void stop.stop()}
         >
           <Icon name="stop" />
           <span>
-            {props.row.stopping ? t("chat.subagentsPanel.stopping") : t("chat.runControls.stop")}
+            {stop.stopping() ? t("chat.subagentsPanel.stopping") : t("chat.runControls.stop")}
           </span>
         </button>
       </Show>
@@ -325,7 +327,7 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
                         <DesktopRow
                           row={row()}
                           onOpen={open}
-                          onStop={props.onStop}
+                          createStop={props.createStop}
                           renderElapsed={props.renderElapsed}
                           registerOpen={registerOpen}
                         />

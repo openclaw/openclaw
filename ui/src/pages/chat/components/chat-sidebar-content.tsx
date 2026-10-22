@@ -11,7 +11,6 @@ import {
   markdownFileLinkFromKeyboardEvent,
   type MarkdownFileLinkTarget,
 } from "../../../components/markdown-file-links.ts";
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import {
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
@@ -34,6 +33,7 @@ import {
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import type { AttachmentDownload } from "./chat-attachment-download.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
@@ -100,11 +100,9 @@ export type SidebarPanelProps = {
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
-  githubRepo?: MarkdownRenderOptions["githubRepo"];
-  githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   embedded?: boolean;
   attachmentRuntime: AttachmentSidebarRuntime;
-  attachmentDownload?: { pending: boolean; error: string | null; onDownload: () => void };
+  attachmentDownload?: AttachmentDownload;
   onClick: (event: MouseEvent) => void;
   onKeydown: (event: KeyboardEvent) => void;
 };
@@ -538,8 +536,6 @@ export function SidebarPanel(props: SidebarPanelProps) {
                           content: toSanitizedMarkdownHtml(content().content, {
                             codeBlockInteraction: "interactive",
                             fileLinks: true,
-                            githubRepo: props.githubRepo ?? null,
-                            githubRepositories: props.githubRepositories,
                             interactiveImages: props.onOpenImage !== undefined,
                             sessionLinks: true,
                           }),

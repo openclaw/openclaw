@@ -517,7 +517,6 @@ const enChatSession = {
       askRateLimited: "Side chat reached its question limit. Try again shortly.",
       askUnavailable: "Side chat cannot answer right now.",
       askRetry: "Retry",
-      asOf: "as of {time}",
       health: {
         "on-track": "On track",
         grinding: "Working",

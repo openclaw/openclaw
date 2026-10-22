@@ -2,18 +2,19 @@ import {
   readClawHubRiskAcknowledgementRequiredError,
   readClawReviewRequiredError,
 } from "@openclaw/gateway-protocol";
-import { createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, onSettled, Show } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
-import "../../components/file-preview-modal-registration.ts";
+import { FilePreviewModal } from "../../components/file-preview-modal.tsx";
 import { registerClawsEnglish } from "../../i18n/locales/en-claws.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { createPageRequestDelay } from "../../lib/page-request.ts";
 import { loadPluginCatalog } from "../../lib/plugins/index.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { useGatewayPage, type GatewayPageChange } from "../../lib/reactive/gateway-page.ts";
+import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -46,18 +47,14 @@ type ClawsDialogProps = {
 };
 
 class ClawsCatalogModel {
-  entries: ClawCatalogEntry[] = [];
   query = "";
-  loading = false;
-  error: string | null = null;
   selected: ClawCatalogEntry | null = null;
   detail: ClawCatalogDetail | null = null;
   preview: {
     kind: "instruction" | "skill";
     name: string;
     content: string | null;
-    loading: boolean;
-    error: string | null;
+    request: Promise<void>;
   } | null = null;
   installedPluginPackages: ReadonlySet<string> = new Set();
   addError: string | null = null;
@@ -75,25 +72,19 @@ class ClawsCatalogModel {
     readonly presentDetailRequest: (request: Promise<ClawCatalogDetail | null> | undefined) => void,
   ) {}
 
-  private searchRevision = 0;
   private previewRevision = 0;
   private detailRevision = 0;
   private cancelDetailRead = () => {};
-  private searchTimer: ReturnType<typeof setTimeout> | null = null;
+  private cancelPreviewRead = () => {};
   onIdentityChange() {
-    this.entries = [];
     this.resetSelection();
     this.applying = false;
   }
 
-  invalidateRequests(change: GatewayPageChange) {
+  invalidateRequests() {
     this.cancelDetailRead();
-    this.searchRevision += 1;
     this.closePreview();
     this.detailRevision += 1;
-    this.entries = [];
-    this.error = change.snapshot.phase === "connected" ? null : t("clawsCatalog.unavailable");
-    this.loading = false;
     this.installedPluginPackages = new Set();
     this.applying = false;
     this.consentWarning = null;
@@ -101,70 +92,10 @@ class ClawsCatalogModel {
     this.riskAcknowledged = false;
   }
 
-  ensureInitialData() {
-    void this.loadCatalog();
-  }
-
   dispose() {
     this.cancelDetailRead();
+    this.cancelPreviewRead();
     this.disposed = true;
-    if (this.searchTimer) {
-      clearTimeout(this.searchTimer);
-      this.searchTimer = null;
-    }
-  }
-
-  private async loadCatalog() {
-    const scope = this.gateway.capture();
-    if (!scope) {
-      return;
-    }
-    const revision = ++this.searchRevision;
-    this.entries = [];
-    this.loading = true;
-    this.error = null;
-    try {
-      const entries = await searchClaws(
-        scope.client,
-        this.props.initialPackageName || this.query,
-        this.props.initialPackageName ? 100 : undefined,
-      );
-      if (this.gateway.isCurrent(scope) && revision === this.searchRevision) {
-        this.entries = entries;
-        if (this.props.initialPackageName) {
-          const entry = entries.find(
-            (candidate) => candidate.packageName === this.props.initialPackageName,
-          );
-          if (entry) {
-            this.select(entry);
-          } else {
-            this.error = t("clawsCatalog.empty");
-          }
-        }
-      }
-    } catch (error) {
-      if (this.gateway.isCurrent(scope) && revision === this.searchRevision) {
-        this.error = formatUiError(error, t("clawsCatalog.unavailable"));
-      }
-    } finally {
-      if (this.gateway.isCurrent(scope) && revision === this.searchRevision) {
-        this.loading = false;
-      }
-    }
-  }
-
-  private search(query: string) {
-    this.query = query;
-    this.searchRevision += 1;
-    this.entries = [];
-    this.error = null;
-    if (this.searchTimer) {
-      clearTimeout(this.searchTimer);
-    }
-    this.searchTimer = setTimeout(() => {
-      this.searchTimer = null;
-      void this.loadCatalog();
-    }, 150);
   }
 
   private source(): ClawCatalogSource | null {
@@ -246,7 +177,7 @@ class ClawsCatalogModel {
     this.addedAgentId = null;
   }
 
-  private select(entry: ClawCatalogEntry) {
+  select(entry: ClawCatalogEntry) {
     if (!this.props.pageMode && this.props.onSelectEntry) {
       this.props.onSelectEntry(entry);
       return;
@@ -432,43 +363,50 @@ class ClawsCatalogModel {
   }
 
   closePreview() {
+    this.cancelPreviewRead();
     this.previewRevision += 1;
     this.preview = null;
   }
 
   async openPreview(kind: "instruction" | "skill", name: string) {
+    this.cancelPreviewRead();
     const source = this.source();
     const scope = this.gateway.capture();
     const revision = ++this.previewRevision;
-    this.preview = {
-      kind,
-      name,
-      content: null,
-      loading: Boolean(source && scope),
-      error: source && scope ? null : t("clawsCatalog.unavailable"),
-    };
+    const receipt = Promise.withResolvers<void>();
+    this.cancelPreviewRead = receipt.resolve;
+    void receipt.promise.catch(() => {});
+    this.preview = { kind, name, content: null, request: receipt.promise };
     if (!source || !scope) {
+      receipt.reject(new UserFacingError(t("clawsCatalog.unavailable")));
       return;
     }
     try {
       const result = await readClawPreview(scope.client, source, { kind, name });
       if (this.gateway.isCurrent(scope) && revision === this.previewRevision && this.preview) {
-        this.preview = { ...this.preview, content: result.content, loading: false };
+        this.preview = { ...this.preview, content: result.content };
       }
     } catch (error) {
       if (this.gateway.isCurrent(scope) && revision === this.previewRevision && this.preview) {
-        this.preview = { ...this.preview, loading: false, error: formatUiError(error) };
+        receipt.reject(new UserFacingError(formatUiError(error), { cause: error }));
       }
+    } finally {
+      receipt.resolve();
     }
   }
 
-  view(): Omit<ClawsCatalogViewProps, "readDetail" | "detailRequest"> {
+  view(): Omit<
+    ClawsCatalogViewProps,
+    | "readEntries"
+    | "catalogRequest"
+    | "onSearch"
+    | "onRetryCatalog"
+    | "readDetail"
+    | "detailRequest"
+  > {
     return {
-      entries: this.entries,
       basePath: this.context.basePath,
       query: this.query,
-      loading: this.loading,
-      error: this.error,
       selected: this.selected,
       pageMode: this.props.pageMode ?? false,
       detail: this.detail,
@@ -480,35 +418,34 @@ class ClawsCatalogModel {
       addedAgentId: this.addedAgentId,
       canAdd: this.canAdd(),
       onOpenPreview: (kind, name) => void this.openPreview(kind, name),
-      onSearch: (query) => this.search(query),
       onSelect: (entry) => this.select(entry),
       onBack: () => this.back(),
       onClose: () => this.close(),
-      onRetryCatalog: () => void this.loadCatalog(),
       onRetryDetail: () => this.loadDetail(),
       onConfirm: () => {
         this.riskAcknowledged = false;
-        void this.add();
+        return this.add();
       },
       onConfirmConsent: () => {
         this.riskAcknowledged = true;
         this.consentWarning = null;
-        void this.add(this.reviewPlan);
+        return this.add(this.reviewPlan);
       },
       onCancelConsent: () => {
         this.consentWarning = null;
         this.reviewPlan = null;
         this.riskAcknowledged = false;
       },
-      onConfirmReview: () => void this.add(this.reviewPlan),
+      onConfirmReview: () => this.add(this.reviewPlan),
       onCancelReview: () => {
         this.reviewPlan = null;
         this.riskAcknowledged = false;
       },
       onRetryOpenChat: () => {
         if (this.addedAgentId) {
-          void this.finishChatHandoff(this.addedAgentId, this.context);
+          return this.finishChatHandoff(this.addedAgentId, this.context);
         }
+        return undefined;
       },
     };
   }
@@ -516,8 +453,15 @@ class ClawsCatalogModel {
 
 export function ClawsCatalogDialog(props: ClawsDialogProps) {
   const context = useApplication();
+  const [catalogRequest, setCatalogRequest] = createSignal<Promise<ClawCatalogEntry[]>>();
+  let cancelSearch = () => {};
   const [detailRequest, setDetailRequest] = createSignal<Promise<ClawCatalogDetail | null>>();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const [applying, showApplying] = createOptimistic(false);
+  const presentMutation = action(function* (completed: Promise<void>) {
+    showApplying(true);
+    yield completed;
+  });
   const model = new Proxy(
     new ClawsCatalogModel(context, props, (request) => {
       void setDetailRequest(request);
@@ -536,19 +480,85 @@ export function ClawsCatalogDialog(props: ClawsDialogProps) {
   model.gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: () => model.onIdentityChange(),
-    invalidateRequests: (change) => model.invalidateRequests(change),
-    ensureInitialData: () => model.ensureInitialData(),
+    invalidateRequests: () => {
+      cancelSearch();
+      setCatalogRequest(undefined);
+      model.invalidateRequests();
+    },
+    ensureInitialData: () => loadCatalog(),
   });
-  onCleanup(() => model.dispose());
+  onSettled(() => () => {
+    cancelSearch();
+    model.dispose();
+  });
+  function loadCatalog(nextQuery = model.query, delay = 0) {
+    cancelSearch();
+    const scope = model.gateway.capture();
+    if (!scope) {
+      return;
+    }
+    const packageName = props.initialPackageName;
+    const { ready, isCancelled, cancel } = createPageRequestDelay(delay);
+    cancelSearch = cancel;
+    const isCurrent = () => !isCancelled() && model.gateway.isCurrent(scope);
+    // Admission also refreshes hidden detail pages on reconnect. Keep selection
+    // at request completion, outside the async rendering computation.
+    void setCatalogRequest(
+      (async () => {
+        if (ready) {
+          await ready;
+        }
+        if (!isCurrent()) {
+          return [];
+        }
+        const entries = await searchClaws(
+          scope.client,
+          packageName || nextQuery,
+          packageName ? 100 : undefined,
+        );
+        if (packageName && isCurrent()) {
+          const entry = entries.find((candidate) => candidate.packageName === packageName);
+          if (!entry) {
+            throw new Error(t("clawsCatalog.empty"));
+          }
+          model.select(entry);
+        }
+        return entries;
+      })(),
+    );
+  }
+  const entries = createMemo(() => {
+    const request = catalogRequest();
+    if (!request && !model.gateway.connected) {
+      throw new Error(t("clawsCatalog.unavailable"));
+    }
+    return request ?? [];
+  });
   const detail = createMemo(() => detailRequest() ?? null);
   const view = createMemo(() => {
     revision();
     return model.view();
   });
+  function mutate(run: () => void | Promise<void>) {
+    const alreadyApplying = model.applying;
+    const scope = model.gateway.capture();
+    const completed = run();
+    if (alreadyApplying || !model.applying || !scope || !completed) {
+      return;
+    }
+    // Commit owner receipts, including cleared consent, before the action holds.
+    onSettled(() => {
+      if (model.gateway.isCurrent(scope) && model.applying) {
+        void presentMutation(completed);
+      }
+    });
+  }
   const preview = createMemo(() => {
     revision();
     return model.preview;
   });
+  const readInventory = createMemo(() => (preview()?.kind === "skill" ? preview()?.request : null));
+  const readFile = createMemo(() => preview()?.request ?? null);
   const previewPath = () => (preview()?.kind === "skill" ? "SKILL.md" : (preview()?.name ?? ""));
   const files = () => {
     const current = preview();
@@ -568,19 +578,36 @@ export function ClawsCatalogDialog(props: ClawsDialogProps) {
   };
   return (
     <openclaw-claws-catalog-dialog>
-      <ClawsCatalogView {...view()} readDetail={detail} detailRequest={detailRequest()} />
+      <ClawsCatalogView
+        {...view()}
+        readEntries={entries}
+        catalogRequest={catalogRequest()}
+        readDetail={detail}
+        detailRequest={detailRequest()}
+        onSearch={(value) => {
+          model.query = value;
+          loadCatalog(value, 150);
+        }}
+        onRetryCatalog={() => loadCatalog()}
+        applying={applying() && view().applying}
+        onConfirm={() => mutate(view().onConfirm)}
+        onConfirmConsent={() => mutate(view().onConfirmConsent)}
+        onConfirmReview={() => mutate(view().onConfirmReview)}
+        onRetryOpenChat={() => mutate(view().onRetryOpenChat)}
+      />
       <Show when={preview()}>
         {(current) => (
-          <openclaw-file-preview-modal
-            prop:label={
+          <FilePreviewModal
+            label={
               current().kind === "instruction" ? t("clawsCatalog.workspaceFiles") : current().name
             }
-            prop:files={files()}
-            prop:activePath={previewPath()}
+            files={files()}
+            activePath={previewPath()}
             layout="document"
-            prop:loading={current().kind === "skill" && current().loading}
-            prop:fileLoading={current().kind === "instruction" && current().loading}
-            prop:error={current().error ?? ""}
+            readInventory={readInventory}
+            inventoryRequest={() => (current().kind === "skill" ? current().request : undefined)}
+            readFile={readFile}
+            fileRequest={() => current().request}
             onFile-preview-select={(event: CustomEvent<string>) => {
               if (current().kind === "instruction" && event.detail !== current().name) {
                 void model.openPreview("instruction", event.detail);
