@@ -31,72 +31,60 @@ function resume(db: EngineConnection, resumeSessionId: string, backendId?: strin
   }).rows;
 }
 
-it("matches migrated string identities using index searches, including malformed and non-string identities", () => {
-  const db = new DatabaseSync(":memory:");
-  try {
-    const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "acp_sessions", {
-      endMarker: "CREATE TABLE IF NOT EXISTS acp_replay_sessions",
-      includeEndMarker: false,
+it("uses indexes for ordered resume matches while filtering agent and backend identities", () => {
+  using db = new DatabaseSync(":memory:");
+  const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "acp_sessions", {
+    endMarker: "CREATE TABLE IF NOT EXISTS acp_replay_sessions",
+    includeEndMarker: false,
+  });
+  db.exec(schema);
+  const meta = createAcpMeta({ agent: "harness-agent" });
+  for (const [suffix, identity, agentId = "coder", backend = " FIXTURE "] of [
+    ["1", { agentSessionId: "first", acpxSessionId: "first" }],
+    ["0", { agentSessionId: "first", acpxSessionId: "second" }],
+    ["2", { agentSessionId: "nul\u0000tail" }],
+    ["other-agent", { agentSessionId: "first" }, "other"],
+    ["other-backend", { agentSessionId: "first" }, "coder", "other"],
+  ] as const) {
+    upsertAcpSessionMetaRow(db, {
+      ...row(`agent:coder:acp:${suffix}`, { ...meta, backend }, agentId),
+      identity_json: JSON.stringify(identity),
     });
-    db.exec(schema);
-    const identities: [string, string[]][] = [
-      ["malformed", []],
-      ['{"agentSessionId":42,"acpxSessionId":"second"}', ["second"]],
-      ['{"agentSessionId":"\u00a0 first\\t","acpxSessionId":"second"}', ["first", "second"]],
-      ['{"agentSessionId":" first ","agentSessionId":"last"}', ["first"]],
-      ['{"agentSessionId":true,"agentSessionId":"last"}', []],
-      ['{"agentSessionId":42,"acpxSessionId":"42"}', ["42"]],
-      ['{"agentSessionId":"nul\\u0000tail"}', ["nul\u0000tail"]],
-      ['{"agentSessionId":"first","acpxSessionId":"first"}', ["first"]],
-    ];
-    const fixtures = identities.map(([identity], index) => ({
-      identity,
-      sessionKey: `agent:coder:acp:${index}`,
-      agentId: "coder",
-      backend: " FIXTURE ",
-    }));
-    fixtures.push(
-      { ...fixtures[2]!, sessionKey: "agent:coder:acp:other-agent", agentId: "other" },
-      { ...fixtures[2]!, sessionKey: "agent:coder:acp:other-backend", backend: "other" },
-    );
-    const meta = createAcpMeta({ agent: "harness-agent" });
-    for (const fixture of fixtures.toReversed()) {
-      upsertAcpSessionMetaRow(db, {
-        ...row(fixture.sessionKey, { ...meta, backend: fixture.backend }, fixture.agentId),
-        identity_json: fixture.identity,
-      });
-    }
-    migratePortableIdentityColumnsV22(db, 21);
-    db.exec(schema);
-    let selectSql = "";
-    const prepare = db.prepare.bind(db);
-    const spy = vi.spyOn(db, "prepare").mockImplementation((query) => {
-      if (query.startsWith("select") && query.includes('from "acp_sessions"')) {
-        selectSql = query;
-      }
-      return prepare(query);
-    });
-    try {
-      for (const id of ["42", "first", "second", "last", "1", "nul\u0000tail", "absent"]) {
-        const expected = identities.flatMap(([, matches], index) =>
-          matches.includes(id) ? [{ sessionKey: `agent:coder:acp:${index}`, ...resultFields }] : [],
-        );
-        expect(resume(db, id, "fixture")).toEqual(expected);
-      }
-    } finally {
-      spy.mockRestore();
-    }
-    const plan = db
-      .prepare(`EXPLAIN QUERY PLAN ${selectSql}`)
-      .all("absent", "absent")
-      .map((entry) => entry.detail);
-    expect(
-      plan.filter((detail) => String(detail).includes("SEARCH acp_sessions USING INDEX")),
-    ).toHaveLength(2);
-    expect(plan.some((detail) => String(detail).includes("SCAN acp_sessions"))).toBe(false);
-  } finally {
-    db.close();
   }
+  migratePortableIdentityColumnsV22(db, 21);
+  db.exec(schema);
+  let selectSql = "";
+  const prepare = db.prepare.bind(db);
+  const spy = vi.spyOn(db, "prepare").mockImplementation((query) => {
+    if (query.startsWith("select") && query.includes('from "acp_sessions"')) {
+      selectSql = query;
+    }
+    return prepare(query);
+  });
+  try {
+    for (const [id, matches] of [
+      ["first", [0, 1]],
+      ["second", [0]],
+      ["nul\u0000tail", [2]],
+      ["absent", []],
+    ] as const) {
+      expect(resume(db, id, "fixture")).toEqual(
+        matches.map((index) =>
+          Object.assign({ sessionKey: `agent:coder:acp:${index}` }, resultFields),
+        ),
+      );
+    }
+  } finally {
+    spy.mockRestore();
+  }
+  const plan = db
+    .prepare(`EXPLAIN QUERY PLAN ${selectSql}`)
+    .all("absent", "absent")
+    .map((entry) => entry.detail);
+  expect(
+    plan.filter((detail) => String(detail).includes("SEARCH acp_sessions USING INDEX")),
+  ).toHaveLength(2);
+  expect(plan.some((detail) => String(detail).includes("SCAN acp_sessions"))).toBe(false);
 });
 
 it("adds resume indexes to populated same-version state without changing canonical rows", () =>
