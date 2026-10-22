@@ -596,11 +596,16 @@ describe("scenario-flow-runner", () => {
                 value: { expr: 'await qaImport("./gateway-log-redaction.js")' },
               },
               {
+                set: "gatewayMessages",
+                value: { expr: 'await qaImport("./gateway-log-sentinel.js")' },
+              },
+              {
                 assert: {
                   expr:
                     'typeof plugin.evaluateCodexPluginLifecycle === "function" && ' +
                     'typeof artifacts.publishQaSuiteArtifactFiles === "function" && ' +
-                    'typeof redaction.redactQaGatewayDebugText === "function"',
+                    'typeof redaction.redactQaGatewayDebugText === "function" && ' +
+                    'gatewayMessages.extractGatewayMessageText({ content: [{ type: "text", text: "completion" }] }) === "completion"',
                 },
               },
             ],
