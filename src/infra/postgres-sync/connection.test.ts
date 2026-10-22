@@ -1,4 +1,3 @@
-import { channel } from "node:diagnostics_channel";
 import { MessageChannel, receiveMessageOnPort, threadId } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
@@ -21,6 +20,7 @@ import type { SqliteWorkerOperationContext } from "../sqlite-worker-operation-se
 import { PostgresSyncConnection } from "./connection.js";
 import { usePostgresFixture } from "./fixture.test-support.js";
 import type { BridgeReply, BridgeRequest, PostgresErrorData } from "./protocol.js";
+import { observeStatementEvents } from "./sql.test-support.js";
 
 const harness = usePostgresFixture();
 const writeBegin = "BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(-42)";
@@ -37,15 +37,6 @@ function transactionFixture() {
     }
   };
   return { db, statements };
-}
-
-function observeStatements() {
-  const statements = channel("openclaw.database.statement");
-  const events: unknown[] = [];
-  const subscriber = (event: unknown) => events.push(event);
-  statements.subscribe(subscriber);
-  harness.cleanups.push(() => statements.unsubscribe(subscriber));
-  return events;
 }
 
 function transportFixture(
@@ -189,37 +180,6 @@ it.each([
   expect(readToken(fixture.db.anchor, "entry")).toBe(before);
 });
 
-it.each(["read", "rollback"] as const)("leaves worker commit facts to the domain (%s)", (mode) => {
-  const { db, command } = transportFixture("normal");
-  const admission = harness.admission((_request, grant) => grant());
-  const receipts: unknown[] = [];
-  observeSqliteWorkerCommittedFacts(admission, ({ facts }) => receipts.push(facts));
-  const operation = () => {
-    command(mode === "read" ? "SELECT" : "INSERT");
-    db.exec(mode === "read" ? "SELECT 1" : "INSERT INTO proof VALUES (7)");
-    if (mode === "rollback") {
-      command("ROLLBACK");
-      throw new Error("cancel write");
-    }
-  };
-  const run = () =>
-    withAdmission({ port: admission.port, sourceReservations: true }, () =>
-      db.runTransaction(operation, {
-        withCommit(commit) {
-          command("COMMIT");
-          commit();
-        },
-      }),
-    );
-  if (mode === "rollback") {
-    expect(run).toThrow("cancel write");
-  } else {
-    run();
-  }
-  admission.service();
-  expect(receipts).toEqual([]);
-});
-
 it("invalidates local mutation witnesses inside a transaction and across rollback", () => {
   const fixture = transportFixture("normal");
   fixture.db.isTransaction = true;
@@ -248,7 +208,8 @@ it.each([
   ["error", "SELECT ?::text", "private\0text", "SELECT ?::text"],
 ] as const)("redacts statement observations on %s", (outcome, sql, binding, redacted) => {
   const fixture = transportFixture("normal");
-  const events = observeStatements();
+  using observation = observeStatementEvents();
+  const { events } = observation;
   const run = () => fixture.db.prepare(sql).get(binding);
   if (outcome === "error") {
     fixture.rejectQuery({

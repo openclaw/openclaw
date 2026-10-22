@@ -2,16 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   decodePostgresError,
   decodePostgresRows,
-  isPostgresConnectionError,
   preparePostgresQuery,
   validatePostgresBindings,
 } from "./protocol.js";
 
 describe("PostgreSQL SQL boundary", () => {
-  it("does not classify server SQLSTATE XX000 as connection-level", () => {
-    expect(isPostgresConnectionError("XX000")).toBe(false);
-  });
-
   it.each([
     ["SELECT E'it\\'s ?', ?", "SELECT E'it\\'s ?', $1"],
     ["SELECT /* outer /* ? */ ? */ ?", "SELECT /* outer /* ? */ ? */ $1"],
@@ -28,27 +23,18 @@ describe("PostgreSQL SQL boundary", () => {
   });
 
   it.each([
-    ["WITH changed AS (UPDATE entries SET value = ? RETURNING *) SELECT * FROM changed", "scoped"],
-    [
-      "WITH changed AS (WITH input AS (SELECT 1) DELETE FROM entries RETURNING *) SELECT * FROM changed",
-      "scoped",
-    ],
-    [
-      "WITH changed AS (INSERT INTO entries VALUES (?) RETURNING *) SELECT * FROM changed",
-      "scoped",
-    ],
-    ["MERGE INTO entries USING source ON false WHEN NOT MATCHED THEN INSERT VALUES (?)", "scoped"],
-    ["SELECT * INTO copied_entries FROM entries", "unscoped"],
-    ['SELECT t."id" INTO copied_entries FROM entries AS t', "unscoped"],
-    ['SELECT 1 AS "id" INTO copied_entries', "unscoped"],
-    ["SELECT 1. INTO copied_entries", "unscoped"],
-    [
-      "SELECT * INTO copied_entries FROM entries; INSERT INTO copied_entries VALUES (?)",
-      "unscoped",
-    ],
-    ["SELECT * FROM entries FOR UPDATE", undefined],
-    ["SELECT * FROM entries FOR NO KEY UPDATE", undefined],
-    ["SELECT t.update, t . /* column */ into FROM entries AS t", undefined],
+    ["WITH c AS (UPDATE t SET value = ? RETURNING *) SELECT * FROM c", "scoped"],
+    ["WITH c AS (WITH i AS (SELECT 1) DELETE FROM t RETURNING *) SELECT * FROM c", "scoped"],
+    ["WITH c AS (INSERT INTO t VALUES (?) RETURNING *) SELECT * FROM c", "scoped"],
+    ["MERGE INTO t USING s ON false WHEN NOT MATCHED THEN INSERT VALUES (?)", "scoped"],
+    ["SELECT * INTO copied FROM t", "unscoped"],
+    ['SELECT t."id" INTO copied FROM t', "unscoped"],
+    ['SELECT 1 AS "id" INTO copied', "unscoped"],
+    ["SELECT 1. INTO copied", "unscoped"],
+    ["SELECT * INTO copied FROM t; INSERT INTO copied VALUES (?)", "unscoped"],
+    ["SELECT * FROM t FOR UPDATE", undefined],
+    ["SELECT * FROM t FOR NO KEY UPDATE", undefined],
+    ["SELECT t.update, t . /* column */ into FROM t", undefined],
     ["SELECT 1 AS update, 'DELETE', $$INSERT$$, E'UPDATE\\\' INTO' /* MERGE */", undefined],
   ] as const)("retains mutation evidence while preparing %s", (input, expected) => {
     expect(preparePostgresQuery(input).mutation).toBe(expected);

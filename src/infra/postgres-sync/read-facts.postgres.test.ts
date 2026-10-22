@@ -27,6 +27,7 @@ import { readSqliteDatabaseWriteRevision } from "../sqlite-database-admission.js
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../sqlite-transaction.js";
 import { usePostgresTestHarness } from "./postgres.test-support.js";
+import { failAfterStatement } from "./sql.test-support.js";
 
 const harness = usePostgresTestHarness("read_facts");
 const { connection, prefix, directories } = harness;
@@ -193,16 +194,8 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
         );
         const expected = failureAt === "callback" ? ["durable", null] : [null, null];
         const failure = new Error("snapshot failure");
-        const exec = reader.exec.bind(reader);
         using close =
-          failureAt === "close"
-            ? vi.spyOn(reader, "exec").mockImplementation((sql) => {
-                exec(sql);
-                if (sql === "ROLLBACK") {
-                  throw failure;
-                }
-              })
-            : undefined;
+          failureAt === "close" ? failAfterStatement(reader, "ROLLBACK", failure) : undefined;
         expect(() =>
           snapshot(() => {
             expectRows(read(), ...expected);
