@@ -156,7 +156,6 @@ it("preserves the first complete publication across concurrent lazy reads", asyn
   const bumpSources = () =>
     bumpSkillsSnapshotVersion({
       workspaceDir: path.resolve(roots.agentWorkspaceDir),
-      sourceScopes: [{ executionWorkspaceDir: path.resolve(roots.executionWorkspaceDir) }],
     });
   workspace
     .mockResolvedValueOnce([entry("workspace-stale")])
