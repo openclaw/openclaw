@@ -46,6 +46,15 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { definedFields } from "../record-fields.js";
 import {
+  normalizeBoundedString,
+  normalizeEnumValue,
+  normalizeTimestamp,
+} from "./store-normalizer-primitives.js";
+import { normalizeProof } from "./store-proof-normalizers.js";
+
+export { normalizeBoundedString, normalizeTimestamp } from "./store-normalizer-primitives.js";
+export { normalizeProofInput } from "./store-proof-normalizers.js";
+import {
   MAX_ATTACHMENT_BYTES,
   MAX_CARD_ARTIFACTS,
   MAX_CARD_ATTACHMENTS,
@@ -150,24 +159,6 @@ export function normalizeNotes(value: unknown): string | undefined {
     throw new Error("notes must be 4000 characters or fewer.");
   }
   return notes;
-}
-
-export function normalizeBoundedString(
-  value: unknown,
-  fallback: string | undefined,
-  maxLength: number,
-  fieldName: string,
-): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return fallback;
-  }
-  if (normalized.length > maxLength) {
-    throw new Error(
-      `${fieldName} must be ${maxLength} characters or fewer (got ${normalized.length}).`,
-    );
-  }
-  return normalized;
 }
 
 export function normalizeRunId(value: unknown): string | undefined {
@@ -339,31 +330,12 @@ export function deriveChildIdempotencyKey(
   return key.length <= 160 ? key : undefined;
 }
 
-function normalizeEnumValue<T extends string, TFallback extends T | undefined>(
-  value: unknown,
-  allowed: readonly T[],
-  fallback: TFallback,
-  fieldName?: string,
-): T | TFallback {
-  if (typeof value === "string" && allowed.includes(value as T)) {
-    return value as T;
-  }
-  if (fieldName && typeof value === "string" && value.trim()) {
-    throw new Error(`${fieldName} must be one of: ${allowed.join(", ")}.`);
-  }
-  return fallback;
-}
-
 export function normalizeLinkType(value: unknown, fallback: WorkboardLinkType): WorkboardLinkType {
   return normalizeEnumValue(value, WORKBOARD_LINK_TYPES, fallback);
 }
 
 export function normalizeTemplateId(value: unknown): WorkboardTemplateId | undefined {
   return normalizeEnumValue(value, WORKBOARD_TEMPLATE_IDS, undefined);
-}
-
-export function normalizeTimestamp(value: unknown, fallback: number): number {
-  return resolveOptionalIntegerOption(value, { min: 0 }) ?? fallback;
 }
 
 function normalizeAttempt(record: Record<string, unknown>): WorkboardRunAttempt | null {
@@ -437,15 +409,6 @@ function normalizeLink(record: unknown): WorkboardLink | null {
 
 function isDependencyLink(link: WorkboardLink): boolean {
   return link.type === "parent" || link.type === "child";
-}
-
-function normalizeProof(record: Record<string, unknown>): WorkboardProof | null {
-  const id = normalizeOptionalString(record.id);
-  const createdAt = normalizeTimestamp(record.createdAt, 0);
-  if (!id || !createdAt) {
-    return null;
-  }
-  return normalizeProofInput(record, createdAt, id);
 }
 
 export function normalizeArtifact(record: unknown): WorkboardArtifact | null {
@@ -679,26 +642,6 @@ function normalizeNotification(record: Record<string, unknown>): WorkboardNotifi
   });
 }
 
-export function normalizeProofInput(
-  input: WorkboardProofInput,
-  now: number,
-  id?: string,
-): WorkboardProof {
-  const label = normalizeBoundedString(input.label, undefined, 160, "proof label");
-  const command = normalizeBoundedString(input.command, undefined, 1000, "proof command");
-  const url = normalizeBoundedString(input.url, undefined, 2000, "proof URL");
-  const note = normalizeBoundedString(input.note, undefined, 2000, "proof note");
-  return definedFields({
-    id: id ?? randomUUID(),
-    status: normalizeEnumValue(input.status, WORKBOARD_PROOF_STATUSES, "unknown"),
-    createdAt: now,
-    label,
-    command,
-    url,
-    note,
-  });
-}
-
 function completionProofConflicts(existing: WorkboardProof, completion: WorkboardProof): boolean {
   return (["label", "command", "url", "note"] as const).some(
     (field) => completion[field] !== undefined && completion[field] !== existing[field],
@@ -809,7 +752,12 @@ export function normalizeMetadata(
       fallback.comments,
     ),
     links: normalizedLinks,
-    proof: normalizeList(record.proof, normalizeProof, MAX_CARD_PROOF, fallback.proof),
+    proof: normalizeList(
+      record.proof,
+      (entry) => normalizeProof(entry, fallback.proof),
+      MAX_CARD_PROOF,
+      fallback.proof,
+    ),
     artifacts: normalizeList(
       record.artifacts,
       normalizeArtifact,
