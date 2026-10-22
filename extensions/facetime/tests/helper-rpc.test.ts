@@ -25,18 +25,8 @@ function waitForSocketEvent(socket: net.Socket, event: "close" | "connect"): Pro
 const dialRequest = { handle: "owner@example.com", mode: "audio" as const };
 const requestedAt = "2026-07-20T17:52:00.000Z";
 
-async function waitFor(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 1000;
-  while (Date.now() < deadline) {
-    if (predicate()) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  throw new Error("timed out waiting for condition");
-}
+const waitFor = (predicate: () => boolean) =>
+  vi.waitFor(() => expect(predicate()).toBe(true), { interval: 10, timeout: 1000 });
 
 let rpc: FaceTimeHelperSocketServer;
 let port: number;
