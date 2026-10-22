@@ -26,6 +26,7 @@ import {
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
   standaloneRuntimeProcessBuildEntries,
+  standaloneRuntimeProcessBuildOutputOptions,
 } from "./scripts/lib/runtime-process-core-build-entries.mts";
 import {
   createStateSchemaInlinePlugin,
@@ -949,7 +950,7 @@ const configs: UserConfig[] = [
           alwaysBundle: (id) =>
             shouldAlwaysBundleDependency(id) || shouldBundleRuntimeSqliteDependency(id),
         },
-        outputOptions: { codeSplitting: false },
+        outputOptions: standaloneRuntimeProcessBuildOutputOptions(name, source),
         plugins: [createStateSchemaInlinePlugin()],
       },
       false,

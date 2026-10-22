@@ -522,6 +522,10 @@ describe("resolveBuildAllSteps", () => {
       expect(invocation.options.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("4352");
       expect(invocation.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
     }
+    const unifiedInvocation = tsdownInvocations.find((invocation) =>
+      invocation.args.includes(TSDOWN_UNIFIED_CONFIG_GROUP),
+    );
+    expect(unifiedInvocation?.args.slice(-2)).toEqual(["--concurrency", "1"]);
     expect(restoreCache).toHaveBeenCalledOnce();
     expect(executionOrder).toEqual([
       "cache:tsdown-ai",
@@ -690,6 +694,8 @@ describe("resolveBuildAllSteps", () => {
       "tsdown.config.ts",
       "--filter",
       TSDOWN_UNIFIED_CONFIG_GROUP,
+      "--concurrency",
+      "1",
     ]);
     expect(unified.env).toMatchObject({ OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" });
     expect(unified.cache).toBeUndefined();

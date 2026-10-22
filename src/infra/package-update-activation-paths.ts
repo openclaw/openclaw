@@ -12,6 +12,11 @@ export function resolvePackageActivationControl(anchor: string): string {
   return `${anchor}.control`;
 }
 
+/** Keep operation-owned recovery state out of incidental runtime inventories. */
+export function isPackageActivationStateDirectoryName(name: string): boolean {
+  return /^\.openclaw\.package-activation-[0-9a-f]{24}(?:\.control)?$/u.test(name);
+}
+
 export function resolvePackageActivationJournalPath(anchor: string): string {
   return path.join(resolvePackageActivationControl(anchor), "operation.sqlite");
 }

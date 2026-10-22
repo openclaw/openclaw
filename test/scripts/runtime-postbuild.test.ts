@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+import { standaloneRuntimeProcessBuildOutputOptions } from "../../scripts/lib/runtime-process-core-build-entries.mts";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -1146,7 +1147,15 @@ describe("previous release update compatibility", () => {
     fsSync.writeFileSync(file, contents);
   }
 
-  function recordFixture(): UpdateCompatibilityInventory & {
+  function sessionTranscriptChunkBanner(root: string): string {
+    const options = standaloneRuntimeProcessBuildOutputOptions(
+      "config/sessions/session-transcript.worker",
+      path.join(root, "src/config/sessions/session-transcript.worker.ts"),
+    );
+    return typeof options === "object" && typeof options.banner === "string" ? options.banner : "";
+  }
+
+  function recordFixture(withSessionTranscriptGraph = false): UpdateCompatibilityInventory & {
     releases: [UpdateCompatibilityRelease];
   } {
     const root = createTempDir("update-compat-release-");
@@ -1181,6 +1190,19 @@ describe("previous release update compatibility", () => {
         "export { resolveRunner as r, resolveMode as m };",
       ].join("\n"),
     );
+    if (withSessionTranscriptGraph) {
+      const banner = sessionTranscriptChunkBanner(root);
+      write(
+        root,
+        "dist/session-transcript-update-abcdefgh.mjs",
+        `${banner}\n//#region src/daemon/inspect.ts\nexport async function inspect() { return (await import("./session-transcript-service-abcdefgh.mjs")).runner(); }\n`,
+      );
+      write(
+        root,
+        "dist/session-transcript-service-abcdefgh.mjs",
+        `${banner}\n//#region src/cli/update-cli/runner.ts\nfunction resolveRunner() { return "worker"; }\nexport { resolveRunner as runner };\n`,
+      );
+    }
     return {
       schemaVersion: 1,
       releases: [recordUpdateCompatibilityRelease({ packageDir: root, integrity })],
@@ -1879,7 +1901,10 @@ describe("previous release update compatibility", () => {
   });
 
   it("records emitted aliases and forwards old consumers to the current implementations", async () => {
-    const inventory = recordFixture();
+    const inventory = recordFixture(true);
+    expect(inventory.releases[0].chunks.map((chunk) => chunk.path)).toEqual([
+      "service-abcdefgh.js",
+    ]);
     expect(inventory.releases[0].chunks).toMatchObject([
       {
         path: "service-abcdefgh.js",
@@ -1949,6 +1974,11 @@ describe("previous release update compatibility", () => {
       candidate(root);
       const current = path.join(root, "dist/current.mjs");
       write(root, `dist/${directory}/inspect.mjs`, fsSync.readFileSync(current, "utf8"));
+      write(
+        root,
+        "dist/session-transcript-inspect-12345678.mjs",
+        `${sessionTranscriptChunkBanner(root)}\n${fsSync.readFileSync(current, "utf8")}`,
+      );
       const options = { distDir: path.join(root, "dist"), sourceDir: root, inventory };
       if (runtime === "missing") {
         fsSync.unlinkSync(current);
@@ -1977,7 +2007,7 @@ describe("previous release update compatibility", () => {
       } else {
         fsSync.copyFileSync(
           path.join(root, "dist/current.mjs"),
-          path.join(root, "dist/duplicate.mjs"),
+          path.join(root, "dist/session-transcript-public-12345678.mjs"),
         );
       }
       expect(() =>

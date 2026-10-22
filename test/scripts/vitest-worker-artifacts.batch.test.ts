@@ -79,6 +79,37 @@ const infraConfig = "test/vitest/vitest.infra.config.ts";
 
 it.for([
   { name: "worker", args: [coreWorker], prepare: true },
+  {
+    name: "retained runtime",
+    args: ["src/infra/update-retained-runtime.test.ts"],
+    prepare: true,
+  },
+  {
+    name: "ordinary retained runtime tree",
+    args: ["src/infra/update-retained-runtime-tree.test.ts"],
+    prepare: false,
+  },
+  {
+    name: "ordinary candidate plugin tree",
+    args: ["src/infra/update-candidate-plugin-tree.test.ts"],
+    prepare: false,
+  },
+  {
+    name: "activation lifetime",
+    args: ["src/infra/package-update-activation-lifetime.test.ts"],
+    prepare: true,
+  },
+  {
+    name: "excluded retained runtime",
+    args: ["src/infra/update-retained-runtime.test.ts", "--exclude=src/infra/**"],
+    prepare: false,
+  },
+  {
+    name: "retained runtime include",
+    args: [],
+    include: ["src/infra/update-retained-runtime.test.ts"],
+    prepare: true,
+  },
   { name: "absolute worker", args: [path.resolve(coreWorker)], prepare: true },
   { name: "line selection", args: [`${coreWorker}:12`], prepare: true },
   { name: "ordinary infra", args: ["src/infra/node-sqlite.test.ts"], prepare: false },
