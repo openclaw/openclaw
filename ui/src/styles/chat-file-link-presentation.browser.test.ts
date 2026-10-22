@@ -31,18 +31,12 @@ function chatDocument(body: string, theme: "dark" | "light") {
   );
 }
 
-function fixtureDocument(themeMode: "dark" | "light"): string {
-  const links = (prefix: string) => `<p>
-    <a id="${prefix}from-text" class="markdown-file-link" data-file-kind="code" data-file-path="src/app.ts">app.ts</a>
-    <a id="${prefix}from-code" class="markdown-file-link" data-file-kind="code" data-file-path="ui/app.ts"><code>app.ts</code></a>
-    <code id="${prefix}plain-code">npm run dev</code></p>`;
-  return chatDocument(
-    `
-    <div class="chat-text">${links("")}</div>
-    <article class="sidebar-markdown">${links("panel-")}</article>`,
-    themeMode,
-  );
-}
+const links = (prefix: string) => `<p>
+  <a id="${prefix}from-text" class="markdown-file-link" data-file-kind="code" data-file-path="src/app.ts">app.ts</a>
+  <a id="${prefix}from-code" class="markdown-file-link" data-file-kind="code" data-file-path="ui/app.ts"><code>app.ts</code></a>
+  <code id="${prefix}plain-code">npm run dev</code></p>`;
+const presentationMarkup = `<div class="chat-text">${links("")}</div>
+  <article class="sidebar-markdown">${links("panel-")}</article>`;
 
 // The reported list-edge reference includes a path the parser cannot shorten.
 const LONG_CHIP_PATH = "packages/gateway-protocol/src/session-transport-envelope.ts";
@@ -84,7 +78,7 @@ function wrapFixtureDocument(themeMode: "dark" | "light", container: WrapContain
   }).join("\n");
   return chatDocument(
     `
-    <div class="${container}" id="column">
+    ${presentationMarkup}<div class="${container}" id="column">
       <ol><li>Reproduce the failing run, then read the harness entry point
         (<a id="wrap-chip" class="markdown-file-link" data-file-kind="code"
           data-file-path="test/harness.ts" data-file-line="182">harness.ts:182</a>)
@@ -104,7 +98,7 @@ async function probeWrap(themeMode: "dark" | "light", container: WrapContainer) 
     wrapFixtureDocument(themeMode, container),
     async (page) => {
       return await page.evaluate(
-        (caseIds) => {
+        ({ caseIds, properties }) => {
           const resolve = (selector: string) => {
             const element = document.querySelector(selector);
             if (!(element instanceof HTMLElement)) {
@@ -112,6 +106,31 @@ async function probeWrap(themeMode: "dark" | "light", container: WrapContainer) 
             }
             return element;
           };
+          const read = (selector: string) => {
+            const computed = getComputedStyle(resolve(selector));
+            return Object.fromEntries(properties.map((property) => [property, computed[property]]));
+          };
+          const glyph = (selector: string) => {
+            const computed = getComputedStyle(resolve(selector), "::before");
+            return {
+              fontSize: computed.fontSize,
+              height: computed.height,
+              maskImage: computed.maskImage,
+              paddingInlineStart: computed.paddingInlineStart,
+              position: computed.position,
+              width: computed.width,
+            };
+          };
+          const presentation = {
+            chatGlyph: glyph("#from-text"),
+            fromCode: read("#from-code > code"),
+            fromText: read("#from-text"),
+            panelFromCode: read("#panel-from-code > code"),
+            panelFromText: read("#panel-from-text"),
+            panelGlyph: glyph("#panel-from-text"),
+            plainCode: read("#plain-code"),
+          };
+
           const column = resolve("#column");
           const chip = resolve("#wrap-chip");
           const longChip = resolve("#long-chip");
@@ -158,78 +177,30 @@ async function probeWrap(themeMode: "dark" | "light", container: WrapContainer) 
               });
             }
           }
-          return { samples, separation };
+          return { samples, separation, presentation };
         },
-        SEPARATION_CASES.map((testCase) => testCase.id),
+        { caseIds: SEPARATION_CASES.map((testCase) => testCase.id), properties: CHIP_PROPERTIES },
       );
     },
   );
 }
 
-async function probe(themeMode: "dark" | "light") {
-  return fixture.withPage(themeMode, fixtureDocument(themeMode), async (page) => {
-    return await page.evaluate((properties) => {
-      const resolve = (selector: string) => {
-        const element = document.querySelector(selector);
-        if (!element) {
-          throw new Error(`Missing presentation fixture element for ${selector}`);
-        }
-        return element;
-      };
-      const read = (selector: string) => {
-        const computed = getComputedStyle(resolve(selector));
-        return Object.fromEntries(properties.map((property) => [property, computed[property]]));
-      };
-      const glyph = (selector: string) => {
-        const computed = getComputedStyle(resolve(selector), "::before");
-        return {
-          fontSize: computed.fontSize,
-          height: computed.height,
-          maskImage: computed.maskImage,
-          paddingInlineStart: computed.paddingInlineStart,
-          position: computed.position,
-          width: computed.width,
-        };
-      };
-      return {
-        chatGlyph: glyph("#from-text"),
-        fromCode: read("#from-code > code"),
-        fromText: read("#from-text"),
-        panelFromCode: read("#panel-from-code > code"),
-        panelFromText: read("#panel-from-text"),
-        panelGlyph: glyph("#panel-from-text"),
-        plainCode: read("#plain-code"),
-      };
-    }, CHIP_PROPERTIES);
-  });
-}
-
 fixture.describe("chat file link presentation", () => {
-  let presentation: Record<"dark" | "light", Awaited<ReturnType<typeof probe>>>;
-  let wrapping: Record<
-    "dark" | "light",
-    Record<WrapContainer, Awaited<ReturnType<typeof probeWrap>>>
-  >;
+  const wrapping = new Map<string, Awaited<ReturnType<typeof probeWrap>>>();
+  const observation = (theme: string, container = "chat-text") =>
+    wrapping.get(`${theme}/${container}`)!;
 
   beforeAll(async () => {
     // The assertion families consume the same read-only observations.
-    presentation = { light: await probe("light"), dark: await probe("dark") };
-    wrapping = {
-      light: {
-        "chat-text": await probeWrap("light", "chat-text"),
-        "sidebar-markdown": await probeWrap("light", "sidebar-markdown"),
-      },
-      dark: {
-        "chat-text": await probeWrap("dark", "chat-text"),
-        "sidebar-markdown": await probeWrap("dark", "sidebar-markdown"),
-      },
-    };
+    for (const { themeMode, container } of WRAP_CASES) {
+      wrapping.set(`${themeMode}/${container}`, await probeWrap(themeMode, container));
+    }
   });
 
   it.each(["light", "dark"] as const)(
     "renders code-authored and text-authored file links identically in %s",
     (themeMode) => {
-      const { fromCode, fromText } = presentation[themeMode];
+      const { fromCode, fromText } = observation(themeMode).presentation;
       // The anchor reserves glyph space; its nested code label must not reserve it again.
       expect(fromCode).toEqual({ ...fromText, paddingLeft: "0px" });
     },
@@ -238,7 +209,7 @@ fixture.describe("chat file link presentation", () => {
   it.each(["light", "dark"] as const)(
     "leaves the chip on code spans that are not file links in %s",
     (themeMode) => {
-      const { fromText, plainCode } = presentation[themeMode];
+      const { fromText, plainCode } = observation(themeMode).presentation;
       expect(plainCode.backgroundColor).not.toBe(fromText.backgroundColor);
       expect(plainCode.borderTopWidth).not.toBe("0px");
       expect(fromText).toMatchObject({
@@ -251,7 +222,7 @@ fixture.describe("chat file link presentation", () => {
   it.each(["light", "dark"] as const)(
     "gives the Chat Detail Panel the same file-link treatment in %s",
     (themeMode) => {
-      const probed = presentation[themeMode];
+      const probed = observation(themeMode).presentation;
       expect([probed.panelFromText, probed.panelFromCode, probed.panelGlyph]).toEqual([
         probed.fromText,
         probed.fromCode,
@@ -264,7 +235,7 @@ fixture.describe("chat file link presentation", () => {
   it.each(["light", "dark"] as const)(
     "gives every masked file glyph a concrete font-sized paint box in %s",
     (themeMode) => {
-      const { chatGlyph, panelGlyph } = presentation[themeMode];
+      const { chatGlyph, panelGlyph } = observation(themeMode).presentation;
       for (const glyph of [chatGlyph, panelGlyph]) {
         expect(glyph).toMatchObject({
           position: "absolute",
@@ -279,7 +250,7 @@ fixture.describe("chat file link presentation", () => {
   it.each(WRAP_CASES)(
     "wraps a file link as one unit at every column width in $container/$themeMode",
     ({ container, themeMode }) => {
-      const { samples } = wrapping[themeMode][container];
+      const { samples } = observation(themeMode, container);
       // Prove the sweep actually changes lines.
       expect(new Set(samples.map((sample) => Math.round(sample.chipTop))).size).toBeGreaterThan(1);
       const split = samples.filter((sample) => sample.chipLineCount !== 1);
@@ -290,7 +261,7 @@ fixture.describe("chat file link presentation", () => {
   it.each(WRAP_CASES)(
     "keeps an unshortened file label inside the column in $container/$themeMode",
     ({ container, themeMode }) => {
-      const { samples, separation } = wrapping[themeMode][container];
+      const { samples, separation } = observation(themeMode, container);
       const overflowing = samples.filter(
         (sample) => sample.longChipWidth > sample.columnWidth + 0.5,
       );
@@ -305,7 +276,7 @@ fixture.describe("chat file link presentation", () => {
   it.each(WRAP_CASES)(
     "keeps the glyph attached to the label's first character in $container/$themeMode",
     ({ container, themeMode }) => {
-      const { separation } = wrapping[themeMode][container];
+      const { separation } = observation(themeMode, container);
       for (const testCase of SEPARATION_CASES) {
         const caseSamples = separation.filter((sample) => sample.caseId === testCase.id);
         expect(caseSamples.length).toBeGreaterThan(0);
