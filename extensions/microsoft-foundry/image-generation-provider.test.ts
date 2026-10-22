@@ -73,31 +73,21 @@ function buildConfig({
   includeModel?: boolean;
   mediaMaxMb?: number;
 } = {}): OpenClawConfig {
+  const model = {
+    id: modelId,
+    name: modelName,
+    api: "openai-completions" as const,
+    baseUrl,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 32_000,
+    maxTokens: 0,
+  };
+  const provider = { baseUrl, api: model.api, models: includeModel ? [model] : [] };
   return {
     ...(mediaMaxMb !== undefined ? { agents: { defaults: { mediaMaxMb } } } : {}),
-    models: {
-      providers: {
-        [PROVIDER_ID]: {
-          baseUrl,
-          api: "openai-completions",
-          models: !includeModel
-            ? []
-            : [
-                {
-                  id: modelId,
-                  name: modelName,
-                  api: "openai-completions",
-                  baseUrl,
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 32_000,
-                  maxTokens: 0,
-                },
-              ],
-        },
-      },
-    },
+    models: { providers: { [PROVIDER_ID]: provider } },
   };
 }
 
@@ -126,15 +116,16 @@ function requireRequest(mock = http.postJsonRequest): Record<string, unknown> {
   return request as Record<string, unknown>;
 }
 
-function requireHeaders(value: unknown): Headers {
-  expect(value).toBeInstanceOf(Headers);
-  if (!(value instanceof Headers)) {
+function expectHeaders(request: Record<string, unknown>, expected: Record<string, string>) {
+  const { headers } = request;
+  if (!(headers instanceof Headers)) {
     throw new Error("expected request headers");
   }
-  return value;
+  expect(Object.fromEntries(headers.entries())).toEqual(expected);
 }
 
-const inputImages = [{ buffer: Buffer.from("input"), mimeType: "image/png" }];
+const inputImage = { buffer: Buffer.from("input"), mimeType: "image/png" };
+const inputImages = [inputImage];
 async function expectRejectedBeforeAuth(
   request: Partial<ImageGenerationRequest>,
   error: string,
@@ -159,14 +150,17 @@ describe("microsoft foundry image generation provider", () => {
   it("exposes MAI image provider metadata and capabilities", async () => {
     const provider = buildMicrosoftFoundryImageGenerationProvider();
     const cfg = buildConfig();
-    expect(provider.id).toBe(PROVIDER_ID);
+    expect(provider).toMatchObject({
+      id: PROVIDER_ID,
+      models: [],
+      capabilities: {
+        generate: { maxCount: 1 },
+        edit: { enabled: true, maxInputImages: 1 },
+        output: { formats: ["png"] },
+      },
+    });
     expect(provider.defaultModel).toBeUndefined();
-    expect(provider.models).toEqual([]);
-    expect(provider.capabilities.generate.maxCount).toBe(1);
-    expect(provider.capabilities.edit.enabled).toBe(true);
-    expect(provider.capabilities.edit.maxInputImages).toBe(1);
     expect(provider.capabilities.geometry?.sizes).toBeUndefined();
-    expect(provider.capabilities.output?.formats).toEqual(["png"]);
     expect(await provider.isConfiguredAsync?.({ agentDir: "/agent", cfg })).toBe(true);
     expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith({
       provider: PROVIDER_ID,
@@ -198,16 +192,13 @@ describe("microsoft foundry image generation provider", () => {
       timeoutMs: 12_345,
       allowPrivateNetwork: false,
     });
+    expectHeaders(request, { "api-key": "foundry-key", "content-type": "application/json" });
     expect(request.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
     expect(request.body).toEqual({
       model: "image-deployment",
       prompt: "draw a clean product render",
       width: 768,
       height: 1365,
-    });
-    expect(Object.fromEntries(requireHeaders(request.headers).entries())).toEqual({
-      "api-key": "foundry-key",
-      "content-type": "application/json",
     });
     expect(result.model).toBe("image-deployment");
     expect(result.images[0]?.buffer.toString()).toBe("png");
@@ -278,13 +269,7 @@ describe("microsoft foundry image generation provider", () => {
     const result = await generateImage({
       prompt: "make it brighter",
       agentDir: "/agent",
-      inputImages: [
-        {
-          buffer: Buffer.from("input"),
-          mimeType: "image/png",
-          fileName: "input.png",
-        },
-      ],
+      inputImages: [{ ...inputImage, fileName: "input.png" }],
     });
 
     expect(prepareFoundryRuntimeAuthMock).toHaveBeenCalledWith(
@@ -300,108 +285,80 @@ describe("microsoft foundry image generation provider", () => {
     expect(http.postMultipartRequest).toHaveBeenCalledOnce();
     const request = requireRequest(http.postMultipartRequest);
     expect(request.url).toBe("https://example.services.ai.azure.com/mai/v1/images/edits");
-    expect(Object.fromEntries(requireHeaders(request.headers).entries())).toEqual({
-      authorization: "Bearer entra-token",
-    });
+    expectHeaders(request, { authorization: "Bearer entra-token" });
     const form = request.body as FormData;
-    expect(form.get("model")).toBe("image-deployment");
-    expect(form.get("prompt")).toBe("make it brighter");
+    expect([form.get("model"), form.get("prompt")]).toEqual([
+      "image-deployment",
+      "make it brighter",
+    ]);
     const image = form.get("image");
     expect(image).toBeInstanceOf(Blob);
-    expect((image as File).name).toBe("input.png");
-    expect((image as File).type).toBe("image/png");
+    expect(image).toMatchObject({ name: "input.png", type: "image/png" });
     expect(result.images[0]?.buffer.toString()).toBe("edited");
   });
 
-  it("rejects image edits for MAI text-to-image-only deployments", async () => {
-    await expectRejectedBeforeAuth(
-      { cfg: buildConfig({ modelName: "MAI-Image-2e" }), inputImages },
-      "MAI-Image-2e does not support Microsoft Foundry MAI image edits.",
-      http.postMultipartRequest,
-    );
-  });
+  it.each`
+    model                 | includeModel | size          | width   | height
+    ${"prod-image"}       | ${false}     | ${"800x1000"} | ${800}  | ${1000}
+    ${"mai-image-2-live"} | ${false}     | ${undefined}  | ${1024} | ${1024}
+    ${"prod-image"}       | ${true}      | ${undefined}  | ${1024} | ${1024}
+  `(
+    "allows custom deployment $model with metadata=$includeModel",
+    async ({
+      model,
+      includeModel,
+      size,
+      width,
+      height,
+    }: {
+      model: string;
+      includeModel: boolean;
+      size: string | undefined;
+      width: number;
+      height: number;
+    }) => {
+      http.postJsonRequest.mockResolvedValue(imageResponse());
+      await generateImage({
+        model,
+        cfg: buildConfig({ modelId: model, modelName: model, includeModel }),
+        size,
+      });
+      expect(http.postJsonRequest).toHaveBeenCalledOnce();
+      expect(requireRequest().body).toEqual({ model, prompt: "draw it", width, height });
+    },
+  );
 
-  it("requires an explicit deployment name before making requests", async () => {
-    await expectRejectedBeforeAuth({ model: "" }, "requires a deployment name");
-  });
-
-  it("allows custom MAI deployment names for generation when model metadata is absent", async () => {
-    http.postJsonRequest.mockResolvedValue(imageResponse());
-
-    await generateImage({
-      model: "prod-image",
-      cfg: buildConfig({ includeModel: false }),
-      size: "800x1000",
-    });
-
-    expect(http.postJsonRequest).toHaveBeenCalledOnce();
-    expect(requireRequest().body).toEqual({
-      model: "prod-image",
-      prompt: "draw it",
-      width: 800,
-      height: 1000,
-    });
-  });
-
-  it("allows custom mai-image deployment names for generation without model metadata", async () => {
-    http.postJsonRequest.mockResolvedValue(imageResponse());
-
-    await generateImage({
-      model: "mai-image-2-live",
-      cfg: buildConfig({ modelId: "mai-image-2-live", includeModel: false }),
-    });
-
-    expect(http.postJsonRequest).toHaveBeenCalledOnce();
-    expect(requireRequest().body).toMatchObject({
-      model: "mai-image-2-live",
-    });
-  });
-
-  it("allows manual custom deployment names when configured name only repeats the id", async () => {
-    http.postJsonRequest.mockResolvedValue(imageResponse());
-
-    await generateImage({
-      model: "prod-image",
-      cfg: buildConfig({ modelId: "prod-image", modelName: "prod-image" }),
-    });
-
-    expect(http.postJsonRequest).toHaveBeenCalledOnce();
-    expect(requireRequest().body).toEqual({
-      model: "prod-image",
-      prompt: "draw it",
-      width: 1024,
-      height: 1024,
-    });
-  });
-
-  it("requires MAI-Image-2.5 metadata before editing custom deployment names", async () => {
-    await expectRejectedBeforeAuth(
-      { model: "prod-image", cfg: buildConfig({ includeModel: false }), inputImages },
-      "edits require MAI-Image-2.5 model metadata",
-      http.postMultipartRequest,
-    );
-  });
-
-  it("rejects non-MAI image deployments before making requests", async () => {
-    await expectRejectedBeforeAuth(
-      {
-        model: "gpt-deployment",
-        cfg: buildConfig({ modelId: "gpt-deployment", modelName: "gpt-5.4" }),
-      },
-      'supports MAI image deployments only, got "gpt-5.4"',
-    );
-  });
-
-  it("rejects literal non-image MAI model names before making requests", async () => {
-    await expect(
-      generateImage({
-        model: "MAI-DS-R1",
-        cfg: buildConfig({ includeModel: false }),
-      }),
-    ).rejects.toThrow('supports MAI image deployments only, got "MAI-DS-R1"');
-    expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
-    expect(http.postJsonRequest).not.toHaveBeenCalled();
-  });
+  it.each`
+    model                 | modelName          | edit     | error
+    ${""}                 | ${"MAI-Image-2.5"} | ${false} | ${"requires a deployment name"}
+    ${"image-deployment"} | ${"MAI-Image-2e"}  | ${true}  | ${"MAI-Image-2e does not support Microsoft Foundry MAI image edits."}
+    ${"prod-image"}       | ${undefined}       | ${true}  | ${"edits require MAI-Image-2.5 model metadata"}
+    ${"gpt-deployment"}   | ${"gpt-5.4"}       | ${false} | ${'supports MAI image deployments only, got "gpt-5.4"'}
+    ${"MAI-DS-R1"}        | ${undefined}       | ${false} | ${'supports MAI image deployments only, got "MAI-DS-R1"'}
+  `(
+    "rejects $model / $modelName before auth (edit=$edit)",
+    async ({
+      model,
+      modelName,
+      edit,
+      error,
+    }: {
+      model: string;
+      modelName: string | undefined;
+      edit: boolean;
+      error: string;
+    }) => {
+      await expectRejectedBeforeAuth(
+        {
+          model,
+          cfg: buildConfig({ modelId: model, modelName, includeModel: modelName !== undefined }),
+          ...(edit ? { inputImages } : {}),
+        },
+        error,
+        edit ? http.postMultipartRequest : http.postJsonRequest,
+      );
+    },
+  );
 
   it("rejects MAI image sizes outside Microsoft Foundry limits", async () => {
     await expect(generateImage({ size: "512x512" })).rejects.toThrow("at least 768x768");
