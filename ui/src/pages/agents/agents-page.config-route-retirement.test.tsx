@@ -78,11 +78,10 @@ it.each(["save", "reload"] as const)(
     try {
       await router.navigate("agents", context);
       const saveButton = await waitForSolid(() =>
-        mounted.getByRole<HTMLButtonElement>("button", { name: "Save", exact: true }),
+        mounted.getByRole<HTMLButtonElement>("button", { name: "Save" }),
       );
       const reloadButton = mounted.getByRole<HTMLButtonElement>("button", {
         name: "Reload Config",
-        exact: true,
       });
       (operation === "save" ? saveButton : reloadButton).click();
       await waitForSolid(() => {
