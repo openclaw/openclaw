@@ -33,9 +33,24 @@ function jsxAnswer(sections: number): string {
   return parts.join("\n");
 }
 
+/** Ordinary unfenced HTML whose four-character chunk boundaries land on partial tags. */
+function htmlAnswer(sections: number): string {
+  const parts: string[] = [];
+  for (let index = 0; index < sections; index += 1) {
+    parts.push(
+      "<details>",
+      `<summary>Result ${index}</summary>`,
+      "<p>ordinary text</p>",
+      "</details>",
+      "",
+    );
+  }
+  return parts.join("\n");
+}
+
 describe("toolCallXmlTextFilter streamed projection work", () => {
   it("does not parse Markdown ownership for ordinary HTML/JSX markup", () => {
-    const source = jsxAnswer(20);
+    const source = htmlAnswer(260);
     const regions = vi.spyOn(codeRegions, "findCodeRegions");
     try {
       const projection = createTextProjection([
