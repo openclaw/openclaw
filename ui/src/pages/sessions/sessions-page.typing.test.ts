@@ -734,8 +734,8 @@ async function mountSearch(
   const context = createContext(connection.gateway, managed.sessions);
   context.agentSelection.state.scopeId = allAgents ? null : "main";
   const page = await createRenderedPage(context, sessionsResult([metadata], 1));
-  const find = <T extends Element = HTMLElement>(part: string) =>
-    page.querySelector<T>(`.sessions-transcript-search__${part}`);
+  const find = (part: string) =>
+    page.querySelector<HTMLElement>(`.sessions-transcript-search__${part}`);
   const search = async (query: string) => {
     page.updateTranscriptSearchQuery(query);
     await page.runTranscriptSearch();
@@ -760,9 +760,12 @@ describe("Sessions transcript search", () => {
     const response = createDeferred<SearchResponse>();
     const request = vi.fn<GatewayBrowserClient["request"]>().mockReturnValue(response.promise);
     const { page, managed, find } = await mountSearch(request, true);
-    find<HTMLButtonElement>("trigger")!.click();
+    find("trigger")!.click();
     await page.updateComplete;
-    editInput(find<HTMLInputElement>("input input")!, "  launch code  ");
+    editInput(
+      page.querySelector<HTMLInputElement>(".sessions-transcript-search__input input")!,
+      "  launch code  ",
+    );
     await page.updateComplete;
     await vi.waitFor(() =>
       expect(
@@ -848,13 +851,13 @@ describe("Sessions transcript search", () => {
         .mockResolvedValue(matches("replacement needle"))
         .mockReturnValueOnce(response.promise);
       const { page, find } = await mountSearch(request);
-      find<HTMLButtonElement>("trigger")!.click();
+      find("trigger")!.click();
       page.updateTranscriptSearchQuery("needle");
       const pending = page.runTranscriptSearch();
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
       await page.updateComplete;
       if (action === "clear") {
-        find<HTMLButtonElement>("clear")!.click();
+        find("clear")!.click();
       } else if (action === "replace") {
         page.updateTranscriptSearchQuery("replacement needle");
         await page.runTranscriptSearch();
@@ -921,11 +924,11 @@ describe("Sessions transcript search", () => {
       .mockResolvedValueOnce(matches("updated needle"))
       .mockReturnValueOnce(replacement.promise);
     const { page, find } = await mountSearch(request);
-    const trigger = find<HTMLButtonElement>("trigger")!;
+    const trigger = find("trigger")!;
     trigger.click();
     await page.updateComplete;
     const form = find("form");
-    const input = find<HTMLInputElement>("input input")!;
+    const input = page.querySelector<HTMLInputElement>(".sessions-transcript-search__input input")!;
     const expectControlsRetained = () => {
       expect(find("form")).toBe(form);
       expect(find("trigger")).toBe(trigger);

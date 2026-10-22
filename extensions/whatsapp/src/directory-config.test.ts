@@ -19,8 +19,14 @@ const mocks = vi.hoisted(() => ({
   waitForConnection: vi.fn<typeof import("./session.js").waitForWaConnection>(),
   waitForCreds: vi.fn<typeof import("./session.js").waitForCredsSaveQueueWithTimeout>(),
 }));
-vi.mock("./active-listener.js", () => ({ resolveWebAccountId: () => "default" }));
-vi.mock("./accounts.js", () => ({ resolveWhatsAppAuthDir: mocks.resolveAuthDir }));
+vi.mock("./active-listener.js", async (original) => ({
+  ...(await original<typeof import("./active-listener.js")>()),
+  resolveWebAccountId: () => "default",
+}));
+vi.mock("./accounts.js", async (original) => ({
+  ...(await original<typeof import("./accounts.js")>()),
+  resolveWhatsAppAuthDir: mocks.resolveAuthDir,
+}));
 vi.mock("./connection-controller-runtime-context.js", () => ({
   getWhatsAppConnectionController: mocks.getController,
   hasPendingWhatsAppConnectionOwner: mocks.hasPendingOwner,

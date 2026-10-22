@@ -50,8 +50,7 @@ afterEach(() => {
   disposeSessionViews();
   container.remove();
 });
-const query = <T extends Element = Element>(selector: string, root: ParentNode = container) =>
-  root.querySelector<T>(selector);
+const query = (selector: string, root: ParentNode = container) => root.querySelector(selector);
 const queryAll = <T extends Element = Element>(selector: string, root: ParentNode = container) =>
   root.querySelectorAll<T>(selector);
 const attr = (selector: string, name: string) => query(selector)?.getAttribute(name);
@@ -64,9 +63,9 @@ const expectTexts = (selector: string, expected: string[], root?: ParentNode) =>
   expect(texts(selector, root)).toEqual(expected);
 const optionValues = (select: HTMLSelectElement | undefined | null) =>
   Array.from(select?.options ?? [], (option) => option.value);
-const getButton = (selector: string) => query<HTMLButtonElement>(selector);
-const getInput = (selector: string) => query<HTMLInputElement>(selector);
-const getSelect = (selector: string) => query<HTMLSelectElement>(selector);
+const getButton = (selector: string) => container.querySelector<HTMLButtonElement>(selector);
+const getInput = (selector: string) => container.querySelector<HTMLInputElement>(selector);
+const getSelect = (selector: string) => container.querySelector<HTMLSelectElement>(selector);
 function change(element: HTMLInputElement | HTMLSelectElement, value: string) {
   element.value = value;
   element.dispatchEvent(new Event("change", { bubbles: true }));
@@ -519,7 +518,7 @@ describe("sessions view", () => {
       onToggleDetails,
     });
 
-    const row = query<HTMLTableRowElement>("tbody tr.session-data-row");
+    const row = container.querySelector<HTMLTableRowElement>("tbody tr.session-data-row");
     expect(row).toBeInstanceOf(HTMLTableRowElement);
     row!
       .querySelector<HTMLInputElement>("input[type=checkbox]")!

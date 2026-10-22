@@ -329,7 +329,7 @@ it("keeps passive documents live with saved HTML and pure core reports only", as
   const request = vi.fn(async () =>
     snapshot({
       sessionKey: "dashboard",
-      tabs: [{ tabId: "main", title: "Main", position: 0 }],
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
       widgets: [
         boardWidget({
           name: "status",

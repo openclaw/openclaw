@@ -278,7 +278,7 @@ export async function replayLifecycleWebhook(
 ) {
   await withServer(
     (req, res) => {
-      void monitor.route.handler(req, res);
+      monitor.route.handler(req, res);
     },
     async (baseUrl) => {
       const { first, replay } = await postWebhookReplay({

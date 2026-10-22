@@ -56,7 +56,7 @@ function withWebhook(
       run(
         (
           body = "{}",
-          { secret = "secret", contentType = "application/json", forwardedFor } = {},
+          { secret = "secret", contentType = "application/json", forwardedFor }: Headers = {},
           suffix = "",
         ) =>
           fetch(`${baseUrl}/hook${suffix}`, {
