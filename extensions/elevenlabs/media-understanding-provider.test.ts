@@ -1,10 +1,19 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import {
+  capturePluginRegistration,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it, vi } from "vitest";
-import { elevenLabsMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import plugin from "./index.js";
 
 describe("elevenLabsMediaUnderstandingProvider", () => {
   installPinnedHostnameTestHooks();
+  const { mediaUnderstandingProviders } = capturePluginRegistration({
+    id: "elevenlabs",
+    register: plugin.register,
+  });
+  const provider = requireRegisteredProvider(mediaUnderstandingProviders, "elevenlabs");
   const request = {
     buffer: Buffer.from("audio"),
     fileName: "voice.mp3",
@@ -16,7 +25,7 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
   it("posts multipart audio to ElevenLabs speech-to-text", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ text: "hello" }));
 
-    const result = await elevenLabsMediaUnderstandingProvider.transcribeAudio!({
+    const result = await provider.transcribeAudio!({
       ...request,
       language: "en",
       fetchFn: fetchMock,
@@ -40,7 +49,7 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([])));
 
     await expect(
-      elevenLabsMediaUnderstandingProvider.transcribeAudio!({
+      provider.transcribeAudio!({
         ...request,
         model: "scribe_v2",
         fetchFn: fetchMock,

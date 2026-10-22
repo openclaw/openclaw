@@ -287,6 +287,8 @@ Keep the flag out of aggregate props memos. Cron passes it as a separate JSX
 prop: `<CronView {...viewProps()} busy={page.saving() || viewProps().busy} />`.
 Only consumers of `busy` should join its optimistic presentation lane;
 unrelated form and route props follow the ordinary owner snapshot.
+The same applies to object-valued JSX props: pass busy flags and completion
+readers separately so a busy update cannot hold the feedback slot behind its own work.
 
 `refresh` takes the actual Solid accessor or derived-store root. A wrapper
 such as `refresh(() => jobsRead())` is not refreshable. A bare refresh asks

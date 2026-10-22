@@ -327,20 +327,16 @@ const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recover
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
 const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
-// Complete ordinary retries inside their diagnostic request allowance, then
-// leave the fifth request active so recovery can honor both the cumulative
-// no-progress bound and the current request's own allowance. The stalled
-// request starts its response, then stays live with SSE keepalives, which reset
-// the client's idle watchdog but not its progress deadline, so it outlives that
-// allowance.
+// Fail three times, then start a quiet response inside the selected model's retry budget.
+// Its idle deadline settles it; keepalives must not extend that provider-owned wait.
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
 const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
-const QA_REPEATED_REQUEST_STALLED_KEEPALIVE_MS = 5_000;
-const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
+const QA_REPEATED_REQUEST_STALL_ATTEMPT = 4;
 // Stalled-turn recovery mirrors the repeated-request e2e timings: short failing
 // retries, then one held request the QA-tuned stuck detector must abort.
 const QA_STALLED_TURN_RESPONSE_PAUSE_MS = 8_000;
 const QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS = 90_000;
+const QA_STALLED_TURN_STALL_ATTEMPT = 5;
 
 function resolveCompactionSummaryFaultMode(params: {
   allInputText: string;
@@ -2234,14 +2230,15 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         ? scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
           ? {
               responsePauseMs: repeatedRequestStalledResponsePauseMs,
-              responseKeepaliveMs: QA_REPEATED_REQUEST_STALLED_KEEPALIVE_MS,
+              // Start the SSE response, but leave it silent until the provider times out.
+              responseKeepaliveMs: repeatedRequestStalledResponsePauseMs,
             }
           : { responsePauseMs: repeatedRequestResponsePauseMs }
         : {}),
       ...(stalledTurnAttempt
         ? {
             responsePauseMs:
-              scenarioState.stalledTurnRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
+              scenarioState.stalledTurnRecoveryAttempts === QA_STALLED_TURN_STALL_ATTEMPT
                 ? QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS
                 : QA_STALLED_TURN_RESPONSE_PAUSE_MS,
           }

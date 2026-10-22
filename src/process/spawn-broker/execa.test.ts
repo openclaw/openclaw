@@ -11,14 +11,13 @@ import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/pro
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createRemoteShellSandboxSession } from "../../agents/sandbox/remote-shell-transport.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withCommandProcessScope } from "../exec-spawn.js";
+import { spawnCommand, withCommandProcessScope } from "../exec-spawn.js";
 import { runCommandBuffered, runCommandWithTimeout, runExec } from "../exec.js";
 import { prepareOomScoreAdjustedSpawn } from "../linux-oom-score.js";
 import { createChildAdapter } from "../supervisor/adapters/child.js";
 import { createServiceChildRelayAdapter } from "../supervisor/service-child-relay-host.js";
 import { BrokerChild } from "./child.js";
 import { runWithSpawnBroker } from "./context.js";
-import { brokerExecaOptions, spawnBrokerCommand } from "./execa-client.js";
 import type { CommandSpawnOptions } from "./execa-types.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
@@ -39,9 +38,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transpor
     if (!broker) {
       return execa(argv[0]!, argv.slice(1), options);
     }
-    const prepared = brokerExecaOptions(options);
-    ok(prepared, "Fixture unexpectedly selected an in-process transport");
-    return spawnBrokerCommand(host, argv, options, prepared);
+    return runWithSpawnBroker(host, () => spawnCommand(argv, options));
   }
   const start = (source: string, options: CommandSpawnOptions, broker = true) =>
     launch(nodeArgv(source), options, broker);
@@ -178,7 +175,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transpor
         outcomes.push({
           code: result.code,
           exitCode: result.exitCode,
-          originalMessage: result.originalMessage,
+          originalMessage: Reflect.get(result, "originalMessage"),
           stderr: result.stderr,
         });
       } finally {
