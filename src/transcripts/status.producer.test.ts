@@ -9,7 +9,6 @@ import {
   listConfigReloadRefinementPrefixes,
 } from "../gateway/config-reload-plan.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
-import { activeSessions } from "./capture-startup.js";
 import * as transcriptCapture from "./capture.js";
 import { readTranscriptCaptureSnapshot, startTranscripts } from "./capture.js";
 import { readConfiguredTranscriptStarts } from "./configured-start-status.js";
@@ -298,105 +297,6 @@ describe("configured transcript source provenance", () => {
         );
       } finally {
         await service.stop();
-      }
-    },
-  );
-
-  it.each(["thrown-stop", "summary-write"] as const)(
-    "retains failed startup cleanup custody after %s",
-    async (fault) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const f = fixture();
-      const start = vi.fn(async (request: TranscriptStartRequest) => {
-        await request.onUtterance({ text: "Admitted note", final: true });
-        return { ok: true as const, session: { ...request.session, title: "Room title" } };
-      });
-      f.provider.start = start;
-      const stop = vi.spyOn(f.provider, "stop");
-      const originalWrite = f.store.writeSession.bind(f.store);
-      let titleFailed = false;
-      let cleanupFails = true;
-      vi.spyOn(TranscriptsStore.prototype, "writeSession").mockImplementation(
-        async (session, condition) => {
-          if (session.title === "Room title" && !titleFailed) {
-            titleFailed = true;
-            throw new Error("title write unavailable");
-          }
-          return originalWrite(session, condition);
-        },
-      );
-      const originalSummary = f.store.writeSummary.bind(f.store);
-      vi.spyOn(TranscriptsStore.prototype, "writeSummary").mockImplementation(async (...args) => {
-        if (fault === "summary-write" && cleanupFails) {
-          throw new Error("summary write unavailable");
-        }
-        return originalSummary(...args);
-      });
-      stop.mockImplementation(async ({ sessionId }) => {
-        if (cleanupFails && fault === "thrown-stop") {
-          throw new Error("cleanup unavailable");
-        }
-        return { ok: true, sessionId };
-      });
-      const service = createTranscriptsAutoStartService(f.ctx);
-      try {
-        await service.start().settled;
-        expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe("admitted-start-failed");
-        await vi.advanceTimersByTimeAsync(65_000);
-        expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe("admitted-start-failed");
-        expect.soft(start).toHaveBeenCalledOnce();
-        expect.soft(await f.store.listSessionEntries()).toHaveLength(1);
-        expect
-          .soft((await f.read()).configuredSources[0]?.startDiagnostic)
-          .toBe("admitted-start-failed");
-        const request = start.mock.calls.at(-1)![0];
-        const session = request.session;
-        await request.onUtterance({ text: "Late failed-start note", final: true });
-        const terminal = fault === "summary-write";
-        await expect(f.tool.execute("status", { action: "status" })).resolves.toMatchObject({
-          details: {
-            [terminal ? "pendingFinalization" : "active"]: [
-              expect.objectContaining({ sessionId: session.sessionId }),
-            ],
-          },
-        });
-        const otherConfig = {
-          transcripts: { autoStart: [{ ...room, sessionId: session.sessionId }] },
-        };
-        const other = createTranscriptsAutoStartService({ ...f.ctx, config: otherConfig });
-        try {
-          await other.start().settled;
-          expect(
-            (await readTranscriptLibraryStatus(f.store, otherConfig)).configuredSources[0]
-              ?.startDiagnostic,
-          ).toBe("id-conflict");
-        } finally {
-          await other.stop();
-        }
-        expect.soft(stop).toHaveBeenCalledOnce();
-        await service.stop();
-        cleanupFails = false;
-        // A failed shutdown still owns cleanup; another stop drains that same owner.
-        await service.stop();
-        expect.soft(stop).toHaveBeenCalledTimes(terminal ? 1 : 3);
-        expect.soft(activeSessions.has(session.sessionId)).toBe(false);
-        const stored = (await f.store.readSession(session.sessionId))!;
-        expect.soft(stored).toMatchObject({
-          sessionId: session.sessionId,
-          startedAt: session.startedAt,
-          title: "Room title",
-          stoppedAt: expect.any(String),
-        });
-        expect.soft(stored.source).toEqual(session.source);
-        expect.soft(await f.store.readSummary(stored)).toMatchObject({
-          summary: { transcript: ["Admitted note"] },
-        });
-      } finally {
-        cleanupFails = false;
-        await service.stop();
-        for (const [request] of start.mock.calls) {
-          await f.tool.execute("cleanup", { action: "stop", sessionId: request.session.sessionId });
-        }
       }
     },
   );

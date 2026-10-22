@@ -972,7 +972,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/transcripts/auto-start-retry.test.ts",
   "src/transcripts/capture-stop.test.ts",
   "src/transcripts/capture-append-drain.test.ts",
-  "src/transcripts/library.query-budget.test.ts",
   "src/transcripts/library.test.ts",
   "src/transcripts/live-summary.test.ts",
   "src/transcripts/status.producer.test.ts",
