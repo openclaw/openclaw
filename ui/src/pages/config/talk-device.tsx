@@ -18,7 +18,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
-import { NativeVoiceControls } from "./talk-device-controls.tsx";
+import { NativeVoiceControls, voiceControlErrorFallback } from "./talk-device-controls.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -99,23 +99,7 @@ function VoiceWakeWriteStatus(props: {
     return t("configPage.deviceTalk.saved");
   };
   return (
-    <Errored
-      fallback={(error, reset) => (
-        <div class="callout danger" role="alert">
-          {formatUiError(error())}
-          <button
-            class="btn btn--sm"
-            type="button"
-            onClick={() => {
-              props.onRetry();
-              reset();
-            }}
-          >
-            {t("common.retry")}
-          </button>
-        </div>
-      )}
-    >
+    <Errored fallback={voiceControlErrorFallback(() => props.onRetry())}>
       <Loading
         fallback={
           <span class="muted" role="status">
@@ -187,23 +171,7 @@ export function VoiceWakeEditor(props: {
         description={t("configPage.deviceTalk.triggerWordsHint")}
         stacked
         control={
-          <Errored
-            fallback={(error, reset) => (
-              <div class="callout danger" role="alert">
-                {formatUiError(error())}
-                <button
-                  class="btn btn--sm"
-                  type="button"
-                  onClick={() => {
-                    props.onRetry();
-                    reset();
-                  }}
-                >
-                  {t("common.retry")}
-                </button>
-              </div>
-            )}
-          >
+          <Errored fallback={voiceControlErrorFallback(() => props.onRetry())}>
             <Loading
               on={scope()}
               fallback={
