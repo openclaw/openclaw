@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -37,6 +37,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function clientAuthority(client: ReturnType<typeof sharingPolicyClient>) {
+  return {
+    ...resolveTalkAgentConsultAuthority(client.connect.scopes, client),
+    operatorAuthority: createAdmittedRunOperatorAuthority({
+      profileId: "talk-requester",
+      scopes: client.connect.scopes ?? [],
+      assertCurrent: () => {},
+    }),
+  };
+}
+
 // Normal reply preparation, not a fabricated FollowupRun/hash, supplies this baseline.
 it.each([true, false])(
   "steers a GA chat-owned Talk run captured before backend publication=%s",
@@ -62,14 +73,7 @@ it.each([true, false])(
       });
       client.connect.caps = ["tool-events", "task-suggestions"];
       const sessionTarget = await prepareTalkSessionTarget(config, "agent:main:main");
-      const authority = {
-        ...resolveTalkAgentConsultAuthority(client.connect.scopes, client),
-        operatorAuthority: createAdmittedRunOperatorAuthority({
-          profileId: "talk-requester",
-          scopes: client.connect.scopes ?? [],
-          assertCurrent: () => {},
-        }),
-      };
+      const authority = clientAuthority(client);
       const runId = "talk-authority-run";
       const registration = registerChatAbortController({
         runId,
@@ -85,9 +89,7 @@ it.each([true, false])(
         timeoutMs: 60_000,
         kind: "chat-send",
       });
-      if (!registration.registered) {
-        throw new Error("Missing Gateway run registration");
-      }
+      assert(registration.registered, "Missing Gateway run registration");
       const queueMessage = vi.fn(async () => undefined);
       let executionError: unknown;
       vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
@@ -99,9 +101,10 @@ it.each([true, false])(
             model: modelId,
             sessionFile,
           } = params;
-          if (!preparedRunAdmission || !operation || !provider || !modelId || !sessionFile) {
-            throw new Error("Missing real reply admission");
-          }
+          assert(
+            preparedRunAdmission && operation && provider && modelId && sessionFile,
+            "Missing real reply admission",
+          );
           updateRpcSourceSessionId(registration.entry, params.sessionId);
           const admittedRunContext = await preparedRunAdmission.admit("embedded", "talk-chat-test");
           return await withPreparedEmbeddedRunToolAuthority(
@@ -180,14 +183,7 @@ it.each([true, false])(
                   scopes: ["operator.read"],
                 });
                 await expect(
-                  steer(runTarget?.toolAuthoritySource, {
-                    ...resolveTalkAgentConsultAuthority(weaker.connect.scopes, weaker),
-                    operatorAuthority: createAdmittedRunOperatorAuthority({
-                      profileId: "talk-requester",
-                      scopes: weaker.connect.scopes ?? [],
-                      assertCurrent: () => {},
-                    }),
-                  }),
+                  steer(runTarget?.toolAuthoritySource, clientAuthority(weaker)),
                 ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
                 expect(queueMessage).toHaveBeenCalledOnce();
               } finally {

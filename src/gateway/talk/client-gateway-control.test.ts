@@ -43,6 +43,35 @@ function responseEvent(owner: ControlOwner, type: string, responseId: string) {
   owner.control.onEvent?.({ direction: "server", type, responseId });
 }
 
+async function waitForCalls(mock: unknown, count = 1) {
+  await vi.waitFor(() => expect(mock).toHaveBeenCalledTimes(count));
+}
+
+async function waitForResult(
+  bridge: ReturnType<typeof controlBridge>,
+  id: string,
+  result: unknown,
+) {
+  await vi.waitFor(() => expect(bridge.submitToolResult).toHaveBeenCalledWith(id, result));
+}
+
+function controlResult<Mode extends "status" | "cancel" | "steer">(
+  mode: Mode,
+  message: string,
+  active = true,
+) {
+  return {
+    ok: true,
+    mode,
+    sessionKey: sessionTarget.canonicalKey,
+    active,
+    message,
+    speak: true,
+    show: true,
+    suppress: false,
+  };
+}
+
 describe("Talk client Gateway control owner", () => {
   it.each(["failed", "incomplete"] as const)(
     "keeps Gateway-controlled browser Talk reusable after a %s response",
@@ -83,15 +112,8 @@ describe("Talk client Gateway control owner", () => {
     async (outcome) => {
       const consultResult = createDeferred<{ text: string }>();
       const cancelled = {
-        ok: true,
-        mode: "cancel" as const,
-        sessionKey: sessionTarget.canonicalKey,
-        active: true,
+        ...controlResult("cancel", "Cancelled the active OpenClaw run."),
         aborted: true,
-        message: "Cancelled the active OpenClaw run.",
-        speak: true,
-        show: true,
-        suppress: false,
       };
       const controlAgentRun = vi
         .fn(async () => ({
@@ -124,7 +146,7 @@ describe("Talk client Gateway control owner", () => {
 
       owner.control.onTranscript?.("user", "check the repository", true);
       consult(owner, "item-consult", "call-consult", "check the repository");
-      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
+      await waitForCalls(runAgentConsult);
       const cancelToolCall = (callId: string) =>
         owner.control.onToolCall?.({
           itemId: callId,
@@ -134,18 +156,14 @@ describe("Talk client Gateway control owner", () => {
         });
       if (outcome === "cancelled") {
         cancelToolCall("call-cancel");
-        await vi.waitFor(() =>
-          expect(bridge.submitToolResult).toHaveBeenCalledWith("call-cancel", cancelled),
-        );
+        await waitForResult(bridge, "call-cancel", cancelled);
       }
       consultResult.resolve({ text: "The repository is clean." });
       const expectedResult =
         outcome === "cancelled"
           ? expect.objectContaining({ status: "cancelled" })
           : { result: "The repository is clean." };
-      await vi.waitFor(() =>
-        expect(bridge.submitToolResult).toHaveBeenCalledWith("call-consult", expectedResult),
-      );
+      await waitForResult(bridge, "call-consult", expectedResult);
       expect(appendTranscript).toHaveBeenCalledWith({
         entryId: expect.stringMatching(/^gateway-[0-9a-f-]+-1$/),
         role: "user",
@@ -156,12 +174,7 @@ describe("Talk client Gateway control owner", () => {
         owner.control.onTranscript?.("user", "cancel", true);
         // A later explicit tool call drains the same control FIFO after the late ASR event.
         cancelToolCall("call-next-cancel");
-        await vi.waitFor(() =>
-          expect(bridge.submitToolResult).toHaveBeenCalledWith(
-            "call-next-cancel",
-            expect.objectContaining({ active: false }),
-          ),
-        );
+        await waitForResult(bridge, "call-next-cancel", expect.objectContaining({ active: false }));
         expect(controlAgentRun).toHaveBeenCalledTimes(2);
         expect(bridge.sendUserMessage).not.toHaveBeenCalled();
       }
@@ -185,20 +198,11 @@ describe("Talk client Gateway control owner", () => {
     "handles spoken status, steering, and cancellation during a %s consult",
     async (entry) => {
       const controlAgentRun = vi.fn(async ({ text }: { text: string }) => ({
-        ok: true,
-        mode:
-          text === "cancel"
-            ? ("cancel" as const)
-            : text === "status"
-              ? ("status" as const)
-              : ("steer" as const),
-        sessionKey: sessionTarget.canonicalKey,
-        active: true,
+        ...controlResult(
+          text === "cancel" ? "cancel" : text === "status" ? "status" : "steer",
+          `${text} accepted`,
+        ),
         ...(text === "cancel" ? { aborted: true } : { queued: text !== "status" }),
-        message: `${text} accepted`,
-        speak: true,
-        show: true,
-        suppress: false,
       }));
       const runStarted = createDeferred();
       const runAgentConsult = vi.fn(
@@ -244,11 +248,7 @@ describe("Talk client Gateway control owner", () => {
         await runStarted.promise;
         for (const text of ["status", "use the release branch instead", "cancel"]) {
           owner.control.onTranscript?.("user", text, true);
-          await vi.waitFor(() =>
-            expect(controlAgentRun).toHaveBeenCalledTimes(
-              text === "status" ? 1 : text === "cancel" ? 3 : 2,
-            ),
-          );
+          await waitForCalls(controlAgentRun, text === "status" ? 1 : text === "cancel" ? 3 : 2);
         }
         expect(controlAgentRun.mock.calls.map(([input]) => input.text)).toEqual([
           "status",
@@ -260,11 +260,10 @@ describe("Talk client Gateway control owner", () => {
           await expect(delegation).resolves.toBeInstanceOf(Error);
           expect(bridge.submitToolResult).not.toHaveBeenCalled();
         } else {
-          await vi.waitFor(() =>
-            expect(bridge.submitToolResult).toHaveBeenCalledWith(
-              "call-long",
-              expect.objectContaining({ status: "cancelled" }),
-            ),
+          await waitForResult(
+            bridge,
+            "call-long",
+            expect.objectContaining({ status: "cancelled" }),
           );
         }
       } finally {
@@ -329,7 +328,7 @@ describe("Talk client Gateway control owner", () => {
         } else {
           consult(owner, "item-flush", "call-flush", "queued task");
         }
-        await vi.waitFor(() => expect(flushTranscript).toHaveBeenCalledOnce());
+        await waitForCalls(flushTranscript);
         if (entry === "delegation") {
           steering = owner.runAgentConsult
             .steer?.({ prompt: "latest task" })
@@ -509,7 +508,7 @@ describe("Talk client Gateway control owner", () => {
     owner.runAgentConsult.adoptCompletionClaims?.();
 
     const first = owner.runAgentConsult({ prompt: "first task" });
-    await vi.waitFor(() => expect(flushTranscript).toHaveBeenCalledOnce());
+    await waitForCalls(flushTranscript);
     const steering = owner.runAgentConsult.steer?.({ prompt: "latest task" }).then(
       () => {
         steeringOutcome = "resolved";
@@ -585,7 +584,7 @@ describe("Talk client Gateway control owner", () => {
         } else {
           consult(owner, "item-flush-completion", "call-flush-completion", "queued task");
         }
-        await vi.waitFor(() => expect(flushTranscript).toHaveBeenCalledOnce());
+        await waitForCalls(flushTranscript);
         flush.resolve();
         await transitioned.promise;
         await owner.close();
@@ -600,16 +599,7 @@ describe("Talk client Gateway control owner", () => {
   );
 });
 
-const statusResult = {
-  ok: true,
-  mode: "status" as const,
-  sessionKey: sessionTarget.canonicalKey,
-  active: false,
-  message: "No active request.",
-  speak: true,
-  show: true,
-  suppress: false,
-};
+const statusResult = controlResult("status", "No active request.", false);
 
 describe("native Talk control admission", () => {
   it("answers an execution failure once without disclosing private details", async () => {
@@ -701,7 +691,7 @@ describe("native Talk control admission", () => {
         expect(common.appendTranscript).toHaveBeenCalledOnce();
         expect(controlAgentRun).not.toHaveBeenCalled();
         expect(handleInput("status", respond)).toBe("control");
-        await vi.waitFor(() => expect(controlAgentRun).toHaveBeenCalledOnce());
+        await waitForCalls(controlAgentRun);
         if (ending === "replace") {
           replacement = createTalkClientGatewayControlOwner(common);
           await activate(replacement);
@@ -778,7 +768,7 @@ describe("Talk client reusable Gateway consults", () => {
           "call-voice-change",
           "Change your voice and keep working",
         );
-        await vi.waitFor(() => expect(runToolAgentConsult).toHaveBeenCalledOnce());
+        await waitForCalls(runToolAgentConsult);
         const runSignal = runToolAgentConsult.mock.calls[0]?.[1];
         expect(runSignal?.aborted).toBe(false);
         changing = requestTalkVoiceChange({

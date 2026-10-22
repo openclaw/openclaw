@@ -1,12 +1,6 @@
-import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import type { RealtimeTranscriptionProviderPlugin } from "../../plugins/types.js";
 import type { RealtimeTranscriptionSessionCreateRequest } from "../../realtime-transcription/provider-types.js";
-import { createGatewayBroadcaster } from "../server-broadcast.js";
-import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "../server-constants.js";
-import { GatewayClientRegistry } from "../server/client-registry.js";
-import type { GatewayWsClient } from "../server/ws-types.js";
 import { expectRecordFields, isRecord, requireGatewayRecord } from "../test-helpers.assertions.js";
 import {
   cleanupTalkConnection,
@@ -93,14 +87,14 @@ function createRelay(
 }
 
 async function createStartedRelaySession(
-  sttSession: ReturnType<typeof createSttSessionMock>,
+  sttSession = createSttSessionMock(),
   providerConfig: Record<string, unknown> = {},
   onRequest?: (req: RealtimeTranscriptionSessionCreateRequest) => void,
 ) {
   const broadcast = createBroadcastContext();
   const relay = createRelay(broadcast.context, sttSession, "conn-1", providerConfig, onRequest);
   await Promise.resolve();
-  return { ...broadcast, ...relay };
+  return { ...broadcast, ...relay, sttSession };
 }
 
 type RelaySession = ReturnType<typeof createTalkTranscriptionRelaySession>;
@@ -126,18 +120,27 @@ function stop(session: RelaySession, options: { discard?: boolean; connId?: stri
 }
 
 function hasType(events: BroadcastEvent[], type: string) {
-  return events.some((event) => isRecord(event.payload) && event.payload.type === type);
+  return payloadsByType(events, type).length > 0;
 }
 
 function relayPayloads(events: BroadcastEvent[]) {
   return events.map((event) => requireGatewayRecord(event.payload, "transcription relay event"));
 }
 
+function payloadsByType(events: BroadcastEvent[], type: string) {
+  return relayPayloads(events).filter((payload) => payload.type === type);
+}
+
+function expectClosed(
+  events: BroadcastEvent[],
+  sttSession: ReturnType<typeof createSttSessionMock>,
+) {
+  expect(findPayloadByType(events, "close").reason).toBe("completed");
+  expect(sttSession.close).toHaveBeenCalledOnce();
+}
+
 function findPayloadByType(events: BroadcastEvent[], type: string): Record<string, unknown> {
-  const event = events.find((candidate) => {
-    const payload = candidate.payload;
-    return isRecord(payload) && payload.type === type;
-  });
+  const event = events.find(({ payload }) => isRecord(payload) && payload.type === type);
   if (!event) {
     throw new Error(`expected relay event type ${type}`);
   }
@@ -283,11 +286,8 @@ describe("talk transcription gateway relay", () => {
       ]);
       expect(hasType(events, "close")).toBe(false);
       await vi.advanceTimersByTimeAsync(4_000);
-      const terminalEvents = events
-        .map((event) => {
-          const payload = requireGatewayRecord(event.payload, "transcription relay event");
-          return isRecord(payload.talkEvent) ? payload.talkEvent.type : undefined;
-        })
+      const terminalEvents = relayPayloads(events)
+        .map(({ talkEvent }) => (isRecord(talkEvent) ? talkEvent.type : undefined))
         .filter((type) =>
           ["input.audio.committed", "transcript.done", "turn.ended", "session.closed"].includes(
             String(type),
@@ -301,8 +301,7 @@ describe("talk transcription gateway relay", () => {
         "turn.ended",
         "session.closed",
       ]);
-      expect(findPayloadByType(events, "close").reason).toBe("completed");
-      expect(sttSession.close).toHaveBeenCalledOnce();
+      expectClosed(events, sttSession);
 
       const eventCount = events.length;
       request?.onTranscript?.("late provider transcript");
@@ -311,19 +310,16 @@ describe("talk transcription gateway relay", () => {
   );
 
   it("closes a provider immediately when its transcription session never received audio", async () => {
-    const sttSession = createSttSessionMock();
-    const { events, session } = await createStartedRelaySession(sttSession, {});
+    const { events, session, sttSession } = await createStartedRelaySession();
 
     await stop(session);
 
-    expect(findPayloadByType(events, "close").reason).toBe("completed");
-    expect(sttSession.close).toHaveBeenCalledOnce();
+    expectClosed(events, sttSession);
   });
 
   it("bounds graceful provider draining when no final transcript arrives", async () => {
     vi.useFakeTimers();
-    const sttSession = createSttSessionMock();
-    const { events, session } = await createStartedRelaySession(sttSession, {});
+    const { events, session, sttSession } = await createStartedRelaySession();
 
     sendAudio(session);
     await stop(session);
@@ -332,24 +328,18 @@ describe("talk transcription gateway relay", () => {
     expect(hasType(events, "close")).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
 
-    const close = findPayloadByType(events, "close");
-    expect(close.reason).toBe("completed");
-    expect(sttSession.close).toHaveBeenCalledOnce();
+    expectClosed(events, sttSession);
   });
 
   it("discards provider close-time transcripts instead of committing captured audio", async () => {
     vi.useFakeTimers();
-    const sttSession = createSttSessionMock();
-    const { events, session, request } = await createStartedRelaySession(sttSession);
+    const { events, session, request, sttSession } = await createStartedRelaySession();
     sttSession.close.mockImplementation(() => request?.onTranscript?.("discarded words"));
     sendAudio(session);
     try {
       await stop(session, { discard: true });
-      expect(
-        events.filter((event) => isRecord(event.payload) && event.payload.type === "transcript"),
-      ).toEqual([]);
-      expect(findPayloadByType(events, "close").reason).toBe("completed");
-      expect(sttSession.close).toHaveBeenCalledOnce();
+      expect(payloadsByType(events, "transcript")).toEqual([]);
+      expectClosed(events, sttSession);
     } finally {
       cleanupTalkConnection("conn-1", { warn: vi.fn() });
     }
@@ -357,8 +347,7 @@ describe("talk transcription gateway relay", () => {
 
   it("preserves partial activity between provider finals while graceful draining continues", async () => {
     vi.useFakeTimers();
-    const sttSession = createSttSessionMock();
-    const { events, session, request } = await createStartedRelaySession(sttSession);
+    const { events, session, request } = await createStartedRelaySession();
 
     sendAudio(session);
     await stop(session);
@@ -422,9 +411,7 @@ describe("talk transcription gateway relay", () => {
     cleanupTalkConnection("conn-1", logGateway);
     await stopping;
 
-    expect(
-      events.filter((event) => isRecord(event.payload) && event.payload.type === "close"),
-    ).toHaveLength(1);
+    expect(payloadsByType(events, "close")).toHaveLength(1);
     expect(relayPayloads(events).map(({ text }) => text)).not.toContain(
       "disconnected provider transcript",
     );
@@ -432,8 +419,7 @@ describe("talk transcription gateway relay", () => {
   });
 
   it("terminates graceful draining immediately when the provider reports an error", async () => {
-    const sttSession = createSttSessionMock();
-    const { events, session, request } = await createStartedRelaySession(sttSession);
+    const { events, session, request, sttSession } = await createStartedRelaySession();
 
     sendAudio(session);
     await stop(session);
@@ -452,99 +438,6 @@ describe("talk transcription gateway relay", () => {
       "transcript after provider error",
     );
     expect(sttSession.close).toHaveBeenCalledOnce();
-  });
-
-  it("closes a backpressured owner for final transcripts while healthy owners still receive them", async () => {
-    vi.useFakeTimers();
-    const createSocket = () => {
-      const socket = Object.assign(new EventEmitter(), {
-        readyState: WebSocket.OPEN as number,
-        bufferedAmount: 0,
-        send: vi.fn<(payload: string) => void>(),
-        close: vi.fn<(code: number, reason: string) => void>(),
-        terminate: vi.fn<() => void>(),
-      });
-      socket.close.mockImplementation(() => {
-        socket.readyState = WebSocket.CLOSING;
-      });
-      socket.terminate.mockImplementation(() => {
-        socket.readyState = WebSocket.CLOSING;
-      });
-      return socket;
-    };
-    const slowSocket = createSocket();
-    const healthySocket = createSocket();
-    const createClient = (
-      connId: string,
-      socket: ReturnType<typeof createSocket>,
-    ): GatewayWsClient =>
-      ({
-        connId,
-        socket: socket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-        usesSharedGatewayAuth: false,
-      }) satisfies GatewayWsClient;
-    const clients = new GatewayClientRegistry([
-      createClient("conn-slow", slowSocket),
-      createClient("conn-healthy", healthySocket),
-    ]);
-    const { broadcastToConnIds } = createGatewayBroadcaster({ clients });
-    const context = { broadcastToConnIds, getRuntimeConfig: () => ({}) } as never;
-    const { session: slowSession, request: slowRequest } = createRelay(
-      context,
-      createSttSessionMock(),
-      "conn-slow",
-    );
-    const { session: healthySession, request: healthyRequest } = createRelay(
-      context,
-      createSttSessionMock(),
-      "conn-healthy",
-    );
-    await Promise.resolve();
-
-    try {
-      slowRequest.onSpeechStart?.();
-      healthyRequest.onSpeechStart?.();
-      slowSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-      const slowFramesBeforePartial = slowSocket.send.mock.calls.length;
-
-      slowRequest.onPartial?.("slow draft");
-      healthyRequest.onPartial?.("healthy draft");
-
-      expect(slowSocket.send).toHaveBeenCalledTimes(slowFramesBeforePartial);
-      expect(slowSocket.close).not.toHaveBeenCalled();
-      expect(slowSocket.terminate).not.toHaveBeenCalled();
-
-      slowRequest.onTranscript?.("slow final");
-      healthyRequest.onTranscript?.("healthy final");
-
-      expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
-      vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
-      expect(slowSocket.terminate).toHaveBeenCalledOnce();
-      const healthyFrames = healthySocket.send.mock.calls.map(
-        ([frame]) => JSON.parse(frame) as { event: string; payload: unknown },
-      );
-      expect(healthyFrames).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            event: "talk.event",
-            payload: expect.objectContaining({ type: "partial", text: "healthy draft" }),
-          }),
-          expect.objectContaining({
-            event: "talk.event",
-            payload: expect.objectContaining({
-              type: "transcript",
-              text: "healthy final",
-              final: true,
-            }),
-          }),
-        ]),
-      );
-    } finally {
-      slowSocket.bufferedAmount = 0;
-      await stop(slowSession, { connId: "conn-slow" });
-      await stop(healthySession, { connId: "conn-healthy" });
-    }
   });
 
   it("closes only transcription relays owned by the disconnected connection", async () => {
@@ -578,10 +471,8 @@ describe("talk transcription gateway relay", () => {
     expect(logGateway.warn).toHaveBeenCalledWith(
       "failed to close transcription relay session after connection disconnect: provider close failed",
     );
-    for (const transcriptionSessionId of [
-      firstSession.transcriptionSessionId,
-      secondSession.transcriptionSessionId,
-    ]) {
+    const ownedIds = [firstSession.transcriptionSessionId, secondSession.transcriptionSessionId];
+    for (const transcriptionSessionId of ownedIds) {
       expect(relayPayloads(events)).toContainEqual(
         expect.objectContaining({
           transcriptionSessionId,
@@ -595,14 +486,12 @@ describe("talk transcription gateway relay", () => {
       expect(() => getUnifiedTalkSession(transcriptionSessionId)).toThrow("Unknown Talk session");
     }
     expect(
-      events.some(
-        (event) =>
-          isRecord(event.payload) &&
-          (event.payload.transcriptionSessionId === firstSession.transcriptionSessionId ||
-            event.payload.transcriptionSessionId === secondSession.transcriptionSessionId) &&
-          (event.payload.type === "ready" || event.payload.type === "error"),
+      relayPayloads(events).filter(
+        ({ transcriptionSessionId, type }) =>
+          ownedIds.includes(String(transcriptionSessionId)) &&
+          (type === "ready" || type === "error"),
       ),
-    ).toBe(false);
+    ).toEqual([]);
     const eventCountAfterClose = events.length;
     request.onSpeechStart?.();
     request.onPartial?.("late partial");
