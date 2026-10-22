@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
+import { createInboundDecisionParams } from "./inbound-decision.test-support.js";
 import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
@@ -18,9 +19,7 @@ function buildCfgWithGroups(
 }
 
 function buildDecisionParams(overrides: Partial<DecisionParams> = {}): DecisionParams {
-  return {
-    cfg: {},
-    accountId: "default",
+  return createInboundDecisionParams({
     message: {
       id: 1,
       sender: "+15555550123",
@@ -32,17 +31,12 @@ function buildDecisionParams(overrides: Partial<DecisionParams> = {}): DecisionP
       chat_identifier: "chatXYZ",
       created_at: "2026-05-08T03:00:00Z",
     },
-    messageText: "hi",
-    bodyText: "hi",
     allowFrom: ["+15555550123"],
     groupAllowFrom: ["+15555550123"],
     groupPolicy: "allowlist",
-    dmPolicy: "open",
-    storeAllowFrom: [],
-    historyLimit: 0,
-    groupHistories: new Map(),
+    isKnownFromMeMessageId: undefined,
     ...overrides,
-  };
+  });
 }
 
 async function admit(params: DecisionParams) {

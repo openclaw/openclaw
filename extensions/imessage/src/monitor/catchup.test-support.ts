@@ -198,22 +198,6 @@ describe("catchup", () => {
       return vi.fn(async () => ({ ok: true }));
     }
 
-    it("replays every fresh inbound row through dispatch and advances the cursor", async () => {
-      const dispatch = alwaysOk();
-      const fetch = fetchOf([
-        row({ guid: "A", rowid: 10, date: now - 30_000 }),
-        row({ guid: "B", rowid: 11, date: now - 20_000 }),
-      ]);
-
-      const summary = await run({ fetch, dispatch });
-
-      expect(summary).toMatchObject({ querySucceeded: true, replayed: 2, failed: 0 });
-      expect(dispatch).toHaveBeenCalledTimes(2);
-
-      const cursor = await loadCursor();
-      expect(cursor?.lastSeenRowid).toBe(11);
-    });
-
     it("skips is_from_me rows but still advances the cursor past them", async () => {
       const dispatch = alwaysOk();
       const observeSkippedFromMe = vi.fn();

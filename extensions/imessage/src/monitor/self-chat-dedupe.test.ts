@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import { createSentMessageCache } from "./echo-cache.js";
+import { createInboundDecisionParams } from "./inbound-decision.test-support.js";
 import {
   rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageInboundDecision,
@@ -34,33 +35,14 @@ function resolveDecision(
     message?: Partial<InboundDecisionParams["message"]>;
   } = {},
 ) {
-  const { message: msgOverrides, ...restOverrides } = overrides;
-  const message = {
-    id: 100,
-    sender: "+15551234567",
-    text: "Hello",
-    is_from_me: false,
-    is_group: false,
-    ...msgOverrides,
-  };
-  const messageText = restOverrides.messageText ?? message.text ?? "";
-  const bodyText = restOverrides.bodyText ?? messageText;
-  return resolveIMessageInboundDecision({
-    cfg: {},
-    allowFrom: ["*"],
-    accountId: "default",
-    groupAllowFrom: [],
-    groupPolicy: "open",
-    dmPolicy: "open",
-    storeAllowFrom: [],
-    historyLimit: 0,
-    groupHistories: new Map(),
-    selfChatCache,
-    ...restOverrides,
-    message,
-    messageText,
-    bodyText,
-  });
+  return resolveIMessageInboundDecision(
+    createInboundDecisionParams({
+      selfChatCache,
+      isKnownFromMeMessageId: undefined,
+      ...overrides,
+      message: { id: 100, sender: SELF_CHAT_HANDLE, text: "Hello", ...overrides.message },
+    }),
+  );
 }
 
 function selfChatMessage(
