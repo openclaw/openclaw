@@ -62,7 +62,6 @@ vi.mock("./agent-runner-memory.js", async (importOriginal) => ({
 vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
   resolveQueuedReplyExecutionConfig: state.resolveConfig,
-  resolveQueuedReplyRuntimeConfig: (config: unknown) => config,
 }));
 
 // mock-isolation: Preparation cases supply an owned or rejected turn without admitting a second real controller operation.
