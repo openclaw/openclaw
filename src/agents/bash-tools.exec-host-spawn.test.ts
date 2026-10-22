@@ -55,5 +55,4 @@ describe.runIf(process.platform !== "win32" && fs.existsSync(zsh))("zsh host exe
     expect(result.stdout).toBe(`off\n${cwd}\none\ntwo\nmatch-one.txt\n`);
     expect(result.stderr).toBe("");
   });
-
 });
