@@ -388,63 +388,50 @@ describe("mixed inline directives", () => {
     });
   });
 
-  it.each([
-    {
-      prefix: "please reply ",
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      keepProfile: false,
-    },
-  ])(
-    "resets to $provider/$model with compatible auth only",
-    async ({ prefix, provider, model, keepProfile }) => {
-      await prepareSharedAuthStoreOwnership();
-      const authPin = {
-        authProfileOverride: "openai:work",
-        authProfileOverrideSource: "user" as const,
-        authProfileOverrideCompactionCount: 2,
-      };
-      const sessionEntry = createSessionEntry({
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-        modelOverrideSource: "user",
-        ...authPin,
-      });
-      const { result } = await applyMixedDirectives({
-        cfg: { agents: { defaults: { model: `${provider}/${model}` } } },
-        body: `${prefix}/model default -s`,
-        senderIsOwner: true,
-        provider: "openai",
-        model: "gpt-5.6-sol",
-        defaultProvider: provider,
-        defaultModel: model,
-        sessionEntry,
-        allowedModels: [{ provider, id: model, name: model }],
-      });
-      const ack = {
-        text: `Session model reset to configured default (${provider}/${model}).${keepProfile ? " Runtime set to codex for this session." : ""}`,
-      };
-      expect(result).toMatchObject(
-        prefix
-          ? { kind: "continue", provider, model, contextTokens: 1_000_000, directiveAck: ack }
-          : { kind: "reply", reply: ack },
-      );
-      expect(sessionEntry.providerOverride).toBeUndefined();
-      expect(sessionEntry.modelOverride).toBeUndefined();
-      expect(sessionEntry.modelOverrideSource).toBe("default");
-      if (keepProfile) {
-        expect(sessionEntry).toMatchObject(authPin);
-      } else {
-        expect(sessionEntry.authProfileOverride).toBeUndefined();
-        expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
-        expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
-      }
-      expect(refreshQueuedFollowupSession).toHaveBeenCalledWith(
-        expect.objectContaining({ nextModelOverrideSource: undefined }),
-      );
-      expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
-    },
-  );
+  it("resets to the configured default and clears incompatible auth", async () => {
+    const provider = "anthropic";
+    const model = "claude-opus-4-6";
+    await prepareSharedAuthStoreOwnership();
+    const authPin = {
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user" as const,
+      authProfileOverrideCompactionCount: 2,
+    };
+    const sessionEntry = createSessionEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.6-sol",
+      modelOverrideSource: "user",
+      ...authPin,
+    });
+    const { result } = await applyMixedDirectives({
+      cfg: { agents: { defaults: { model: `${provider}/${model}` } } },
+      body: "please reply /model default -s",
+      senderIsOwner: true,
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      defaultProvider: provider,
+      defaultModel: model,
+      sessionEntry,
+      allowedModels: [{ provider, id: model, name: model }],
+    });
+    expect(result).toMatchObject({
+      kind: "continue",
+      provider,
+      model,
+      contextTokens: 1_000_000,
+      directiveAck: { text: `Session model reset to configured default (${provider}/${model}).` },
+    });
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBe("default");
+    expect(sessionEntry.authProfileOverride).toBeUndefined();
+    expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+    expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
+    expect(refreshQueuedFollowupSession).toHaveBeenCalledWith(
+      expect.objectContaining({ nextModelOverrideSource: undefined }),
+    );
+    expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
+  });
 
   it("keeps mixed queue options on the current message", async () => {
     const { result, sessionEntry } = await applyMixedDirectives({
@@ -492,36 +479,33 @@ describe("mixed inline directives", () => {
     expect(persistenceMocks.persist).not.toHaveBeenCalled();
   });
 
-  it.each(["/fast status"])(
-    "validates unsupported thinking despite an informational sibling %j",
-    async (sibling) => {
-      const { result, sessionEntry } = await applyMixedDirectives({
-        body: `please reply ${sibling} /think high`,
-        provider: "fixture-route",
-        model: "reasoner",
-        allowedModels: [
-          {
-            provider: "fixture-route",
-            id: "reasoner",
-            name: "Reasoner",
-            reasoning: false,
-          },
-        ],
-        gatewayClientScopes: [],
-      });
-      expect(result).toMatchObject({
-        kind: "reply",
-        reply: {
-          isError: true,
-          text: expect.stringContaining('Thinking level "high" is not supported'),
+  it("validates unsupported thinking despite an informational sibling", async () => {
+    const { result, sessionEntry } = await applyMixedDirectives({
+      body: "please reply /fast status /think high",
+      provider: "fixture-route",
+      model: "reasoner",
+      allowedModels: [
+        {
+          provider: "fixture-route",
+          id: "reasoner",
+          name: "Reasoner",
+          reasoning: false,
         },
-        preRunRejection: "session-directive-rejected",
-      });
-      expect(sessionEntry).toEqual(createSessionEntry());
-      expect(persistenceMocks.persist).not.toHaveBeenCalled();
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    },
-  );
+      ],
+      gatewayClientScopes: [],
+    });
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: {
+        isError: true,
+        text: expect.stringContaining('Thinking level "high" is not supported'),
+      },
+      preRunRejection: "session-directive-rejected",
+    });
+    expect(sessionEntry).toEqual(createSessionEntry());
+    expect(persistenceMocks.persist).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
 
   it("keeps valid turn hints when a sibling exec option is invalid", async () => {
     const { result, sessionEntry } = await applyMixedDirectives({
@@ -555,64 +539,68 @@ describe("mixed inline directives", () => {
     expect(persistenceMocks.persist).not.toHaveBeenCalled();
   });
 
-  it.each(["please reply /model blocked /think off"])(
-    "rejects operator-denied directive %s without session or provider effects",
-    async (body) => {
-      const cfg: OpenClawConfig = {
-        plugins: { enabled: false },
-        agents: {
-          defaults: {
-            model: { primary: "fixture/allowed", fallbacks: ["fixture/blocked"] },
-            modelPolicy: { allow: ["fixture/*"] },
-            models: { "fixture/blocked": { alias: "blocked" } },
+  it("rejects operator-denied directives without session or provider effects", async () => {
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      agents: {
+        defaults: {
+          model: { primary: "fixture/allowed", fallbacks: ["fixture/blocked"] },
+          modelPolicy: { allow: ["fixture/*"] },
+          models: { "fixture/blocked": { alias: "blocked" } },
+        },
+      },
+      models: {
+        providers: {
+          fixture: {
+            api: "openai-completions",
+            baseUrl: "https://fixture.invalid/v1",
+            models: [],
           },
         },
-        models: {
-          providers: {
-            fixture: {
-              api: "openai-completions",
-              baseUrl: "https://fixture.invalid/v1",
-              models: [],
-            },
-          },
-        },
-      };
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
-        profileId: "limited-operator",
-        scopes: ["operator.write"],
-        assertCurrent: () => {},
-        modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { deny: ["fixture/blocked"] } }),
-      });
-      const sessionEntry = createSessionEntry();
-      const before = structuredClone(sessionEntry);
-      const { result } = await applyMixedDirectives({
-        body,
-        cfg,
-        sessionEntry,
-        operatorAuthority,
-        provider: "fixture",
-        model: "allowed",
-        aliasIndex: buildModelAliasIndex({ cfg, defaultProvider: "fixture" }),
-        allowedModels: ["allowed", "blocked"].map((id) => ({ provider: "fixture", id, name: id })),
-      });
+      },
+    };
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "limited-operator",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+      modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { deny: ["fixture/blocked"] } }),
+    });
+    const sessionEntry = createSessionEntry();
+    const before = structuredClone(sessionEntry);
+    const { result } = await applyMixedDirectives({
+      body: "please reply /model blocked /think off",
+      cfg,
+      sessionEntry,
+      operatorAuthority,
+      provider: "fixture",
+      model: "allowed",
+      aliasIndex: buildModelAliasIndex({ cfg, defaultProvider: "fixture" }),
+      allowedModels: ["allowed", "blocked"].map((id) => ({ provider: "fixture", id, name: id })),
+    });
 
-      expect(result).toMatchObject({
-        kind: "reply",
-        reply: {
-          isError: true,
-          text: expect.stringContaining("operator role cannot use this model"),
-        },
-      });
-      expect(sessionEntry).toEqual(before);
-      expect(persistenceMocks.persist).not.toHaveBeenCalled();
-      expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
-      expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
-      expect(refreshQueuedFollowupSession).not.toHaveBeenCalled();
-      expect(triggerSessionPatchHook).not.toHaveBeenCalled();
-    },
-  );
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: {
+        isError: true,
+        text: expect.stringContaining("operator role cannot use this model"),
+      },
+    });
+    expect(sessionEntry).toEqual(before);
+    expect(persistenceMocks.persist).not.toHaveBeenCalled();
+    expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
+    expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
+    expect(refreshQueuedFollowupSession).not.toHaveBeenCalled();
+    expect(triggerSessionPatchHook).not.toHaveBeenCalled();
+  });
   it.each([
     { prefix: "", scope: "session", flag: " --global", owner: true, target: "defaults" },
+    {
+      prefix: "please reply ",
+      scope: "session",
+      flag: " --global",
+      owner: true,
+      target: "defaults",
+    },
     { prefix: "please reply ", scope: "global", flag: "", owner: false, target: undefined },
   ] as const)(
     "resolves scope=$scope flag=$flag owner=$owner without widening authority",

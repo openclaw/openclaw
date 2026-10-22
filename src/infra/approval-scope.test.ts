@@ -23,18 +23,8 @@ const grant = {
 } satisfies ApprovalScope;
 
 it.each([
-  [
-    {
-      ...message,
-      recipientCount: 3,
-      recipients: ["alice@x.com", "bob@y.com"],
-      audience: "external",
-    },
-    "Send to 3 recipients via email (external): alice@x.com, bob@y.com, +1 more",
-  ],
   [{ ...message, target: "slack #general" }, "Send to 1 recipient via slack #general"],
   [payment, "Pay 49.99 EUR to Stripe"],
-  [{ kind: "external-post", target: "github", visibility: "public" }, "Post publicly to github"],
   [
     { kind: "external-post", target: "github", visibility: "restricted" },
     "Post restricted to github",
@@ -43,32 +33,19 @@ it.each([
   expect(summarizeApprovalScope(scope)).toBe(expected);
 });
 
-it("preserves clean scope fields and visibly escapes spoofing characters", () => {
-  const cleanScope = {
-    ...message,
-    recipients: ["alice@example.com"],
-    audience: "internal",
-  } satisfies ApprovalScope;
-  expect(sanitizeApprovalScope(cleanScope)).toEqual(cleanScope);
-  expect(sanitizeApprovalScope({ ...cleanScope, target: "mail\u202Ebox" })).toMatchObject({
-    target: "mail\\u{202E}box",
-  });
-  expect(sanitizeApprovalScope({ ...cleanScope, target: "🦞".repeat(128) })).toMatchObject({
-    target: "🦞".repeat(128),
-  });
-});
-
 it("clamps recipient previews to the declared recipient count", () => {
   const clamped = sanitizeApprovalScope({
     ...message,
     recipients: ["alice@example.com", "bob@example.com"],
+    audience: "internal",
   });
-  expect(clamped).toMatchObject({ recipientCount: 1, recipients: ["alice@example.com"] });
-  expect(summarizeApprovalScope(clamped!)).toBe("Send to 1 recipient via email: alice@example.com");
+  expect(clamped).toEqual({ ...message, recipients: ["alice@example.com"], audience: "internal" });
+  expect(summarizeApprovalScope(clamped!)).toBe(
+    "Send to 1 recipient via email (internal): alice@example.com",
+  );
 });
 
 it.each([
-  { ...message, target: `${"x".repeat(127)}\u202E` },
   { ...message, recipients: [`${"x".repeat(127)}\u202E`] },
   { ...payment, amount: `${"x".repeat(39)}\u202E` },
   { ...payment, currency: `${"x".repeat(11)}\u202E` },

@@ -41,6 +41,8 @@ restoration failure; slow startup does not undo a completed repair.
 
     On Linux, Doctor and update status recognize standard systemd `[Unit]`, `[Service]`, and `[Install]` directives, including execution and resource controls. Custom settings are reported as unchanged; unknown keys and keys in the wrong section still produce an unrecognized-setting warning. Recognition does not validate directive values or authorize replacing customized units or drop-ins.
 
+    Options and sections prefixed with `X-` are recognized as application metadata and reported as unchanged, without unrecognized-setting warnings. They do not affect fallback health checks, matching systemd's behavior, but still protect operator-owned metadata from service rewrites.
+
     On Linux, if the user-level gateway service is missing but a system-level OpenClaw gateway service exists, doctor does not install a second user-level service automatically. Inspect with `openclaw gateway status --deep` or `openclaw doctor --deep`, then remove the duplicate or set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when a system supervisor owns the gateway lifecycle.
 
   </Accordion>
@@ -74,6 +76,10 @@ restoration failure; slow startup does not undo a completed repair.
   <Accordion title="9. Security warnings">
     Doctor emits a Security note only when it finds a warning, such as a provider open to DMs without an allowlist or a dangerously configured policy. Use `openclaw security audit` for the full security inventory.
 
+    Config repairs retain the source of unchanged credentials: environment-backed
+    values are not reported as plaintext. Literal values, including escaped
+    environment templates, still produce plaintext warnings.
+
     Missing multi-agent DM routing ownership is reported as a finding. It does
     not stop the remaining channel security checks or pending state migrations.
     Configure the reported account binding before expecting that route to work.
@@ -83,6 +89,9 @@ restoration failure; slow startup does not undo a completed repair.
   </Accordion>
   <Accordion title="10. systemd linger (Linux)">
     If running as a systemd user service, doctor enables lingering if needed so the gateway stays alive after logout.
+
+    Doctor also warns when the enclosing user manager has a host-shutdown timeout below 90 seconds. This host policy needs an operator decision; reinstalling the Gateway cannot change it. See [Linux](/platforms/linux#gateway-service-systemd).
+
   </Accordion>
   <a id="11-workspace-status-skills-plugins-and-taskflows" />
   <Accordion title="11. Workspace status (skills and plugins)">

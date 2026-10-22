@@ -38,7 +38,7 @@ import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { createWorkspaceAliasMigrationRepair } from "./doctor-workspace-alias.js";
 import { createDoctorChangesPanelSink } from "./doctor/changes-panel-sink.js";
 import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
-import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
+import * as notes from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
   applyLegacyCompatibilityStep,
@@ -70,6 +70,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   runtime?: RuntimeEnv;
   prompter?: DoctorPrompter;
+  reportFindings?: notes.DoctorFindingReporter;
 }) {
   await using preparingResources = new AsyncDisposableStack();
   const shouldRepair = params.options.repair === true || params.options.yes === true;
@@ -150,7 +151,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   ): void => {
     changesPanelSink.emit(mutation.changes, options.sanitize ? { sanitize: true } : {});
     if (options.emitWarnings !== false && mutation.warnings?.length) {
-      emitDoctorNotes({ note, warningNotes: mutation.warnings });
+      notes.emitDoctorNotes({ note, warningNotes: mutation.warnings });
       configRepairWarnings.push(...mutation.warnings);
     }
     state = applyDoctorConfigMutation({
@@ -347,7 +348,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     cfg: state.candidate,
     env: process.env,
   });
-  emitDoctorNotes({ note, warningNotes: tailscaleWarnings });
+  notes.emitDoctorNotes({ note, warningNotes: tailscaleWarnings });
   configRepairWarnings.push(...tailscaleWarnings);
 
   const { prepareRetiredPhoneControlCleanup } = await import("./doctor-retired-phone-control.js");
@@ -388,7 +389,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const pluginActivationSourceConfig = state.candidate;
   const { collectCodexPluginActivationWarnings } =
     await import("./doctor/shared/codex-plugin-activation-warning.js");
-  emitDoctorNotes({
+  notes.emitDoctorNotes({
     note,
     warningNotes: collectCodexPluginActivationWarnings(pluginActivationSourceConfig),
   });
@@ -438,7 +439,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...collectGitHubUpgradeWarnings(normalizePluginsConfig(state.candidate.plugins)),
   ];
   if (pluginWarnings.length > 0) {
-    note(sanitizeDoctorNote(pluginWarnings.join("\n")), "Doctor warnings");
+    note(notes.sanitizeDoctorNote(pluginWarnings.join("\n")), "Doctor warnings");
   }
 
   const hasConfiguredChannels =
@@ -456,7 +457,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         shouldRepair,
       }),
     );
-    emitDoctorNotes({
+    notes.emitDoctorNotes({
       note,
       changeNotes: channelDoctorSequence.changeNotes,
       infoNotes: channelDoctorSequence.infoNotes,
@@ -519,6 +520,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
           state,
           installedPluginIdRecovery: installedPluginRecovery.recovery,
           doctorFixCommand,
+          reportFindings: params.reportFindings,
           env: process.env,
           blockedCodexProviderPlan,
           pluginMetadataSnapshotState,
@@ -557,14 +559,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }
     // Committed side-effect repairs (SQLite/filesystem) already happened; report now.
     // Candidate-config mutations stay queued until the atomic write commits.
-    emitDoctorNotes({
+    notes.emitDoctorRepairSequenceNotes({
       note,
-      changeNotes: repairSequence.changeNotes,
-      warningNotes: repairSequence.warningNotes,
+      repairSequence,
+      structuredWarnings: Boolean(params.reportFindings),
+      emitConfigChange: (change) => changesPanelSink.emit([change]),
     });
-    for (const configChange of repairSequence.configChangeNotes ?? []) {
-      changesPanelSink.emit([configChange]);
-    }
   } else {
     const { collectDoctorPreviewNotes } = await import("./doctor/shared/preview-warnings.js");
     const previewNotes = await runWithCurrentPluginMetadata(state.candidate, () =>
@@ -577,7 +577,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         blockedCodexProviderPlan,
       }),
     );
-    emitDoctorNotes({
+    notes.emitDoctorNotes({
       note,
       infoNotes: previewNotes.infoNotes,
       warningNotes: previewNotes.warningNotes,
@@ -593,7 +593,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       )
     : [];
   if (mutableAllowlistWarnings.length > 0) {
-    note(sanitizeDoctorNote(mutableAllowlistWarnings.join("\n")), "Doctor warnings");
+    note(notes.sanitizeDoctorNote(mutableAllowlistWarnings.join("\n")), "Doctor warnings");
   }
 
   const modelBillingRouteConfig = state.candidate;
@@ -624,7 +624,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (confirmedWorkspace) {
     explicitSetPaths.push(...(confirmedWorkspace.explicitSetPaths ?? []));
     if (confirmedWorkspace.warnings?.length) {
-      emitDoctorNotes({ note, warningNotes: confirmedWorkspace.warnings });
+      notes.emitDoctorNotes({ note, warningNotes: confirmedWorkspace.warnings });
       configRepairWarnings.push(...confirmedWorkspace.warnings);
     }
   }

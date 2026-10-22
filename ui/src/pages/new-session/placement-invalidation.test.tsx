@@ -66,6 +66,7 @@ it("retains project artwork while current labels and selection remain live", () 
   vi.spyOn(place, "canWrite").mockReturnValue(true);
   vi.spyOn(place, "deviceFolderAvailable", "get").mockReturnValue(false);
   vi.spyOn(browser, "projects", "get").mockReturnValue(projects);
+  vi.spyOn(browser, "projectsReady", "get").mockReturnValue(true);
   vi.spyOn(browser, "projectQuery", "get").mockReturnValue("Sample");
   vi.spyOn(browser, "projectId", "get").mockImplementation(() => projectId);
   vi.spyOn(browser, "popoverOpen").mockReturnValue(true);

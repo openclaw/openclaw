@@ -4,7 +4,6 @@ import {
   externalContentStamp,
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
-  normalizeCacheKey,
   readCachedSearchPayload,
   readResponseText,
   resolveCacheTtlMs,
@@ -16,19 +15,22 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { resolveReadOnlyEnvSecretRef } from "openclaw/plugin-sdk/secret-ref-readonly";
 import {
   assertHttpUrlTargetsPrivateNetwork,
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  resolveSearxngBaseUrl,
-  resolveSearxngCategories,
-  resolveSearxngLanguage,
-} from "./config.js";
+  asOptionalObjectRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
+const SEARXNG_BASE_URL_ENV_VAR = "SEARXNG_BASE_URL";
+const SEARXNG_BASE_URL_PATH = "plugins.entries.searxng.config.webSearch.baseUrl";
 const DEFAULT_TIMEOUT_SECONDS = 20;
 const MAX_RESPONSE_BYTES = 1_000_000;
 type SearxngEndpointMode = "selfHosted" | "strict";
@@ -39,6 +41,28 @@ type SearxngResult = {
   content?: string;
   img_src?: string;
 };
+
+function normalizeBaseUrl(value: unknown): string | undefined {
+  return normalizeSecretInput(value)?.replace(/\/+$/u, "") || undefined;
+}
+
+function resolveSearxngBaseUrl(config?: OpenClawConfig): string | undefined {
+  const webSearch = resolveProviderWebSearchPluginConfig(config, "searxng");
+  const resolved = resolveReadOnlyEnvSecretRef({
+    value: webSearch?.baseUrl,
+    path: SEARXNG_BASE_URL_PATH,
+    cfg: config,
+    expectedEnvId: SEARXNG_BASE_URL_ENV_VAR,
+    normalizeValue: normalizeBaseUrl,
+  });
+  if (resolved.status === "available") {
+    return resolved.value;
+  }
+  if (resolved.status === "blocked") {
+    return undefined;
+  }
+  return normalizeBaseUrl(process.env[SEARXNG_BASE_URL_ENV_VAR]);
+}
 
 function normalizeSearxngResult(value: unknown): SearxngResult | null {
   const candidate = asOptionalObjectRecord(value);
@@ -136,17 +160,30 @@ export async function runSearxngSearch(params: {
   count?: number;
   categories?: string;
   language?: string;
-  baseUrl?: string;
   timeoutSeconds?: number;
   cacheTtlMinutes?: number;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
-  const count = resolveSearchCount(params.count, DEFAULT_SEARCH_COUNT);
-  const categories = params.categories ?? resolveSearxngCategories(params.config);
-  const language = params.language ?? resolveSearxngLanguage(params.config);
-  const baseUrl = params.baseUrl ?? resolveSearxngBaseUrl(params.config);
-  const timeoutSeconds = resolveTimeoutSeconds(params.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
+  const count = resolveSearchCount(
+    params.count ?? params.config?.tools?.web?.search?.maxResults,
+    DEFAULT_SEARCH_COUNT,
+  );
+  const categories =
+    params.categories ??
+    normalizeOptionalString(
+      resolveProviderWebSearchPluginConfig(params.config, "searxng")?.categories,
+    );
+  const language =
+    params.language ??
+    normalizeOptionalString(
+      resolveProviderWebSearchPluginConfig(params.config, "searxng")?.language,
+    );
+  const baseUrl = resolveSearxngBaseUrl(params.config);
+  const timeoutSeconds = resolveTimeoutSeconds(
+    params.timeoutSeconds ?? params.config?.tools?.web?.search?.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS,
+  );
   const cacheTtlMs = resolveCacheTtlMs(
     params.cacheTtlMinutes ?? params.config?.tools?.web?.search?.cacheTtlMinutes,
     DEFAULT_CACHE_TTL_MINUTES,
@@ -160,16 +197,14 @@ export async function runSearxngSearch(params: {
   const endpointMode = await validateSearxngBaseUrl(baseUrl);
   params.signal?.throwIfAborted();
 
-  const cacheKey = normalizeCacheKey(
-    JSON.stringify({
-      provider: "searxng",
-      query: params.query,
-      count,
-      categories: categories ?? "",
-      language: language ?? "",
-      baseUrl,
-    }),
-  );
+  const cacheKey = JSON.stringify({
+    provider: "searxng",
+    query: params.query,
+    count,
+    categories: categories ?? "",
+    language: language ?? "",
+    baseUrl,
+  });
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;

@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { For, Show, createMemo, createSignal, createStore, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createAnchoredOverlay } from "../lib/reactive/overlay-anchor.ts";
@@ -67,7 +67,7 @@ export function PickerContent<Option extends PickerOption>(props: {
   const [searching, setSearching] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [keyboard, setKeyboard] = createSignal(false);
-  const [collapsed, setCollapsed] = createSignal(new Set<string>());
+  const [collapsed, setCollapsed] = createStore<string[]>([]);
   const direction = () => (getComputedStyle(props.host).direction === "rtl" ? "rtl" : "ltr");
   const resolvePlacement = (
     placement: PickerParams<Option>["placement"],
@@ -115,7 +115,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         section = {
           group,
           options: [],
-          expanded: Boolean(query().trim()) || !collapsed().has(group.id),
+          expanded: Boolean(query().trim()) || !collapsed.includes(group.id),
         };
         groups.set(group.id, section);
       }
@@ -321,9 +321,6 @@ export function PickerContent<Option extends PickerOption>(props: {
       enter ? 120 : 150,
     );
   }
-  onCleanup(() => {
-    clearTimeout(hoverTimer);
-  });
   createScrollPosition(
     () => ({
       reveal: opened()
@@ -350,8 +347,9 @@ export function PickerContent<Option extends PickerOption>(props: {
     } else {
       setQuery("");
       setSearching(false);
-      // Disabled overlays can retire repeatedly as unrelated DOM content changes.
-      setCollapsed((current) => (current.size ? new Set<string>() : current));
+      setCollapsed((draft) => {
+        draft.length = 0;
+      });
       hoverOpened = false;
       if (sheetScroll) {
         sheetScroll.root.scrollTop = sheetScroll.top;
@@ -363,6 +361,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     const disconnectAnchor = anchor.connect();
     const stop = control.connect(() => {}, onOpenChange);
     return () => {
+      clearTimeout(hoverTimer);
       stop();
       disconnectAnchor();
     };
@@ -380,14 +379,17 @@ export function PickerContent<Option extends PickerOption>(props: {
     // The parent For keys each mounted row by value.
     const initialValue = untrack(() => row.option().value);
     let element: HTMLDivElement;
-    onCleanup(() => {
-      if (optionElements.get(initialValue) === element) {
-        optionElements.delete(initialValue);
-      }
+    onSettled(() => {
+      optionElements.set(initialValue, element);
+      return () => {
+        if (optionElements.get(initialValue) === element) {
+          optionElements.delete(initialValue);
+        }
+      };
     });
     return (
       <div
-        ref={[itemRef, (node) => optionElements.set(initialValue, (element = node))]}
+        ref={[itemRef, (node) => (element = node)]}
         {...menu.item(
           row.option().value,
           row.option().disabled || !visible().has(row.option().value),
@@ -581,14 +583,13 @@ export function PickerContent<Option extends PickerOption>(props: {
                       aria-controls={`${id}-group-${index()}`}
                       disabled={Boolean(query().trim())}
                       onClick={() =>
-                        setCollapsed((current) => {
-                          const next = new Set(current);
-                          if (next.has(group().id)) {
-                            next.delete(group().id);
+                        setCollapsed((draft) => {
+                          const collapsedIndex = draft.indexOf(group().id);
+                          if (collapsedIndex !== -1) {
+                            draft.splice(collapsedIndex, 1);
                           } else {
-                            next.add(group().id);
+                            draft.push(group().id);
                           }
-                          return next;
                         })
                       }
                     >

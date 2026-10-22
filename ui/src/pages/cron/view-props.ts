@@ -30,6 +30,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   return {
     ...page.actions,
     gateway: page.context().gateway,
+    getActionRetired: page.getActionRetired,
     onRunMount: page.registerRun,
     loading: page.cron().cronLoading,
     /** True once a cron.list response has completed (initial load finished). */
@@ -40,6 +41,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     connected: page.cron().connected,
     status: page.cron().cronStatus,
     jobs: page.cron().cronJobs,
+    reads: page.reads,
     jobsLoadingMore: page.cron().cronJobsLoadingMore,
     jobsTotal: page.cron().cronJobsTotal,
     jobsHasMore: page.cron().cronJobsHasMore,

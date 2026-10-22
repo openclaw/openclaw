@@ -128,10 +128,7 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                 <select
                   value={view.accountId ?? ""}
                   disabled={view.busy || !view.snapshot}
-                  onChange={(event: Event) => {
-                    if (!(event.currentTarget instanceof HTMLSelectElement)) {
-                      return;
-                    }
+                  onChange={(event) => {
                     accountId = event.currentTarget.value;
                     snapshot = undefined;
                     void request("x.allowlist.list");
@@ -173,11 +170,9 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                     required
                     value={view.username}
                     disabled={view.busy}
-                    onInput={(event: Event) => {
-                      if (event.currentTarget instanceof HTMLInputElement) {
-                        username = event.currentTarget.value;
-                        publish();
-                      }
+                    onInput={(event) => {
+                      username = event.currentTarget.value;
+                      publish();
                     }}
                   />
                 </label>

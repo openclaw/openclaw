@@ -70,7 +70,7 @@
 .task-progress-details--desktop[data-desktop-details]:not([open])
   .task-progress-details__current[data-note] {
   grid-column: 1 / -1;
-  text-overflow: ellipsis;
+  text-overflow: clip;
 }
 
 .task-progress-details--desktop[data-desktop-details]:not([open])
@@ -104,11 +104,6 @@
 
 .task-progress-details--desktop[data-desktop-details] .task-progress-details__current {
   text-overflow: clip;
-}
-
-.task-progress-details--desktop[data-desktop-details]
-  .task-progress-details__current[data-scrollable="true"]:not([data-note]) {
-  mask-image: linear-gradient(to right, black calc(100% - 8px), transparent);
 }
 
 .task-progress-details--desktop[data-desktop-details][data-details-moving] {
@@ -181,7 +176,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 

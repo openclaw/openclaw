@@ -24,11 +24,8 @@ function registerDirect(monitor: Monitor, options: ParentOptions) {
   return monitor.registerParent({ parentThreadId: "parent-thread", ...options });
 }
 
-async function directFixture(
-  options: ParentOptions = {},
-  monitorOptions?: ConstructorParameters<typeof CodexNativeSubagentMonitor>[2],
-) {
-  const f = monitorFixture(monitorOptions);
+async function directFixture(options: ParentOptions = {}) {
+  const f = monitorFixture();
   const release = vi.fn();
   const claimDirectChild = vi.fn(() => release);
   const owner = await registerDirect(f.monitor, { claimDirectChild, ...options });
@@ -42,7 +39,7 @@ const mainRequester = {
 
 describe("CodexNativeSubagentMonitor", () => {
   it("keeps A during an accepted B follow-up and gives the new child turn only B's ceiling", async () => {
-    const { client, monitor, captureSource } = monitorFixture({ recoveryPollDelaysMs: [] });
+    const { client, monitor, captureSource } = monitorFixture();
     const a = modelSource(["model-a"]);
     const b = modelSource(["model-b"]);
     const mappingA = {
@@ -119,7 +116,7 @@ describe("CodexNativeSubagentMonitor", () => {
   });
 
   it("retains nested admitted work and fences only the cancelled execution across regrant", async () => {
-    const { client, monitor, captureSource } = monitorFixture({ recoveryPollDelaysMs: [] });
+    const { client, monitor, captureSource } = monitorFixture();
     const source = modelSource(["model-a", "model-b"]);
     const parent = await registerDirect(monitor, { modelSource: source });
     parent.bindTurn("parent-turn");
@@ -553,9 +550,7 @@ describe("CodexNativeSubagentMonitor", () => {
   );
 
   it("keeps follow-up admission through repeated active predecessor history", async () => {
-    const { client, monitor, claimDirectChild, owner } = await directFixture(mainRequester, {
-      recoveryPollDelaysMs: [],
-    });
+    const { client, monitor, claimDirectChild, owner } = await directFixture(mainRequester);
     client.setThreadRead(
       "child-thread",
       threadRead({ turnId: "turn-a", status: "inProgress", threadStatus: "active" }),

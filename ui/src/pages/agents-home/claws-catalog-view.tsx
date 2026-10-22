@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../i18n/index.ts";
@@ -87,7 +87,7 @@ export function ClawsCatalogView(props: ClawsCatalogViewProps) {
             >
               <a
                 class="plugin-catalog-detail__back"
-                href={pathForRoute("agents-home", props.basePath)}
+                href={pathForRoute("claws", props.basePath)}
                 onClick={(event) => {
                   if (shouldHandleNavigationClick(event)) {
                     event.preventDefault();

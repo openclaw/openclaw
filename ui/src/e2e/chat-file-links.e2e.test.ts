@@ -94,12 +94,11 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.files.get");
 
         await page.locator('[data-region-header="side"]').waitFor({ state: "visible" });
-        expect(await page.locator(".sidebar-file-view").count()).toBe(0);
-
         const fileTab = page
           .locator(".side-panel__header .tabstrip-tab")
           .filter({ hasText: "slow.ts" });
-        expect(await fileTab.count()).toBe(1);
+        await polledCount(fileTab).toBe(1);
+        expect(await page.locator(".sidebar-file-view").count()).toBe(0);
         if (intent === "close") {
           await exactButton(page, "Close tab: slow.ts").click();
           await fileTab.waitFor({ state: "detached" });

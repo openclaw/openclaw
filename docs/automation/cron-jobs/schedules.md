@@ -25,6 +25,8 @@ These schedule flags work with both `openclaw automations add` and `openclaw aut
 
 Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` to interpret an offset-less `--at` datetime, or to evaluate a cron expression, in that IANA timezone. Cron expressions without `--tz` use the Gateway host timezone. `--tz` is not valid with `--every` or `--on-exit`.
 
+The Control UI's **Run at** field uses your browser's local timezone. A time skipped by a daylight-saving transition is invalid; choose a time before or after the gap. A newly entered repeated fall-back time uses its first occurrence. Editing other fields preserves the existing one-shot instant, including its original offset and timestamp precision.
+
 Recurring top-of-hour expressions (minute `0` with a wildcard hour field) are automatically staggered by up to 5 minutes to reduce load spikes. Use `--exact` to force precise timing, or `--stagger 30s` for an explicit window (cron schedules only).
 
 In the Control UI, enable **Exact timing** to disable staggering. For recurring top-of-hour expressions, turn it off and clear **Stagger window** to restore the default window of up to 5 minutes. For other expressions, clearing a saved window without changing the expression disables staggering and reopens with **Exact timing** enabled. A new schedule with a blank window keeps default timing when its expression changes.

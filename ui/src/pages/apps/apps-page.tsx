@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, lazy, Loading, Show } from "solid-js";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { isNativeWebChromeHost } from "../../app/native-web-chrome.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
@@ -18,6 +18,8 @@ import { buildMacGatewayLaunchUrl } from "./gateway-launch.ts";
 import { Apps } from "./view.tsx";
 
 registerEnglishCatalog(registerMcpAppEnglish);
+
+const DiscoveryStatus = lazy(() => import("../../components/mcp-app-discovery-status.tsx"));
 
 type AppsPageProps = { appSearch?: string };
 type AppLaunch = { key: string; detail?: McpAppOpenDetail };
@@ -72,7 +74,7 @@ export function AppsPage(props: AppsPageProps) {
       state.connectionRevision,
     ]);
     const route = appRoute();
-    const discovered = catalog();
+    const discovered = catalog.snapshot();
     if (
       previous?.key === key &&
       previous.detail &&
@@ -160,12 +162,13 @@ export function AppsPage(props: AppsPageProps) {
               when={paneKey()}
               keyed
               fallback={
-                <Show
-                  when={catalog().loading}
-                  fallback={<p role="alert">{catalog().error ?? t("mcpApp.invalidLink")}</p>}
-                >
-                  <p role="status">{t("mcpApp.loading")}</p>
-                </Show>
+                <Loading fallback={<p role="status">{t("mcpApp.loading")}</p>}>
+                  <DiscoveryStatus
+                    request={catalog.request()}
+                    emptyMessage={t("mcpApp.invalidLink")}
+                    emptyRole="alert"
+                  />
+                </Loading>
               }
             >
               <openclaw-chat-pane

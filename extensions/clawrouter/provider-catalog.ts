@@ -1,6 +1,7 @@
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   getCachedLiveProviderModelRows,
+  loadBundledModelIdentityFactsResolver,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
@@ -54,6 +55,7 @@ type CatalogProvider = {
   nativeBaseUrl: string;
   routes: CatalogRoute[];
   models: unknown[];
+  hostedWebSearchModels: Set<string>;
 };
 
 type RouteMetadata = {
@@ -61,6 +63,7 @@ type RouteMetadata = {
   baseUrl: string;
   upstreamModel?: string;
   serviceTiers?: string[];
+  hostedWebSearch?: true;
 };
 
 export function normalizeClawRouterReasoningEfforts(
@@ -130,6 +133,22 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
       ? row.routes.map(parseCatalogRoute).filter((route): route is CatalogRoute => Boolean(route))
       : [],
     models: Array.isArray(row?.models) ? row.models : [],
+    hostedWebSearchModels: new Set(
+      (Array.isArray(row?.offers) ? row.offers : []).flatMap((offerValue) => {
+        const offer = asOptionalRecord(offerValue);
+        const admission = asOptionalRecord(offer?.hostedToolAdmission);
+        return offer?.endpoint === "responses" &&
+          offer.transport === "http" &&
+          offer.routeKind === "unified" &&
+          offer.route === "/v1/responses" &&
+          offer.eligible === true &&
+          typeof offer.modelId === "string" &&
+          admission?.version === "clawrouter.hosted-tool-admission.v1" &&
+          admission.web_search === "admitted"
+          ? [offer.modelId]
+          : [];
+      }),
+    ),
   };
 }
 
@@ -144,6 +163,12 @@ const OPENAI_NATIVE_IMAGE_MODEL_IDS = new Set([
   "gpt-4.1-nano",
 ]);
 
+type ResolveNativeModelFacts = Awaited<ReturnType<typeof loadBundledModelIdentityFactsResolver>>;
+
+// Upstream catalogs whose first-party model facts are qualified for routed rows. A row
+// inherits only when its upstream id and wire API match the bundled native row exactly.
+const NATIVE_MODEL_FACT_PROVIDERS = new Set(["openai", "anthropic"]);
+
 function microsPerMillionToCost(value: number | undefined): number {
   return value === undefined ? 0 : value / 1_000_000;
 }
@@ -152,6 +177,7 @@ function buildRoutedModel(
   rootUrl: string,
   provider: CatalogProvider,
   value: unknown,
+  resolveNativeModelFacts: ResolveNativeModelFacts,
 ): ModelDefinitionConfig | undefined {
   const row = asOptionalRecord(value);
   const id = normalizeOptionalString(row?.id);
@@ -164,6 +190,13 @@ function buildRoutedModel(
     row?.supportedReasoningEfforts,
   );
   const pricing = asOptionalRecord(row?.pricing);
+  const native = asOptionalRecord(row?.nativeCapabilities);
+  const responses = asOptionalRecord(asOptionalRecord(native?.endpoints)?.responses);
+  const supportsHostedWebSearch =
+    native?.version === "clawrouter.native-capabilities.v1" &&
+    Array.isArray(responses?.hostedTools) &&
+    responses.hostedTools.every((tool) => typeof tool === "string") &&
+    responses.hostedTools.includes("web_search");
   let api: NonNullable<ModelDefinitionConfig["api"]>;
   let baseUrl: string;
   let upstreamModel: string | undefined;
@@ -215,6 +248,16 @@ function buildRoutedModel(
   const serviceTiers = Array.isArray(pricing?.serviceTiers)
     ? normalizeTrimmedStringList(pricing.serviceTiers.map((tier) => asOptionalRecord(tier)?.id))
     : undefined;
+  const nativeFacts = NATIVE_MODEL_FACT_PROVIDERS.has(provider.id)
+    ? resolveNativeModelFacts({ provider: provider.id, api, modelId: upstream })
+    : undefined;
+  // Service catalog facts win over inherited native defaults.
+  const compat = {
+    ...nativeFacts?.compat,
+    ...(supportedReasoningEfforts
+      ? { supportsReasoningEffort: true, supportedReasoningEfforts }
+      : {}),
+  };
 
   return {
     id,
@@ -226,15 +269,9 @@ function buildRoutedModel(
       /(?:claude-|gemini-|gpt-5|gpt-oss|deepseek-v|reasoner|glm-5|grok-4|minimax-m)/u.test(
         qualifiedId,
       ),
-    ...(supportedReasoningEfforts
-      ? {
-          thinkingLevelMap,
-          compat: {
-            supportsReasoningEffort: true,
-            supportedReasoningEfforts,
-          },
-        }
-      : {}),
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+    ...(Object.keys(compat).length > 0 ? { compat } : {}),
+    ...(nativeFacts?.mediaInput ? { mediaInput: nativeFacts.mediaInput } : {}),
     input:
       parseCatalogInput(row?.input) ??
       ((provider.id === "openai" && OPENAI_NATIVE_IMAGE_MODEL_IDS.has(upstream)) ||
@@ -265,6 +302,13 @@ function buildRoutedModel(
         api,
         baseUrl,
         ...(upstreamModel ? { upstreamModel } : {}),
+        // Support is not a grant: require this key's exact matching route admission.
+        ...(provider.id === "openai" &&
+        api === "openai-responses" &&
+        supportsHostedWebSearch &&
+        provider.hostedWebSearchModels.has(id)
+          ? { hostedWebSearch: true }
+          : {}),
         // Only this catalog provider/transport owns OpenAI scheduling tiers.
         ...(provider.id === "openai" && api === "openai-responses" && serviceTiers?.length
           ? { serviceTiers }
@@ -277,11 +321,12 @@ function buildRoutedModel(
 function buildDiscoveredModels(
   rootUrl: string,
   providers: CatalogProvider[],
+  resolveNativeModelFacts: ResolveNativeModelFacts,
 ): ModelDefinitionConfig[] {
   const models = new Map<string, ModelDefinitionConfig>();
   for (const provider of providers) {
     for (const model of provider.models) {
-      const routed = buildRoutedModel(rootUrl, provider, model);
+      const routed = buildRoutedModel(rootUrl, provider, model, resolveNativeModelFacts);
       if (!routed || models.has(routed.id)) {
         continue;
       }
@@ -315,7 +360,11 @@ export async function buildClawRouterProviderConfig(params: {
     baseUrl: `${rootUrl}/v1`,
     api: "openai-responses",
     apiKey: params.apiKey,
-    models: buildDiscoveredModels(rootUrl, providers),
+    models: buildDiscoveredModels(
+      rootUrl,
+      providers,
+      await loadBundledModelIdentityFactsResolver(),
+    ),
   };
 }
 

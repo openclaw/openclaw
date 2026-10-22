@@ -1,6 +1,12 @@
+import {
+  getRequiredHookHandler,
+  registerHookHandlersForTest,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "../runtime-api.js";
+import { registerFeishuSubagentHooks } from "../subagent-hooks-api.js";
 import {
   createFeishuThreadBindingManager as createFeishuThreadBindingManagerImpl,
   getFeishuThreadBindingManager,
@@ -20,30 +26,38 @@ function conversationRef(conversationId: string, parentConversationId?: string) 
   return { ...account, conversationId, ...(parentConversationId ? { parentConversationId } : {}) };
 }
 
-function bind(conversation: ReturnType<typeof conversationRef>, targetSessionKey: string) {
+function bindTo(
+  conversation: ReturnType<typeof conversationRef>,
+  targetSessionKey: string,
+  metadata?: Record<string, unknown>,
+) {
   return service.bind({
     conversation,
     targetSessionKey,
     targetKind: "session",
     placement: "current",
+    metadata,
   });
 }
 
-function createManager(cfg: OpenClawConfig = baseCfg): FeishuThreadBindingManager {
-  const manager = createFeishuThreadBindingManagerImpl({ cfg, accountId: "default" });
+function createManager(
+  cfg: OpenClawConfig = baseCfg,
+  accountId = "default",
+): FeishuThreadBindingManager {
+  const manager = createFeishuThreadBindingManagerImpl({ cfg, accountId });
   trackedManagers.push(manager);
   return manager;
 }
 
-describe("Feishu thread bindings", () => {
-  afterEach(() => {
-    for (const manager of trackedManagers) {
-      manager.stop();
-    }
-    trackedManagers.length = 0;
-    vi.restoreAllMocks();
-  });
+afterEach(() => {
+  for (const manager of trackedManagers) {
+    manager.stop();
+  }
+  trackedManagers.length = 0;
+  vi.restoreAllMocks();
+});
 
+describe("Feishu thread bindings", () => {
   it("registers current-placement adapter capabilities for Feishu", () => {
     createManager();
 
@@ -59,37 +73,17 @@ describe("Feishu thread bindings", () => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     createManager({ ...baseCfg, agents: { entries: { main: {}, codex: {} } } });
 
-    const binding = await getSessionBindingService().bind({
-      targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-      targetKind: "session",
-      conversation: {
-        channel: "feishu",
-        accountId: "default",
-        conversationId: "oc_group_chat:topic:om_topic_root",
-        parentConversationId: "oc_group_chat",
-      },
-      placement: "current",
-      metadata: {
-        label: "codex-main",
-      },
+    const conversation = conversationRef("oc_group_chat:topic:om_topic_root", "oc_group_chat");
+    const binding = await bindTo(conversation, "agent:codex:acp:binding:feishu:default:abc123", {
+      label: "codex-main",
     });
-
-    expect(binding.conversation.conversationId).toBe("oc_group_chat:topic:om_topic_root");
-    const resolved = getSessionBindingService().resolveByConversation({
-      channel: "feishu",
-      accountId: "default",
-      conversationId: "oc_group_chat:topic:om_topic_root",
-    });
+    expect(binding.conversation.conversationId).toBe(conversation.conversationId);
+    const resolved = service.resolveByConversation(conversationRef(conversation.conversationId));
     expect(resolved).toEqual({
       bindingId: "default:oc_group_chat:topic:om_topic_root",
       targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
       targetKind: "session",
-      conversation: {
-        channel: "feishu",
-        accountId: "default",
-        conversationId: "oc_group_chat:topic:om_topic_root",
-        parentConversationId: "oc_group_chat",
-      },
+      conversation,
       status: "active",
       boundAt: 1_700_000_000_000,
       expiresAt: 1_700_086_400_000,
@@ -106,34 +100,28 @@ describe("Feishu thread bindings", () => {
     });
   });
 
-  it("expires idle bindings from manager and service lookups at the deadline", async () => {
+  it.each([
+    ["idle deadline", 86_400_000, undefined],
+    ["maximum age after activity", 3_600_000, { idleHours: 2, maxAgeHours: 1 }],
+    ["touch after expiry", 86_400_000, undefined],
+  ] as const)("expires bindings at %s", async (mode, lifetime, threadBindings) => {
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    const manager = createManager();
+    const manager = createManager({
+      ...baseCfg,
+      session: { ...baseCfg.session, threadBindings },
+    });
     const targetSessionKey = "agent:codex:acp:binding:feishu:default:expired";
-    const conversation = {
-      channel: "feishu",
-      accountId: "default",
-      conversationId: "oc_group_chat:topic:om_expired_root",
-    };
-
-    const binding = await service.bind({
-      targetSessionKey,
-      targetKind: "session",
-      conversation,
-      placement: "current",
-    });
-    await service.bind({
-      targetSessionKey,
-      targetKind: "session",
-      conversation: {
-        ...conversation,
-        conversationId: "oc_group_chat:topic:om_expired_list_root",
-      },
-      placement: "current",
-    });
-    const expiresAt = startedAt + 86_400_000;
+    const conversation = conversationRef("oc_group_chat:topic:om_expired_root");
+    const binding = await bindTo(conversation, targetSessionKey);
+    await bindTo(conversationRef("oc_group_chat:topic:om_expired_list_root"), targetSessionKey);
+    const expiresAt = startedAt + lifetime;
     expect(binding.expiresAt).toBe(expiresAt);
 
+    if (mode === "maximum age after activity") {
+      now.mockReturnValue(startedAt + 30 * 60_000);
+      service.touch(binding.bindingId);
+      expect(service.resolveByConversation(conversation)?.expiresAt).toBe(expiresAt);
+    }
     now.mockReturnValue(expiresAt - 1);
     expect(manager.getByConversationId(conversation.conversationId)).toBeDefined();
     expect(manager.listBySessionKey(targetSessionKey)).toHaveLength(2);
@@ -141,61 +129,20 @@ describe("Feishu thread bindings", () => {
     expect(service.listBySession(targetSessionKey)).toHaveLength(2);
 
     now.mockReturnValue(expiresAt);
+    if (mode === "touch after expiry") {
+      service.touch(binding.bindingId, expiresAt + 1);
+    }
     expect(service.resolveByConversation(conversation)).toBeNull();
     expect(manager.getByConversationId(conversation.conversationId)).toBeUndefined();
     expect(manager.listBySessionKey(targetSessionKey)).toEqual([]);
     expect(service.listBySession(targetSessionKey)).toEqual([]);
   });
 
-  it("expires bindings at their maximum age even after activity refreshes idle time", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    createManager({
-      session: { ...baseCfg.session, threadBindings: { idleHours: 2, maxAgeHours: 1 } },
-    });
-    const conversation = conversationRef("oc_group_chat:topic:om_max_age_root");
-    const binding = await bind(conversation, "agent:codex:acp:binding:feishu:default:max-age");
-
-    now.mockReturnValue(startedAt + 30 * 60_000);
-    service.touch(binding.bindingId);
-    expect(service.resolveByConversation(conversation)?.expiresAt).toBe(startedAt + 60 * 60_000);
-
-    now.mockReturnValue(startedAt + 60 * 60_000);
-    expect(service.resolveByConversation(conversation)).toBeNull();
-    expect(service.listBySession(binding.targetSessionKey)).toEqual([]);
-  });
-
-  it("does not revive an expired binding when its conversation is touched", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    const manager = createManager();
-    const conversation = conversationRef("oc_group_chat:topic:om_expired_touch_root");
-    const binding = await bind(
-      conversation,
-      "agent:codex:acp:binding:feishu:default:expired-touch",
-    );
-    const expiresAt = startedAt + 86_400_000;
-    expect(binding.expiresAt).toBe(expiresAt);
-
-    now.mockReturnValue(expiresAt);
-    service.touch(binding.bindingId, expiresAt + 1);
-
-    expect(manager.getByConversationId(conversation.conversationId)).toBeUndefined();
-    expect(service.resolveByConversation(conversation)).toBeNull();
-  });
-
   it("keeps active bindings touchable and unbindable", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
     createManager();
-    const conversation = {
-      channel: "feishu",
-      accountId: "default",
-      conversationId: "oc_group_chat:topic:om_active_root",
-    };
-    const binding = await service.bind({
-      targetSessionKey: "agent:codex:acp:binding:feishu:default:active",
-      targetKind: "session",
-      conversation,
-      placement: "current",
-    });
+    const conversation = conversationRef("oc_group_chat:topic:om_active_root");
+    const binding = await bindTo(conversation, "agent:codex:acp:binding:feishu:default:active");
 
     now.mockReturnValue(startedAt + 1_000);
     service.touch(binding.bindingId);
@@ -229,12 +176,8 @@ describe("Feishu thread bindings", () => {
     const manager = createManager();
     const original = conversationRef("oc_group_chat:topic:om_topic_root", "oc_group_chat");
 
-    await service.bind({
-      targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-      targetKind: "session",
-      conversation: original,
-      placement: "current",
-      metadata: { agentId: "codex" },
+    await bindTo(original, "agent:codex:acp:binding:feishu:default:abc123", {
+      agentId: "codex",
     });
 
     manager.stop();
@@ -318,4 +261,214 @@ describe("Feishu thread bindings", () => {
       });
     },
   );
+});
+
+function origin(to: string, threadId?: string) {
+  return { channel: "feishu" as const, accountId: "work", to, ...(threadId ? { threadId } : {}) };
+}
+
+type FeishuOrigin = ReturnType<typeof origin>;
+const child = "agent:main:subagent:child";
+
+function deliveryEvent(params: {
+  childSessionKey: string;
+  requesterOrigin?: FeishuOrigin;
+  requesterSessionKey?: string;
+}) {
+  return {
+    childSessionKey: params.childSessionKey,
+    requesterSessionKey: params.requesterSessionKey ?? "agent:main:main",
+    requesterOrigin: params.requesterOrigin ?? origin("user:ou_sender_1"),
+    expectsCompletionMessage: true,
+  };
+}
+
+function managedHookFixture() {
+  const handlers = registerHookHandlersForTest<OpenClawPluginApi>({
+    config: { ...baseCfg, channels: { feishu: {} } },
+    register: registerFeishuSubagentHooks,
+  });
+  const manager = createManager({ ...baseCfg, channels: { feishu: {} } }, "work");
+  const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
+  return {
+    deliveryHandler,
+    deliver: (
+      childSessionKey: string,
+      requesterOrigin?: FeishuOrigin,
+      requesterSessionKey?: string,
+    ) =>
+      deliveryHandler(deliveryEvent({ childSessionKey, requesterOrigin, requesterSessionKey }), {}),
+    endedHandler: getRequiredHookHandler(handlers, "subagent_ended"),
+    manager,
+    bind: (
+      conversationId: string,
+      params: Partial<Parameters<typeof manager.bindConversation>[0]> = {},
+    ) =>
+      manager.bindConversation({
+        conversationId,
+        targetKind: "subagent",
+        targetSessionKey: child,
+        ...params,
+      }),
+  };
+}
+
+describe("feishu subagent hook handlers", () => {
+  it.each([
+    { conversationId: "ou_sender_1", chat: "oc_dm" },
+    { conversationId: "oc_group:topic:om_root", chat: "oc_group", thread: "om_root" },
+  ])("preserves bound delivery for $conversationId", async ({ conversationId, chat, thread }) => {
+    const { deliver, bind } = managedHookFixture();
+    const to = `chat:${chat}`;
+    bind(conversationId, {
+      parentConversationId: thread ? chat : undefined,
+      metadata: { deliveryTo: to, deliveryThreadId: thread, boundBy: "system" },
+    });
+    await expect(deliver(child, origin(to, thread))).resolves.toEqual({
+      origin: origin(to, thread),
+    });
+  });
+
+  it("selects the requester-matching binding when a child has multiple routes", async () => {
+    const { deliver, bind } = managedHookFixture();
+    for (const sender of ["ou_sender_1", "ou_sender_2"]) {
+      bind(sender, {
+        metadata: { deliveryTo: `user:${sender}`, boundBy: "system" },
+      });
+    }
+
+    await expect(deliver(child, origin("user:ou_sender_2"))).resolves.toEqual({
+      origin: origin("user:ou_sender_2"),
+    });
+  });
+
+  it.each(["single", "direct", "topic"] as const)(
+    "keeps the selected %s requester record private and unchanged",
+    async (selection) => {
+      const { deliver, bind, manager } = managedHookFixture();
+      // One account/conversation has one record, so matching requester and child routes share a session.
+      const topic = selection === "topic";
+      if (selection !== "single") {
+        bind("ou_other", {
+          metadata: { deliveryTo: "user:ou_other" },
+        });
+      }
+      bind(topic ? "oc_group:topic:om_topic:sender:ou_selected" : "ou_selected", {
+        parentConversationId: topic ? "oc_group" : undefined,
+        metadata: {
+          deliveryTo: " chat:oc_delivery ",
+          ...(topic ? { deliveryThreadId: " om_delivery " } : {}),
+          label: "private route label",
+          boundBy: "fixture",
+          data: { internal: "not an origin field" },
+        },
+      });
+      const records = manager.listBySessionKey(child);
+      const snapshot = structuredClone(records);
+      expect(records).toHaveLength(selection === "single" ? 1 : 2);
+
+      await expect(
+        deliver(
+          child,
+          topic
+            ? origin("chat:oc_group", "om_topic")
+            : origin(selection === "single" ? "user:ou_unrelated" : "user:ou_selected"),
+          ` ${child} `,
+        ),
+      ).resolves.toStrictEqual({
+        origin: origin("chat:oc_delivery", topic ? "om_delivery" : undefined),
+      });
+      expect(manager.listBySessionKey(child)).toStrictEqual(snapshot);
+      for (const record of records) {
+        expect(manager.getByConversationId(record.conversationId)).toBe(record);
+      }
+    },
+  );
+
+  it.each(["direct", "topic"] as const)(
+    "does not pick one of several child routes when the requester has no %s match",
+    async (selection) => {
+      const { deliver, bind } = managedHookFixture();
+      for (const sender of ["ou_one", "ou_two"]) {
+        bind(sender);
+      }
+
+      await expect(
+        deliver(
+          child,
+          selection === "topic" ? origin("chat:oc_group", "om_missing") : origin("user:ou_missing"),
+          child,
+        ),
+      ).resolves.toBeUndefined();
+    },
+  );
+
+  it("keeps ambiguous requester topics unresolved unless the child has one route", async () => {
+    const { deliveryHandler, bind, manager } = managedHookFixture();
+    const requesterSessionKey = "agent:main:requester";
+    for (const sender of ["ou_a", "ou_b"]) {
+      bind(`oc_group:topic:om_topic:sender:${sender}`, {
+        parentConversationId: "oc_group",
+        targetKind: "session",
+        targetSessionKey: requesterSessionKey,
+      });
+    }
+    for (const [chat, topic] of [
+      ["oc_group", "om_topic"],
+      ["oc_other", "om_other"],
+    ] as const) {
+      bind(`${chat}:topic:${topic}`, {
+        parentConversationId: chat,
+      });
+    }
+    const event = deliveryEvent({
+      childSessionKey: child,
+      requesterSessionKey,
+      requesterOrigin: origin("chat:oc_group", "om_topic"),
+    });
+
+    await expect(deliveryHandler(event, {})).resolves.toBeUndefined();
+
+    manager.unbindConversation("oc_other:topic:om_other");
+    await expect(deliveryHandler(event, {})).resolves.toEqual({
+      origin: origin("chat:oc_group", "om_topic"),
+    });
+  });
+
+  it("removes bound routes on subagent_ended", async () => {
+    const { deliver, endedHandler, bind } = managedHookFixture();
+    bind("ou_sender_1", {
+      metadata: { deliveryTo: "user:ou_sender_1", boundBy: "system" },
+    });
+
+    await endedHandler(
+      {
+        targetSessionKey: child,
+        targetKind: "subagent",
+        reason: "done",
+        accountId: "work",
+      },
+      {},
+    );
+
+    await expect(deliver(child)).resolves.toBeUndefined();
+  });
+
+  it("leaves disabled completion, unrelated channels and missing managers unchanged", async () => {
+    const { deliveryHandler, manager, bind } = managedHookFixture();
+    bind("ou_sender_1");
+    const event = deliveryEvent({ childSessionKey: child });
+
+    await expect(
+      deliveryHandler({ ...event, expectsCompletionMessage: false }, {}),
+    ).resolves.toBeUndefined();
+    await expect(
+      deliveryHandler(
+        { ...event, requesterOrigin: { channel: "discord", accountId: "work", to: "channel:123" } },
+        {},
+      ),
+    ).resolves.toBeUndefined();
+    manager.stop();
+    await expect(deliveryHandler(event, {})).resolves.toBeUndefined();
+  });
 });

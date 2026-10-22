@@ -355,6 +355,7 @@ it.each([
       serviceTiers: tiers,
       supportsServiceTierRecovery: true,
       serviceTierObservation: { requestedTier: "ultrafast", responseTier: "priority" },
+      serviceTierObservations: [{ requestedTier: "ultrafast", responseTier: "priority" }],
       thinkingLevels: [{ id: "max", label: "Maximum" }],
       runtimeChoices: [
         { agentRuntime: { id: "codex", source: "model" }, available: true, serviceTiers: tiers },
@@ -377,6 +378,7 @@ it.each([
       "supportsServiceTierRecovery",
       "serviceTiers",
       "serviceTierObservation",
+      "serviceTierObservations",
       "runtimeChoices",
     ]) {
       expect(pinned).not.toHaveProperty(field);
@@ -417,4 +419,31 @@ it("offers only unconfigured providers with quick API-key setup", () => {
       ["openai"],
     ),
   ).toEqual([{ id: "anthropic", displayName: "Anthropic" }]);
+});
+
+it("keeps the first usage alias label and the last alias payload", () => {
+  const cards = build([], {
+    providerUsage: {
+      updatedAt: 1,
+      providers: [
+        {
+          provider: "claude-cli",
+          displayName: "First label",
+          windows: [{ label: "old", usedPercent: 10 }],
+        },
+        {
+          provider: "anthropic",
+          displayName: "Later label",
+          windows: [{ label: "latest", usedPercent: 75 }],
+        },
+      ],
+    },
+  });
+  expect(cards).toMatchObject([
+    {
+      id: "anthropic",
+      displayName: "First label",
+      usage: { windows: [{ label: "latest", usedPercent: 75 }] },
+    },
+  ]);
 });

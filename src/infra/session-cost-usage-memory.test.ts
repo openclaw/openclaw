@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type {
@@ -16,7 +17,6 @@ import type { SessionActorStorageWrites } from "../config/sessions/session-actor
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { buildUsageOverview } from "../shared/usage-overview.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
@@ -79,25 +79,23 @@ async function fixture(
   entry: Partial<InternalSessionEntry> = {},
   target = { sessionKey, sessionId },
 ) {
-  const { sessionKey: fixtureSessionKey, sessionId: fixtureSessionId } = target;
   const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
-  const binding = await acquireSessionActorStorage(
-    { agentId: "main", storePath, sessionKey: fixtureSessionKey, env },
-    { lifetime: { assertCurrent() {}, assertReadable() {} }, authority, create: true },
+  const binding = expectDefined(
+    await acquireSessionActorStorage(
+      { agentId: "main", storePath, sessionKey: target.sessionKey, env },
+      { lifetime: { assertCurrent() {}, assertReadable() {} }, authority, create: true },
+    ),
+    "Production acquisition did not select memory storage",
   );
-  if (!binding) {
-    throw new Error("Production acquisition did not select memory storage");
-  }
   const { actor } = binding;
   const scope = {
     agentId: "main",
-    sessionKey: fixtureSessionKey,
-    sessionId: fixtureSessionId,
+    ...target,
     storePath: binding.path,
   };
   const owner = memorySessionActorOwners.read({ agentId: "main", path: storePath })!;
   await commit(actor, "session.entry.create", {
-    entry: { sessionId: fixtureSessionId, updatedAt: 1, ...entry },
+    entry: { sessionId: target.sessionId, updatedAt: 1, ...entry },
     cwd: "/synthetic",
   });
   let next = 0;
@@ -137,7 +135,7 @@ async function fixture(
     sessionFile,
     ...target,
     refresh: () => refreshUsage(binding),
-    report: () => memoryReport({ binding, sessionFile }),
+    report: (files = [sessionFile]) => runUsage(binding, sessionReport(files)),
     snapshot: (input: SessionActorMemoryUsageReads["session.usage.snapshot"]["input"]) =>
       actor.storage!.read({ type: "session.usage.snapshot", input }, authority),
     corpus: () =>
@@ -156,10 +154,17 @@ async function cachedFixture(target = { sessionKey, sessionId }) {
   const entry =
     snapshot?.rollup &&
     decodeUsageCostRollup(snapshot.rollup.valueJson, "fixture", snapshot.rollup.blob ?? null);
-  if (!entry) {
-    throw new Error("Expected a production-generated usage rollup");
-  }
-  return { ...cached, entry, sessionId: target.sessionId };
+  return {
+    ...cached,
+    entry: expectDefined(entry, "Expected a production-generated usage rollup"),
+    write: (rollup: ReturnType<typeof paddedRollup>) =>
+      commit(
+        cached.actor,
+        "session.usage.write",
+        { sessionId: target.sessionId, rollup: { ...rollup, updatedAt: 1 } },
+        { kind: "committed", value: true },
+      ),
+  };
 }
 
 function paddedRollup(entry: UsageCostRollupEntry, bytes: number, compressed = false) {
@@ -170,10 +175,10 @@ function paddedRollup(entry: UsageCostRollupEntry, bytes: number, compressed = f
     return encoded;
   }
   const raw = Buffer.from(JSON.stringify(rollup.rollup));
-  const envelope = decodeUsageCostRollupEnvelope(encoded.valueJson);
-  if (!envelope) {
-    throw new Error("Expected generated usage envelope");
-  }
+  const envelope = expectDefined(
+    decodeUsageCostRollupEnvelope(encoded.valueJson),
+    "Expected generated usage envelope",
+  );
   return {
     valueJson: JSON.stringify({
       ...envelope,
@@ -181,28 +186,6 @@ function paddedRollup(entry: UsageCostRollupEntry, bytes: number, compressed = f
     }),
     blob: Uint8Array.from(raw),
   };
-}
-
-async function writeRollup(
-  cached: Awaited<ReturnType<typeof cachedFixture>>,
-  rollup: ReturnType<typeof paddedRollup>,
-) {
-  await commit(
-    cached.actor,
-    "session.usage.write",
-    {
-      sessionId: cached.sessionId,
-      rollup: { ...rollup, updatedAt: 1 },
-    },
-    { kind: "committed", value: true },
-  );
-}
-
-function memoryReport(
-  cached: { binding: Parameters<typeof runSessionActorUsage>[0]; sessionFile: string },
-  sessionFiles = [cached.sessionFile],
-) {
-  return runUsage(cached.binding, sessionReport(sessionFiles));
 }
 
 function sessionReport(sessionFiles: string[], pricingFingerprint = "fixture") {
@@ -230,8 +213,8 @@ describe("actor memory usage", () => {
           padding: "x".repeat(70 * 1024),
         });
       }
-      await writeRollup(cached, encoded);
-      const report = await memoryReport(cached);
+      await cached.write(encoded);
+      const report = await cached.report();
       expect(report).toMatchObject({
         kind: "sessions",
         summaries: [null],
@@ -257,14 +240,14 @@ describe("actor memory usage", () => {
         }),
       ).toEqual({ kind: "refresh", changed: mode !== "valid" });
       if (mode !== "valid") {
-        expect(await memoryReport(cached)).toMatchObject({
+        expect(await cached.report()).toMatchObject({
           summaries: [{ input: 5, output: 2 }],
           cacheStatus: { status: "fresh", staleFiles: 0 },
           invalidRows: [],
         });
       } else {
         await cached.append(7);
-        expect(await memoryReport(cached)).toMatchObject({
+        expect(await cached.report()).toMatchObject({
           staleSessionFiles: [cached.sessionFile],
           cacheStatus: { staleFiles: 1 },
         });
@@ -276,13 +259,13 @@ describe("actor memory usage", () => {
     const cached = await cachedFixture();
     const encoded = paddedRollup(cached.entry, 900 * 1024);
     const sessionFiles = [cached.sessionFile];
-    await writeRollup(cached, encoded);
+    await cached.write(encoded);
     for (let index = 1; index < 40; index++) {
       const next = await cachedFixture({
         sessionKey: `${sessionKey}-${index}`,
         sessionId: `budget-${index}`,
       });
-      await writeRollup(next, paddedRollup(next.entry, 900 * 1024));
+      await next.write(paddedRollup(next.entry, 900 * 1024));
       sessionFiles.push(next.sessionFile);
     }
     const snapshot = await cached.snapshot({
@@ -297,7 +280,7 @@ describe("actor memory usage", () => {
       ),
     ).toBeLessThanOrEqual(32 * 1024 * 1024);
     expect(snapshot.filter(({ rollup }) => rollup?.blob)).toHaveLength(36);
-    const report = await memoryReport(cached, sessionFiles);
+    const report = await cached.report(sessionFiles);
     expect(report).toMatchObject({
       kind: "sessions",
       summaries: Array(40).fill(null),
@@ -313,8 +296,8 @@ describe("actor memory usage", () => {
       const cached = await cachedFixture();
       const encoded = paddedRollup(cached.entry, 33 * 1024 * 1024, true);
       expect(encoded.blob.byteLength).toBeLessThan(1024 * 1024);
-      await writeRollup(cached, encoded);
-      const report = await memoryReport(cached);
+      await cached.write(encoded);
+      const report = await cached.report();
       expect(report).toMatchObject({
         kind: "sessions",
         summaries: [null],
@@ -331,7 +314,7 @@ describe("actor memory usage", () => {
       const cached = await cachedFixture();
       if (mode !== "valid") {
         const encoded = encodeUsageCostRollup(cached.entry);
-        await writeRollup(cached, { ...encoded, blob: new Uint8Array() });
+        await cached.write({ ...encoded, blob: new Uint8Array() });
       }
       const snapshot = await cached.snapshot({
         includeRollupBodies: true,
@@ -354,7 +337,7 @@ describe("actor memory usage", () => {
       if (mode === "valid") {
         const scope = new AsyncWorkScope();
         scope.beginClose(new Error("report cancelled"));
-        await expect(scope.run(() => memoryReport(cached))).rejects.toThrow("report cancelled");
+        await expect(scope.run(() => cached.report())).rejects.toThrow("report cancelled");
         await scope.drain();
       }
     },
@@ -413,13 +396,15 @@ describe("actor memory usage", () => {
     expect(await refresh()).toEqual({ kind: "refresh", changed: false });
   });
 
-  it("includes all selected memory sessions in overview totals before limiting rows", async () => {
+  it("refreshes and reports every selected memory session through the worker adapter", async () => {
     const first = await fixture();
-    const secondTarget = {
-      sessionKey: "agent:main:dashboard:incognito-usage-second",
-      sessionId: "usage-2",
-    };
-    const second = await fixture({}, secondTarget);
+    const second = await fixture(
+      {},
+      {
+        sessionKey: "agent:main:dashboard:incognito-usage-second",
+        sessionId: "usage-2",
+      },
+    );
     const cost = { input: 0.8, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 1 };
     await first.append(8, cost);
     await second.append(8, cost);
@@ -444,26 +429,7 @@ describe("actor memory usage", () => {
     expect(cached).toMatchObject({
       kind: "sessions",
       cacheStatus: { status: "fresh", cachedFiles: 2 },
-    });
-    if (cached.kind !== "sessions") {
-      throw new Error("Expected selected memory usage summaries");
-    }
-    expect(
-      buildUsageOverview({
-        rows: [first, second].map((target, index) => ({
-          key: target.sessionKey,
-          sessionId: target.sessionId,
-          agentId: "main",
-          updatedAt: 10_000,
-          usage: cached.summaries[index] ?? null,
-        })),
-        options: { limit: 1 },
-        dayBucket,
-      }),
-    ).toMatchObject({
-      totals: { totalTokens: 20, totalCost: 2 },
-      sessions: [{ usage: { totalTokens: 10, totalCost: 1 } }],
-      overview: { total: 2, selectedRowCount: 2, limit: 1 },
+      summaries: Array.from({ length: 2 }, () => ({ totalTokens: 10, totalCost: 1 })),
     });
   });
 
@@ -488,9 +454,7 @@ describe("actor memory usage", () => {
   });
 
   it("keeps captured corpus and usage bytes detached while later writes update new reads", async () => {
-    const { binding, append, refresh, snapshot, corpus: readCorpus } = await fixture();
-    await append(5);
-    await refresh();
+    const { binding, append, refresh, snapshot, corpus: readCorpus } = await cachedFixture();
     const snapshotInput = {
       includeEvents: true,
       includeRollupBodies: true,

@@ -576,6 +576,24 @@ Hand-written units do not inherit the adaptive heap sizing that `openclaw gatewa
 
 `TimeoutStopSec=330` covers the Gateway's five-minute cooperative drain plus teardown reserve. To inspect the current managed unit body, run `systemctl --user cat openclaw-gateway.service` (or `systemctl --user cat openclaw-gateway-<profile>.service` for a named profile).
 
+Host shutdown also stops the enclosing `user@<uid>.service`. Its timeout can cut
+short the Gateway's own drain; Ubuntu 24.04 ships a five-second limit in
+`/usr/lib/systemd/system/user@.service.d/timeout.conf`. Doctor and Gateway status
+warn when the effective user-manager timeout is below 90 seconds. This warning
+does not trigger a Gateway reinstall or change host policy.
+
+Inspect it with `systemctl show user@$(id -u).service -p TimeoutStopUSec`. To allow
+more time, create `/etc/systemd/system/user@<uid>.service.d/zz-openclaw-stop-timeout.conf`:
+
+```ini
+[Service]
+TimeoutStopSec=90
+```
+
+Use `330` to preserve the full Gateway drain, accepting a potentially longer host
+shutdown. The drop-in name sorts after Ubuntu's `timeout.conf`; run
+`sudo systemctl daemon-reload` and inspect the effective value again.
+
 Enable it:
 
 ```bash

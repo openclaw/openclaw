@@ -21,6 +21,7 @@ import {
 it.each([true, false])("shows device settings only with the capability, admin=%s", (canAdmin) => {
   const capability: Device = {
     snapshot: createNativeDeviceSettingsSnapshot(),
+    initialSnapshot: Promise.resolve(createNativeDeviceSettingsSnapshot()),
     subscribe: () => () => undefined,
     set: () => undefined,
     requestPermission: () => undefined,
@@ -118,7 +119,7 @@ it("treats worktrees as a sessions hub tab", () => {
 });
 
 it("keeps model setup as a settings subpage without a sidebar entry", () => {
-  expect(isSettingsNavigationRoute("agents-home")).toBe(false);
+  expect(isSettingsNavigationRoute("claws")).toBe(false);
   expect(isSettingsNavigationRoute("model-setup")).toBe(true);
   expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
 });

@@ -7,7 +7,6 @@ export const page = definePage({
   ...routePageSpec("logs"),
   component: () =>
     import("./logs-page.tsx").then((module) => ({
-      header: true,
       renderSolid: () =>
         createComponent(ShellLayoutBoundary, {
           traits: { logsPage: true, toolbarHeader: true, settingsWorkspace: true },

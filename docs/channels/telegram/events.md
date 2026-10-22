@@ -14,7 +14,7 @@ Operational Telegram surfaces: reaction wakes, config writes, and what the bot s
 
 <AccordionGroup>
   <Accordion title="Reaction notifications">
-    Telegram reactions arrive as `message_reaction` updates, separate from message payloads. When enabled, OpenClaw enqueues system events like `Telegram reaction added: 👍 by Alice (@alice) on msg 42`.
+    Telegram reactions arrive as `message_reaction` updates, separate from message payloads. When enabled, OpenClaw enqueues system events like `Telegram reaction added: 👍 by Alice (@alice) on msg 42`. Custom emoji are reported as `custom emoji <id>`; paid reactions are ignored.
 
     - `channels.telegram.reactionNotifications`: `off | own | all` (default: `own`)
     - `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` (default: `minimal`)

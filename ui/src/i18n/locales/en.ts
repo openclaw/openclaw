@@ -4,6 +4,7 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
+  agentChip: TranslationMap;
   logbook: TranslationMap;
   gatewayLogs: TranslationMap;
   standingGrants: TranslationMap;
@@ -254,6 +255,7 @@ export const en: TranslationMap & {
       | "deleteSessionStale"
       | "deleteSessionsStale"
       | "groupMenu"
+      | "groupOptions"
       | "newSessionInGroup"
       | "groupDefaultsStale"
       | "moveToTopLevel",
@@ -864,6 +866,7 @@ export const en: TranslationMap & {
     deleteSessionsStale:
       "Gateway connection replaced before {count} sessions were deleted. Try again.",
     groupMenu: "Group options for {group}",
+    groupOptions: "Group options",
     newSessionInGroup: "New session in {group}",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
     moveToTopLevel: "Move to top level",
@@ -1205,7 +1208,7 @@ export const en: TranslationMap & {
       menuLabel: "Gateway: {gateway}",
       primaryTag: "primary",
       setPrimary: "Set as primary…",
-      openSettings: "Gateway settings…",
+      openSettings: "Gateway settings",
       connected: "Connected",
       unreachable: "Unreachable",
       unknown: "Unknown status",
@@ -1627,6 +1630,7 @@ export const en: TranslationMap & {
     linksLabel: "Community and resources",
     linkWebsite: "Website",
     linkDocs: "Docs",
+    linkSupport: "Support",
     linkGitHub: "GitHub",
     linkDiscord: "Discord",
     linkX: "X (Twitter)",
@@ -2672,9 +2676,10 @@ export const en: TranslationMap & {
       tooLargeToast: "File too large. Try a smaller file.",
       openOriginal: "Open original",
       compressToFit: "Compress to fit",
+      retryCompression: "Retry compression",
       compressionHint:
         "Video is too large. Compress a copy on this device; the original stays unchanged.",
-      compressing: "Compressing… {progress}%",
+      compressing: "Compressing · {progress}%",
       compressionUnsupported: "This browser cannot compress this video.",
       compressionTooLarge: "Video is still too large. Try a smaller file.",
       compressionFailed: "Could not compress video. Try again.",

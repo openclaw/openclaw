@@ -2,17 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import {
   applyLegacyAuthStore,
   coerceLegacyAuthStore,
   coerceLegacyAuthProfileStore,
-  coerceLegacyFlatCredential,
   normalizeLegacyAuthProfileFields,
   parseLegacyCredentialEntry,
   hasUsableAuthProfileCredential,
@@ -60,21 +57,15 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import { coerceAuthProfileState } from "../agents/auth-profiles/state.js";
 import { saveAuthProfileStoreWithPreparedOwner } from "../agents/auth-profiles/store-runtime.js";
-import type {
-  AuthProfileCredential,
-  AuthProfileState,
-  AuthProfileStore,
-} from "../agents/auth-profiles/types.js";
+import type { AuthProfileState, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-auth-dir.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { OPENAI_PROVIDER_ID } from "../agents/openai-routing.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createConfigRuntimeEnv } from "../config/config-env-vars.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { createVerifiedSqliteSnapshot } from "../infra/sqlite-snapshot.js";
 import {
   assertExistingDatabaseIdentity,
@@ -134,6 +125,13 @@ import {
   canonicalizeLegacyAuthOrder,
   canonicalizeLegacyAuthStore,
 } from "./doctor/auth-alias-transforms.js";
+import {
+  coerceLegacyConfigAuthProfileStore,
+  coerceLegacyFlatAuthProfileStore,
+  extractProviderPrefix,
+  isSafeLegacyProviderKey,
+} from "./doctor/auth-legacy-config-coercion.js";
+import { createAuthMigrationWarningRecorder } from "./doctor/auth-migration-findings.js";
 import { listMutableCodexRouteAgentEntries } from "./doctor/shared/codex-route-agent-entries.js";
 import {
   collectUnresolvedLegacyOAuthSidecarProfileIds,
@@ -193,12 +191,6 @@ class AuthProfileMigrationVerificationError extends Error {
   }
 }
 
-type RawAuthProfileImportStore = {
-  version: number;
-  profiles: Record<string, Record<string, unknown>>;
-  order?: Record<string, string[]>;
-};
-
 type LegacyFlatAuthProfileRepairResult = {
   detected: string[];
   changes: string[];
@@ -207,103 +199,9 @@ type LegacyFlatAuthProfileRepairResult = {
   migratedProfileIds: Set<string>;
   blockedProfileIds: Set<string>;
   warnings: string[];
+  findings: HealthFinding[];
+  aliasFindings: readonly HealthFinding[];
 };
-
-function isSafeLegacyProviderKey(key: string): boolean {
-  return key.trim().length > 0 && !isBlockedObjectKey(key);
-}
-
-function extractProviderPrefix(value: string, separator: ":" | "/"): string | undefined {
-  const index = value.indexOf(separator);
-  return index > 0 ? readNonEmptyString(value.slice(0, index)) : undefined;
-}
-
-function extractProviderFromModelRef(modelRef: string): string | undefined {
-  return extractProviderPrefix(splitTrailingAuthProfile(modelRef).model, "/");
-}
-
-function collectLegacyConfigAuthProfileProviderHints(
-  cfg: OpenClawConfig,
-): ReadonlyMap<string, string | null> {
-  const hints = new Map<string, string | null>();
-  const addHint = (profileId: string, provider: string): void => {
-    const existing = hints.get(profileId);
-    // Ambiguous evidence stays ambiguous even if a later reference repeats one provider.
-    hints.set(profileId, existing === undefined || existing === provider ? provider : null);
-  };
-  const addModelHints = (models: unknown): void => {
-    if (!isRecord(models)) {
-      return;
-    }
-    for (const [modelRef, rawModel] of Object.entries(models)) {
-      const provider = extractProviderFromModelRef(modelRef);
-      if (!provider || !isSafeLegacyProviderKey(provider) || !isRecord(rawModel)) {
-        continue;
-      }
-      const agentRuntime = isRecord(rawModel.agentRuntime) ? rawModel.agentRuntime : null;
-      const authProfileId = agentRuntime
-        ? readNonEmptyString(agentRuntime.authProfileId)
-        : undefined;
-      if (authProfileId) {
-        addHint(authProfileId, provider);
-      }
-    }
-  };
-
-  for (const { value } of collectConfiguredModelRefs(cfg)) {
-    const { profile } = splitTrailingAuthProfile(value);
-    const provider = extractProviderFromModelRef(value);
-    if (profile && provider && isSafeLegacyProviderKey(provider)) {
-      addHint(profile, provider);
-    }
-  }
-
-  const root: Record<string, unknown> = cfg;
-  const auth = isRecord(root.auth) ? root.auth : null;
-  const order = auth && isRecord(auth.order) ? auth.order : null;
-  if (order) {
-    for (const [provider, profileIds] of Object.entries(order)) {
-      if (!isSafeLegacyProviderKey(provider) || !Array.isArray(profileIds)) {
-        continue;
-      }
-      for (const profileId of profileIds) {
-        const normalizedProfileId = readNonEmptyString(profileId);
-        if (normalizedProfileId) {
-          addHint(normalizedProfileId, provider);
-        }
-      }
-    }
-  }
-  const agents = isRecord(root.agents) ? root.agents : null;
-  const defaults = agents && isRecord(agents.defaults) ? agents.defaults : null;
-  addModelHints(defaults?.models);
-  for (const agent of listAgentEntries(cfg)) {
-    addModelHints(agent.models);
-  }
-  return hints;
-}
-
-function coerceLegacyFlatAuthProfileStore(raw: unknown): AuthProfileStore | null {
-  if (!isRecord(raw) || "profiles" in raw) {
-    return null;
-  }
-  const store: AuthProfileStore = {
-    version: AUTH_STORE_VERSION,
-    profiles: {},
-  };
-  for (const [key, value] of Object.entries(raw)) {
-    const providerId = key.trim();
-    if (!isSafeLegacyProviderKey(providerId)) {
-      continue;
-    }
-    const credential = coerceLegacyFlatCredential(providerId, value);
-    if (!credential) {
-      continue;
-    }
-    store.profiles[`${providerId}:default`] = credential;
-  }
-  return Object.keys(store.profiles).length > 0 ? store : null;
-}
 
 function listAuthProfileSqliteMigrationCandidates(
   cfg: OpenClawConfig,
@@ -338,106 +236,6 @@ function collectAuthOwnerProfileIds(store: unknown, state: unknown): Set<string>
     ...collectRawAuthRotationProfileIds(store),
     ...collectRawAuthRotationProfileIds(state),
   ]);
-}
-
-const CONFIG_AUTH_VALUE_FIELDS = {
-  api_key: ["key", "apiKey", "api_key"],
-  token: ["token"],
-} as const;
-
-function readConfigAuthAlias<T>(
-  raw: Record<string, unknown>,
-  fields: readonly string[],
-  read: (value: unknown) => T | null | undefined,
-): T | undefined {
-  for (const field of fields) {
-    const value = read(raw[field]);
-    if (value != null) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function inferLegacyConfigAuthProfileMode(
-  raw: Record<string, unknown>,
-): AuthProfileCredential["type"] | undefined {
-  const explicit = readNonEmptyString(raw.mode) ?? readNonEmptyString(raw.type);
-  if (explicit === "api_key" || explicit === "token" || explicit === "oauth") {
-    return explicit;
-  }
-  for (const mode of ["api_key", "token"] as const) {
-    const fields = CONFIG_AUTH_VALUE_FIELDS[mode];
-    if (
-      readConfigAuthAlias(raw, fields, readNonEmptyString) ||
-      readConfigAuthAlias(raw, [`${fields[0]}Ref`, ...fields], coerceSecretRef)
-    ) {
-      return mode;
-    }
-  }
-  if (
-    readNonEmptyString(raw.access) &&
-    readNonEmptyString(raw.refresh) &&
-    typeof raw.expires === "number"
-  ) {
-    return "oauth";
-  }
-  return undefined;
-}
-
-function coerceLegacyConfigAuthProfileStore(cfg: OpenClawConfig): AuthProfileStore | null {
-  const cfgRecord: Record<string, unknown> = cfg;
-  const auth = isRecord(cfgRecord.auth) ? cfgRecord.auth : null;
-  const profiles = auth && isRecord(auth.profiles) ? auth.profiles : null;
-  if (!profiles) {
-    return null;
-  }
-  const providerHints = collectLegacyConfigAuthProfileProviderHints(cfg);
-  const store: RawAuthProfileImportStore = { version: AUTH_STORE_VERSION, profiles: {} };
-  for (const [profileId, raw] of Object.entries(profiles)) {
-    if (!isRecord(raw)) {
-      continue;
-    }
-    const mode = inferLegacyConfigAuthProfileMode(raw);
-    if (!mode) {
-      continue;
-    }
-    const provider =
-      readNonEmptyString(raw.provider) ??
-      extractProviderPrefix(profileId, ":") ??
-      providerHints.get(profileId);
-    if (!provider || !isSafeLegacyProviderKey(provider)) {
-      continue;
-    }
-    const next: Record<string, unknown> = { ...raw, provider, mode };
-    if (mode === "api_key" || mode === "token") {
-      const fields = CONFIG_AUTH_VALUE_FIELDS[mode];
-      const valueField = fields[0];
-      const refField = `${valueField}Ref`;
-      const ref = readConfigAuthAlias(raw, [refField, ...fields], coerceSecretRef);
-      const value = readConfigAuthAlias(raw, fields, readNonEmptyString);
-      if (ref) {
-        next[refField] = ref;
-        for (const field of fields) {
-          delete next[field];
-        }
-      } else if (value) {
-        next[valueField] = value;
-        delete next[refField];
-      } else {
-        continue;
-      }
-    } else if (
-      !readNonEmptyString(raw.access) ||
-      !readNonEmptyString(raw.refresh) ||
-      typeof raw.expires !== "number"
-    ) {
-      continue;
-    }
-    store.profiles[profileId] = next;
-  }
-  const canonicalStore = coerceLegacyAuthProfileStore(store);
-  return canonicalStore && Object.keys(canonicalStore.profiles).length > 0 ? canonicalStore : null;
 }
 
 function isDefaultAgentCandidate(
@@ -637,6 +435,8 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
     return recoveryApproved;
   };
   const warnings: string[] = [];
+  const findings: HealthFinding[] = [];
+  const reportWarning = createAuthMigrationWarningRecorder(warnings, findings);
   const migratedProfileIds = new Set<string>();
   const blockedProfileIds = new Set<string>();
   const resume = () => {
@@ -644,8 +444,12 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       return resumePendingAuthProfileMigrationArchives(env, recoverCompleted);
     } catch (err) {
       params.openAICodexAuthProfileIdMap?.forEach((_target, id) => blockedProfileIds.add(id));
-      warnings.push(
+      reportWarning(
         `Could not finalize an interrupted auth profile archive; legacy sources were left for recovery: ${String(err)}`,
+        "archive-finalization",
+        "Keep the retained sources and archives. Check the reported filesystem error and access permissions, then rerun openclaw doctor --fix to finish archival. Verify current auth separately with openclaw models status.",
+        undefined,
+        "historical",
       );
       return [];
     }
@@ -673,6 +477,8 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
     migratedProfileIds,
     blockedProfileIds,
     warnings,
+    findings,
+    aliasFindings: [],
   };
   if (warnings.length > 0) {
     // A pending imported receipt owns its source until recovery succeeds.
@@ -729,6 +535,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   });
   result.changes.push(...repairedFields.changes);
   warnings.push(...repairedFields.warnings);
+  result.aliasFindings = repairedFields.findings;
   const openAIProfileIdMap = repairedFields.profileIdMap;
   for (const [from, to] of requestedProfileIdMap) {
     if (openAIProfileIdMap.get(from) !== to) {
@@ -889,14 +696,24 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
             finalizeAuthProfileMigrationSource(receipt, "archived-unparsed");
             return receipt.archivePath;
           });
-          result.warnings.push(
+          reportWarning(
             unresolvedSidecarWarning ??
-              `Archived unparseable auth profile input without import for ${shortenHomePath(candidate.authPath)} (${archived.map(shortenHomePath).join(", ")}). Restore the archive to its original path, correct the JSON, and rerun ${formatCliCommand("openclaw doctor --fix")}; alternatively re-authenticate with ${formatCliCommand("openclaw models auth login --provider <provider>")}.`,
+              `Archived unparseable auth profile input without import for ${shortenHomePath(candidate.authPath)} (${archived.map(shortenHomePath).join(", ")}).`,
+            unresolvedSidecarWarning ? "missing-oauth-sidecar" : "archived-unparsed",
+            unresolvedSidecarWarning
+              ? "Run openclaw models status to identify the unavailable profiles, then openclaw models auth login --provider <provider-id> for their configured providers. Keep the archived sources."
+              : "Keep the listed archives. Compare openclaw models status with your expected accounts; if credentials are missing, inspect the archive for manual recovery or sign in with openclaw models auth login --provider <provider-id>.",
+            candidate.authPath,
+            unresolvedSidecarWarning ? "fix-now" : "historical",
           );
           continue;
         }
-        result.warnings.push(
+        reportWarning(
           `Left auth profile JSON in place for ${shortenHomePath(candidate.authPath)} because no importable auth profiles or state were found.`,
+          "unimportable-source",
+          "Inspect the retained source and compare openclaw models status with the accounts you expect. If credentials are unavailable, use openclaw models auth login --provider <provider-id>; keep the source for manual recovery.",
+          candidate.authPath,
+          "recommended",
         );
         continue;
       }
@@ -1034,8 +851,11 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
           if (!(error instanceof AuthProfileMigrationVerificationError)) {
             throw error;
           }
-          result.warnings.push(
+          reportWarning(
             `Left auth profile JSON in place for ${shortenHomePath(candidate.authPath)} because SQLite verification failed${error.detail ? ` (${error.detail})` : ""}.`,
+            "verification-failed",
+            "Keep the original JSON and recovery copy. Inspect the reported SQLite verification error and filesystem permissions; rerun openclaw doctor --fix after correcting the cause. Do not delete the credential database.",
+            candidate.authPath,
           );
           continue;
         }
@@ -1128,7 +948,12 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         );
       }
       if (unresolvedSidecarWarning) {
-        result.warnings.push(unresolvedSidecarWarning);
+        reportWarning(
+          unresolvedSidecarWarning,
+          "missing-oauth-sidecar",
+          "Run openclaw models status to identify the unavailable profiles, then openclaw models auth login --provider <provider-id> for their configured providers. Keep the archived sources.",
+          candidate.authPath,
+        );
       }
       if (openAIProviderRepair !== null) {
         result.changes.push(
@@ -1145,8 +970,11 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       if (candidateProfileIds.size === 0) {
         openAIProfileIdMap.forEach((_target, id) => blockedProfileIds.add(id));
       }
-      result.warnings.push(
+      reportWarning(
         `Failed to migrate auth profile JSON for ${shortenHomePath(candidate.authPath)}: ${String(err)}`,
+        "import-failed",
+        `Preserve the source and recovery copy. Restore valid UTF-8 JSON from a verified backup if unreadable; otherwise correct the reported source or database access error, then rerun ${formatCliCommand("openclaw doctor --fix")}. Use openclaw models status to identify credentials still requiring login.`,
+        candidate.authPath,
       );
     } finally {
       if (!completed) {
@@ -1311,14 +1139,20 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
   changes: string[];
   warnings: string[];
   profileIdMap: ReadonlyMap<string, string>;
+  findings: HealthFinding[];
 }> {
   const env = params.env ?? process.env;
   const warnings: string[] = [];
+  const findings: HealthFinding[] = [];
+  const reportWarning = createAuthMigrationWarningRecorder(warnings, findings);
   let incompleteCensus = false;
   const warnUnavailable = (pathname: string) => {
     incompleteCensus = true;
-    warnings.push(
+    reportWarning(
       `Skipped auth-profile alias migration because ${shortenHomePath(pathname)} is unavailable.`,
+      "owner-unavailable",
+      "Check that the credential owner path exists and is readable by the OpenClaw user, then rerun openclaw doctor --fix. Keep existing credentials and archives.",
+      pathname,
     );
   };
   const candidates = listAuthProfileRepairCandidates(params.cfg, env, warnUnavailable);
@@ -1353,8 +1187,11 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
       (store.status === "readable" && (!isRecord(store.raw) || !isRecord(store.raw.profiles)))
     ) {
       incompleteCensus = true;
-      warnings.push(
+      reportWarning(
         `Skipped auth-profile alias migration because ${shortenHomePath(databasePath)} is unreadable or invalid.`,
+        "owner-invalid",
+        "Keep the database and recovery copy. Correct access permissions or recover the credential store from a verified backup before rerunning openclaw doctor --fix; do not delete the database.",
+        databasePath,
       );
       continue;
     }
@@ -1372,8 +1209,11 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
         (store.status !== "readable" || isReadableAuthAliasStore(store.raw)) &&
         canReadRotationState;
       if (!canRenameAliases) {
-        warnings.push(
+        reportWarning(
           `Skipped auth-profile alias renames because ${shortenHomePath(databasePath)} is unreadable or invalid; supported credential fields can still be repaired.`,
+          "alias-state-invalid",
+          "Keep the credential database and recovery copy. Inspect the invalid auth or rotation state and restore a verified backup if needed, then rerun openclaw doctor --fix.",
+          databasePath,
         );
       }
       const unreadableStateJson =
@@ -1391,8 +1231,11 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
       assertExistingDatabaseIdentity(databasePath, identity.key, identity.birthtime);
       if (state.status === "unreadable" && unreadableStateJson === undefined) {
         incompleteCensus = true;
-        warnings.push(
+        reportWarning(
           `Skipped auth-profile field repair because ${shortenHomePath(databasePath)} has no stable rotation-state source.`,
+          "rotation-source-unavailable",
+          "Keep the database and recovery copy. Restore readable rotation state from a verified backup or correct the reported access problem before rerunning openclaw doctor --fix.",
+          databasePath,
         );
         continue;
       }
@@ -1410,8 +1253,10 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
   }
   const profileIdMap = new Map(incompleteCensus ? [] : params.profileIdMap);
   if (incompleteCensus && params.profileIdMap.size > 0) {
-    warnings.push(
+    reportWarning(
       "Deferred auth profile aliases because an owner could not be inspected; repair that owner and rerun Doctor.",
+      "owner-inspection-incomplete",
+      "Resolve the credential-owner path or database finding shown above, then rerun openclaw doctor --fix. Keep all account credentials until every owner can be inspected.",
     );
   }
   for (const target of planned) {
@@ -1422,8 +1267,11 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
     for (const [from, to] of profileIdMap) {
       if (!target.canReadRotationState || references.has(from) || references.has(to)) {
         profileIdMap.delete(from);
-        warnings.push(
+        reportWarning(
           `Deferred auth profile alias ${from} because ${shortenHomePath(target.databasePath)} cannot safely rename its credential owner.`,
+          "alias-owner-unsafe",
+          "Keep this profile and its credential owner. Repair the reported unreadable auth or rotation state from a verified backup, then rerun openclaw doctor --fix.",
+          from,
         );
       }
     }
@@ -1472,8 +1320,11 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
     }
   }
   for (const profileId of unresolvedProfileIds) {
-    warnings.push(
+    reportWarning(
       `Kept auth profile ${profileId} unchanged because its provider realm or identity is unresolved.`,
+      "identity-unresolved",
+      "Compare this profile and its configured provider realm with openclaw models status. Correct the provider/account selection before retrying openclaw doctor --fix; do not overwrite another account to force migration.",
+      profileId,
     );
   }
   for (const target of planned) {
@@ -1485,15 +1336,24 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
         (occupied.has(from) || recovery.recovered.get(from) !== to)
       ) {
         profileIdMap.delete(from);
-        warnings.push(`Deferred stale auth profile alias ${from}; the target is occupied.`);
+        reportWarning(
+          `Deferred stale auth profile alias ${from}; the target is occupied.`,
+          "alias-target-occupied",
+          "Compare the source and target accounts with openclaw models status; preserve both credential profiles and choose the intended account in auth.profiles/auth.order before rerunning openclaw doctor --fix.",
+          from,
+        );
       }
     }
   }
   for (const from of profileIdMap.keys()) {
     if (recovery.blocked.has(from)) {
       profileIdMap.delete(from);
-      warnings.push(
+      reportWarning(
         `Kept auth profile ${from} unchanged because its recorded account changed; reconcile the migration before retrying.`,
+        "recorded-account-changed",
+        "Compare the retained migration archive with the current account shown by openclaw models status. Preserve both accounts and recovery data; reconcile the intended account and its config references before rerunning openclaw doctor --fix.",
+        from,
+        "historical",
       );
     }
   }
@@ -1512,7 +1372,7 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
       !isDeepStrictEqual(target.state, target.migratedState),
   );
   if (changed.length === 0 && migrationMap.size === 0) {
-    return { changes: [], warnings, profileIdMap };
+    return { changes: [], warnings, findings, profileIdMap };
   }
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   const assertTargetCurrent = (
@@ -1669,7 +1529,7 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
   if (changes.length > 0) {
     clearRuntimeAuthProfileStoreSnapshots();
   }
-  return { changes, warnings, profileIdMap };
+  return { changes, warnings, findings, profileIdMap };
 }
 
 function recoverArchivedAuthProfileMappings(params: {
@@ -1734,7 +1594,7 @@ function recoverArchivedAuthProfileMappings(params: {
         ) {
           continue;
         }
-        const archivedStore = JSON.parse(sourceBytes.toString("utf8")) as unknown;
+        const archivedStore = parseAuthProfileMigrationSource({ sourceBytes, sourcePath });
         const sourceStore =
           coerceLegacyAuthProfileStore(archivedStore) ??
           coerceLegacyFlatAuthProfileStore(archivedStore);

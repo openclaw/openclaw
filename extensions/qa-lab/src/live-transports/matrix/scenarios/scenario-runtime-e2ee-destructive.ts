@@ -808,9 +808,6 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
         waitAccountId: accountId,
       },
     );
-    await context.waitGatewayAccountReady(accountId, {
-      timeoutMs: context.timeoutMs,
-    });
     driver = await createMatrixQaE2eeActorClient(
       context,
       "matrix-e2ee-sync-state-loss-crypto-intact",

@@ -4,6 +4,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { writeToolCall } from "../../../src/gateway/gateway-provider-fixture.test-support.ts";
@@ -15,7 +16,12 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
+import {
+  installControlUiE2ePageDiagnosticRing,
+  recordControlUiE2eFailureFacts,
+} from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -217,6 +223,7 @@ suite.define(() => {
         viewport: { width: 1440, height: 1000 },
       },
       async ({ page }) => {
+        const pageEvents = installControlUiE2ePageDiagnosticRing(page);
         await pairControlUiPage(page, cli);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await waitForControlUiGatewayReady(page);
@@ -257,8 +264,59 @@ suite.define(() => {
         await panel
           .locator("openclaw-chat-html-preview [role=status]")
           .waitFor({ state: "hidden" });
-        await document.getByRole("button", { name: "Count", exact: true }).click();
-        await expect.poll(() => document.locator("output").textContent()).toBe("1");
+        // Inner-frame readiness does not settle the enclosing panel's layout transition.
+        await page
+          .locator('[data-region="side"]')
+          .filter({ has: panel })
+          .evaluate(finishElementAnimations);
+        const previewFacts = async (phase: "before" | "after") => {
+          const [content, frameBounds] = await Promise.all([
+            document.locator("body").evaluate((body) => {
+              const button = body.querySelector("button");
+              const buttonBounds = button?.getBoundingClientRect();
+              const output = body.querySelector("output");
+              return {
+                timeOrigin: performance.timeOrigin,
+                clickHandlerPresent: typeof button?.onclick === "function",
+                output: output ? Number(output.textContent) : null,
+                buttonX: buttonBounds?.x ?? null,
+                buttonY: buttonBounds?.y ?? null,
+                buttonWidth: buttonBounds?.width ?? null,
+                buttonHeight: buttonBounds?.height ?? null,
+              };
+            }),
+            frame.boundingBox(),
+          ]);
+          const facts = {
+            ...content,
+            frameX: frameBounds?.x ?? null,
+            frameY: frameBounds?.y ?? null,
+            frameWidth: frameBounds?.width ?? null,
+            frameHeight: frameBounds?.height ?? null,
+          };
+          return Object.fromEntries(
+            Object.entries(facts).map(([key, value]) => [`htmlPreview_${phase}_${key}`, value]),
+          );
+        };
+        // Retain document identity across the real click; never replay it for diagnostics.
+        const beforeClick = withTimeout(previewFacts("before"), 1_000).catch(() => ({}));
+        try {
+          await document.getByRole("button", { name: "Count", exact: true }).click();
+          await expect.poll(() => document.locator("output").textContent()).toBe("1");
+        } catch (error) {
+          recordControlUiE2eFailureFacts(page, {
+            ...(await beforeClick),
+            htmlPreview_pageErrors: pageEvents.filter((event) => event.source === "pageerror")
+              .length,
+            htmlPreview_consoleErrors: pageEvents.filter(
+              (event) => event.source === "console" && event.details.type === "error",
+            ).length,
+          });
+          await withTimeout(previewFacts("after"), 1_000)
+            .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+            .catch(() => undefined);
+          throw error;
+        }
         expect(
           await document.locator("body").evaluate(() => {
             let topDenied = false;

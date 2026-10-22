@@ -2,12 +2,12 @@ import {
   readClawHubRiskAcknowledgementRequiredError,
   readClawReviewRequiredError,
 } from "@openclaw/gateway-protocol";
-import { createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
 import "../../components/file-preview-modal-registration.ts";
-import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
+import { registerClawsEnglish } from "../../i18n/locales/en-claws.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -35,7 +35,7 @@ import {
 import type { ClawsCatalogViewProps } from "./claws-catalog-view-props.ts";
 import { ClawsCatalogView } from "./claws-catalog-view.tsx";
 
-registerEnglishCatalog(registerAgentsHomeEnglish);
+registerEnglishCatalog(registerClawsEnglish);
 
 type ClawsDialogProps = {
   onClose?: () => void;
@@ -539,7 +539,7 @@ export function ClawsCatalogDialog(props: ClawsDialogProps) {
     invalidateRequests: (change) => model.invalidateRequests(change),
     ensureInitialData: () => model.ensureInitialData(),
   });
-  onCleanup(() => model.dispose());
+  onSettled(() => () => model.dispose());
   const detail = createMemo(() => detailRequest() ?? null);
   const view = createMemo(() => {
     revision();

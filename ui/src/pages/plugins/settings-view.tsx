@@ -46,8 +46,9 @@ import {
   type PluginSettingsEditorProps,
   type PluginSettingsField,
 } from "./settings-editor.tsx";
-import { renderPluginLifecycle } from "./settings-lifecycle.tsx";
+import { PluginLifecycle } from "./settings-lifecycle.tsx";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
+import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
 import type { PluginToolPreview } from "./tool-preview.tsx";
 export type PluginSettingsTab = "installed" | "advanced";
 type SharedProps = Omit<
@@ -253,13 +254,9 @@ function AdvancedSettings(options: InventoryProps): JSX.Element {
       <Show
         when={config()}
         fallback={
-          options.configError ? (
-            renderRetryError(options.configError, options.onConfigReadRetry)
-          ) : options.configSchemaLoading || !options.configValue ? (
-            <SettingsLoadingSkeleton rows={4} carapace />
-          ) : (
+          !options.configError && !options.configSchemaLoading && options.configValue ? (
             <SettingsEmpty message={t("pluginsPage.schemaUnavailable")} carapace />
-          )
+          ) : null
         }
       >
         {(current) => (
@@ -279,12 +276,17 @@ function AdvancedSettings(options: InventoryProps): JSX.Element {
                 onRemove: options.onConfigRemove,
               }}
             />
-            {options.configError
-              ? renderRetryError(options.configError, options.onConfigWriteRetry)
-              : null}
           </>
         )}
       </Show>
+      <PluginSettingsReadStatus
+        model={{ ...options, configSchema: options.advancedSchema }}
+        loading={
+          !options.configError && !config() && (options.configSchemaLoading || !options.configValue)
+        }
+        rows={4}
+        renderError={renderRetryError}
+      />
     </Show>
   );
 }
@@ -361,7 +363,6 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
         <div
           id="plugin-settings-panel"
           role="tabpanel"
-          tabindex="0"
           aria-labelledby={`plugin-settings-tab-${props.tab}`}
         >
           {body}
@@ -535,14 +536,14 @@ function PluginOverview(props: DetailProps): JSX.Element {
         titleAction={
           <Show
             when={Boolean(props.installProgress)}
-            fallback={renderPluginLifecycle(
-              {
-                ...props,
-                settingsHref: props.settingsHref ?? "#configuration",
-                onSettings: () => props.onTabChange("configuration"),
-              },
-              plugin(),
-            )}
+            fallback={
+              <PluginLifecycle
+                {...props}
+                settingsHref={props.settingsHref ?? "#configuration"}
+                onSettings={() => props.onTabChange("configuration")}
+                plugin={plugin()}
+              />
+            }
           >
             <PluginInstallAction
               registerInstallAction={props.registerInstallAction}

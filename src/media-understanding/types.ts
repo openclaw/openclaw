@@ -202,6 +202,10 @@ export type MediaUnderstandingProviderSyntheticAuthResult = {
 export type MediaUnderstandingProvider = {
   id: string;
   capabilities?: MediaUnderstandingCapability[];
+  /** Add image capability from this request's configured model inputs, not registration config. */
+  inheritConfiguredImageCapability?: boolean;
+  /** Narrow capability-less shared entries; undefined preserves all effective capabilities. */
+  sharedEntryCapabilities?: MediaUnderstandingCapability[];
   defaultModels?: Partial<Record<MediaUnderstandingCapability, string>>;
   autoPriority?: Partial<Record<MediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;

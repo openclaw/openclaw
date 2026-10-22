@@ -157,7 +157,7 @@ async function runZaiApiKeyAuth(
   const modelIdOverride = detected?.modelId;
   const nextEndpoint = detected?.endpoint ?? endpoint ?? (await promptForZaiEndpoint(ctx));
   const preset = {
-    ...(nextEndpoint ? { endpoint: nextEndpoint } : {}),
+    endpoint: nextEndpoint,
     ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
   };
   return {

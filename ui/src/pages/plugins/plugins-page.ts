@@ -51,6 +51,7 @@ export function createPluginsPage(options: {
   surface: () => "discovery" | "settings";
 }) {
   const context = options.context;
+  const runtime = context.runtimeConfig;
   let active = true;
   const targets = createPluginPageTargets();
   let routeData: PluginsRouteData | undefined;
@@ -83,6 +84,7 @@ export function createPluginsPage(options: {
   const help = createPluginHelp(context);
   let pluginConfigEditPending = false;
   let routeDataConsumed = false;
+  const [catalog, setCatalog] = createSignal<Promise<void> | null>(null, { ownedWrite: true });
   let pluginGeneration: number | undefined;
   let adminAccess: boolean | undefined;
   let readAccess: boolean | undefined;
@@ -128,7 +130,6 @@ export function createPluginsPage(options: {
       return false;
     }
     pluginConfigEditPending = true;
-    const runtime = context.runtimeConfig;
     if (value === undefined) {
       runtime.removeFormValue(path);
     } else {
@@ -152,7 +153,6 @@ export function createPluginsPage(options: {
     if (!detail || !descriptor) {
       return undefined;
     }
-    const runtime = context.runtimeConfig;
     return {
       field,
       descriptor,
@@ -161,7 +161,10 @@ export function createPluginsPage(options: {
         baseHash: runtime.state.configSnapshot?.hash ?? null,
         gateway,
         canInspect: hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
-        saveError: runtime.state.lastError,
+        // Awaited writes and discards can settle before the presentation catches up.
+        get saveError() {
+          return runtime.state.lastError;
+        },
         onDiscard: () => runtime.discardFormValue(field.path),
         onCommit: async (path, value) => {
           const previous = write;
@@ -173,7 +176,6 @@ export function createPluginsPage(options: {
       },
     };
   };
-  const settings = { patch, resolveCredential };
 
   const consent = createPluginsConsent({
     gateway,
@@ -184,9 +186,7 @@ export function createPluginsPage(options: {
     setBusy,
     setMessage,
     getMessages: () => state.messages,
-    clearPageNotice: () => {
-      setState({ pageNotice: null });
-    },
+    clearPageNotice: () => setState({ pageNotice: null }),
     closeDetails: skillPreview.close,
     applyMutationResult,
     refreshCatalogAfterMutation: refreshCatalog,
@@ -206,11 +206,10 @@ export function createPluginsPage(options: {
   onCleanup(catalogTask.cancel);
 
   onSettled(() => {
-    const runtimeConfig = context.runtimeConfig;
-    let configAutoSaveStatus = runtimeConfig.state.configAutoSaveStatus;
+    let configAutoSaveStatus = runtime.state.configAutoSaveStatus;
     // Preserve saving-to-saved receipts so plugin edits refresh the catalog even within one render turn.
-    return runtimeConfig.subscribe(() => {
-      const nextStatus = runtimeConfig.state.configAutoSaveStatus;
+    return runtime.subscribe(() => {
+      const nextStatus = runtime.state.configAutoSaveStatus;
       const completedSave = configAutoSaveStatus === "saving" && nextStatus === "saved";
       configAutoSaveStatus = nextStatus;
       publish();
@@ -422,6 +421,7 @@ export function createPluginsPage(options: {
   function invalidateRequests(invalidateCatalog: boolean, retirePresentation = true) {
     mcpLogin.reset();
     if (invalidateCatalog) {
+      void setCatalog(null);
       catalogTask.reset();
       discovery.invalidate();
     }
@@ -517,7 +517,9 @@ export function createPluginsPage(options: {
       return;
     }
     setState({ error: null });
-    await catalogTask.run([client]);
+    const promise = catalogTask.run([client]);
+    void setCatalog(promise);
+    await promise;
   }
 
   async function refreshDiscovery(): Promise<void> {
@@ -550,8 +552,7 @@ export function createPluginsPage(options: {
   }
 
   function canEditConfig(): boolean {
-    const runtimeConfig = context.runtimeConfig;
-    return accessBlockedReason(runtimeConfig.canSet, runtimeConfig.state.connected) === null;
+    return accessBlockedReason(runtime.canSet, runtime.state.connected) === null;
   }
 
   function setBusy(key: string, value: PluginMutationAction | null) {
@@ -718,7 +719,7 @@ export function createPluginsPage(options: {
     skillPreview,
     mcpLogin,
     discovery,
-    settings,
+    settings: { patch, resolveCredential },
     consent,
     ...targets,
     settingsTab,
@@ -735,6 +736,8 @@ export function createPluginsPage(options: {
       revision();
       return loading();
     },
+    routeLoading: () => gateway.connected && !routeDataConsumed,
+    catalogRead: catalog,
     setState,
     refreshCatalog,
     selectHubTab,

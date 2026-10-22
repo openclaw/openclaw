@@ -84,6 +84,10 @@ function failedManualScenarios(schedule?: string): Scenario[] {
   }));
 }
 
+function manual(operation: string, fields: Scenario = {}): Scenario {
+  return { event: "workflow_dispatch", operation, ...fields };
+}
+
 function loadWorkflow(platform: string) {
   const workflow = parse(
     fs.readFileSync(`.github/workflows/${platform}-store-release.yml`, "utf8"),
@@ -178,151 +182,102 @@ function assertUpload(
   ]);
 }
 
-it("routes daily TestFlight and qualified weekly/manual App Store releases", () => {
-  const workflow = loadWorkflow("ios");
-  const upload = expectDefined(
-    workflow.jobs.release.steps.find((step) => step.name === "Prepare and upload iOS release"),
-    "iOS upload step",
-  );
-  const uploadEnvironment = expectDefined(upload.env, "iOS upload environment");
-  const group = expectDefined(
-    uploadEnvironment.OPENCLAW_TESTFLIGHT_GROUP_ID,
-    "TestFlight group expression",
-  );
-
-  const scenarios: Scenario[] = [
-    ...scheduledScenarios("app-store"),
-    {
-      event: "workflow_dispatch",
-      operation: "testflight",
-      enabled: "false",
-      destination: "testflight",
-    },
-    {
-      event: "workflow_dispatch",
-      operation: "release",
-      enabled: "false",
-      destination: "app-store",
-      qualify: true,
-    },
-    ...failedManualScenarios(),
-    ...["schedule", "workflow_dispatch"].map((event) => ({
-      event,
-      operation: event === "schedule" ? "" : "testflight",
-      cancelled: true,
-    })),
-    {
-      event: "workflow_dispatch",
-      operation: "screenshots",
-      screenshots: true,
-      ref: "refs/heads/candidate",
-    },
-    {
-      event: "workflow_dispatch",
-      operation: "testflight",
-      ref: "refs/heads/candidate",
-    },
-    { repository: "example/fork" },
-    { event: "push", operation: "release" },
-  ];
-  for (const scenario of scenarios) {
-    const evaluate = scenarioEvaluator(
-      scenario,
-      {
-        IOS_TESTFLIGHT_ENABLED: scenario.enabled ?? "true",
-        OPENCLAW_TESTFLIGHT_GROUP_ID: "external-group-id",
-      },
-      true,
-    );
-    assertAdmission(workflow, scenario, evaluate);
-    expect(Boolean(evaluate(workflow.jobs.screenshots.if))).toBe(scenario.screenshots ?? false);
-    if (!scenario.destination) {
-      continue;
-    }
-    expect(evaluate(workflow["run-name"].slice("iOS ".length))).toBe(
-      scenario.destination === "testflight"
-        ? "TestFlight distribution"
-        : (scenario.event ?? "schedule") === "schedule"
-          ? "Store release (weekly)"
-          : "Store release",
-    );
-    expect(evaluate(workflow.jobs.release.environment)).toBe(
-      scenario.destination === "testflight" ? "ios-testflight" : "ios-store-release",
-    );
-    expect(evaluate(group)).toBe("external-group-id");
-    assertUpload(upload, "ios", expectDefined(scenario.destination, "iOS destination"), evaluate);
-  }
-});
-
-it("routes Android weekly/manual store releases through qualification and screenshot tooling", () => {
-  const workflow = loadWorkflow("android");
-  expect(workflow.on.workflow_dispatch.inputs.operation).toMatchObject({
-    default: "release",
-    options: ["release", "internal"],
-  });
+it.each(["ios", "android"])("routes %s daily and qualified weekly/manual releases", (platform) => {
+  const ios = platform === "ios";
+  const daily = ios ? "testflight" : "internal";
+  const store = ios ? "app-store" : "play-store";
+  const workflow = loadWorkflow(platform);
   const release = workflow.jobs.release;
   const findStep = (name: string) =>
     expectDefined(
       release.steps.find((step) => step.name === name),
       name,
     );
-  const upload = findStep("Prepare and upload Android release");
-  const tooling = findStep("Prepare trusted Linux Android tooling");
-  const diagnostics = findStep("Retain screenshot diagnostics");
-  const emulators = expectDefined(
-    findStep("Setup Android toolchain").with?.["install-screenshot-emulators"],
-    "screenshot emulator selection",
-  );
+  const upload = findStep(`Prepare and upload ${ios ? "iOS" : "Android"} release`);
+  if (!ios) {
+    expect(workflow.on.workflow_dispatch.inputs.operation).toMatchObject({
+      default: "release",
+      options: ["release", "internal"],
+    });
+  }
   const scenarios: Scenario[] = [
-    ...scheduledScenarios("play-store"),
-    ...failedManualScenarios("0 11 * * 1"),
-    {
-      schedule: "0 11 * * 1",
-      qualify: true,
-      cancelled: true,
-    },
-    {
-      event: "workflow_dispatch",
-      operation: "internal",
+    ...scheduledScenarios(store),
+    manual(daily, { enabled: "false", destination: daily }),
+    manual(ios ? "release" : workflow.on.workflow_dispatch.inputs.operation.default, {
       enabled: "false",
-      destination: "internal",
-    },
-    {
-      event: "workflow_dispatch",
-      operation: workflow.on.workflow_dispatch.inputs.operation.default,
-      enabled: "false",
-      destination: "play-store",
+      destination: store,
       qualify: true,
-    },
-    { event: "workflow_dispatch", operation: "unknown" },
-    { event: "push", operation: "internal" },
-    ...["schedule", "workflow_dispatch"].flatMap((event) => [
-      { event, operation: "internal", ref: "refs/heads/candidate" },
-      { event, operation: "internal", repository: "example/fork" },
-    ]),
+    }),
+    ...failedManualScenarios(ios ? undefined : "0 11 * * 1"),
+    ...(ios
+      ? [
+          ...["schedule", "workflow_dispatch"].map((event) => ({
+            event,
+            operation: event === "schedule" ? "" : daily,
+            cancelled: true,
+          })),
+          manual("screenshots", { screenshots: true, ref: "refs/heads/candidate" }),
+          manual(daily, { ref: "refs/heads/candidate" }),
+          { repository: "example/fork" },
+        ]
+      : [
+          { schedule: "0 11 * * 1", qualify: true, cancelled: true },
+          manual("unknown"),
+          ...["schedule", "workflow_dispatch"].flatMap((event) => [
+            { event, operation: daily, ref: "refs/heads/candidate" },
+            { event, operation: daily, repository: "example/fork" },
+          ]),
+        ]),
+    { event: "push", operation: ios ? "release" : daily },
   ];
   for (const scenario of scenarios) {
-    const evaluate = scenarioEvaluator(scenario, {
-      ANDROID_INTERNAL_ENABLED: scenario.enabled ?? "true",
-    });
+    const evaluate = scenarioEvaluator(
+      scenario,
+      {
+        [ios ? "IOS_TESTFLIGHT_ENABLED" : "ANDROID_INTERNAL_ENABLED"]: scenario.enabled ?? "true",
+        OPENCLAW_TESTFLIGHT_GROUP_ID: "external-group-id",
+      },
+      ios,
+    );
     assertAdmission(workflow, scenario, evaluate);
+    if (ios) {
+      expect(Boolean(evaluate(workflow.jobs.screenshots.if))).toBe(scenario.screenshots ?? false);
+    }
     if (!scenario.destination) {
       continue;
     }
-    const storeRelease = scenario.destination === "play-store";
-    expect(evaluate(workflow["run-name"].slice("Android ".length))).toBe(
+    const storeRelease = scenario.destination === store;
+    expect(evaluate(workflow["run-name"].slice(ios ? 4 : 8))).toBe(
       !storeRelease
-        ? "Internal testing distribution"
+        ? ios
+          ? "TestFlight distribution"
+          : "Internal testing distribution"
         : (scenario.event ?? "schedule") === "schedule"
           ? "Store release (weekly)"
           : "Store release",
     );
     expect(evaluate(release.environment)).toBe(
-      storeRelease ? "android-store-release" : "android-internal",
+      storeRelease ? `${platform}-store-release` : `${platform}-${daily}`,
     );
-    expect(Boolean(evaluate(tooling.if ?? "true"))).toBe(storeRelease);
-    expect(Boolean(evaluate(diagnostics.if ?? "true"))).toBe(storeRelease);
-    expect(evaluate(String(emulators))).toBe(String(storeRelease));
-    assertUpload(upload, "android", scenario.destination, evaluate);
+    if (ios) {
+      const group = expectDefined(
+        upload.env?.OPENCLAW_TESTFLIGHT_GROUP_ID,
+        "TestFlight group expression",
+      );
+      expect(evaluate(group)).toBe("external-group-id");
+    } else {
+      for (const name of [
+        "Prepare trusted Linux Android tooling",
+        "Retain screenshot diagnostics",
+      ]) {
+        expect(Boolean(evaluate(findStep(name).if ?? "true"))).toBe(storeRelease);
+      }
+      const emulators = expectDefined(
+        findStep("Setup Android toolchain").with?.["install-screenshot-emulators"],
+        "screenshot emulator selection",
+      );
+      expect(evaluate(String(emulators))).toBe(String(storeRelease));
+    }
+    assertUpload(upload, platform, scenario.destination, evaluate);
   }
 });

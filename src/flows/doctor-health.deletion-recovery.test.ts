@@ -20,7 +20,8 @@ import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
-const { mocks, createDoctorRuntime } = await import("./doctor-health.test-support.js");
+const { mocks, createDoctorRuntime, createDoctorConfig } =
+  await import("./doctor-health.test-support.js");
 const repairOptions = { repair: true, nonInteractive: true };
 function execState(sql: string, env: NodeJS.ProcessEnv) {
   runOpenClawStateWriteTransaction((database) => database.db.exec(sql), { env });
@@ -75,10 +76,7 @@ it("keeps a newly quarantined pending deletion out of update reclamation", async
   await withOpenClawTestState(
     { scenario: "external-service", env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" } },
     async (state) => {
-      const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
-        gateway: { mode: "local" },
-      };
+      const cfg = createDoctorConfig(state);
       await state.writeConfig(cfg);
       const agentPath = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).path;
       await closeOpenClawAgentDatabasesAsync(state.stateDir);
@@ -108,7 +106,7 @@ it("keeps a newly quarantined pending deletion out of update reclamation", async
       const bytes = fs.readFileSync(agentPath);
       const inode = fs.statSync(agentPath).ino;
       mocks.config.mockReturnValue(cfg);
-      mocks.packageRoot.mockReturnValue(undefined);
+      mocks.packageRoot.mockReturnValue(process.cwd());
       mocks.runContributions.mockReset();
       const runtime = createDoctorRuntime();
 

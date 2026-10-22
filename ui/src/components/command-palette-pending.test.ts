@@ -17,30 +17,13 @@ import {
   setInputValue,
   pressKey,
   registerCommandPaletteTestHooks,
+  transcriptResult,
 } from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
 
-function transcriptResult(roster: SessionsListResult, snippet: string): SessionsSearchResult {
-  const sessionKey = roster.sessions[0]!.key;
-  return {
-    sessions: roster.sessions,
-    results: [
-      {
-        sessionKey,
-        sessionId: sessionKey.split(":").at(-1)!,
-        messageId: "message",
-        role: "assistant",
-        timestamp: 1,
-        score: 1,
-        snippet,
-      },
-    ],
-  };
-}
+registerCommandPaletteTestHooks({ mockScroll: false });
 
 describe("CommandPalette pending searches", () => {
-  registerCommandPaletteTestHooks({ mockScroll: false });
-
   it.each([false, true])(
     "debounces input until the final key or IME commit: %s",
     async (composing) => {
@@ -232,6 +215,9 @@ describe("CommandPalette pending searches", () => {
     const list = vi.fn(async () => null);
     const { palette, query } = await mountSearch({ request }, list);
     palette.onSelectSession = undefined;
+    await enterQuery(palette, "");
+    expect(findPaletteOption(palette, "Plugins")).toBeDefined();
+    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
     await enterQuery(palette, "zzcatalog");
     expect(palette.textContent).not.toContain("Searching commands");
     await vi.advanceTimersByTimeAsync(200);
@@ -252,6 +238,33 @@ describe("CommandPalette pending searches", () => {
     expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
     expect(request).toHaveBeenCalledOnce();
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it("keeps static commands visible when reopened over a pending catalog", async () => {
+    const catalog = createDeferred<{ models: never[] }>();
+    const { palette, query } = await mountSearch(
+      { request: () => catalog.promise },
+      async () => null,
+    );
+    await searchPalette(palette, "plugins");
+    palette.togglePalette();
+    await palette.updateComplete;
+    palette.openPalette({
+      value: "plugins",
+      selectionStart: 7,
+      selectionEnd: 7,
+      selectionDirection: "none",
+    });
+    await palette.updateComplete;
+    try {
+      expect(paletteInput(palette).value).toBe("plugins");
+      expect(findPaletteOption(palette, "Plugins")).toBeDefined();
+      expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
+    } finally {
+      catalog.resolve({ models: [] });
+    }
+    await settlePalette(palette);
+    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
   });
 
   it("waits for the transcript source after metadata settles", async () => {
@@ -384,4 +397,122 @@ describe("CommandPalette pending searches", () => {
       expect(findPaletteOption(palette, "zzfixtureunique stale")).toBeUndefined();
     },
   );
+});
+
+describe("CommandPalette session search", () => {
+  it.each([
+    {
+      name: "punctuation-normalized title",
+      query: "per session communi",
+      title: "Per-session communication controls in UI",
+      sameSession: true,
+    },
+    { name: "transcript-only match", serverMatch: false },
+    { name: "server metadata match", serverMatch: true },
+  ])("keeps metadata and transcript results selectable: $name", async (scenario) => {
+    const query = scenario.query ?? "needle";
+    const title = scenario.title ?? "needle";
+    const metadata = createSessionResult("agent:main:metadata", title);
+    const contextOnly = scenario.sameSession
+      ? metadata
+      : createSessionResult("agent:main:context", "Unrelated title");
+    const roster = {
+      ...metadata,
+      count: 2,
+      totalCount: 2,
+      sessions: [...metadata.sessions, ...contextOnly.sessions],
+    };
+    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
+      options?.search && !scenario.serverMatch ? metadata : roster,
+    );
+    const searchResult: SessionsSearchResult = {
+      ...transcriptResult(contextOnly, "The needle appears only in the conversation body."),
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      return searchResult;
+    });
+    const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
+    await searchPalette(palette, query);
+    expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    const items = [...palette.querySelectorAll<HTMLElement>(".cmd-palette__item")];
+    expect(items).toHaveLength(scenario.sameSession ? 1 : 2);
+    expect(items[0]?.textContent).toContain(title);
+    if (scenario.sameSession) {
+      const buttons = [...palette.querySelectorAll("button")];
+      expect(buttons.some((button) => button.textContent?.match(/Sessions\s*1/u))).toBe(true);
+      expect(buttons.some((button) => button.textContent?.match(/Messages\s*0/u))).toBe(true);
+    } else {
+      expect(items[1]?.textContent).toContain("Unrelated title");
+      expect(items[1]?.textContent).toContain("needle appears only in the conversation body");
+    }
+    expect(palette.textContent).not.toContain("Search notices");
+    expect(palette.textContent).not.toContain("may be incomplete");
+    expect(palette.textContent).not.toContain("Chat search failed");
+    findPaletteOption(palette, title)!.click();
+    expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:metadata");
+  });
+});
+
+describe("CommandPalette metadata publications", () => {
+  it("loads catalog rows and refreshes skills without reloading unchanged models", async () => {
+    let skillName = "Needle old skill";
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.status") {
+        return { skills: [{ skillKey: "needle", name: skillName, description: "Weather" }] };
+      }
+      if (method === "models.list") {
+        return { models: [{ provider: "fixture", id: "needle", name: "Needle model" }] };
+      }
+      if (method === "plugins.list") {
+        return { plugins: [{ id: "needle-plugin", name: "Needle plugin", description: "Tools" }] };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "needle-job", name: "Needle automation" }] };
+      }
+      return { results: [], sessions: [] };
+    });
+    const { palette, emit, context } = await mountSearch({
+      methods: ["skills.status", "models.list", "plugins.list", "cron.list"],
+      request,
+    });
+    context.agents.ensureList = async () => ({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "main", name: "Needle agent" }],
+    });
+    await searchPalette(palette, "needle");
+    expect(findPaletteOption(palette, "Needle old skill")?.textContent).toContain("Weather");
+    expect(findPaletteOption(palette, "Needle plugin")?.textContent).toContain("Tools");
+    expect(
+      findPaletteOption(palette, "Needle plugin")?.querySelector(".cmd-palette__plugin-icon"),
+    ).not.toBeNull();
+    expect(findPaletteOption(palette, "Needle automation")).toBeDefined();
+    expect(findPaletteOption(palette, "Needle agent")).toBeDefined();
+    expect(findPaletteOption(palette, "Needle model")).toBeDefined();
+    expect(request).toHaveBeenCalledWith(
+      "cron.list",
+      expect.objectContaining({
+        includeDisabled: true,
+        limit: 200,
+        offset: 0,
+        compact: true,
+      }),
+    );
+    expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith("plugins.list", {});
+
+    skillName = "Needle new skill";
+    emit("chat.metadata.changed", { modelCatalogChanged: false, authChanged: false });
+    await settlePalette(palette, 0);
+
+    expect(findPaletteOption(palette, "Needle new skill")).toBeDefined();
+    expect(findPaletteOption(palette, "Needle old skill")).toBeUndefined();
+    expect(findPaletteOption(palette, "Needle model")).toBeDefined();
+    expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(2);
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+  });
 });

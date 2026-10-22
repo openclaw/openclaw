@@ -19,28 +19,28 @@ const target = (slug = "weather", ownerHandle = "alice", version = "1.2.3"): Tar
   ownerHandle,
   version,
 });
-const verification = ({ slug, ownerHandle, version }: Target) => ({
+const pass = {
   ok: true,
   decision: "pass",
   reasons: [],
+  security: { status: "clean", passed: true },
+};
+const verification = ({ slug, ownerHandle, version }: Target) => ({
+  ...pass,
   slug,
   publisherHandle: ownerHandle,
   version,
   skill: null,
   publisher: null,
-  security: { status: "clean", passed: true },
 });
 const verdict = ({ slug, ownerHandle, version }: Target, overrides = {}) => ({
-  ok: true,
-  decision: "pass",
-  reasons: [],
+  ...pass,
   requestedSlug: slug,
   requestedOwnerHandle: ownerHandle,
   requestedVersion: version,
   slug,
   version,
   publisherHandle: ownerHandle,
-  security: { status: "clean", passed: true },
   ...overrides,
 });
 function missingSkills({ items }: { items: Array<{ slug: string; version: string }> }) {
@@ -90,15 +90,10 @@ describe("fetchExactClawHubSkillSecurityVerdicts", () => {
       timeoutMs: undefined,
       token: undefined,
     };
-    expect(mocks.fetchClawHubSkillSecurityVerdicts).toHaveBeenCalledTimes(2);
-    expect(mocks.fetchClawHubSkillSecurityVerdicts).toHaveBeenNthCalledWith(1, {
-      ...options,
-      items: [target()],
-    });
-    expect(mocks.fetchClawHubSkillSecurityVerdicts).toHaveBeenNthCalledWith(2, {
-      ...options,
-      items: [target("weather", "bob")],
-    });
+    expect(mocks.fetchClawHubSkillSecurityVerdicts.mock.calls).toEqual([
+      [{ ...options, items: [target()] }],
+      [{ ...options, items: [target("weather", "bob")] }],
+    ]);
     expect(mocks.fetchClawHubSkillVerification).toHaveBeenCalledTimes(2);
     expect(mocks.fetchClawHubSkillVerification).toHaveBeenNthCalledWith(1, {
       ...options,
@@ -149,17 +144,15 @@ describe("fetchExactClawHubSkillSecurityVerdicts", () => {
     });
 
     expect(mocks.fetchClawHubSkillSecurityVerdicts).toHaveBeenCalledTimes(1);
-    expect(items[0]).toMatchObject({
-      ok: true,
-      requestedOwnerHandle: "alice",
-      publisherHandle: "alice",
-    });
-    expect(items[1]).toMatchObject({
-      ok: false,
-      requestedOwnerHandle: "bob",
-      reasons: ["security.identity_mismatch"],
-      error: { code: "identity_mismatch" },
-    });
+    expect(items).toMatchObject([
+      { ok: true, requestedOwnerHandle: "alice", publisherHandle: "alice" },
+      {
+        ok: false,
+        requestedOwnerHandle: "bob",
+        reasons: ["security.identity_mismatch"],
+        error: { code: "identity_mismatch" },
+      },
+    ]);
     expect(mocks.fetchClawHubSkillVerification).not.toHaveBeenCalled();
   });
 

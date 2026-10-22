@@ -5,9 +5,19 @@ import type { SettingsMediaDeviceState } from "./view-state.ts";
 import type { TabIconViewProps } from "./view-tab-icon.tsx";
 
 type ConfigPageProps = ReturnType<ReturnType<typeof createConfigPage>["configProps"]>;
-// Most callbacks ignore completion values; custom-theme import tracks its admitted request.
+// Async presenters retain their owners' admitted completions.
 type ConfigData = {
-  [Key in keyof ConfigPageProps]: Key extends "onImportCustomTheme"
+  [Key in keyof ConfigPageProps]: Key extends
+    | "presentationRetired"
+    | "setSessionObserverEnabled"
+    | "setSessionObserverUtilityModel"
+    | "onNativeNotificationsSendTest"
+    | "onImportCustomTheme"
+    | "onWebPushSubscribe"
+    | "onWebPushUnsubscribe"
+    | "onWebPushTest"
+    | "onWebPushSetUserPreferences"
+    | "onWebPushSetDevicePreferences"
     ? ConfigPageProps[Key]
     : ConfigPageProps[Key] extends (...args: infer Args) => unknown
       ? (...args: Args) => void
@@ -17,6 +27,8 @@ type ConfigData = {
 type ConfigViewOptions = Partial<
   Pick<
     ConfigData,
+    | "schemaRead"
+    | "onRetrySchema"
     | "mutationAllowed"
     | "openFileAllowed"
     | "rawDraftPending"

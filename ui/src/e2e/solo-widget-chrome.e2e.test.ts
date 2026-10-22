@@ -112,6 +112,7 @@ async function showDashboardMenu(page: Page, input: "pointer" | "keyboard" = "po
   }
   await surface.waitFor({ state: "visible" });
   await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+  await expect.poll(() => surface.getAttribute("data-phase")).toBe("open");
   return menu;
 }
 

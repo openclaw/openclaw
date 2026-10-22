@@ -1,6 +1,6 @@
 import "../../styles/logs.css";
 import type { LogsTailResult } from "@openclaw/gateway-protocol";
-import { createSignal, onSettled } from "solid-js";
+import { createSignal, createStore, onSettled } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
   beginPanelRefresh,
@@ -42,9 +42,9 @@ export function LogsPage() {
   const context = useApplication();
   const [status, setStatus] = createSignal(createPanelRefreshStatus(), { ownedWrite: true });
   const [file, setFile] = createSignal<string | null>(null, { ownedWrite: true });
-  const [entries, setEntries] = createSignal<LogEntry[]>([], { ownedWrite: true });
+  const [entries, setEntries] = createStore<LogEntry[]>([], { shallow: true });
   const [filterText, setFilterText] = createSignal("");
-  const [levelFilters, setLevelFilters] = createSignal<Record<LogLevel, boolean>>({
+  const [levelFilters, setLevelFilters] = createStore<Record<LogLevel, boolean>>({
     ...DEFAULT_LOG_LEVEL_FILTERS,
   });
   const [autoFollow, setAutoFollow] = createSignal(true);
@@ -71,7 +71,7 @@ export function LogsPage() {
       cursorBootId = undefined;
       setStatus(createPanelRefreshStatus());
       setFile(null);
-      setEntries([]);
+      setEntries(() => []);
       setTruncated(false);
       follow.reset();
     },
@@ -133,13 +133,22 @@ export function LogsPage() {
       }
       const nextEntries = payload.lines.map(parseLogLine);
       const reset = resetCursor || sourceChanged || payload.reset || previousCursor === null;
-      setEntries((previous) =>
-        reset ? nextEntries : [...previous, ...nextEntries].slice(-LOG_BUFFER_LIMIT),
+      // Truncation belongs to the displayed history until a complete tail replaces it.
+      setTruncated(
+        Boolean(payload.truncated) ||
+          (!reset && truncated()) ||
+          (reset ? nextEntries.length : entries.length + nextEntries.length) > LOG_BUFFER_LIMIT,
       );
+      setEntries((draft) => {
+        if (reset) {
+          draft.length = 0;
+        }
+        draft.push(...nextEntries);
+        draft.splice(0, Math.max(0, draft.length - LOG_BUFFER_LIMIT));
+      });
       cursor = payload.cursor;
       cursorBootId = bootId;
       setFile(payload.file);
-      setTruncated(Boolean(payload.truncated));
       setStatus(completePanelRefresh());
       follow.schedule();
       return true;
@@ -148,7 +157,8 @@ export function LogsPage() {
         return false;
       }
       if (isMissingOperatorReadScopeError(error)) {
-        setEntries([]);
+        setEntries(() => []);
+        setTruncated(false);
         const failed = failPanelRefresh(createPanelRefreshStatus(), error, gateway.snapshot);
         setStatus(
           failed.error
@@ -195,7 +205,7 @@ export function LogsPage() {
       <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
         <section class="content-header">
           <div>
-            <div class="page-title">{t("tabs.logs")}</div>
+            <h1 class="page-title">{t("tabs.logs")}</h1>
           </div>
         </section>
         <SettingsWorkspace fillHeight>
@@ -204,15 +214,17 @@ export function LogsPage() {
             refreshDisabled={!gateway.connected || requestState() !== "idle"}
             status={status()}
             file={file()}
-            entries={entries()}
+            entries={entries}
             filterText={filterText()}
-            levelFilters={levelFilters()}
+            levelFilters={levelFilters}
             autoFollow={autoFollow()}
             truncated={truncated()}
             onStreamRef={(element) => (stream = element)}
             onFilterTextChange={setFilterText}
             onLevelToggle={(level, enabled) =>
-              setLevelFilters((previous) => ({ ...previous, [level]: enabled }))
+              setLevelFilters((draft) => {
+                draft[level] = enabled;
+              })
             }
             onToggleAutoFollow={(enabled) => {
               setAutoFollow(enabled);

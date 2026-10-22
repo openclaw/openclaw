@@ -2,8 +2,10 @@
 
 import { createComponent, createStore, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { saveIndicatorProps } from "./settings-save-indicator.test-support.ts";
 import {
   SettingsSaveIndicator,
@@ -115,6 +117,18 @@ describe("settings save indicator", () => {
     expect(next.onRetry).not.toHaveBeenCalled();
   });
 
+  it("retires the previous failure during a manual save and shows the same error again", async () => {
+    const lastError = "permission denied";
+    await update({ status: "error", lastError });
+    expect(indicator.textContent).toContain("Save failed");
+    await update({ status: "error", saving: true, lastError: null });
+    expect(indicator.textContent?.trim()).toBe("Saving…");
+    expect(indicator.querySelector('[role="status"]')).toMatchObject({ title: "" });
+    await update({ status: "error", lastError });
+    expect(indicator.textContent).toContain("Save failed");
+    expect(indicator.querySelector('[role="status"]')).toMatchObject({ title: lastError });
+  });
+
   it("applies pending changes and reports the in-flight state", async () => {
     const { onApply } = await update({ needsApply: true });
 
@@ -125,5 +139,38 @@ describe("settings save indicator", () => {
     expect(indicator.textContent?.trim()).toBe("Applying…");
     expect(part("spinner")).not.toBeNull();
     expect(button("Apply changes")).toBeUndefined();
+  });
+
+  it("presents an admitted Save without inventing an accepted owner result", async () => {
+    const held = createDeferred<boolean>();
+    const onSave = vi.fn(() => held.promise);
+    await update({ status: "paused", onSave });
+    button("Save")!.click();
+    await waitForSolid(() => expect(indicator.textContent).toContain("Saving…"));
+    expect(indicator.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(onSave).toHaveBeenCalledOnce();
+    held.resolve(false);
+    await waitForSolid(() => expect(button("Save")?.disabled).toBe(false));
+    expect(indicator.textContent).toContain("Autosave paused after reconnect");
+    expect(indicator.textContent).not.toContain("Saved");
+  });
+
+  it("consumes a rejected command and allows a later retry", async () => {
+    const held = createDeferred<boolean>();
+    const onRetry = vi.fn(() => held.promise);
+    await update({ status: "error", onRetry });
+    button("Retry")!.click();
+    await waitForSolid(() => expect(indicator.textContent).toContain("Saving…"));
+    held.reject(new Error("Synthetic retry transport failed"));
+    await waitForSolid(() =>
+      expect(indicator.querySelector('[role="alert"]')?.textContent).toContain(
+        "Synthetic retry transport failed",
+      ),
+    );
+    const retry = vi.fn(async () => false);
+    await update({ status: "error", onRetry: retry });
+    button("Retry")!.click();
+    await waitForSolid(() => expect(retry).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(indicator.querySelector('[role="alert"]')).toBeNull());
   });
 });

@@ -2,7 +2,8 @@ import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { observeSettlement, promptAgent } from "./translator.prompt-harness.test-support.js";
+import { createPromptRequest } from "./translator.bridge-test-helpers.js";
+import type { AcpGatewayAgent } from "./translator.js";
 import {
   createAcpConnection,
   createAcpGateway,
@@ -32,13 +33,13 @@ export function createTranslatorScenario(
     sessionStore.createSession({ sessionId, sessionKey, cwd: "/tmp" });
   }
   const connection = createAcpConnection({ requestPermission });
-  const sessionUpdate = vi.spyOn(connection, "sessionUpdate");
+  const sessionUpdate = connection["__sessionUpdateMock"];
   const agent = createAcpGatewayAgent(
     connection,
     createAcpGateway(request as GatewayClient["request"]),
     { ...options, sessionStore },
   );
-  return { agent, sessionStore, sessionUpdate };
+  return { agent, connection, sessionKey, sessionStore, sessionUpdate };
 }
 
 export function expectSingleCall(
@@ -46,6 +47,15 @@ export function expectSingleCall(
   fields: Record<string, unknown>,
 ) {
   expect(source.mock.calls).toMatchObject([[fields]]);
+}
+
+function observeSettlement(promise: ReturnType<AcpGatewayAgent["prompt"]>) {
+  const settleSpy = vi.fn();
+  void promise.then(
+    (value) => settleSpy({ kind: "resolve", value }),
+    (error: unknown) => settleSpy({ kind: "reject", error }),
+  );
+  return settleSpy;
 }
 
 export function createPromptScenario({
@@ -72,7 +82,8 @@ export function createPromptScenario({
     return send(params);
   });
   const h = createTranslatorScenario(request, options);
-  const prompt = (sessionId = "session-1", text = "hello") => promptAgent(h.agent, sessionId, text);
+  const prompt = (sessionId = "session-1", text = "hello") =>
+    h.agent.prompt(createPromptRequest(sessionId, text));
   const start = (sessionId = "session-1", text = "hello") => {
     const sent = nextSend.promise;
     const result = prompt(sessionId, text);

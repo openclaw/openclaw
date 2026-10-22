@@ -1,24 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { createFeishuTestEvent } from "./bot.test-support.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 
 type Message = FeishuMessageEvent["message"];
-function event(message: Partial<Message> = {}, sender = "ou-user"): FeishuMessageEvent {
-  return {
-    sender: { sender_id: { open_id: sender } },
-    message: {
-      message_id: "om_first",
-      chat_id: "oc-dm",
-      chat_type: "p2p",
-      message_type: "text",
-      content: JSON.stringify({ text: "hello" }),
-      create_time: "1710000000000",
-      ...message,
-    },
-  };
-}
 const key = (message: Partial<Message> = {}, sender?: string) =>
-  resolveFeishuMessageDedupeKey(event(message, sender));
+  resolveFeishuMessageDedupeKey(
+    createFeishuTestEvent({
+      messageId: "om_first",
+      senderOpenId: sender ?? "ou-user",
+      message: { create_time: "1710000000000", ...message },
+    }),
+  );
 const richPost = (content: object, message: Partial<Message> = {}) => ({
   message_type: "post",
   content: JSON.stringify({ title: "", ...content }),

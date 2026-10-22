@@ -1,21 +1,14 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveChangedNodeTestTargets } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { resolveCiCheckFamilyScope } from "../../scripts/lib/ci-check-family-scope.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeFiles } from "./ci-changed-node-test-plan.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Mode = "aggressive" | "full";
 function fixture(files: Record<string, string> | string[]) {
   const cwd = tempDirs.make("node-selection-");
-  const entries: [string, string][] = Array.isArray(files)
-    ? files.map((file) => [file, "export {};\n"])
-    : Object.entries(files);
-  for (const [file, content] of entries) {
-    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-    writeFileSync(path.join(cwd, file), content);
-  }
+  writeFiles(cwd, files);
   return cwd;
 }
 
@@ -37,13 +30,14 @@ it.each(["added", "renamed", "deleted", "import-edge"])(
     const testOnly = "src/infra/own.test.ts";
     const cwd = fixture([...guards, ...(change === "deleted" ? [] : [source])]);
     if (change === "import-edge") {
-      writeFileSync(path.join(cwd, source), 'import "./dependency.js";\n');
-      writeFileSync(path.join(cwd, "src/infra/dependency.ts"), "export {};\n");
+      writeFiles(cwd, {
+        [source]: 'import "./dependency.js";\n',
+        "src/infra/dependency.ts": "export {};\n",
+      });
     }
     const paths = change === "renamed" ? ["src/infra/old-module.ts", source] : [source];
     expect(select(cwd, paths)).toEqual(guards.toSorted());
-    mkdirSync(path.dirname(path.join(cwd, testOnly)), { recursive: true });
-    writeFileSync(path.join(cwd, testOnly), "export {};\n");
+    writeFiles(cwd, [testOnly]);
     expect(select(cwd, [testOnly])).toEqual([testOnly]);
     expect(resolveCiCheckFamilyScope(paths).additionalGroups).toContain(
       "runtime-topology-architecture",
@@ -75,7 +69,7 @@ it("bounds protected regressions to nearby consumers and restores area coverage 
   const direct = "src/agents/example/subject.test.ts";
   const nearby = "src/infra/device-pairing.test.ts";
   const distant = "src/infra/state-migrations.audit-logs.test.ts";
-  const unrelated = "src/agents/bash-tools.exec.path.test.ts";
+  const unrelated = "src/agents/bash-tools.exec.script-preflight.test.ts";
   const cwd = fixture({
     [source]: "export const value = 1;",
     [direct]: 'import "./subject.js";',

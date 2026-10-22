@@ -7,14 +7,14 @@ import { createAgentViewTestProps as createProps } from "./agents-view.test-help
 import { Agents } from "./view.tsx";
 
 it("shows admitted default commands and follows confirmed roster state", async () => {
-  const first = createDeferred<boolean | undefined>();
-  const retry = createDeferred<boolean | undefined>();
+  const first = createDeferred();
+  const retry = createDeferred();
+  let retired = createDeferred();
   const onSetDefault = vi
     .fn()
     .mockReturnValueOnce(first.promise)
     .mockReturnValueOnce(retry.promise);
-  const props = createProps({ onSetDefault });
-  props.config.configSaving = true;
+  const props = createProps({ onSetDefault, presentationRetired: () => retired.promise });
   const mounted = mountSolid(Agents, props);
   const control = () =>
     Array.from(
@@ -27,12 +27,20 @@ it("shows admitted default commands and follows confirmed roster state", async (
       expect(control().disabled).toBe(true);
     });
     expect(props.readData().agentsList?.defaultId).toBe("alpha");
+    retired.resolve();
+    retired = createDeferred();
+    mounted.update({
+      ...props,
+      selectedAgentId: "alpha",
+      config: { ...props.config, configSaving: false },
+    });
+    await vi.waitFor(() => expect(control().textContent?.trim()).toBe("Default"));
     mounted.update({ ...props, config: { ...props.config, configSaving: false } });
     await vi.waitFor(() => {
       expect(control().textContent).toContain("Set Default");
       expect(control().disabled).toBe(false);
     });
-    first.resolve(false);
+    first.resolve();
     mounted.update(props);
     await vi.waitFor(() => {
       expect(control().textContent).toContain("Set Default");
@@ -40,7 +48,7 @@ it("shows admitted default commands and follows confirmed roster state", async (
     });
     control().click();
     expect(onSetDefault).toHaveBeenNthCalledWith(2, "beta");
-    retry.resolve(true);
+    retry.resolve();
     const data = props.readData();
     mounted.update({
       ...props,
@@ -51,8 +59,8 @@ it("shows admitted default commands and follows confirmed roster state", async (
       expect(control().disabled).toBe(true);
     });
   } finally {
-    first.resolve(false);
-    retry.resolve(false);
+    first.resolve();
+    retry.resolve();
     mounted.dispose();
   }
 });
