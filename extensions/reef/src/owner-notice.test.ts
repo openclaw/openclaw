@@ -114,29 +114,20 @@ it("keeps non-waking owner notices passive", async () => {
   expect(runtime.system.enqueueSessionEvent).not.toHaveBeenCalled();
 });
 
-it.each(["refused", "failed", "cancelled"] as const)(
-  "rejects a waking owner notice when the event is %s",
-  async (outcome) => {
-    const runtime = ownerNoticeRuntime();
-    vi.mocked(runtime.system.enqueueSessionEvent).mockReturnValue({
-      id: "notice",
-      cancel: () => false,
-      accepted: Promise.resolve(
-        outcome === "refused" ? { ok: false, error: "admission refused" } : { ok: true },
-      ),
-      settled: Promise.resolve({
-        status: outcome === "refused" ? "failed" : outcome,
-        executionStarted: outcome !== "refused",
-        delivered: false,
-      }),
-    });
-    const notify = createReefOwnerNoticeHandler({ runtime, cfg: {}, handle: "bob" });
-    await expect(
-      notify({ text: "owner notice", contextKey: "reef:owner:bob", wakeAgent: true }),
-    ).rejects.toThrow(outcome === "refused" ? "admission refused" : `Reef owner notice ${outcome}`);
-    expect(runtime.system.enqueueSystemEvent).not.toHaveBeenCalled();
-  },
-);
+it("rejects a waking owner notice when admission is refused", async () => {
+  const runtime = ownerNoticeRuntime();
+  vi.mocked(runtime.system.enqueueSessionEvent).mockReturnValue({
+    id: "notice",
+    cancel: () => false,
+    accepted: Promise.resolve({ ok: false, error: "admission refused" }),
+    settled: Promise.resolve({ status: "failed", executionStarted: false, delivered: false }),
+  });
+  const notify = createReefOwnerNoticeHandler({ runtime, cfg: {}, handle: "bob" });
+  await expect(
+    notify({ text: "owner notice", contextKey: "reef:owner:bob", wakeAgent: true }),
+  ).rejects.toThrow("admission refused");
+  expect(runtime.system.enqueueSystemEvent).not.toHaveBeenCalled();
+});
 
 it("advances the full batch when a receipt notice fails", async () => {
   const order: string[] = [];
@@ -357,7 +348,7 @@ describe("ReefReceiptNotifier", () => {
   });
 });
 
-it("does not mark an overdue delivery notified until its session event settles successfully", async () => {
+it("marks an accepted overdue notice once even when execution later fails", async () => {
   const marked = new Set<string>();
   const entry = {
     peer: "clawd",
@@ -386,33 +377,36 @@ it("does not mark an overdue delivery notified until its session event settles s
       settled: settled.promise,
     };
   });
+  const logger = runtime.logging.getChildLogger();
+  vi.mocked(runtime.logging.getChildLogger).mockReturnValue(logger);
   const ownerNotice = createReefOwnerNoticeHandler({ runtime, cfg: {}, handle: "bob" });
   const first = notifyOverdueReefDeliveries({ trust: store, ownerNotice });
-  const failure = expect(first).rejects.toThrow("delivery interrupted");
   await submitted.promise;
   expect(store.markOutboundDeliveryOverdueNotified).not.toHaveBeenCalled();
   accepted.resolve({ ok: true });
-  await accepted.promise;
-  expect(store.markOutboundDeliveryOverdueNotified).not.toHaveBeenCalled();
+  await first;
+  expect(marked.has(entry.id)).toBe(true);
   settled.resolve({
     status: "failed",
     executionStarted: true,
     delivered: false,
     error: "delivery interrupted",
   });
-  await failure;
-  expect(store.markOutboundDeliveryOverdueNotified).not.toHaveBeenCalled();
+  await settled.promise;
+  expect(logger.warn).toHaveBeenCalledWith("Reef owner notice failed", {
+    error: "delivery interrupted",
+  });
   await notifyOverdueReefDeliveries({ trust: store, ownerNotice });
   expect(marked.has(entry.id)).toBe(true);
-  expect(runtime.system.captureSessionEventTarget).toHaveBeenCalledTimes(2);
-  expect(runtime.system.enqueueSessionEvent).toHaveBeenCalledTimes(2);
+  expect(runtime.system.captureSessionEventTarget).toHaveBeenCalledTimes(1);
+  expect(runtime.system.enqueueSessionEvent).toHaveBeenCalledTimes(1);
   expect(runtime.system.enqueueSessionEvent).toHaveBeenLastCalledWith(
     expect.stringContaining(entry.id),
     {
       agentId: "main",
       sessionKey: "agent:main:reef:direct:alice",
       contextKey: `reef:delivery-overdue:${entry.peer}:${entry.id}`,
-      expectedTarget: await vi.mocked(runtime.system.captureSessionEventTarget).mock.results[1]!
+      expectedTarget: await vi.mocked(runtime.system.captureSessionEventTarget).mock.results[0]!
         .value,
       createIfMissing: true,
     },

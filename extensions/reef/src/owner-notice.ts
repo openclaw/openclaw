@@ -310,11 +310,10 @@ export async function notifyOverdueReefDeliveries(params: {
   )) {
     const elapsedMs = Date.now() - overdue.sentAt;
     const minutes = Math.max(1, Math.round(elapsedMs / 60_000));
-    // Dispatch before marking: a crash in between re-sends one deduped notice
-    // on the next tick, whereas marking first could silence it permanently —
-    // the exact failure this sweep exists to report. The context key keeps
-    // redispatch idempotent while the event is still queued, and a receipt
-    // only sees overdueNotifiedAt after the notice really went out.
+    // Mark after admission so a refused notice can retry. Once accepted,
+    // later execution failure must not resubmit potentially delivered work.
+    // A crash before marking can still repeat the notice after adoption;
+    // queued duplicates are suppressed by the context key.
     await params.ownerNotice({
       text: `Reef message ${overdue.id} to @${overdue.peer} has not been confirmed delivered after ${minutes} minute${minutes === 1 ? "" : "s"}; the peer's claw looks offline or unreachable. The relay keeps it queued and you will get a follow-up if it is delivered or rejected. If your owner was waiting on this, let them know now.`,
       peer: overdue.peer,
@@ -365,9 +364,12 @@ export function createReefOwnerNoticeHandler(params: {
     if (!accepted.ok) {
       throw new Error(accepted.error);
     }
-    const outcome = await receipt.settled;
-    if (outcome.status !== "completed") {
-      throw new Error(outcome.error ?? `Reef owner notice ${outcome.status}`);
-    }
+    void receipt.settled.then((outcome) => {
+      if (outcome.status !== "completed") {
+        params.runtime.logging
+          .getChildLogger({ module: "reef-owner-notice" })
+          .warn(`Reef owner notice ${outcome.status}`, { error: outcome.error });
+      }
+    });
   };
 }
