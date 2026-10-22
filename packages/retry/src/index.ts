@@ -301,33 +301,6 @@ export function resolveRetryConfig(
   };
 }
 
-type JitterMode = "symmetric" | "positive";
-
-function applyJitter(
-  delayMs: number,
-  jitter: number | "full",
-  mode: JitterMode,
-  random: () => number,
-): number {
-  if (jitter === "full") {
-    if (mode === "symmetric") {
-      // Over-cap Retry-After cannot be honored. Spread downward instead of
-      // letting the final cap collapse every client onto the same instant.
-      return Math.max(0, Math.round(delayMs * (0.5 + random() * 0.5)));
-    }
-    return Math.max(0, Math.ceil(delayMs * (1 + random())));
-  }
-  if (jitter <= 0) {
-    return mode === "positive" ? Math.ceil(delayMs) : delayMs;
-  }
-  const fraction = random();
-  const offset = mode === "positive" ? fraction * jitter : (fraction * 2 - 1) * jitter;
-  const raw = delayMs * (1 + offset);
-  // Retry-After is a lower bound. Positive jitter must round upward or a
-  // fractional server hint can be undercut even with a zero random draw.
-  return Math.max(0, mode === "positive" ? Math.ceil(raw) : Math.round(raw));
-}
-
 export function toRetryError(value: unknown, fallbackMessage = "Non-Error thrown"): Error {
   if (value instanceof Error) {
     return value;
@@ -411,12 +384,20 @@ export function createRetryRunner(runtime: RetryRuntime = {}) {
         const canHonorRetryAfter = hasRetryAfter && (retryAfterMs ?? 0) <= delayCap;
         const wantsPositiveDraw =
           resolved.jitter === "full" ? !hasRetryAfter || canHonorRetryAfter : canHonorRetryAfter;
-        delay = applyJitter(
-          delay,
-          resolved.jitter,
-          wantsPositiveDraw ? "positive" : "symmetric",
-          random,
-        );
+        const jitter = resolved.jitter;
+        if (jitter === "full") {
+          delay = wantsPositiveDraw
+            ? Math.max(0, Math.ceil(delay * (1 + random())))
+            : Math.max(0, Math.round(delay * (0.5 + random() * 0.5)));
+        } else if (jitter <= 0) {
+          delay = wantsPositiveDraw ? Math.ceil(delay) : delay;
+        } else {
+          const fraction = random();
+          const offset = wantsPositiveDraw ? fraction * jitter : (fraction * 2 - 1) * jitter;
+          const raw = delay * (1 + offset);
+          // Retry-After is a lower bound, even with a fractional hint and zero draw.
+          delay = Math.max(0, wantsPositiveDraw ? Math.ceil(raw) : Math.round(raw));
+        }
         delay = Math.min(Math.max(delay, minDelayMs), delayCap);
 
         await options.onRetry?.({ ...context, delayMs: delay });
