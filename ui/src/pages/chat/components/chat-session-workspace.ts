@@ -1,9 +1,7 @@
-/* oxlint-disable max-lines -- TODO: split workspace opening after reference resolution lands. */
 import { BROWSER_IMAGE_MIME_TYPES } from "../../../../../src/shared/browser-image-mime-types.js";
 import { downloadArtifact } from "../../../api/artifact-download.ts";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import { downloadSessionFile } from "../../../api/session-file-download.ts";
-import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { t } from "../../../i18n/index.ts";
@@ -21,6 +19,8 @@ import {
   hasUniformLineEndings,
   loadArtifactSidebarContent,
   readWorkspaceFileText,
+  readSessionFileReference,
+  workspaceBrowserFilePath,
   unsupportedFileSidebarContent,
 } from "./chat-session-workspace-file-content.ts";
 import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
@@ -53,145 +53,10 @@ registerFilePreviewEnglish();
 export { retireSessionWorkspaceCheckout } from "./chat-session-workspace-state.ts";
 export type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
 
-function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
-  if (!root || /^(?:\/|[a-z]:[\\/]|\\\\)/i.test(filePath)) {
-    return filePath;
-  }
-  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  const base = root.replace(/[\\/]+$/, "");
-  const relative = filePath.replace(/^[\\/]+/, "").replaceAll(/[\\/]/g, separator);
-  return base ? `${base}${separator}${relative}` : `${separator}${relative}`;
-}
-
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
     state.sidebarContent = resolveSessionDiffSidebarContent(state);
     sessionWorkspaceForHost(state).publish();
-  }
-}
-
-const BARE_FILE_NAME = /^[^\\/]+$/u;
-const PARENT_PATH_SEGMENT = /(?:^|[\\/])\.\.(?:[\\/]|$)/u;
-
-function readGatewayErrorDetail(error: unknown, key: string): unknown {
-  if (!(error instanceof GatewayRequestError)) {
-    return undefined;
-  }
-  const details: unknown = error.details;
-  return typeof details === "object" && details !== null ? Reflect.get(details, key) : undefined;
-}
-
-function isMissingSessionFile(error: unknown): boolean {
-  return readGatewayErrorDetail(error, "type") === "session_file_not_found";
-}
-
-function readOversizedSessionFileSize(error: unknown): number | undefined {
-  if (readGatewayErrorDetail(error, "type") !== "session_file_too_large") {
-    return undefined;
-  }
-  const size = readGatewayErrorDetail(error, "size");
-  return typeof size === "number" ? size : undefined;
-}
-
-function oversizedSessionFileResult(
-  sessionKey: string,
-  path: string,
-  size: number,
-): SessionWorkspaceGetResult {
-  return {
-    sessionKey,
-    file: {
-      path,
-      name: pathDisplayName(path),
-      size,
-      kind: "read",
-      missing: false,
-      previewKind: "unsupported",
-    },
-  };
-}
-
-function isResolvableReferencePath(path: string): boolean {
-  return (
-    path.length > 0 &&
-    !/^[\\/]/u.test(path) &&
-    !/^[a-zA-Z]:/u.test(path) &&
-    !PARENT_PATH_SEGMENT.test(path)
-  );
-}
-
-/**
- * Chat refers to files by the name in the message, so a nested file reads as
- * missing at the workspace root. Only an unambiguous exact name match may
- * retry: a truncated listing, several matches, or a path-bearing reference
- * keeps the original failure instead of opening an arbitrary file.
- */
-async function readSessionFileReference(
-  state: SessionWorkspaceHost,
-  sessionKey: string,
-  agentId: string | undefined,
-  path: string,
-  messageEntryId?: string,
-): Promise<{ result: SessionWorkspaceGetResult; actionPath: string } | null> {
-  const messageFile = messageEntryId ? { messageEntryId } : {};
-  try {
-    const result = await state.sessions.getFile(sessionKey, path, { agentId, ...messageFile });
-    if (!result) {
-      return null;
-    }
-    return {
-      result,
-      actionPath: path,
-    };
-  } catch (error) {
-    if (!isMissingSessionFile(error)) {
-      const size = readOversizedSessionFileSize(error);
-      if (size !== undefined) {
-        return { result: oversizedSessionFileResult(sessionKey, path, size), actionPath: path };
-      }
-      throw error;
-    }
-    if (!BARE_FILE_NAME.test(path)) {
-      throw error;
-    }
-    const listing = await state.sessions.listFiles(sessionKey, { agentId, path: "", search: path });
-    const browser = listing?.browser;
-    if (!listing?.root || !browser || browser.truncated) {
-      throw error;
-    }
-    const matches = browser.entries.filter(
-      (entry) =>
-        entry.kind === "file" && entry.name === path && isResolvableReferencePath(entry.path),
-    );
-    const [match] = matches;
-    if (matches.length !== 1 || !match) {
-      throw error;
-    }
-    // Search entries are workspace-root-relative. Root them before reading so
-    // follow-up actions cannot be resolved against a nested session cwd.
-    const actionPath = workspaceBrowserFilePath(listing.root, match.path);
-    try {
-      const result = await state.sessions.getFile(sessionKey, actionPath, {
-        agentId,
-        ...messageFile,
-      });
-      if (!result) {
-        return null;
-      }
-      return {
-        result,
-        actionPath,
-      };
-    } catch (resolvedError) {
-      const size = readOversizedSessionFileSize(resolvedError);
-      if (size !== undefined) {
-        return {
-          result: oversizedSessionFileResult(sessionKey, actionPath, size),
-          actionPath,
-        };
-      }
-      throw resolvedError;
-    }
   }
 }
 

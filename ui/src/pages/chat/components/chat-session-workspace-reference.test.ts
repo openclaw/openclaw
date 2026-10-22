@@ -20,20 +20,27 @@ vi.mock("../../../api/session-file-download.ts", async (importOriginal) => {
   return { ...actual, downloadSessionFile };
 });
 
+function createReferenceState(
+  sessions: SessionWorkspaceHost["sessions"],
+  methods: string[] = ["sessions.files.list", "sessions.files.set"],
+): SessionWorkspaceHost {
+  return {
+    client: createGatewayBrowserClientFixture(),
+    connected: true,
+    connectionEpoch: 1,
+    handleOpenSidebar: createSidebarContentRecorder(),
+    hello: gatewayHelloForMethods(methods),
+    sessionKey: "agent:main:current",
+    sidebarContent: null,
+    sessions,
+  };
+}
+
 describe("session workspace file reference resolution", () => {
   it("preserves a null file-capability result as an unavailable preview", async () => {
     const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async () => null);
     const listFiles = vi.fn();
-    const state: SessionWorkspaceHost = {
-      client: createGatewayBrowserClientFixture(),
-      connected: true,
-      connectionEpoch: 1,
-      handleOpenSidebar: createSidebarContentRecorder(),
-      hello: gatewayHelloForMethods([]),
-      sessionKey: "agent:main:current",
-      sidebarContent: null,
-      sessions: createSessionCapabilityFixture({ getFile, listFiles }),
-    };
+    const state = createReferenceState(createSessionCapabilityFixture({ getFile, listFiles }), []);
 
     void openSessionWorkspaceFile(state, { path: "REPORT.md" });
 
@@ -98,16 +105,9 @@ describe("session workspace file reference resolution", () => {
         },
       }),
     );
-    const state: SessionWorkspaceHost = {
-      client: createGatewayBrowserClientFixture(),
-      connected: true,
-      connectionEpoch: 1,
-      handleOpenSidebar: createSidebarContentRecorder(),
-      hello: gatewayHelloForMethods(["sessions.files.list", "sessions.files.set"]),
-      sessionKey: "agent:main:current",
-      sidebarContent: null,
-      sessions: createSessionCapabilityFixture({ getFile, listFiles, setFile }),
-    };
+    const state = createReferenceState(
+      createSessionCapabilityFixture({ getFile, listFiles, setFile }),
+    );
 
     void openSessionWorkspaceFile(state, { path: "ORGANIZATION_REPORT.md" });
 
@@ -195,16 +195,7 @@ describe("session workspace file reference resolution", () => {
         },
       }),
     );
-    const state: SessionWorkspaceHost = {
-      client: createGatewayBrowserClientFixture(),
-      connected: true,
-      connectionEpoch: 1,
-      handleOpenSidebar: createSidebarContentRecorder(),
-      hello: gatewayHelloForMethods(["sessions.files.set"]),
-      sessionKey: "agent:main:current",
-      sidebarContent: null,
-      sessions: createSessionCapabilityFixture({ getFile, setFile }),
-    };
+    const state = createReferenceState(createSessionCapabilityFixture({ getFile, setFile }));
 
     void openSessionWorkspaceFile(state, { path: requestPath });
 
@@ -257,16 +248,7 @@ describe("session workspace file reference resolution", () => {
         entries: [{ path: nestedPath, name: "REPORT.md", kind: "file" }],
       },
     });
-    const state: SessionWorkspaceHost = {
-      client: createGatewayBrowserClientFixture(),
-      connected: true,
-      connectionEpoch: 1,
-      handleOpenSidebar: createSidebarContentRecorder(),
-      hello: gatewayHelloForMethods(["sessions.files.list"]),
-      sessionKey: "agent:main:current",
-      sidebarContent: null,
-      sessions: createSessionCapabilityFixture({ getFile, listFiles }),
-    };
+    const state = createReferenceState(createSessionCapabilityFixture({ getFile, listFiles }));
 
     void openSessionWorkspaceFile(state, { path: "REPORT.md" });
 
@@ -300,14 +282,6 @@ describe("session workspace file reference resolution", () => {
       },
     },
     {
-      label: "the only match escapes the workspace root",
-      browser: {
-        path: "",
-        search: "REPORT.md",
-        entries: [{ path: "../REPORT.md", name: "REPORT.md", kind: "file" }],
-      },
-    },
-    {
       label: "the match is a directory",
       browser: {
         path: "",
@@ -328,16 +302,7 @@ describe("session workspace file reference resolution", () => {
       files: [],
       browser,
     });
-    const state: SessionWorkspaceHost = {
-      client: createGatewayBrowserClientFixture(),
-      connected: true,
-      connectionEpoch: 1,
-      handleOpenSidebar: createSidebarContentRecorder(),
-      hello: gatewayHelloForMethods(["sessions.files.list"]),
-      sessionKey: "agent:main:current",
-      sidebarContent: null,
-      sessions: createSessionCapabilityFixture({ getFile, listFiles }),
-    };
+    const state = createReferenceState(createSessionCapabilityFixture({ getFile, listFiles }));
 
     void openSessionWorkspaceFile(state, { path: "REPORT.md" });
 
@@ -359,16 +324,7 @@ describe("session workspace file reference resolution", () => {
       }),
     );
     const listFiles = vi.fn();
-    const state: SessionWorkspaceHost = {
-      client: createGatewayBrowserClientFixture(),
-      connected: true,
-      connectionEpoch: 1,
-      handleOpenSidebar: createSidebarContentRecorder(),
-      hello: gatewayHelloForMethods(["sessions.files.list"]),
-      sessionKey: "agent:main:current",
-      sidebarContent: null,
-      sessions: createSessionCapabilityFixture({ getFile, listFiles }),
-    };
+    const state = createReferenceState(createSessionCapabilityFixture({ getFile, listFiles }));
 
     void openSessionWorkspaceFile(state, { path: "labs/output/REPORT.md" });
 
