@@ -200,6 +200,10 @@ export class DraftPlaceBrowser {
     return this.projectCatalog?.loading ?? false;
   }
 
+  get projectRead(): Promise<void> | null {
+    return this.projectCatalog?.pendingRead ?? null;
+  }
+
   get projectRecents(): readonly ProjectRecent[] | undefined {
     return this.projectCatalog?.snapshot.result?.recents;
   }

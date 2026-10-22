@@ -29,6 +29,7 @@ it("keeps the focused folder input and retained rows through a failed refresh an
       if (pending) {
         browser.readCompletion = null;
       }
+      setRevision((value) => value + 1);
       setRegisteringProject(pending);
     };
     onSettled(() => () => browser.reset());

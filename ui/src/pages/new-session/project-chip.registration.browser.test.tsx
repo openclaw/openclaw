@@ -1,6 +1,6 @@
-/* @vitest-environment jsdom */
 import { createMemo, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { page } from "vitest/browser";
 import type { ProjectsRegisterResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -58,7 +58,7 @@ function mountBrowser() {
           workspace: "/workspace",
           projectId: browser.projectId,
           selectedRemoteProject: null,
-          projects: [],
+          projects: browser.projects,
           recents: [],
           projectQuery: "",
         }),
@@ -86,6 +86,7 @@ describe("project registration presentation", () => {
     request.mockImplementationOnce(() => registration.promise);
     const register = view.getByRole<HTMLButtonElement>("button", { name: "Register as project" });
     const use = view.container.querySelector<HTMLButtonElement>(".new-session-page__browser-use")!;
+    const catalogReads = request.mock.calls.filter(([method]) => method === "projects.list").length;
     register.click();
     await waitForSolid(() => {
       expect(register.disabled).toBe(true);
@@ -95,13 +96,13 @@ describe("project registration presentation", () => {
     expect(request.mock.calls.filter(([method]) => method === "projects.register")).toHaveLength(1);
     const input = view.getByRole<HTMLInputElement>("combobox");
     input.focus();
-    browser.browser.setDraft("/workspace/no");
+    await page.getByRole("combobox").fill("/workspace/no");
     await waitForSolid(() => {
       expect(input.value).toBe("/workspace/no");
       expect(view.queryByRole("option")).toBeNull();
     });
     expect(document.activeElement).toBe(input);
-    browser.browser.setDraft("/workspace");
+    await page.getByRole("combobox").fill("/workspace");
     await waitForSolid(() => expect(view.getByRole("option").textContent).toContain("packages"));
     registration.reject(new Error("Project registry unavailable"));
     await waitForSolid(() => {
@@ -114,15 +115,72 @@ describe("project registration presentation", () => {
     register.click();
     await waitForSolid(() => expect(register.disabled).toBe(true));
     expect(browser.browser.error).toBeNull();
-    retry.resolve({
+    const project: ProjectsRegisterResult = {
       id: "registered-workspace",
-      displayName: "Workspace",
+      displayName: "Registered workspace",
       repoRoot: "/workspace",
       source: "registered",
+    };
+    request.mockImplementationOnce(async () => ({ projects: [project] }));
+    retry.resolve(project);
+    await waitForSolid(() => {
+      expect(browser.browserOpen).toBe(false);
+      expect(view.getByRole("button", { name: "Registered workspace" })).not.toBeNull();
     });
-    await waitForSolid(() => expect(browser.browserOpen).toBe(false));
     expect(browser.browserRegistering).toBe(false);
     expect(browser.browser.error).toBeNull();
+    expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(
+      catalogReads + 1,
+    );
+  });
+
+  it("releases saving when closed during the post-registration catalog refresh", async () => {
+    const { browser, request, view, open } = mountBrowser();
+    await open();
+    const project: ProjectsRegisterResult = {
+      id: "registered-workspace",
+      displayName: "Registered workspace",
+      repoRoot: "/workspace",
+      source: "registered",
+    };
+    const catalog = createDeferred<{ projects: ProjectsRegisterResult[] }>();
+    const catalogReads = request.mock.calls.filter(([method]) => method === "projects.list").length;
+    request.mockImplementationOnce(async () => project);
+    request.mockImplementationOnce(() => catalog.promise);
+    view.getByRole<HTMLButtonElement>("button", { name: "Register as project" }).click();
+    await waitForSolid(() => {
+      expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(
+        catalogReads + 1,
+      );
+      expect(
+        view.getByRole<HTMLButtonElement>("button", { name: "Register as project" }).disabled,
+      ).toBe(true);
+    });
+
+    browser.close();
+    await open();
+    await waitForSolid(() => {
+      expect(
+        view.getByRole<HTMLButtonElement>("button", { name: "Register as project" }).disabled,
+      ).toBe(false);
+      expect(
+        view.container.querySelector<HTMLButtonElement>(".new-session-page__browser-use")!.disabled,
+      ).toBe(false);
+    });
+    expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(
+      catalogReads + 1,
+    );
+    catalog.resolve({ projects: [project] });
+    await waitForSolid(() =>
+      expect(browser.projects.some((row) => row.id === project.id)).toBe(true),
+    );
+    expect(browser.browserOpen).toBe(true);
+    expect(
+      view.getByRole<HTMLButtonElement>("button", { name: "Register as project" }).disabled,
+    ).toBe(false);
+    expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(
+      catalogReads + 1,
+    );
   });
 
   it.each(["close", "disconnect", "connection epoch"])(

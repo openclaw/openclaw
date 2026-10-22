@@ -1,4 +1,16 @@
-import { action, createMemo, createOptimistic, Errored, For, Loading, Show } from "solid-js";
+import { createDeferred } from "@solidjs/signals";
+import {
+  action,
+  affects,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  Loading,
+  refresh,
+  Show,
+} from "solid-js";
+import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -21,52 +33,6 @@ export function ProjectChip(props: {
   nativeTerminal: boolean;
   focus?: ProjectBrowserFocus;
 }) {
-  const browser = createMemo(() => props.params.place.browser);
-  const connectionEpoch = createMemo(() => props.params.gateway.connectionEpoch);
-  const registration = createMemo(() => {
-    const owner = browser();
-    const epoch = connectionEpoch();
-    const [saving, setSaving] = createOptimistic(false);
-    return { browser: owner, epoch, saving, setSaving };
-  });
-  const presentRegistration = action(function* (
-    view: ReturnType<typeof registration>,
-    pending: Promise<void>,
-    receipt: BrowserProjectRegistration,
-  ) {
-    if (
-      view.browser === props.params.place.browser &&
-      view.epoch === props.params.gateway.connectionEpoch &&
-      receipt.isCurrent()
-    ) {
-      view.setSaving(true);
-    }
-    yield Promise.race([pending, receipt.retired]);
-  });
-  const registerProject = async (path: string) => {
-    const view = registration();
-    let receipt: BrowserProjectRegistration | undefined;
-    const pending = view.browser.registerBrowserProject(path, (started) => {
-      receipt = started;
-    });
-    if (!receipt) {
-      return pending;
-    }
-    // Publish the admitted owner operation before joining its presentation action.
-    await Promise.resolve();
-    try {
-      await presentRegistration(view, pending, receipt);
-    } catch (error) {
-      if (
-        view.browser === props.params.place.browser &&
-        view.epoch === props.params.gateway.connectionEpoch &&
-        receipt.isCurrent()
-      ) {
-        view.browser.browser.error = formatUiError(error);
-        props.params.onChange();
-      }
-    }
-  };
   const label = () =>
     props.params.place.deviceFolder ? t("newSession.deviceFolder") : props.state.label;
   const applyFolder = (folder: string) => {
@@ -136,6 +102,98 @@ export function ProjectChip(props: {
       projectSearchAvailable,
       projectAddAvailable,
     };
+  });
+  const projectSource = createMemo(
+    () => {
+      const browser = props.params.place.browser;
+      const projects = browser.projects;
+      return { browser, pending: browser.projectRead, projects };
+    },
+    {
+      equals: (previous, next) =>
+        previous.browser === next.browser &&
+        previous.pending === next.pending &&
+        (next.pending !== null || previous.projects === next.projects),
+    },
+  );
+  const projectsReady = createMemo(() => props.params.place.browser.projectsReady);
+  const projects = createDeferred<readonly ProjectRecord[]>((previous) => {
+    const source = projectSource();
+    // A picker mounted during a shared refresh starts with the accepted rows.
+    if (previous === undefined && projectsReady()) {
+      return source.projects;
+    }
+    return source.pending ? source.pending.then(() => source.browser.projects) : source.projects;
+  });
+  const browser = createMemo(() => props.params.place.browser);
+  const connectionEpoch = createMemo(() => props.params.gateway.connectionEpoch);
+  const registration = createMemo(() => {
+    const owner = browser();
+    const epoch = connectionEpoch();
+    const [saving, setSaving] = createOptimistic(false);
+    return { browser: owner, epoch, projects, saving, setSaving };
+  });
+  const presentRegistration = action(function* (
+    view: ReturnType<typeof registration>,
+    pending: Promise<void>,
+    receipt: BrowserProjectRegistration,
+  ) {
+    if (
+      view.browser === props.params.place.browser &&
+      view.epoch === props.params.gateway.connectionEpoch &&
+      receipt.isCurrent()
+    ) {
+      view.setSaving(true);
+      affects(view.projects);
+    }
+    yield Promise.race([pending, receipt.retired]);
+    if (
+      view.browser === props.params.place.browser &&
+      view.epoch === props.params.gateway.connectionEpoch &&
+      props.params.gateway.connected &&
+      view.browser.projectsReady &&
+      view.browser.projectRead === null
+    ) {
+      // The owner already reloaded; do not rejoin a held catalog after the browser closes.
+      yield refresh(view.projects);
+    }
+  });
+  const registerProject = async (path: string) => {
+    const view = registration();
+    let receipt: BrowserProjectRegistration | undefined;
+    const pending = view.browser.registerBrowserProject(path, (started) => {
+      receipt = started;
+    });
+    if (!receipt) {
+      return pending;
+    }
+    // Publish the admitted owner operation before joining its presentation action.
+    await Promise.resolve();
+    try {
+      await presentRegistration(view, pending, receipt);
+    } catch (error) {
+      if (
+        view.browser === props.params.place.browser &&
+        view.epoch === props.params.gateway.connectionEpoch &&
+        receipt.isCurrent()
+      ) {
+        view.browser.browser.error = formatUiError(error);
+        props.params.onChange();
+      }
+    }
+  };
+  const localProjects = createMemo(() => {
+    // Retired catalogs clear immediately; a live refresh keeps local filtering responsive.
+    const accepted = !props.nativeTerminal && projectsReady() ? projects() : [];
+    const query = view().query.toLowerCase();
+    return query
+      ? accepted.filter((project) =>
+          [project.displayName, project.originUrl ?? "", project.repoRoot ?? ""]
+            .join("\n")
+            .toLowerCase()
+            .includes(query),
+        )
+      : accepted;
   });
   const projectSearchRead = createMemo(() => props.params.place.browser.projectSearchRead);
   const projectSearchResult = createMemo(() => {
@@ -301,8 +359,8 @@ export function ProjectChip(props: {
               })}
             />
           </label>
-          {
-            <For each={props.state.localProjects} keyed={(project) => project.id}>
+          <Loading on={projectsReady()}>
+            <For each={localProjects()} keyed={(project) => project.id}>
               {(project) => {
                 const icon = <Icon name="gitBranch" />;
                 return (
@@ -320,7 +378,7 @@ export function ProjectChip(props: {
                 );
               }}
             </For>
-          }
+          </Loading>
           {view().cloneInput && view().projectAddAvailable ? (
             <SessionMenuItem
               item={{
