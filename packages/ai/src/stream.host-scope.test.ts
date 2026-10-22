@@ -16,16 +16,16 @@ import {
   getDefaultAiTransportHost,
   runWithAiTransportHost,
 } from "./host.js";
+import { assistantMessage, textBlock } from "./provider-transport-parity.test-support.js";
 import { cleanupSessionResources, registerSessionResourceCleanup } from "./session-resources.js";
 import { createLlmRuntime, createNodeLlmRuntime } from "./stream.js";
-import { createZeroUsage } from "./usage.test-support.js";
 
 const original = getDefaultAiTransportHost();
 afterEach(() => configureAiTransportHost(original));
 const context = { messages: [] };
 const host = (prefix: string) => ({ resolveSecretSentinel: (value: string) => prefix + value });
 const resolveSecret = (value: string) => getAiTransportHost().resolveSecretSentinel(value);
-const textContent = (text: string) => [{ type: "text", text }];
+const textContent = (text: string) => [textBlock(text)];
 const model: Model = {
   id: "scoped",
   name: "Scoped",
@@ -39,16 +39,7 @@ const model: Model = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 function message(text: string): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    provider: model.provider,
-    model: model.id,
-    api: model.api,
-    stopReason: "stop",
-    timestamp: 1,
-    usage: createZeroUsage(),
-  };
+  return assistantMessage(model, textContent(text));
 }
 function registryForStream(stream: ApiStreamFunction) {
   const registry = createApiRegistry();
