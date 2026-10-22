@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasInternalDiagnosticEventInterest } from "./diagnostic-event-listener-presence.js";
 import { emitTrustedDiagnosticEvent } from "./diagnostic-events.js";
@@ -32,7 +33,7 @@ export function withSqliteWorkerReservationObservation<T>(
   observation: SqliteWorkerReservationObservation,
   run: () => T,
 ): T {
-  return reservations.run(observation, run);
+  return runWithAsyncStore(reservations, observation, run);
 }
 
 const detailedTiming = isDiagnosticFlagEnabled("sqlite.worker-timing");

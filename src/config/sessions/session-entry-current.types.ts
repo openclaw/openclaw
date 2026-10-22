@@ -17,6 +17,7 @@ export type SessionEntryCurrentFacts = {
   sandbox?: SessionEntry["sandbox"];
   sandboxMode?: SessionEntry["sandboxMode"];
   permissionMode?: SessionEntry["permissionMode"];
+  toolOverrides?: SessionEntry["toolOverrides"];
   sessionRoot?: SessionEntry["sessionRoot"];
   authProfileOverride?: SessionEntry["authProfileOverride"];
   authProfileOverrideSource?: SessionEntry["authProfileOverrideSource"];
@@ -40,6 +41,8 @@ export type SessionEntryCurrentFacts = {
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
   delegatedToolPolicy?: unknown;
+  skillLibrarySelections?: unknown;
+  executionPolicy?: unknown;
   subagentRecovery?: {
     lastRunId?: unknown;
     sessionLifecycleRunId?: unknown;

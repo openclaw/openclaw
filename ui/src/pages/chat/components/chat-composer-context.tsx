@@ -5,6 +5,7 @@ import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/sha
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
 import {
@@ -13,9 +14,11 @@ import {
   type ProviderQuotaGroup,
   type ProviderUsageDisplayProps,
 } from "../../../lib/provider-quota-summary.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { resolveSessionContextLimit } from "../../../lib/sessions/context-budget.ts";
 import { createChatPickerOverlay } from "./chat-picker-overlay.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 
@@ -280,10 +283,10 @@ export function ContextNotice(props: ContextNoticeProps) {
         })
       : t("chat.usageRemaining");
   });
-  const colors = createMemo(() => {
+  const colors = () => {
     const context = model();
     return context ? { "--ctx-color": context.color, "--ctx-bg": context.bg } : undefined;
-  });
+  };
   const dashOffset = () => RING_CIRCUMFERENCE * (1 - (model()?.pct ?? 0) / 100);
   const providerCosts = createMemo(() =>
     model() ? latestProviderCostStats(props.messages) : null,

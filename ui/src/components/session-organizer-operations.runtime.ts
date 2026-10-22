@@ -20,7 +20,7 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import { requestCloudWorkerStop } from "./cloud-worker-stop.runtime.ts";
 import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
-import { showInputDialog } from "./input-dialog.ts";
+import { showInputDialog } from "./input-dialog.tsx";
 import type { SessionMenuAction } from "./session-menu-solid.tsx";
 import { archiveSessionsWithUndo } from "./session-organizer-archive.runtime.ts";
 import {
@@ -280,9 +280,17 @@ export async function runBatchSessionAction(
   }
 }
 
+export type SessionRenameHost = SessionActionHost & {
+  readonly sessionData: SessionActionHost["sessionData"] &
+    Pick<
+      SessionOrganizerDependencies["sessionData"],
+      "beginSessionMutation" | "sessionDraftSignal" | "sessionMutationError"
+    >;
+};
+
 export async function renameSession(
-  deps: SessionOrganizerDependencies,
-  session: SidebarRecentSession,
+  deps: SessionRenameHost,
+  session: SessionActionRow & Pick<SidebarRecentSession, "renameValue" | "userLabel">,
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -291,6 +299,14 @@ export async function renameSession(
   await showInputDialog({
     signal: deps.sessionData.sessionDraftSignal,
     gateway: scope.gateway,
+    canSubmit: () =>
+      readSessionMethodAccess(scope.gateway.snapshot, {
+        method: "sessions.patch",
+        params: { key: session.key, label: null },
+        sessionScope: true,
+        session,
+        allowDeferred: true,
+      }).allowed,
     title: t("sessionsView.renameSessionPrompt"),
     defaultValue: session.renameValue,
     submit: async (value) => {
@@ -298,7 +314,7 @@ export async function renameSession(
       if (!patch) {
         return null;
       }
-      const currentScope = deps.sessionData.beginSessionMutation();
+      const currentScope = deps.sessionData.beginSessionMutation(true);
       if (!currentScope) {
         return t("sessionsView.actionRequiresConnection");
       }
@@ -340,15 +356,14 @@ export async function assignSessionOwner(
   ) {
     return;
   }
-  const assigned = await scope.sessions.assignOwner(session.key, owner, {
-    agentId: resolveUiSessionRowAgentId(session, scope.selectedAgentId),
-  });
-  if (
-    deps.sessionData.isSessionMutationScopeCurrent(scope) &&
-    !assigned &&
-    scope.sessions.state.error
-  ) {
-    deps.sessionData.publishSessionMutationError(scope, scope.sessions.state.error);
+  try {
+    await scope.sessions.assignOwner(session.key, owner, {
+      agentId: resolveUiSessionRowAgentId(session, scope.selectedAgentId),
+    });
+  } catch (error) {
+    if (deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+      deps.sessionData.publishSessionMutationError(scope, error);
+    }
   }
 }
 

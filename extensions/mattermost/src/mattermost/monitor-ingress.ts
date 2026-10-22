@@ -183,14 +183,11 @@ export function createMattermostIngressMonitor(options: {
       return await options.dispatch(post, payload, lifecycle);
     },
     pollIntervalMs: options.pollIntervalMs ?? MATTERMOST_INGRESS_POLL_INTERVAL_MS,
-    // Preserve Mattermost's existing one-drain-at-a-time delivery cycle.
-    waitForDeliveryIdleBeforeRepump: true,
     retention: "standard",
     drain: {
+      deferredLaneOccupancy: "release",
       resolveNonRetryableFailure: resolveMattermostIngressNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs,
       onLog: (message) => options.runtime.log?.(`mattermost ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),

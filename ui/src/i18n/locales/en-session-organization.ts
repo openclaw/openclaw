@@ -6,6 +6,12 @@ const enSessionOrganization = {
   sessionsView: {
     pullRequestCount: en.sessionsView.pullRequestCount,
     advanced: "Advanced",
+    searchGroups: "Search groups",
+    unassigned: "Unassigned",
+    mobileConversation: "Conversation",
+    mobileCopyPreviewLink: "Copy preview link",
+    mobileCopySessionId: "Copy session ID",
+    mobileCopyMarkdown: "Copy as Markdown",
     copyDetails: "Copy details",
     copyLink: "Copy link",
     communication: {
@@ -285,12 +291,13 @@ const enSessionOrganization = {
       "Delete 1 session?\n\nStop any attached worker safely, then delete the session entry and archive its transcript.",
     deleteSelectedConfirm:
       "Delete {count} sessions?\n\nStop any attached workers safely, then delete the session entries and archive their transcripts.",
-    archiveSessionTitle: "Archive session?",
+    archiveSessionTitle: "Also archive nested sessions?",
     archiveSessionNestedOne:
-      '"{session}" has a nested session. Archive only this one and it moves to the top level.',
+      '"{session}" has 1 directly nested session. If you archive only this session, that nested session moves to the top level.',
     archiveSessionNestedOther:
-      '"{session}" has {count} nested sessions. Archive only this one and they move to the top level.',
-    archiveThisSession: "Archive this session",
+      '"{session}" has {count} directly nested sessions. If you archive only this session, those nested sessions move to the top level.',
+    archiveThisSession: "Archive only this session",
+    archiveAllSessions: "Archive all ({count})",
     moveToTopLevel: en.sessionsView.moveToTopLevel,
     archiveTreeRootRequired:
       "Archive a persistent conversation and its children, not a hidden worker run.",
@@ -354,6 +361,7 @@ const enSessionOrganization = {
     removeFromGroup: "Remove from group",
     moveBackToGroups: "Move back to Groups",
     groupMenu: en.sessionsView.groupMenu,
+    groupOptions: en.sessionsView.groupOptions,
     newSessionInGroup: en.sessionsView.newSessionInGroup,
     groupDefaultsMenu: "New session defaults",
     groupDefaultsFailed: "Could not save the group defaults.",

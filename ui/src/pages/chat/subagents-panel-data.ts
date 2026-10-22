@@ -87,7 +87,22 @@ function createMetrics(identity: string): Metrics {
 export class SubagentsPanelData {
   rows: readonly SubagentsPanelRow[] = [];
   loading = false;
-  error: string | null = null;
+  private failure: { kind: "read" | "stop"; message: string } | null = null;
+  get error(): string | null {
+    return this.failure?.message ?? null;
+  }
+  get readError(): string | null {
+    return this.failure?.kind === "read" ? this.failure.message : null;
+  }
+  get stopError(): string | null {
+    return this.failure?.kind === "stop" ? this.failure.message : null;
+  }
+  readResult: Promise<void> = Promise.resolve();
+  private readCompletion: ReturnType<typeof Promise.withResolvers<void>> | null = null;
+  private lifetime = Promise.withResolvers<void>();
+  get retired(): Promise<void> {
+    return this.lifetime.promise;
+  }
   hasResult = false;
 
   private input: SubagentsPanelInput | null = null;
@@ -108,7 +123,6 @@ export class SubagentsPanelData {
   private readonly narration = createSidebarNarration();
   private readonly unsubscribe: Array<() => void>;
   private readonly visibilityDocument = globalThis.document;
-  private readonly visibilityChanged = () => this.reconcile();
   private readonly stopVisibility: (() => void) | undefined;
 
   constructor(
@@ -147,7 +161,7 @@ export class SubagentsPanelData {
       context.gateway.subscribeEvents((event) => this.handleEvent(event)),
     ];
     this.stopVisibility = this.visibilityDocument
-      ? listen(this.visibilityDocument, "visibilitychange", this.visibilityChanged)
+      ? listen(this.visibilityDocument, "visibilitychange", () => this.reconcile())
       : undefined;
   }
 
@@ -185,7 +199,8 @@ export class SubagentsPanelData {
     this.scope = scope;
     const generation = this.generation;
     this.loading = true;
-    this.error = null;
+    this.failure = null;
+    this.syncReadCompletion();
     this.observation = this.context.sessions.observeList(
       this.childQuery(this.input),
       (snapshot) => {
@@ -222,7 +237,7 @@ export class SubagentsPanelData {
       return;
     }
     this.metrics.clear();
-    this.error = null;
+    this.failure = null;
     await this.readList();
   }
 
@@ -235,6 +250,9 @@ export class SubagentsPanelData {
       return;
     }
     const query = this.childQuery(this.input);
+    this.loading = true;
+    this.syncReadCompletion();
+    this.publish();
     const pending = Promise.resolve()
       .then(async () => {
         if (this.current(generation)) {
@@ -249,8 +267,9 @@ export class SubagentsPanelData {
       })
       .catch((error: unknown) => {
         if (this.current(generation)) {
-          this.error = formatUiError(error);
+          this.failure = { kind: "read", message: formatUiError(error) };
           this.loading = false;
+          this.syncReadCompletion();
           this.publish();
         }
       })
@@ -269,8 +288,9 @@ export class SubagentsPanelData {
     const incomplete =
       (pagination?.hasMore ?? result?.hasMore) ||
       (pagination?.totalCount !== undefined && pagination.count < pagination.totalCount);
-    this.loading = snapshot.loading || incomplete;
-    this.error = snapshot.error;
+    this.loading = !snapshot.error && (snapshot.loading || incomplete);
+    this.failure = snapshot.error ? { kind: "read", message: snapshot.error } : null;
+    this.syncReadCompletion();
     if (snapshot.error) {
       // Access loss must not leave previously readable child contents onscreen.
       this.sessions = [];
@@ -507,11 +527,12 @@ export class SubagentsPanelData {
     const tools = this.narration.read().tools;
     this.rows = this.sessions.map((session) => {
       const metrics = this.metrics.get(session.key);
-      const tool = isSessionRunStateActive(session)
+      const active = isSessionRunStateActive(session);
+      const tool = active
         ? (tools.get(session.key) ?? (metrics?.liveToolObserved ? undefined : metrics?.tool))
         : undefined;
       const headline =
-        isSessionRunStateActive(session) && metrics
+        active && metrics
           ? selectActivityHeadline(
               [...metrics.calls]
                 .filter(([identity, item]) => {
@@ -538,16 +559,13 @@ export class SubagentsPanelData {
         activity:
           tool?.text ||
           headline?.title ||
-          (isSessionRunStateActive(session) &&
+          (active &&
           session.observerDigest?.runId &&
           session.activeRunIds?.includes(session.observerDigest.runId)
             ? session.observerDigest.headline.trim() || undefined
             : undefined),
         toolDisplayName: tool ? resolveToolDisplay({ name: tool.name }).label : undefined,
-        canStop:
-          isSessionRunStateActive(session) &&
-          session.activeRunIds?.length === 1 &&
-          stopAccess.allowed,
+        canStop: active && session.activeRunIds?.length === 1 && stopAccess.allowed,
         stopping: this.stopping.has(session.key),
         stopAccess,
       };
@@ -577,7 +595,7 @@ export class SubagentsPanelData {
       sessionAbortable: true,
     }).abort;
     if (!access.allowed) {
-      this.error = access.reason;
+      this.failure = { kind: "stop", message: access.reason };
       this.publish();
       return;
     }
@@ -594,10 +612,28 @@ export class SubagentsPanelData {
       return;
     }
     this.stopping.delete(session.key);
-    this.error = result.ok ? (result.warning ?? null) : formatUiError(result.error);
+    const message = result.ok ? (result.warning ?? null) : formatUiError(result.error);
+    this.failure = message ? { kind: "stop", message } : null;
     this.publish();
     if (result.ok) {
       void this.refresh();
+    }
+  }
+
+  reportStopError(error: unknown): void {
+    this.failure = { kind: "stop", message: formatUiError(error) };
+    this.publish();
+  }
+
+  private syncReadCompletion(): void {
+    if (this.loading) {
+      if (!this.readCompletion) {
+        this.readCompletion = Promise.withResolvers<void>();
+        this.readResult = this.readCompletion.promise;
+      }
+    } else {
+      this.readCompletion?.resolve();
+      this.readCompletion = null;
     }
   }
 
@@ -611,6 +647,11 @@ export class SubagentsPanelData {
   }
 
   private retire(): void {
+    this.lifetime.resolve();
+    this.lifetime = Promise.withResolvers<void>();
+    this.readCompletion?.resolve();
+    this.readCompletion = null;
+    this.readResult = Promise.resolve();
     this.generation += 1;
     this.observation?.dispose();
     this.observation = null;
@@ -622,7 +663,7 @@ export class SubagentsPanelData {
     this.messageSubscriptions.clear();
     this.loading = false;
     this.hasResult = false;
-    this.error = null;
+    this.failure = null;
     this.syncNarration();
   }
 

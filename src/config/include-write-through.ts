@@ -9,6 +9,7 @@ import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import { recordUpdateDoctorConfigFileWrite } from "../infra/update-doctor-result.js";
+import { readObjectPath } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -116,22 +117,7 @@ function includeConfigPathsEqual(left: readonly string[], right: readonly string
 // re-imports them) so there is exactly one copy. Config paths can traverse
 // array indices (roster entries), hence parseConfigPathArrayIndex.
 export function getPathValue(value: unknown, keyPath: readonly string[]): unknown {
-  let current = value;
-  for (const segment of keyPath) {
-    if (Array.isArray(current)) {
-      const index = parseConfigPathArrayIndex(segment);
-      if (index === undefined || index >= current.length) {
-        return undefined;
-      }
-      current = current[index];
-      continue;
-    }
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[segment];
-  }
-  return current;
+  return readObjectPath(value, keyPath, "bounded");
 }
 
 export function setPathValue(

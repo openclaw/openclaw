@@ -20,6 +20,7 @@ export type GenerationWorkerInput = (
         "owners" | "managedRoots" | "receipts" | "files" | "namespaces"
       >;
       callbackPort?: MessagePort;
+      progressSignal?: Int32Array<SharedArrayBuffer>;
     }
   | { operation: "call"; handle: number; args: GenerationWireValue[]; asynchronous: boolean }
   | { operation: "close" }

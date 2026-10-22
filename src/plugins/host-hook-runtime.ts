@@ -563,15 +563,11 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
   return failures;
 }
 
-export function clearPluginHostRuntimeState(params?: { pluginId?: string; runId?: string }): void {
-  clearPluginRunContext(params ?? {});
-  if (params?.pluginId) {
-    getPluginHostRuntimeState().schedulerJobsByPlugin.delete(params.pluginId);
-  } else if (!params?.runId) {
-    const state = getPluginHostRuntimeState();
-    state.schedulerJobsByPlugin.clear();
-    state.pendingAgentEventHandlersByRunId.clear();
-    state.closedRunIds.clear();
-    state.terminalEventCleanupExpiredRunIds.clear();
-  }
+export function clearPluginHostRuntimeState(): void {
+  clearPluginRunContext({});
+  const state = getPluginHostRuntimeState();
+  state.schedulerJobsByPlugin.clear();
+  state.pendingAgentEventHandlersByRunId.clear();
+  state.closedRunIds.clear();
+  state.terminalEventCleanupExpiredRunIds.clear();
 }

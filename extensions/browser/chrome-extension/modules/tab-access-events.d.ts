@@ -1,33 +1,4 @@
 import type { TabAccessEpoch, TabAccessPolicy } from "./tab-access.js";
-import type { BrowserTabSnapshot } from "./tab-eligibility.js";
-
-type ChromeEvent<Listener> = {
-  addListener(listener: Listener): void;
-};
-
-export type TabAccessEventsChromeApi = {
-  debugger: {
-    onEvent: ChromeEvent<
-      (source: { tabId?: number; sessionId?: string }, method: string, params: unknown) => void
-    >;
-    onDetach: ChromeEvent<(source: { tabId?: number }, reason: string) => void>;
-  };
-  tabs: {
-    onRemoved: ChromeEvent<(tabId: number) => void>;
-    onReplaced: ChromeEvent<(addedTabId: number, removedTabId: number) => void>;
-    onUpdated: ChromeEvent<
-      (
-        tabId: number,
-        changeInfo: { groupId?: number; url?: string; status?: string },
-        tab: BrowserTabSnapshot,
-      ) => void
-    >;
-  };
-  tabGroups: {
-    onUpdated: ChromeEvent<(group?: { id: number; title?: string }) => void>;
-    onRemoved: ChromeEvent<(group?: { id: number; title?: string }) => void>;
-  };
-};
 
 export type TabAccessEventPolicy = Pick<
   TabAccessPolicy,
@@ -50,7 +21,6 @@ export type TabAccessEventPolicy = Pick<
 };
 
 export function registerTabAccessEvents(options: {
-  chromeApi?: TabAccessEventsChromeApi;
   accessReady: Promise<unknown>;
   policy: TabAccessEventPolicy;
   attachments: Map<

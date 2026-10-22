@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 338803,
-  "reason": "Integrated main after schema and syntax-highlighting deferrals measures 338803 B at startup; cap at 338900 B with the existing 64 B build-variance allowance.",
-  "updatedAt": "2026-10-17"
+  "startupJsGzipBytes": 315967,
+  "reason": "Measured cd982fce7e5 startup at 315967 B: +37 B vs c4fd27d76ca (shared UI chunk +13 B with self-profile scopes; hash-only chunks +24 B), no new eager modules; correct the below-measurement baseline from #180890.",
+  "updatedAt": "2026-10-22"
 }

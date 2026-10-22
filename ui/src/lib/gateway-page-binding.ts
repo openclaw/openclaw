@@ -33,10 +33,6 @@ type GatewayRouteDataIdentity = {
   gatewaySnapshot: ApplicationGatewaySnapshot;
 };
 
-/**
- * Owns a page's Gateway binding and request epoch. Source replacement and
- * same-client reconnects share one request boundary, so stale work cannot survive either.
- */
 export class GatewayPageBinding {
   private readonly lifecycle = createGatewayConnectionLifecycle({
     client: null,
@@ -82,6 +78,7 @@ export class GatewayPageBinding {
       return;
     }
     this.applySnapshot(gateway.snapshot, { initial, sourceChanged });
+    // Source replacements and same-client reconnects retire stale requests before notifying consumers.
     this.stopGateway = gateway.subscribe((snapshot) => {
       if (this.currentGateway === gateway && this.options.getGateway() === gateway) {
         this.applySnapshot(snapshot, { initial: false, sourceChanged: false });

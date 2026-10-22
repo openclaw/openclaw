@@ -35,12 +35,7 @@ export function floatToG711Ulaw(samples: Float32Array): Uint8Array {
   return bytes;
 }
 
-export type RealtimeTalkAudioFrame = {
-  peak: number;
-  rms: number;
-};
-
-export function measureRealtimeTalkAudioFrame(samples: Float32Array): RealtimeTalkAudioFrame {
+export function measureRealtimeTalkAudioFrame(samples: Float32Array) {
   let peak = 0;
   let sumSquares = 0;
   for (const rawSample of samples) {
@@ -177,7 +172,7 @@ export class RealtimeTalkMediaStreamMeter {
   }
 }
 
-export function estimateBase64DecodedByteLength(value: string): number {
+function estimateBase64DecodedByteLength(value: string): number {
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
   return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
 }

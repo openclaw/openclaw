@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { throwIfSettledRejected } from "./error-graph-internal.js";
+import { throwIfSettledRejected, throwSettledAggregate } from "./error-graph-internal.js";
 
 describe("throwIfSettledRejected", () => {
   it("accepts empty or successful work", () => {
@@ -41,6 +41,53 @@ describe("throwIfSettledRejected", () => {
         throw error;
       }
       expect(error.message).toBe("Some cleanup failed");
+      expect(error.errors).toEqual([first, "second"]);
+      expect(error.errors[0]).toBe(first);
+    }
+  });
+});
+
+describe("throwSettledAggregate", () => {
+  it("accepts empty or successful work", () => {
+    expect(() => throwSettledAggregate([], "cleanup failed")).not.toThrow();
+    expect(() =>
+      throwSettledAggregate([{ status: "fulfilled", value: undefined }], "cleanup failed"),
+    ).not.toThrow();
+  });
+
+  it("retains an aggregate envelope for a single non-Error rejection", () => {
+    try {
+      throwSettledAggregate([{ status: "rejected", reason: undefined }], "cleanup failed");
+      expect.unreachable("the sole failure must be reported");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AggregateError);
+      if (!(error instanceof AggregateError)) {
+        throw error;
+      }
+      expect(error.message).toBe("cleanup failed");
+      expect(error.errors).toEqual([undefined]);
+      expect(Object.hasOwn(error, "cause")).toBe(false);
+    }
+  });
+
+  it("preserves rejection identities and input order among successful work", () => {
+    const first = new Error("first");
+    try {
+      throwSettledAggregate(
+        [
+          { status: "fulfilled", value: "success" },
+          { status: "rejected", reason: first },
+          { status: "rejected", reason: "second" },
+        ],
+        "joined cleanup failed",
+      );
+      expect.unreachable("the joined failures must be reported");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AggregateError);
+      if (!(error instanceof AggregateError)) {
+        throw error;
+      }
+      expect(error.message).toBe("joined cleanup failed");
       expect(error.errors).toEqual([first, "second"]);
       expect(error.errors[0]).toBe(first);
     }

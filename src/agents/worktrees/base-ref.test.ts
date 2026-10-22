@@ -23,6 +23,18 @@ describe("managed worktree creation groups", () => {
 
   const create = (name: string) => service.create({ repoRoot: repo, name });
   const head = (cwd: string) => git(cwd, "rev-parse", "HEAD");
+  function joinAllocations(count: number) {
+    const allocate = preparation.createWithWorktreeAllocation;
+    const joined = createDeferred();
+    let callers = 0;
+    vi.spyOn(preparation, "createWithWorktreeAllocation").mockImplementation(async (...args) => {
+      if (++callers === count) {
+        joined.resolve();
+      }
+      await joined.promise;
+      return await allocate(...args);
+    });
+  }
   function observeReads() {
     const execute = gitExec.executeGitCommand;
     const counts = { fetches: 0, statusReads: 0 };
@@ -56,20 +68,47 @@ describe("managed worktree creation groups", () => {
     });
   });
 
+  it.each(["branch", "detached"])(
+    "creates from local HEAD without origin on a %s checkout",
+    async (checkout) => {
+      await git(repo, "remote", "remove", "origin");
+      await git(repo, "switch", "-c", "local-work");
+      await fs.writeFile(path.join(repo, "README.md"), "local commit\n");
+      await git(repo, "add", "README.md");
+      await git(repo, ...gitIdentity, "commit", "-m", "local work");
+      const expectedHead = await head(repo);
+      if (checkout === "detached") {
+        await git(repo, "checkout", "--detach", expectedHead);
+      }
+      joinAllocations(2);
+      const execute = gitExec.executeGitCommand;
+      const remoteCommands: string[] = [];
+      vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (["remote", "ls-remote", "fetch", "merge"].includes(args[0]!)) {
+          remoteCommands.push(args[0]!);
+        }
+        return await execute(cwd, args, options);
+      });
+
+      const records = await Promise.all([create("local-first"), create("local-second")]);
+
+      for (const record of records) {
+        expect(record.baseRef).toBe("HEAD");
+        expect(await head(record.path)).toBe(expectedHead);
+        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe(
+          "local commit\n",
+        );
+      }
+      expect(await head(repo)).toBe(expectedHead);
+      expect(remoteCommands).toEqual(["remote"]);
+    },
+  );
+
   it("shares one dirty local-default decision across a burst of twenty creates", async () => {
     const localHead = await head(repo);
     const remoteHead = await advanceRemote();
     await fs.writeFile(path.join(repo, "README.md"), "local work\n");
-    const allocate = preparation.createWithWorktreeAllocation;
-    const joined = createDeferred();
-    let callers = 0;
-    vi.spyOn(preparation, "createWithWorktreeAllocation").mockImplementation(async (...args) => {
-      if (++callers === 20) {
-        joined.resolve();
-      }
-      await joined.promise;
-      return await allocate(...args);
-    });
+    joinAllocations(20);
     const reads = observeReads();
     const enqueue = gitExec.enqueueGitRefMutation;
     const failures: unknown[] = [];
@@ -86,7 +125,6 @@ describe("managed worktree creation groups", () => {
       Array.from({ length: 20 }, (_, index) => create(`burst-${index}`)),
     );
 
-    expect(records).toHaveLength(20);
     expect(new Set(records.map((record) => record.baseRef))).toEqual(new Set(["origin/main"]));
     expect(await head(repo)).toBe(localHead);
     expect(await git(repo, "rev-parse", "origin/main")).toBe(remoteHead);
@@ -147,6 +185,24 @@ describe("managed worktree creation groups", () => {
       releaseSecond.resolve();
       await Promise.allSettled([first, second]);
     }
+  });
+
+  it("reports repository updates only while fetching the default base", async () => {
+    const execute = gitExec.executeGitCommand;
+    const events: string[] = [];
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      if (args[0] === "fetch") {
+        events.push("fetch");
+      }
+      return await execute(cwd, args, options);
+    });
+    const onProgress = (phase: string) => events.push(phase);
+    await service.create({ repoRoot: repo, name: "default", onProgress });
+    expect(events.slice(0, 2)).toEqual(["base", "fetch"]);
+    expect(events.at(-1)).toBe("checkout");
+    events.length = 0;
+    await service.create({ repoRoot: repo, name: "explicit", baseRef: "HEAD", onProgress });
+    expect(events).toEqual(["checkout"]);
   });
 
   it("reuses a recent default, then refreshes after its freshness window", async () => {

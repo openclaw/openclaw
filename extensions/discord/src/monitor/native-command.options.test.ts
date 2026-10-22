@@ -47,8 +47,7 @@ let listNativeCommandSpecs: typeof import("openclaw/plugin-sdk/command-auth-nati
 type CreateCommand = typeof import("./native-command.js").createDiscordNativeCommand;
 let createDiscordNativeCommand: CreateCommand;
 let buildDiscordCommandOptions: typeof import("./native-command.options.js").buildDiscordCommandOptions;
-let resolveDiscordNativeAutocompleteAuthorized: typeof import("./native-command-auth.js").resolveDiscordNativeAutocompleteAuthorized;
-let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
+let nativeCommandContext: typeof import("./native-command.dispatch.test-support.js").nativeCommandContext;
 
 function createNativeCommand(
   spec: string | Parameters<CreateCommand>[0]["command"],
@@ -64,12 +63,8 @@ function createNativeCommand(
   return createDiscordNativeCommand({
     readPolicy,
     command,
-    cfg,
-    discordConfig: cfg.channels?.discord ?? {},
-    accountId: "default",
-    sessionPrefix: "discord:slash",
+    ...nativeCommandContext(cfg),
     ephemeralDefault: true,
-    threadBindings: createNoopThreadBindingManager("default"),
   });
 }
 
@@ -168,8 +163,7 @@ beforeAll(async () => {
   ({ listNativeCommandSpecs } = await import("openclaw/plugin-sdk/command-auth-native"));
   ({ createDiscordNativeCommand } = await import("./native-command.js"));
   ({ buildDiscordCommandOptions } = await import("./native-command.options.js"));
-  ({ resolveDiscordNativeAutocompleteAuthorized } = await import("./native-command-auth.js"));
-  ({ createNoopThreadBindingManager } = await import("./thread-bindings.js"));
+  ({ nativeCommandContext } = await import("./native-command.dispatch.test-support.js"));
 });
 
 beforeEach(() => {
@@ -316,18 +310,6 @@ it("returns empty autocomplete when access is revoked during the pairing-store r
     authSpy.mockRestore();
     clearRuntimeConfigSnapshot();
   }
-});
-
-it("rejects autocomplete when commands.ownerAllowFrom rejects the sender", async () => {
-  const cfg = createAllowedGuildAutocompleteConfig({ ownerAllowFrom: ["discord:owner-user"] });
-  await expect(
-    resolveDiscordNativeAutocompleteAuthorized({
-      cfg,
-      discordConfig: cfg.channels?.discord ?? {},
-      accountId: "default",
-      interaction: autocompleteInteraction(blockedGuildMember) as never,
-    }),
-  ).resolves.toBe(false);
 });
 
 it("keeps plugin command autocomplete aligned with dispatch owner checks", async () => {

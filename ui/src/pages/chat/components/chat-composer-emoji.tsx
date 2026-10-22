@@ -5,6 +5,7 @@ import {
   type Overlay,
 } from "../../../components/overlay-lifecycle.ts";
 import { createTextareaTokenAnchor } from "../../../components/textarea-token-anchor.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import "../../../components/solid/overlay.css";
 import {
   emojiForShortcode,
@@ -14,13 +15,15 @@ import {
 } from "../../../lib/chat/emoji.ts";
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
 import "../../../styles/chat/emoji-menu.css";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import {
   handleComposerMenuKeydown,
   ComposerMenu,
   renderComposerMenuOption as ComposerMenuOption,
 } from "./chat-composer-menu.tsx";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 type EmojiMenuState = {
   target: EmojiTarget | null;

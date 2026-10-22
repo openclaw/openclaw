@@ -10,6 +10,11 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withConfigWriteLock } from "../config/write-lock.js";
 import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
+import {
+  resolveClientCredentialStorePath,
+  resolveStateClientCredentialEnvironment,
+} from "../infra/client-credential-paths.js";
+import { capturePortClientCredentialBinding } from "../infra/client-credential-restore.js";
 import { resolveDatabaseEngineInput } from "../infra/database-engine/config.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import {
@@ -17,7 +22,6 @@ import {
   type DatabasePortInspection,
   DatabasePortError,
 } from "../infra/database-engine/port-command.worker.js";
-import { databasePortProviders } from "../infra/database-engine/port-provider.js";
 import {
   resolveDatabaseFamilyEngines,
   type DatabaseEngineId,
@@ -34,7 +38,6 @@ import {
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { createVerifiedSqliteSnapshot } from "../infra/sqlite-snapshot.js";
 import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   assertDatabaseArtifact,
   captureDatabaseArtifact,
@@ -64,7 +67,10 @@ import {
   storeAt,
   storeDirectory,
 } from "./doctor-database-port-context.js";
-import { assertDatabasePortPluginMigrationsComplete } from "./doctor-database-port-migrations.js";
+import {
+  assertDatabasePortPluginMigrationsComplete,
+  inspectDatabasePortSources,
+} from "./doctor-database-port-migrations.js";
 import {
   assertOriginal,
   loadDatabasePortStateReceipt,
@@ -73,6 +79,7 @@ import {
   withDatabasePortConfigStateReceipt,
 } from "./doctor-database-port-publication.js";
 import {
+  assertLocalCredentialPortCompanion,
   prepareSharedStatePortSource,
   selectDatabasePortEngine,
   withDatabasePortStateOwner,
@@ -114,30 +121,34 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
     to,
     family: ctx.family,
   });
-  if (!ctx.family || ctx.family === "state") {
-    await prepareSharedStatePortSource(ctx, from, to, options.dryRun);
+  const sources = await inspectDatabasePortSources(ctx, config, from, to);
+  let all = sources.all;
+  const owner = sources.owner;
+  if (
+    (!ctx.family || ctx.family === "state") &&
+    (await prepareSharedStatePortSource(ctx, from, to, options.dryRun))
+  ) {
+    all = await discoverBackupDatabasePaths({ stateDir: ctx.stateDir, config, env: ctx.env });
   }
-  const context = { stateDir: ctx.stateDir, config, env: ctx.env };
-  const plugins = resolvePluginMetadataSnapshot(context);
-  const families = await Promise.all(
-    databasePortProviders.map(async (provider) => ({
-      id: provider.id,
-      roots: await provider.resolveRoots({ ...context, plugins }),
-    })),
-  );
-  privatePaths(
-    ctx,
-    families.flatMap((family) => family.roots),
-  );
-  const all = await discoverBackupDatabasePaths({ stateDir: ctx.stateDir, config, env: ctx.env });
-  const owner = (file: string) =>
-    families.find((family) =>
-      family.roots.some((root) => file === root || file.startsWith(`${root}${path.sep}`)),
-    )?.id;
-  const stores = all.filter((file) => owner(file) && (!ctx.family || owner(file) === ctx.family));
+  const selected = all.filter((file) => owner(file) && (!ctx.family || owner(file) === ctx.family));
+  const localCompanions = new Map<string, string>();
+  for (const file of selected) {
+    const env =
+      owner(file) === "state"
+        ? resolveStateClientCredentialEnvironment({ path: file, env: ctx.env })
+        : undefined;
+    if (env) {
+      const local = resolveClientCredentialStorePath(env);
+      if (all.includes(local)) {
+        localCompanions.set(local, file);
+      }
+    }
+  }
+  const stores = selected.filter((file) => !localCompanions.has(file));
   const outOfScope: { path: string; engine: DatabaseEngineId }[] = [];
   const inspected = new Map<string, DatabasePortInspection>();
-  for (const file of all) {
+  // Admit the shared target before its exact local companion can leave the portable set.
+  for (const file of all.filter((candidate) => !localCompanions.has(candidate))) {
     ctx.target = file;
     privatePaths(ctx, [file]);
     if (!stores.includes(file)) {
@@ -166,6 +177,10 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
       refuse(ctx, `${facts.engine} store with ${from} config`, "matching physical/config engines");
     }
     inspected.set(file, facts);
+  }
+  for (const [file, sharedPath] of localCompanions) {
+    assertLocalCredentialPortCompanion(ctx, file, sharedPath, inspected.get(sharedPath)?.family);
+    outOfScope.push({ path: file, engine: "sqlite" });
   }
   capacity(
     ctx,
@@ -274,6 +289,24 @@ async function captureOriginals(ctx: Context, facts: Awaited<ReturnType<typeof p
       originalCapture: await captureDatabaseArtifact(anchor),
       verification: null,
     });
+    const credentialEnv =
+      info.family === "state"
+        ? resolveStateClientCredentialEnvironment({ path: file, env: ctx.env })
+        : undefined;
+    if (credentialEnv) {
+      const credentialBinding = capturePortClientCredentialBinding({
+        env: credentialEnv,
+        sourcePath: anchor,
+        sourceFile: { path: original.path, dev: String(stat.dev), ino: String(stat.ino) },
+      });
+      const bindingFile = path.join(directory, "client-credential-binding.json");
+      writeDatabasePortArtifact(
+        bindingFile,
+        `${JSON.stringify(credentialBinding)}\n`,
+        ctx.assertCurrent,
+      );
+      artifacts.push(await captureDatabaseArtifact(bindingFile));
+    }
   }
   for (const [index, input] of facts.configInputs.entries()) {
     await assertDatabaseArtifact(input);
@@ -615,7 +648,7 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
       : undefined;
     return await withDatabasePortStateOwner(ctx, recovery, async () => {
       if (recovery) {
-        ctx.manifest = assertDatabasePortRecoveryAllowed(stateDir, recovery);
+        ctx.manifest = assertDatabasePortRecoveryAllowed(ctx.stateDir, recovery);
         await loadRecovery(ctx);
         if (ctx.manifest.state === "complete") {
           return finalize(ctx, ctx.manifest.outcome!);

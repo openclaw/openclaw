@@ -89,9 +89,6 @@ function PrivateComposerRecoveryDialog(
         </For>
         {error() && <p role="alert">{t(`chat.privateDraftReload.${error()}`)}</p>}
         <openclaw-modal-actions class="exec-approval-actions">
-          <button type="button" class="btn danger" onClick={() => props.finish(current())}>
-            {t("chat.privateDraftReload.discard")}
-          </button>
           <button
             ref={(element) => {
               keepButton = element;
@@ -102,6 +99,9 @@ function PrivateComposerRecoveryDialog(
             onClick={() => props.finish(false)}
           >
             {t("chat.privateDraftReload.keep")}
+          </button>
+          <button type="button" class="btn danger" onClick={() => props.finish(current())}>
+            {t("chat.privateDraftReload.discard")}
           </button>
         </openclaw-modal-actions>
       </section>

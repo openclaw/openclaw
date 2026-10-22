@@ -257,9 +257,6 @@ export function createSessionCapability(
       }
       const projected = permissions.reconcileList(admitted, revision, agentId);
       roster.observations.inherit(projected, admitted);
-      if (!projected) {
-        return projected;
-      }
       for (const row of admitted?.sessions ?? []) {
         mutations.observePendingFields(
           row,
@@ -308,9 +305,12 @@ export function createSessionCapability(
 
   const mutations = createSessionMutations({
     connection,
+    defer: (intent) => gateway.defer?.(intent) ?? false,
     snapshot: () => gateway.snapshot,
     findRow: (matches) => {
-      const row = roster.observations.publishedRow(matches);
+      const row =
+        roster.observations.publishedRow(matches) ??
+        presentation.result?.sessions.find((candidate) => matches(candidate, presentation.agentId));
       return row ? roster.observations.projectFields(row) : undefined;
     },
     readState: () => state,
@@ -321,7 +321,14 @@ export function createSessionCapability(
     publishedRow: (key) => roster.observations.publishedRow((row) => row.key === key),
     archiveFields: roster.observations,
     readRevision: () => roster.requestRevision,
-    redecorateLists: roster.redecorateLists,
+    redecorateLists: () => {
+      roster.redecorateLists();
+      const result = mutations.applyRows(presentation.result, presentation.agentId);
+      if (result !== presentation.result) {
+        presentation = { ...presentation, result };
+        notifySubscribers();
+      }
+    },
     notifyPendingChange: notifySubscribers,
     notifyCreated,
     clearThink: thinkingClaims.clear,
@@ -362,26 +369,6 @@ export function createSessionCapability(
     const epoch = {};
     pullRequestEpochs.set(key.trim(), epoch);
     return epoch;
-  };
-
-  const setPullRequestSummary = (
-    key: string,
-    summary: SessionCatalogPullRequestSummary | undefined,
-    epoch?: object,
-  ) => {
-    const normalizedKey = key.trim();
-    if (!normalizedKey || (epoch !== undefined && pullRequestEpochs.get(normalizedKey) !== epoch)) {
-      return;
-    }
-    if (pullRequestSummaries.get(normalizedKey) === summary) {
-      return;
-    }
-    if (summary) {
-      pullRequestSummaries.set(normalizedKey, summary);
-    } else {
-      pullRequestSummaries.delete(normalizedKey);
-    }
-    publish({ ...state });
   };
 
   const { reconcile, captureReconcile, capturePatchFields, reconcileChangedEvent, observeRow } =
@@ -429,15 +416,17 @@ export function createSessionCapability(
     return changed;
   };
 
+  // Gateway receipts retire shared session state; first-client adoption preserves the admitted boot roster.
   const stopGateway = gateway.subscribe((next) => {
     const previousClient = connectionClient;
     const connected = next.phase === "connected";
     const presentationScope = gatewayPresentationScope(gateway);
     const selfUserId = presentationScope.displayUser?.id.trim() || null;
-    // First-client adoption keeps the boot roster admitted by the cache lifecycle.
+    const samePresentationScope = presentationKey === presentationScope.key;
+    const retainDeferredMetadata =
+      samePresentationScope && Boolean(next.deferredIntentCount || next.deferredIntentDraining);
     const identityChanged =
-      (previousClient !== null && previousClient !== next.client) ||
-      presentationKey !== presentationScope.key;
+      (previousClient !== null && previousClient !== next.client) || !samePresentationScope;
     presentationKey = presentationScope.key;
     const transportChanged = connection.transition(next);
     if (identityChanged && !transportChanged) {
@@ -469,16 +458,17 @@ export function createSessionCapability(
       const hadSubscriptionError = sessionEventSubscriptionError !== null;
       thinkingClaims.reset();
       permissions.clear();
-      roster.reset(identityChanged);
+      roster.reset(identityChanged && !retainDeferredMetadata);
       sessionEventSubscription.reset();
       sessionEventSubscriptionError = null;
       retireOperationConnection(previousClient);
       groups.invalidate();
       swarmActivity.clear();
-      mutations.retireConnection();
+      mutations.retireConnection(retainDeferredMetadata);
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
-      if (identityChanged) {
+      // Only queued desired-state changes retain presentation across a replacement client.
+      if (identityChanged && !retainDeferredMetadata) {
         hydratedClient = null;
         hydratedSelfUserId = null;
         presentationProfileId = selfUserId;
@@ -587,8 +577,8 @@ export function createSessionCapability(
     if (eventObservation.scope && !connection.isCurrent(eventObservation.scope)) {
       return;
     }
-    const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
-    const status = reconciled.status ?? eventInfo?.status;
+    const hasActiveRun = eventInfo?.hasActiveRun;
+    const status = eventInfo?.status;
     const runEnded =
       hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
     const isTerminalMessage = event.event === "session.message" && runEnded;
@@ -704,7 +694,21 @@ export function createSessionCapability(
     isPreparedWorkSession: mutations.isPreparedWorkSession,
     pullRequestSummary,
     capturePullRequestEpoch,
-    setPullRequestSummary,
+    setPullRequestSummary(key, summary, epoch) {
+      const normalizedKey = key.trim();
+      if (!normalizedKey || pullRequestSummaries.get(normalizedKey) === summary) {
+        return;
+      }
+      if (epoch !== undefined && pullRequestEpochs.get(normalizedKey) !== epoch) {
+        return;
+      }
+      if (summary) {
+        pullRequestSummaries.set(normalizedKey, summary);
+      } else {
+        pullRequestSummaries.delete(normalizedKey);
+      }
+      publish({ ...state });
+    },
     delete: deletions.delete,
     deleteMany: deletions.deleteMany,
     deletionState: deletions.deletionState,

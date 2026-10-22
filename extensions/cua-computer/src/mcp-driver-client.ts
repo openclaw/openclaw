@@ -8,6 +8,7 @@ import {
   ClickButton,
   ScrollDirection,
   type CuaDriverSession,
+  type CuaSessionState,
   type CuaToolResult,
 } from "./driver-client.js";
 
@@ -200,13 +201,12 @@ function createClient(binaryPath: string, socketPath: string, env: NodeJS.Proces
     );
 }
 
-function sessionState(value: CuaToolResult): import("@trycua/cua-driver").SessionStateOutput {
+function sessionState(value: CuaToolResult): CuaSessionState {
   if (value.isError || !value.structuredContent) {
     throw driverProtocolError(value.text || "CUA MCP session operation failed");
   }
   const structured = value.structuredContent;
   return {
-    session: typeof structured.session === "string" ? structured.session : "",
     captureScope: mappedEnum(
       structured.capture_scope,
       ["auto", "window", "desktop"],
@@ -217,27 +217,8 @@ function sessionState(value: CuaToolResult): import("@trycua/cua-driver").Sessio
       ["window", "desktop"],
       "effective scope",
     ),
-    desktopCaptureAuthorized: structured.desktop_capture_authorized === true,
     desktopUnlocked: structured.desktop_unlocked === true,
-    ...(typeof structured.escalation_reason === "string"
-      ? {
-          escalationReason: mappedEnum(
-            structured.escalation_reason,
-            [
-              "ax_tree_pixel_mismatch",
-              "background_delivery_failed",
-              "foreground_ineffective",
-              "no_window_target",
-              "other",
-            ],
-            "escalation reason",
-          ),
-        }
-      : {}),
-    ...(typeof structured.escalation_detail === "string"
-      ? { escalationDetail: structured.escalation_detail }
-      : {}),
-  } as import("@trycua/cua-driver").SessionStateOutput;
+  };
 }
 
 class McpCuaDriverSession implements CuaDriverSession {
@@ -431,9 +412,7 @@ class McpCuaDriverSession implements CuaDriverSession {
       try {
         await start;
       } catch (error) {
-        if (this.startPromise === start) {
-          this.startPromise = undefined;
-        }
+        this.startPromise = undefined;
         throw error;
       }
       return;

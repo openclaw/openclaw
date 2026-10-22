@@ -17,8 +17,6 @@ export const CODEX_MANAGED_APP_SERVER_CHECK_ID = "codex/managed-app-server";
 
 type CodexManagedDoctorDependencies = CodexDoctorStartOptionsDependencies & {
   resolveNativeCommand?: typeof resolveManagedCodexNativeCommand;
-  /** Returns combined stdout and stderr. */
-  runVersionCommand?: (command: string) => Promise<string>;
 };
 
 type CodexManagedDoctorRegistrationHost = {
@@ -103,9 +101,7 @@ function createCodexManagedAppServerHealthCheck(params: {
 
       let output: string;
       try {
-        output = await (params.deps?.runVersionCommand
-          ? params.deps.runVersionCommand(nativeCommand)
-          : runCodexVersionCommand(nativeCommand, env));
+        output = await runCodexVersionCommand(nativeCommand, env);
       } catch (error) {
         const spawnFailure = findCodexAppServerSpawnError(
           describeCodexSpawnError(error, nativeCommand),

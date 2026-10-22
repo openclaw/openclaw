@@ -1,7 +1,4 @@
-import {
-  buildChannelInboundEventContext,
-  createChannelInboundEnvelopeBuilderAsync,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
@@ -12,7 +9,6 @@ type A2aInboundDispatchParams = {
   account: ResolvedA2aChannelAccount;
   config: OpenClawConfig;
   channelRuntime: PluginRuntime["channel"];
-  buildContext: typeof buildChannelInboundEventContext;
   store: A2aTaskStore;
   taskId: string;
   contextId: string;
@@ -74,7 +70,7 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
     timestamp,
     body: params.text,
   });
-  const ctxPayload = params.buildContext({
+  const ctxPayload = params.channelRuntime.inbound.buildContext({
     channel: "a2a",
     accountId: route.accountId ?? params.account.accountId,
     messageId: params.messageId,

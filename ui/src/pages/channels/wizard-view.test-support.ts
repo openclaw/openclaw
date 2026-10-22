@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type { WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
-import { disposeChannelViews, renderChannelView } from "./view.test-support.ts";
+import {
+  createChannelsViewProps,
+  disposeChannelViews,
+  renderChannelView,
+} from "./view.test-support.ts";
+import { ChannelsView } from "./view.tsx";
 import type { ChannelWizardState } from "./wizard-runner.ts";
-import { ChannelWizard } from "./wizard-view.tsx";
 
-type WizardProps = Parameters<typeof ChannelWizard>[0];
+type WizardProps = ReturnType<typeof createWizardFixture>;
 
 export function setupWizardTests() {
   beforeEach(async () => {
@@ -27,13 +31,12 @@ export function wizardStep(
   return { phase: "step", channel: null, step, busy: true, validationError: null, ...overrides };
 }
 
-export function renderWizard(wizard: ChannelWizardState, overrides: Partial<WizardProps> = {}) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  const props = {
+function createWizardFixture(wizard: ChannelWizardState) {
+  const multiselectValues: unknown[] = [];
+  return {
     wizard,
     channelLabel: (channelId: string) => channelId,
-    multiselectValues: [],
+    multiselectValues,
     onToggleMultiselect: vi.fn(),
     textValue: "",
     secretVisible: false,
@@ -47,13 +50,54 @@ export function renderWizard(wizard: ChannelWizardState, overrides: Partial<Wiza
     whatsappBusy: false,
     onWhatsAppStart: vi.fn(),
     onWhatsAppWait: vi.fn(),
-    ...overrides,
   };
+}
+
+export function renderWizard(wizard: ChannelWizardState, overrides: Partial<WizardProps> = {}) {
+  const root = document.createElement("div");
+  document.body.append(root);
+  const props = { ...createWizardFixture(wizard), ...overrides };
   const update = (patch: Partial<WizardProps> = {}) => {
     Object.assign(props, patch);
-    renderChannelView(ChannelWizard, props, container);
+    const channel = props.wizard.phase === "idle" ? null : props.wizard.channel;
+    const view = createChannelsViewProps(
+      {
+        ts: 1,
+        channelOrder: [],
+        channelLabels: channel ? { [channel]: props.channelLabel(channel) } : {},
+        channels: {},
+        channelAccounts: {},
+        channelDefaultAccountId: {},
+      },
+      null,
+      {
+        channels: {
+          whatsappLoginQrDataUrl: props.whatsappQrDataUrl,
+          whatsappLoginMessage: props.whatsappMessage,
+          whatsappLoginConnected: props.whatsappConnected,
+          whatsappBusy: props.whatsappBusy,
+        },
+        wizardHost: {
+          state: () => props.wizard,
+          draft: {
+            multiselect: props.multiselectValues,
+            textValue: props.textValue,
+            secretVisible: props.secretVisible,
+          },
+          toggleMultiselect: props.onToggleMultiselect,
+          setTextValue: props.onTextInput,
+          toggleSecretVisibility: props.onToggleSecretVisibility,
+          answer: props.onAnswer,
+          close: props.onClose,
+        },
+        onWhatsAppStart: props.onWhatsAppStart,
+        onWhatsAppWait: props.onWhatsAppWait,
+      },
+    );
+    renderChannelView(ChannelsView, view, root);
   };
   update();
+  const container = root.querySelector<HTMLElement>(".channels-wizard")!;
   return { container, ...props, update };
 }
 

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
@@ -11,6 +13,10 @@ import {
   WORKTREE_CREATE_LEASE_SCOPE,
   WORKTREE_MUTATION_LEASE_SCOPE,
 } from "../../agents/worktrees/capacity-contract.js";
+import {
+  type SqliteWorkerReply,
+  SQLITE_WORKER_MAX_MESSAGE_BYTES,
+} from "../../infra/sqlite-worker-contract.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -18,8 +24,15 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
+import * as stateRead from "../../state/openclaw-state-read-operation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
+import {
+  createLocalWorkspaceManifestTree,
+  localWorkspaceManifestRootReference,
+  updateLocalWorkspaceManifestTree,
+} from "./local-workspace-manifest-tree.js";
+import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import {
   mutateLocalWorkspaceProjection as mutateProjection,
@@ -44,7 +57,31 @@ beforeAll(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("keeps mutation preconditions small without trimming committed payloads", () => {
+it("distinguishes committed deletion from unknown or mismatched mutation coverage", () => {
+  const worktreeId = randomUUID();
+  const previous = { ...localWorkspaceProjectionFixture(worktreeId, root), revision: 0 };
+  const mutation = { kind: "delete" as const, revision: 0 };
+  expect(readLocalWorkspaceCommit(null, worktreeId, mutation, previous)).toBeUndefined();
+  expect(() => readLocalWorkspaceCommit(undefined, worktreeId, mutation, previous)).toThrow(
+    "coverage is incomplete",
+  );
+  for (const receipt of [
+    null,
+    { worktree_id: randomUUID(), revision: 1 },
+    { worktree_id: worktreeId, revision: 2 },
+  ]) {
+    expect(() =>
+      readLocalWorkspaceCommit(
+        receipt,
+        worktreeId,
+        { kind: "update", revision: 0, patch: {} },
+        previous,
+      ),
+    ).toThrow("commit identity is invalid");
+  }
+});
+
+it("keeps mutation preconditions and receipts small without trimming stored payloads", () => {
   using cleanup = new DisposableStack();
   const database = new DatabaseSync(":memory:");
   cleanup.defer(() => database.close());
@@ -58,11 +95,20 @@ it("keeps mutation preconditions small without trimming committed payloads", () 
     journal_json: "{}",
     journal_pack: journalPack,
   };
-  mutateProjection(database, worktreeId, { kind: "create", row: initial });
-  const reads = trackSqliteStatementExecutions(database, ["precondition"], (sql) =>
-    /^select\b/i.test(sql) && sql.includes("local_workspace_projections") ? "precondition" : null,
+  const reads = trackSqliteStatementExecutions(database, ["precondition", "receipt"], (sql) =>
+    !sql.includes("local_workspace_projections")
+      ? null
+      : /^select\b/i.test(sql)
+        ? "precondition"
+        : /\breturning\b/i.test(sql)
+          ? "receipt"
+          : null,
   );
   cleanup.defer(reads.restore);
+  expect(mutateProjection(database, worktreeId, { kind: "create", row: initial })).toEqual({
+    worktree_id: worktreeId,
+    revision: 0,
+  });
   expect(() => mutateProjection(database, worktreeId, { kind: "create", row: initial })).toThrow(
     "Local workspace binding already exists",
   );
@@ -71,13 +117,20 @@ it("keeps mutation preconditions small without trimming committed payloads", () 
     revision: 0,
     patch: { paused_runtimes_json: "[]" },
   });
-  assert(updated?.journal_pack);
-  expect(updated).toMatchObject({ revision: 1, paused_runtimes_json: "[]" });
-  expect(updated.baseline_json).toBe(baseline);
-  expect(Buffer.from(updated.journal_pack).equals(journalPack)).toBe(true);
+  expect(updated).toEqual({ worktree_id: worktreeId, revision: 1 });
   expect(() => mutateProjection(database, worktreeId, { kind: "delete", revision: 1 })).toThrow(
     "Local workspace has unsettled edits",
   );
+  expect(reads.rowCounts.precondition).toBe(3);
+  expect(reads.rowCounts.receipt).toBe(2);
+  expect(reads.textBytes.precondition + reads.blobBytes.precondition).toBeLessThan(1024);
+  expect(reads.textBytes.receipt + reads.blobBytes.receipt).toBeLessThan(1024);
+  reads.restore();
+  const persisted = readProjectionInDatabase(database, worktreeId);
+  assert(persisted?.journal_pack);
+  expect(persisted).toMatchObject({ revision: 1, paused_runtimes_json: "[]" });
+  expect(persisted.baseline_json).toBe(baseline);
+  expect(Buffer.from(persisted.journal_pack).equals(journalPack)).toBe(true);
   mutateProjection(database, worktreeId, {
     kind: "update",
     revision: 1,
@@ -85,7 +138,6 @@ it("keeps mutation preconditions small without trimming committed payloads", () 
   });
   mutateProjection(database, worktreeId, { kind: "delete", revision: 2 });
   expect(readProjectionInDatabase(database, worktreeId)).toBeUndefined();
-  expect(reads.textBytes.precondition + reads.blobBytes.precondition).toBeLessThan(1024);
 });
 
 it("preserves the acknowledged row when a stale revision conflicts", async () => {
@@ -115,6 +167,128 @@ it("preserves the acknowledged row when a stale revision conflicts", async () =>
   expect(retainedGuard).toThrow();
   expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(committed);
   expect(committed).toMatchObject({ revision: 1, baseline_ref: "sha256:accepted" });
+});
+
+it("cancels an accepted manifest read when the workspace lease ends", async () => {
+  const controller = new AbortController();
+  const started = Promise.withResolvers<AbortSignal>();
+  const completion = Promise.withResolvers<never>();
+  const startRead = stateRead.startOpenClawStateReadOperation;
+  vi.spyOn(stateRead, "startOpenClawStateReadOperation").mockImplementation(
+    (command, selection) => {
+      if (command.type !== "localWorkspace.manifest") {
+        return startRead(command, selection);
+      }
+      started.resolve(selection.signal);
+      return completion.promise;
+    },
+  );
+  const worktreeId = randomUUID();
+  const reason = new Error("workspace lease cancelled during manifest read");
+  const outcome = withLocalWorkspaceStore(
+    { worktreeId, env, signal: controller.signal },
+    async (store) => {
+      const row = await store.create(localWorkspaceProjectionFixture(worktreeId, root));
+      await store.manifest(row, { kind: "materialize" });
+    },
+  ).catch((error: unknown) => error);
+  const readSignal = await started.promise;
+  controller.abort(reason);
+  try {
+    expect(readSignal.aborted).toBe(true);
+  } finally {
+    completion.reject(reason);
+    expect(await outcome).toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+  }
+});
+
+it("accepts manifest nodes and checkpoint headers atomically and preserves them on rollback", async () => {
+  const worktreeId = randomUUID();
+  const database = openOpenClawStateDatabase({ env });
+  const records = createLocalWorkspaceManifestTree([
+    { path: "old.txt", type: "file", mode: 0o644, size: 3, sha256: "a".repeat(64) },
+    { path: "kept.txt", type: "file", mode: 0o644, size: 4, sha256: "b".repeat(64) },
+  ]);
+  const acceptedRoot = localWorkspaceManifestRootReference(records, null);
+  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const row = await store.create({
+      ...localWorkspaceProjectionFixture(worktreeId, root),
+      baseline_ref: "sha256:legacy",
+      baseline_json: "retained legacy document",
+    });
+    const acknowledged = await store.update(
+      row,
+      {
+        checkpoint_json: "accepted receipt",
+        baseline_ref: "sha256:superseded",
+        baseline_json: "superseded legacy document",
+      },
+      undefined,
+      {
+        previousRoot: "sha256:legacy",
+        resultingRoot: acceptedRoot,
+        records: [...records.values()],
+        removed: [],
+        replace: true,
+      },
+    );
+    expect(acknowledged).toMatchObject({ baseline_ref: acceptedRoot, baseline_json: null });
+  });
+  const nodeRows = () =>
+    database.db
+      .prepare(
+        "SELECT path, node_json FROM local_workspace_manifest_nodes WHERE worktree_id = ? ORDER BY path",
+      )
+      .all(worktreeId);
+  const acceptedNodes = nodeRows();
+  expect(acceptedNodes.map((row) => row.path)).toEqual(["", "kept.txt", "old.txt"]);
+  const accepted = await readLocalWorkspaceProjection(worktreeId, env);
+  expect(accepted).toMatchObject({
+    baseline_ref: acceptedRoot,
+    baseline_json: null,
+    checkpoint_json: "accepted receipt",
+    revision: 1,
+  });
+  const next = updateLocalWorkspaceManifestTree(records, [{ path: "old.txt" }]);
+  const nextRoot = localWorkspaceManifestRootReference(records, null);
+  database.db
+    .exec(`CREATE TRIGGER refuse_manifest_header BEFORE UPDATE ON local_workspace_projections
+    WHEN NEW.worktree_id = '${worktreeId}'
+    BEGIN SELECT RAISE(ABORT, 'synthetic manifest acceptance interruption'); END;`);
+  try {
+    await expect(
+      withLocalWorkspaceStore({ worktreeId, env }, (store) =>
+        store.update(store.get()!, { checkpoint_json: "next receipt" }, undefined, {
+          previousRoot: acceptedRoot,
+          resultingRoot: nextRoot,
+          ...next,
+        }),
+      ),
+    ).rejects.toThrow("synthetic manifest acceptance interruption");
+    expect(nodeRows()).toEqual(acceptedNodes);
+    expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(accepted);
+  } finally {
+    database.db.exec("DROP TRIGGER refuse_manifest_header;");
+  }
+  await expect(
+    withLocalWorkspaceStore({ worktreeId, env }, (store) =>
+      store.update(store.get()!, {}, undefined, {
+        previousRoot: "sha256:stale",
+        resultingRoot: nextRoot,
+        ...next,
+      }),
+    ),
+  ).rejects.toThrow("manifest baseline changed");
+  expect(nodeRows()).toEqual(acceptedNodes);
+  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const row = await store.update(store.get()!, { checkpoint_json: "next receipt" }, undefined, {
+      previousRoot: acceptedRoot,
+      resultingRoot: nextRoot,
+      ...next,
+    });
+    expect(row).toMatchObject({ baseline_ref: nextRoot, checkpoint_json: "next receipt" });
+  });
+  expect(nodeRows().map((row) => row.path)).toEqual(["", "kept.txt"]);
 });
 
 it.each([
@@ -198,7 +372,6 @@ it("adopts native committed facts after reply loss without replaying the mutatio
     expect(store.get()).toEqual(row);
     return row;
   });
-  lostReply.mockRestore();
   expect(writes).toBe(1);
   expect(acknowledged).toMatchObject({
     revision: 1,
@@ -210,4 +383,117 @@ it("adopts native committed facts after reply loss without replaying the mutatio
     await expect(store.delete(store.get()!)).rejects.toThrow("unsettled edits");
   });
   expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(acknowledged);
+  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const cleared = await store.update(store.get()!, { pending_ref: null });
+    await store.delete(cleared);
+    expect(store.get()).toBeUndefined();
+  });
+  lostReply.mockRestore();
+  expect(writes).toBe(3);
+  expect(await readLocalWorkspaceProjection(worktreeId, env)).toBeUndefined();
+});
+
+it("recovers an oversized committed row after reply loss without replaying or trimming bytes", async () => {
+  const worktreeId = randomUUID();
+  await withLocalWorkspaceStore({ worktreeId, env }, (store) =>
+    store.create(localWorkspaceProjectionFixture(worktreeId, root)),
+  );
+  const baseline = JSON.stringify({ synthetic: "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES / 4) });
+  const journalPack = new Uint8Array(1024).fill(7);
+  let writes = 0;
+  let retainedGuard: (() => void) | undefined;
+  const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
+    const result = await scope.execute(command, executeOptions);
+    if (command.type === "localWorkspace.mutate") {
+      writes += 1;
+      throw new Error("Synthetic local workspace reply lost after native commit");
+    }
+    return result;
+  });
+  const acknowledged = await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    retainedGuard = store.assertCurrent;
+    const row = await store.update(
+      { ...store.get()!, base_commit: "f".repeat(40) },
+      {
+        baseline_ref: "sha256:oversized",
+        baseline_json: baseline,
+        journal_json: "{}",
+        journal_pack: journalPack,
+        paused_runtimes_json: undefined,
+      },
+    );
+    expect(store.get()).toEqual(row);
+    return row;
+  });
+  lostReply.mockRestore();
+  expect(writes).toBe(1);
+  assert(retainedGuard);
+  expect(retainedGuard).toThrow();
+  const committed = await readLocalWorkspaceProjection(worktreeId, env);
+  expect(acknowledged).toMatchObject({
+    revision: 1,
+    baseline_ref: "sha256:oversized",
+    base_commit: "a".repeat(40),
+    journal_json: "{}",
+    paused_runtimes_json: null,
+  });
+  expect(acknowledged.baseline_json).toBe(baseline);
+  expect(acknowledged.journal_pack).toEqual(journalPack);
+  expect(committed).toEqual(acknowledged);
+  expect(committed?.baseline_json).toBe(baseline);
+});
+
+it("queues an expanded checkpoint receipt behind another workspace write", async () => {
+  const busyId = randomUUID();
+  const checkpointId = randomUUID();
+  const checkpoint = JSON.stringify({ syntheticRecords: "x".repeat(72 * 1024 * 1024) });
+  await withLocalWorkspaceStore({ worktreeId: busyId, env }, async (busy) => {
+    const initial = await busy.create(localWorkspaceProjectionFixture(busyId, root));
+    await withLocalWorkspaceStore({ worktreeId: checkpointId, env }, async (store) => {
+      const row = await store.create(localWorkspaceProjectionFixture(checkpointId, root));
+      const held = Promise.withResolvers<void>();
+      let publish: (() => boolean) | undefined;
+      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the worker.
+      const emit = Worker.prototype.emit;
+      const replies = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
+        this: Worker,
+        ...args: Parameters<Worker["emit"]>
+      ) {
+        const reply = args[1] as SqliteWorkerReply;
+        if (args[0] === "message" && reply.ok && !reply.transfer && !reply.input) {
+          const value = deserialize(reply.value);
+          if (value?.worktree_id === busyId && value.revision === 1) {
+            publish = () => {
+              publish = undefined;
+              return Reflect.apply(emit, this, args);
+            };
+            held.resolve();
+            return true;
+          }
+        }
+        return Reflect.apply(emit, this, args);
+      });
+      const pending = busy.update(initial, { paused_runtimes_json: "[]" });
+      try {
+        await held.promise;
+        probe.command(stateWorker, (command, options, scope) => {
+          const result = scope.execute(command, options);
+          if (command.type === "localWorkspace.mutate") {
+            // Release only after the real broker has admitted or refused the second write.
+            replies.mockRestore();
+            publish?.();
+          }
+          return result;
+        });
+        const accepted = await store.update(row, { checkpoint_json: checkpoint });
+        expect(accepted.checkpoint_json).toBe(checkpoint);
+        await pending;
+      } finally {
+        replies.mockRestore();
+        publish?.();
+        await pending;
+      }
+    });
+  });
+  expect((await readLocalWorkspaceProjection(checkpointId, env))?.checkpoint_json).toBe(checkpoint);
 });

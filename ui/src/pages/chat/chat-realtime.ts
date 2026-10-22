@@ -1,4 +1,5 @@
 import type { TalkConfigResult, TalkVoiceChangeEvent } from "@openclaw/gateway-protocol";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { RealtimeVoiceCloseOptions } from "../../../../src/talk/provider-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
@@ -36,22 +37,25 @@ export type ChatRealtimeState = {
   switchRealtimeTalkCamera: () => Promise<void>;
 };
 
-type ChatRealtimeSnapshot = {
+export type ChatRealtimeView = {
   realtimeTalkActive: boolean;
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
   realtimeTalkInputNotice: string | null;
-  realtimeTalkUseSystemDefault: (() => Promise<void>) | null;
   realtimeTalkInputLevel: RealtimeTalkLevelSignal;
   realtimeTalkVideoStream: MediaStream | null;
   realtimeTalkCameraDevices: RealtimeTalkCameraDevice[];
   realtimeTalkVideoCapable: boolean;
   realtimeTalkVideoPending: boolean;
   realtimeTalkCameraError: boolean;
+};
+
+type ChatRealtimeSnapshot = {
+  realtimeTalkUseSystemDefault: (() => Promise<void>) | null;
   realtimeTalkSession: RealtimeTalkSession | null;
   realtimeTalkVoiceController: RealtimeTalkVoiceSelection | null;
   realtimeTalkConversationState: RealtimeTalkConversationState;
-};
+} & ChatRealtimeView;
 
 /** Synchronous call/device authority; projections observe complete state transitions. */
 class ChatRealtimeOwner {
@@ -71,7 +75,7 @@ class ChatRealtimeOwner {
     realtimeTalkVoiceController: null,
     realtimeTalkConversationState: createRealtimeTalkConversationState(),
   };
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
 
   get snapshot(): Readonly<ChatRealtimeSnapshot> {
     return this.value;
@@ -79,17 +83,12 @@ class ChatRealtimeOwner {
 
   update(patch: Partial<ChatRealtimeSnapshot>) {
     this.value = { ...this.value, ...patch };
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   }
 
   subscribe(listener: () => void) {
     const notify = () => listener();
-    this.listeners.add(notify);
-    return () => {
-      this.listeners.delete(notify);
-    };
+    return this.listeners.subscribe(notify);
   }
 }
 

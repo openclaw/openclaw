@@ -14,6 +14,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus } from "../api/types.ts";
+import type { SidebarZoneEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import type { SessionRowAttention } from "../lib/session-attention.ts";
@@ -91,7 +92,7 @@ export type SidebarToolActivity = {
   text?: string;
 };
 
-export type SidebarRecentSession = {
+export type SidebarRecentSession = Readonly<{
   key: string;
   agentId?: string;
   sessionId?: string;
@@ -206,7 +207,7 @@ export type SidebarRecentSession = {
   containsActiveDescendant: boolean;
   runningChildCount: number;
   failedChildCount: number;
-};
+}>;
 
 export type SidebarSessionHovercardRow = Pick<
   SidebarRecentSession,
@@ -301,6 +302,7 @@ export type SidebarSectionDropTarget = {
 
 export type SidebarSessionMutationScope = {
   epoch: number;
+  allowDeferred?: boolean;
   context: ApplicationContext;
   gateway: ApplicationContext["gateway"];
   sessions: SessionCapability;
@@ -561,3 +563,16 @@ export const SIDEBAR_SESSION_STATUS_OPTIONS = ["active", "snoozed", "archived", 
 export function sessionCatalogHostKey(catalogId: string, hostId: string): string {
   return `${catalogId}\u0000${hostId}`;
 }
+
+/** Archived pins leave Pinned so the archived view can still list them in place. */
+export function isListedInPinnedSection(
+  row: Pick<SidebarRecentSession, "key" | "archived">,
+  pinnedKeys: ReadonlySet<string>,
+): boolean {
+  return pinnedKeys.has(row.key) && row.archived !== true;
+}
+
+export type SidebarPinZone = {
+  entries: readonly SidebarZoneEntry[];
+  sessionRows: ReadonlyMap<string, SidebarRecentSession>;
+};

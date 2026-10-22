@@ -13,6 +13,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
+import type { DiffReadTiming } from "../../infra/diff-read-timing.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type {
   PluginApprovalRequest,
@@ -292,6 +293,7 @@ type GatewayKernelContext = {
     params: ChatStartupProjectionReadParams,
   ) => Promise<ChatStartupProjectionResult | undefined>;
   getHealthCache: () => HealthSummary | null;
+  getReadiness?: import("../server/readiness.js").ReadinessChecker;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
   publishPresence: () => void;
@@ -413,7 +415,9 @@ type GatewayResidentBridgeContext = {
   /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
   workerSessionPlacementService?: WorkerSessionPlacementReader &
     Partial<WorkerSessionPlacementRetirementService> &
-    Partial<Pick<WorkerSessionPlacementStore, "withWorkspaceExclusion">>;
+    Partial<
+      Pick<WorkerSessionPlacementStore, "withWorkspaceExclusion" | "withLocalWorkspaceReservation">
+    >;
   /** Process-local health samples fenced to the exact active placement owner. */
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   /** Process-current paired-device runner proof for active placement projection. */
@@ -588,6 +592,7 @@ export type GatewayRequestHandlerOptions = Omit<
     target: { sessionKey: string; agentId?: string; sessionId: string },
     consume: (entry: import("../../config/sessions/types.js").InternalSessionEntry) => T,
   ) => Promise<T>;
+  diffTiming?: DiffReadTiming;
   markSessionSubscribePhase?: (
     phase: import("../slow-request-diagnostics.js").SessionSubscribePhase,
   ) => void;

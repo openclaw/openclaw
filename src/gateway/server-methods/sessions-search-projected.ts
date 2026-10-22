@@ -131,11 +131,9 @@ export async function searchProjectedSessionTranscripts(params: {
     if (!sameSelection(selected, current)) {
       continue;
     }
-    const matchedRows = new Set(
-      matchingHits(current, pages)
-        .slice(0, limit)
-        .map(({ row }) => row),
-    );
+    const hits = matchingHits(current, pages);
+    const matches = hits.slice(0, limit);
+    const matchedRows = new Set(matches.map(({ row }) => row));
     projection.setArchivePageSize(matchedRows.size);
     const published = await withReadySessionRows(
       projection,
@@ -156,10 +154,7 @@ export async function searchProjectedSessionTranscripts(params: {
         if (!sameSelection(selected, refreshed)) {
           return false;
         }
-        const hits = matchingHits(refreshed, pages);
-        const matches = hits.slice(0, limit);
-        const rows = new Set(matches.map((match) => match.row));
-        const sessions = [...rows].flatMap((target) => {
+        const sessions = [...matchedRows].flatMap((target) => {
           const record = read.describe({
             ...target,
             storePath: target.storeTarget.storePath,

@@ -113,7 +113,7 @@ export type AgentRunChannelContext = Pick<
   spawnedBy?: string | null;
 };
 
-export type AgentRunModelOptions = Pick<
+type AgentRunModelOptions = Pick<
   QueuedAgentRunParams,
   "authProfileId" | "thinkLevel" | "thinkingExplicit" | "fastMode" | "fastModeAutoOnSeconds"
 > & {
@@ -131,7 +131,7 @@ export type AgentRunModelOptions = Pick<
   isFinalFallbackAttempt?: boolean;
 };
 
-export type AgentRunInputContext = Pick<
+type AgentRunInputContext = Pick<
   QueuedAgentRunParams,
   | "workspaceDir"
   | "cwd"
@@ -155,7 +155,6 @@ export type AgentRunInputContext = Pick<
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
   currentInboundEventKind?: InboundEventKind;
-  heartbeatEventQueueSessionKey?: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered facts represented by attachment text in the current prompt. */
@@ -183,7 +182,7 @@ export type AgentRunTranscriptContext = Pick<
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
 };
 
-export type AgentRunLifecycle = Pick<
+type AgentRunLifecycle = Pick<
   QueuedAgentRunParams,
   "providerReviewAcknowledgment" | "timeoutMs" | "runTimeoutOverrideMs" | "scheduledToolPolicy"
 > & {
@@ -216,3 +215,11 @@ export type AgentRunLifecycle = Pick<
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
 };
+
+export type AgentRunExecutionContext = AgentRunClientContext &
+  AgentRunMessageContext &
+  AgentRunChannelContext &
+  AgentRunModelOptions &
+  AgentRunInputContext &
+  AgentRunTranscriptContext &
+  AgentRunLifecycle;

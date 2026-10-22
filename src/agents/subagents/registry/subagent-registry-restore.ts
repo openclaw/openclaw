@@ -173,6 +173,7 @@ export function createSubagentRegistryRestorer(config: {
       throw failures[0];
     }
     activated = true;
+    requesterActivator.reset();
   }
 
   async function resumeRestoredRuns(
@@ -181,7 +182,7 @@ export function createSubagentRegistryRestorer(config: {
     startupTrace?: GatewayStartupTrace,
   ) {
     await measureStartup(startupTrace, "sidecars.subagent-reserve", () =>
-      reserveRestoredSubagentControllerSources(capturedRuns),
+      reserveRestoredSubagentControllerSources(capturedRuns, assertCurrent),
     );
     assertCurrent();
     if (runs.size === 0) {

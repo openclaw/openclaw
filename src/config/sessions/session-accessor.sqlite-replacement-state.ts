@@ -6,6 +6,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
+import { readStagedConversationPublications } from "./session-accessor.sqlite-conversation-publication.js";
 import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-creation-read.js";
 import {
   sessionSharingEntriesEqual,
@@ -146,6 +147,7 @@ export function prepareSessionEntryReplacementPublication(
   ];
   const publication: SessionEntryReplacementPublication = {
     kind: "session-entry-replacements",
+    conversationPublication: readStagedConversationPublications(database),
     transcriptPublication: readStagedSessionTranscriptAuthority(database),
     pendingArchiveRecovery: result.pendingArchiveRecovery,
     membershipInvalidatedKeys: result.membershipInvalidatedKeys,
@@ -298,6 +300,7 @@ export function commitSessionEntryReplacementsInDatabase(
             : canonicalFacts?.window,
         canonicalPreviousSideTables: canonicalFacts?.sideTables,
         postimages: writtenPostimages,
+        publishConversationBinding: (replacement.previousSessionKeys?.length ?? 0) > 0,
       },
     );
     deleteLegacySessionEntryRows(

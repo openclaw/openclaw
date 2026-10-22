@@ -25,6 +25,9 @@ import {
 } from "./tool-description-presets.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
+// Shared with restart classification without importing the tool-search runtime contract.
+export const TOOL_CALL_RAW_TOOL_NAME = "dispatch_action";
+
 /** Built-in tool profile ids exposed in config and UI. */
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
@@ -222,7 +225,6 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     ["message", "Send messages"],
   ]),
   ...coreTools("automation", { profiles: [], includeInOpenClawGroup: true }, [
-    ["heartbeat_respond", "Accept heartbeat outcomes for post-turn handling"],
     [AUTOMATIONS_TOOL_NAME, CRON_TOOL_DISPLAY_SUMMARY, { profiles: ["coding"] }],
     [
       "gateway",

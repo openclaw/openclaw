@@ -3,6 +3,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { readSessionSendDelivery } from "../../gateway/session-send-delivery.js";
+import {
+  prepareUserTurnTranscriptAnnotation,
+  readUserTurnTranscriptAnnotation,
+} from "../../sessions/user-turn-transcript-annotation-message.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionPendingInputRow } from "./session-accessor.sqlite-pending-inputs.js";
@@ -28,6 +32,47 @@ function preparePendingInputMessage(
     stableMessage,
     requestHash: resolvePendingInputRequestHash(stableMessage, requestFingerprint),
   };
+}
+
+function matchAcceptedPendingInputMessage(
+  message: PersistedUserTurnMessage,
+  acceptedHash: string,
+): ReturnType<typeof preparePendingInputMessage> | undefined {
+  const request = preparePendingInputMessage(message);
+  if (request.requestHash === acceptedHash) {
+    return request;
+  }
+  const origin = message["__openclaw"]?.requesterOrigin;
+  if (!origin) {
+    return undefined;
+  }
+  // Old requester origins hashed absent fields as undefined. Prove the whole
+  // accepted hash without returning that legacy shape to persistence or comparison.
+  const legacy = preparePendingInputMessage({
+    ...message,
+    __openclaw: {
+      ...message["__openclaw"],
+      requesterOrigin: {
+        operatorProfileId: undefined,
+        messageProvider: undefined,
+        accountId: undefined,
+        chatType: undefined,
+        conversationId: undefined,
+        messageThreadId: undefined,
+        groupId: undefined,
+        groupChannel: undefined,
+        groupSpace: undefined,
+        senderId: undefined,
+        senderName: undefined,
+        senderUsername: undefined,
+        senderE164: undefined,
+        ...origin,
+      },
+    },
+  });
+  return legacy.requestHash === acceptedHash
+    ? { ...request, requestHash: acceptedHash }
+    : undefined;
 }
 
 export type PendingInputRequest = {
@@ -74,6 +119,10 @@ export function resolvePendingInputReplayRequest(
       accepted.request_hash !== prepared.requestHash &&
       !prepared.requestHash.startsWith("request:")
     ) {
+      const request = matchAcceptedPendingInputMessage(message, accepted.request_hash);
+      if (request) {
+        return { message, ...request };
+      }
       const delivery = readSessionSendDelivery(message);
       if (!delivery) {
         return original;
@@ -91,9 +140,9 @@ export function resolvePendingInputReplayRequest(
           },
         },
       };
-      const request = preparePendingInputMessage(candidate);
-      if (request.requestHash === accepted.request_hash) {
-        return { ...original, requestHash: request.requestHash };
+      const legacyRequest = matchAcceptedPendingInputMessage(candidate, accepted.request_hash);
+      if (legacyRequest) {
+        return { ...original, requestHash: legacyRequest.requestHash };
       }
     }
     return original;
@@ -108,13 +157,17 @@ export function resolvePendingInputReplayRequest(
   if (accepted?.run_id !== prepared.runId || accepted.request_hash === prepared.requestHash) {
     return original;
   }
+  const request = matchAcceptedPendingInputMessage(message, accepted.request_hash);
+  if (request) {
+    return { message, ...request };
+  }
   // v2026.9.5 keyed the wave but attributed it to the scheduling sibling.
   // Nothing else may vary, and an absent or unmatched receipt authorizes no substitution.
   for (const sourceSessionKey of new Set(replaySourceSessionKeys)) {
     const candidate = { ...message, provenance: { ...message.provenance, sourceSessionKey } };
-    const request = preparePendingInputMessage(candidate);
-    if (request.requestHash === accepted.request_hash) {
-      return { message: candidate, ...request };
+    const candidateRequest = matchAcceptedPendingInputMessage(candidate, accepted.request_hash);
+    if (candidateRequest) {
+      return { message: candidate, ...candidateRequest };
     }
   }
   return original;
@@ -159,8 +212,12 @@ export function resolveCommittedPendingInputRequestHash(
   if (!prepared) {
     return undefined;
   }
-  const { timestamp: _preparedTimestamp, ...stablePrepared } =
-    sanitizeTranscriptMessageForStorage(prepared);
+  const storedPrepared = sanitizeTranscriptMessageForStorage(prepared);
+  const annotation = readUserTurnTranscriptAnnotation(committedMessage, options.runId);
+  // Replay the same validated annotation, then compare every original message field too.
+  const { timestamp: _preparedTimestamp, ...stablePrepared } = annotation
+    ? prepareUserTurnTranscriptAnnotation(storedPrepared, annotation, options.runId)
+    : storedPrepared;
   const { timestamp: _committedTimestamp, ...stableCommitted } = committedMessage;
   if (stableStringify(stablePrepared) !== stableStringify(stableCommitted)) {
     throw new Error("Input completion retry conflicts with the committed input");

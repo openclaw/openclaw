@@ -124,6 +124,22 @@ afterEach(() => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("context engine quarantine health", () => {
+  it("warns when persisted quarantine inventory cannot be read", async () => {
+    const read = vi
+      .spyOn(pluginStateWorker, "listPluginStateInWorker")
+      .mockRejectedValueOnce(new Error("synthetic health read failure: sensitive-row-fragment"));
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await listPersisted()).toEqual([]);
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        "[runtime-health] Persisted quarantine inventory is unavailable for runtime-quarantines; health warnings may be incomplete. Run openclaw doctor to inspect state storage.",
+      );
+    } finally {
+      warning.mockRestore();
+      read.mockRestore();
+    }
+  });
+
   it("does not dispatch health cleanup again on an empty warm turn", async () => {
     await withStateDirEnv("openclaw-context-engine-warm-health-", async () => {
       const previous = captureRegistry();

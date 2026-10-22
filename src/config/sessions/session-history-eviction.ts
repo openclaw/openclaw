@@ -692,7 +692,6 @@ async function enforceSessionHistoryMaintenanceForDatabase(
           pruning = {
             usage,
             removedFiles: 0,
-            completed: false,
             checkpointIncomplete: pageDiagnostics.checkpointIncomplete ?? 1,
             checkpoint: pageDiagnostics.checkpoint,
           };

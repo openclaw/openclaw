@@ -1,18 +1,60 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  isPending,
+  onSettled,
+} from "solid-js";
 import { SettingsRow, SettingsSection } from "../components/solid/settings-ui.tsx";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { CustomPluginUiDisabled } from "./control-ui-disabled.solid.tsx";
 
 export function PluginManager() {
   const context = useApplication();
-  const [reloading, setReloading] = createSignal(false);
-  const [reloadError, setReloadError] = createSignal("");
-  const source = projectSource(context.plugins, {
-    read: (runtime) => runtime,
-    subscribe: (runtime, notify) => runtime.subscribe(notify),
-    equality: "revision",
+  const [reloading, setReloading] = createOptimistic(false);
+  const [operationRead, setOperationRead] = createSignal<{
+    result: Promise<void>;
+    revision: number;
+    kind: "reload" | "refresh";
+  } | null>(null);
+  const source = projectOwner(context.plugins, (runtime) => runtime);
+  const connection = projectOwner(
+    context.gateway,
+    (gateway) => gateway.connectionRevision,
+    Object.is,
+  );
+  let reloadLifetime = Promise.withResolvers<void>();
+  onSettled(() => {
+    const stop = connection.subscribe(() => {
+      // Retire at the synchronous owner; reactive cleanup waits for the action.
+      reloadLifetime.resolve();
+      reloadLifetime = Promise.withResolvers<void>();
+    });
+    return () => {
+      stop();
+      reloadLifetime.resolve();
+    };
+  });
+  const completion = createMemo(() => {
+    const read = operationRead();
+    return read?.revision === connection.read() ? read.result.then(() => null) : null;
+  });
+  const refreshing = () => isPending(completion) && operationRead()?.kind === "refresh";
+  const observe = (result: Promise<void>, kind: "reload" | "refresh") => {
+    // The surface can disappear before the admitted operation settles.
+    void result.catch(() => undefined);
+    setOperationRead({ result, kind, revision: context.gateway.connectionRevision });
+  };
+  const reload = action(function* (result: Promise<void>, retired: Promise<void>) {
+    setReloading(true);
+    yield Promise.race([result, retired]);
   });
   const replacements = createMemo(() => source.read().registrations("replacements"));
   const surfaces = createMemo(() => [
@@ -39,19 +81,10 @@ export function PluginManager() {
                     class="btn btn--sm oc-action oc-action-secondary"
                     type="button"
                     disabled={reloading()}
-                    onClick={() =>
-                      void (async () => {
-                        setReloading(true);
-                        setReloadError("");
-                        try {
-                          await source.read().reload();
-                        } catch (error) {
-                          setReloadError(error instanceof Error ? error.message : String(error));
-                        } finally {
-                          setReloading(false);
-                        }
-                      })()
-                    }
+                    onClick={() => {
+                      const retired = reloadLifetime.promise;
+                      observe(reload(source.read().reload(), retired), "reload");
+                    }}
                   >
                     {t("pluginUi.reload")}
                   </button>
@@ -59,8 +92,12 @@ export function PluginManager() {
                 <button
                   class="btn btn--sm oc-action oc-action-secondary"
                   type="button"
-                  onClick={() => void source.read().refresh()}
+                  aria-busy={refreshing() ? "true" : "false"}
+                  onClick={() => observe(source.read().refresh(), "refresh")}
                 >
+                  <Show when={refreshing()}>
+                    <span class="btn__spinner" aria-hidden="true" />
+                  </Show>
                   {t("common.retry")}
                 </button>
               </>
@@ -115,9 +152,21 @@ export function PluginManager() {
               />
             )}
           </For>
-          <Show when={reloadError()}>
-            <SettingsRow title={reloadError()} role="alert" carapace />
-          </Show>
+          <For each={!reloading() && operationRead() ? [operationRead()!] : []}>
+            {() => (
+              <Errored
+                fallback={(error) => {
+                  const message = () => {
+                    const value = error();
+                    return value instanceof Error ? value.message : String(value);
+                  };
+                  return <SettingsRow title={message()} role="alert" carapace />;
+                }}
+              >
+                <Loading>{completion()}</Loading>
+              </Errored>
+            )}
+          </For>
         </SettingsSection>
       </Show>
     </openclaw-plugin-manager>

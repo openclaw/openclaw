@@ -61,6 +61,18 @@ describe("conversation registry", () => {
   let storePath: string;
   const subscriptions: (() => void)[] = [];
   const observe = (unsubscribe: () => void) => subscriptions.push(unsubscribe);
+  const watchFacts = (onReceipt = () => {}) => {
+    const receipts: ConversationPublication[] = [];
+    observe(
+      conversationPublication.subscribeFacts((receipt) => {
+        if ("facts" in receipt) {
+          receipts.push(receipt);
+          onReceipt();
+        }
+      }),
+    );
+    return receipts;
+  };
   const expectPostimage = (fact: unknown, row: unknown, kind?: string) =>
     expect(fact).toMatchObject({ kind: "postimage", value: { ...(kind ? { kind } : {}), row } });
 
@@ -151,17 +163,14 @@ describe("conversation registry", () => {
       nativeDirectUserId: "peer-a",
       label: "@peer-a's agent",
     });
-    const receipts: ConversationPublication[] = [];
-    observe(conversationPublication.subscribe((receipt) => receipts.push(receipt)));
+    const receipts = watchFacts();
     await registerConversationAddresses(registryScope(), [identity!], 100);
     expect(receipts).toHaveLength(1);
     expectPostimage(
       receipts[0]?.facts.get(JSON.stringify(["catalogue", identity!.conversationRef])),
       {
         conversation_id: identity!.conversationRef,
-        label: identity!.label,
-        created_at: 100,
-        updated_at: 100,
+        kind: identity!.kind,
       },
       "catalogue",
     );
@@ -523,7 +532,6 @@ describe("conversation registry", () => {
       }, options);
     write(0, 10);
     const installed = new Map<string, unknown>();
-    const snapshots: string[][] = [];
     observe(
       conversationPublication.subscribeFacts((receipt) => {
         if ("facts" in receipt) {
@@ -532,9 +540,6 @@ describe("conversation registry", () => {
           }
         }
       }),
-    );
-    observe(
-      conversationPublication.subscribe(() => snapshots.push([...installed.keys()].toSorted())),
     );
     const database = openOpenClawAgentDatabase(options);
     const associationReads = trackSqliteStatementExecutions(
@@ -560,23 +565,20 @@ describe("conversation registry", () => {
     const oldRelated = associationKey(0, "related");
     const newPrimary = associationKey(1, "primary");
     expect(installed.get(oldPrimary)).toEqual({ kind: "absent" });
-    for (const [key, role, first_seen_at] of [
-      [oldRelated, "related", 10],
-      [newPrimary, "primary", 20],
+    for (const [key, role] of [
+      [oldRelated, "related"],
+      [newPrimary, "primary"],
     ] as const) {
-      expectPostimage(installed.get(key), { role, first_seen_at, last_seen_at: 20 });
+      expectPostimage(installed.get(key), { role, last_seen_at: 20 });
     }
-    expect(snapshots).toHaveLength(2);
-    for (const keys of snapshots) {
-      expect(keys).toEqual(expect.arrayContaining([oldPrimary, oldRelated, newPrimary]));
-    }
+    const committedFacts = new Map(installed);
     expect(() =>
       runOpenClawAgentWriteTransaction(() => {
         write(0, 30);
         throw new Error("rollback conversation");
       }, options),
     ).toThrow("rollback conversation");
-    expect(snapshots).toHaveLength(2);
+    expect(installed).toEqual(committedFacts);
     expect(
       openOpenClawAgentDatabase(options)
         .db.prepare(
@@ -586,7 +588,7 @@ describe("conversation registry", () => {
     ).toEqual({ role: "primary" });
   });
 
-  it("commits catalogue metadata whose encoded receipt exceeds the transport limit", async () => {
+  it("publishes binding facts without transporting large catalogue metadata", async () => {
     const scope = registryScope();
     const identity = address("large-catalogue", undefined, { channel: "fixture" })!;
     // The request fits IPC; JSON's six-byte escape expands the stored postimage beyond it.
@@ -594,13 +596,9 @@ describe("conversation registry", () => {
       payload: "\0".repeat(Math.floor(SQLITE_WORKER_MAX_MESSAGE_BYTES / 6) + 1),
     };
     const events: string[] = [];
-    observe(
-      conversationPublication.subscribeFacts((change) => {
-        if ("kind" in change) {
-          events.push(change.kind);
-        }
-      }),
-    );
+    const receipts = watchFacts(() => {
+      events.push("facts");
+    });
     await expect(registerConversationAddresses(scope, [identity], 100)).resolves.toBeUndefined();
     events.push("reply");
     const database = openDatabase(scope);
@@ -614,7 +612,15 @@ describe("conversation registry", () => {
       bytes: JSON.stringify(identity.metadata).length,
       updated_at: 100,
     });
-    expect(events).toContain("unknown");
-    expect(events.indexOf("unknown")).toBeLessThan(events.indexOf("reply"));
+    expect(events).toEqual(["facts", "reply"]);
+    expect(receipts[0]?.facts.get(JSON.stringify(["catalogue", identity.conversationRef]))).toEqual(
+      {
+        kind: "postimage",
+        value: {
+          kind: "catalogue",
+          row: { conversation_id: identity.conversationRef, kind: identity.kind },
+        },
+      },
+    );
   });
 });

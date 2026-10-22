@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement as beforeSettled } from "../../../../test/helpers/promise.js";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import * as transcript from "../../../infra/outbound/deliver-transcript.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
@@ -33,25 +34,13 @@ function setup(outcome: "rejected" | "aborted" | "sent" = "sent") {
     received.push(text);
     return { channel: "discord", messageId: `chunk-${received.length}` };
   });
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "discord",
-        source: "test",
-        plugin: createOutboundTestPlugin({
-          id: "discord",
-          outbound: {
-            deliveryMode: "direct",
-            chunker: chunkText,
-            textChunkLimit: 2_000,
-            sendText,
-          },
-        }),
-      },
-    ]),
-  );
-  const deliver = async () => {
-    const result = await deliverCompletionDirect({
+  const plugin = createOutboundTestPlugin({
+    id: "discord",
+    outbound: { deliveryMode: "direct", chunker: chunkText, textChunkLimit: 2_000, sendText },
+  });
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+  const deliver = () =>
+    deliverCompletionDirect({
       cfg: {},
       requesterSessionKey: "agent:main:discord:dm:U123",
       directIdempotencyKey: "chunked-text-completion",
@@ -61,75 +50,57 @@ function setup(outcome: "rejected" | "aborted" | "sent" = "sent") {
       signal: controller.signal,
       onDeliveryResult,
     });
-    if (!result) {
-      throw new Error("Expected a direct text completion attempt");
-    }
-    return result;
-  };
   return { deliver, received, sendText, onDeliveryResult };
 }
 
-describe("direct completion text delivery", () => {
-  it.each(["rejected", "aborted"] as const)(
-    "settles a chunked result when its second chunk is %s",
-    async (outcome) => {
-      const fixture = setup(outcome);
-      const result = await fixture.deliver();
+it.each(["rejected", "aborted"] as const)("settles after chunk two is %s", async (outcome) => {
+  const fixture = setup(outcome);
+  const result = await fixture.deliver();
 
-      expect(fixture.sendText).toHaveBeenCalledTimes(2);
-      expect(fixture.received).toHaveLength(1);
-      expect(result).toMatchObject({
-        delivered: false,
-        path: "direct",
-        disposition: "permanent_failure",
-      });
-      expect(result.error).toContain(`second chunk ${outcome}`);
-      expect(fixture.onDeliveryResult).not.toHaveBeenCalled();
-    },
-  );
-
-  it("reports complete delivery before transcript mirroring settles", async () => {
-    const fixture = setup();
-    const mirrorEntered = createDeferredCore();
-    const releaseMirror = createDeferredCore();
-    vi.spyOn(transcript, "mirrorDeliveredPayloads").mockImplementation(async () => {
-      mirrorEntered.resolve();
-      await releaseMirror.promise;
-    });
-    const delivery = fixture.deliver();
-    try {
-      await Promise.race([
-        mirrorEntered.promise,
-        delivery.then(() => {
-          throw new Error("Delivery settled without entering its mirror");
-        }),
-      ]);
-      expect(fixture.sendText).toHaveBeenCalledTimes(2);
-      expect(fixture.received.join(" ")).toBe(content);
-      expect(fixture.onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ delivered: true, deliveredAt: expect.any(Number) }),
-      );
-    } finally {
-      releaseMirror.resolve();
-      await delivery;
-    }
-    await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
+  expect(fixture.sendText).toHaveBeenCalledTimes(2);
+  expect(fixture.received).toHaveLength(1);
+  expect(result).toMatchObject({
+    delivered: false,
+    path: "direct",
+    disposition: "permanent_failure",
+    error: expect.stringContaining(`second chunk ${outcome}`),
   });
+  expect(fixture.onDeliveryResult).not.toHaveBeenCalled();
+});
 
-  it.each(["mirror", "report"] as const)(
-    "preserves complete delivery when later %s bookkeeping rejects",
-    async (failure) => {
-      const fixture = setup();
-      const error = new Error("post-send bookkeeping failed");
-      if (failure === "mirror") {
-        vi.spyOn(transcript, "mirrorDeliveredPayloads").mockRejectedValue(error);
-      } else {
-        fixture.onDeliveryResult.mockRejectedValue(error);
-      }
+it("reports complete delivery before transcript mirroring settles", async () => {
+  const fixture = setup();
+  const mirrorEntered = createDeferredCore();
+  const releaseMirror = createDeferredCore();
+  vi.spyOn(transcript, "mirrorDeliveredPayloads").mockImplementation(async () => {
+    mirrorEntered.resolve();
+    await releaseMirror.promise;
+  });
+  const delivery = fixture.deliver();
+  try {
+    await beforeSettled(mirrorEntered.promise, delivery, "Delivery missed its mirror");
+    expect(fixture.sendText).toHaveBeenCalledTimes(2);
+    expect(fixture.received.join(" ")).toBe(content);
+    expect(fixture.onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ delivered: true, deliveredAt: expect.any(Number) }),
+    );
+  } finally {
+    releaseMirror.resolve();
+    await delivery;
+  }
+  await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
+});
 
-      await expect(fixture.deliver()).resolves.toMatchObject({ delivered: true, path: "direct" });
-      expect(fixture.received.join(" ")).toBe(content);
-      expect(fixture.onDeliveryResult).toHaveBeenCalledOnce();
-    },
-  );
+it.each(["mirror", "report"] as const)("keeps delivery after %s rejects", async (failure) => {
+  const fixture = setup();
+  const error = new Error("post-send bookkeeping failed");
+  if (failure === "mirror") {
+    vi.spyOn(transcript, "mirrorDeliveredPayloads").mockRejectedValue(error);
+  } else {
+    fixture.onDeliveryResult.mockRejectedValue(error);
+  }
+
+  await expect(fixture.deliver()).resolves.toMatchObject({ delivered: true, path: "direct" });
+  expect(fixture.received.join(" ")).toBe(content);
+  expect(fixture.onDeliveryResult).toHaveBeenCalledOnce();
 });

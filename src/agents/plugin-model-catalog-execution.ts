@@ -18,7 +18,6 @@ import {
   type OpenClawAgentSqliteWorkerStore,
 } from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
-import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
 import {
@@ -131,15 +130,7 @@ export async function loadPersistedPluginModelCatalogs(
     assertExistingDatabaseIdentity(options.path, identity.key, identity.birthtime);
   };
   const unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({ ...options, revoke, close });
-  let unregisterRoot: (() => void) | undefined;
   try {
-    unregisterRoot = registerOpenClawStateDatabaseAsyncResource({
-      close: async (closedIdentity) => {
-        if (!closedIdentity || closedIdentity.key === root.admission.identity.key) {
-          await close();
-        }
-      },
-    });
     reading = readPluginModelCatalogsInWorker(
       {
         ...options,
@@ -152,7 +143,6 @@ export async function loadPersistedPluginModelCatalogs(
     assertCurrent();
     return catalogs;
   } finally {
-    unregisterRoot?.();
     unregisterAgent();
   }
 }

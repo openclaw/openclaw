@@ -10,6 +10,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { CronEventClaimInvalidatedError } from "../event-source.js";
 import { captureCronMutationCommit } from "../mutation-completion.js";
+import { currentPluginCommandHostProcessId } from "../plugin-command-schedule.js";
 import { getCronJobsStoreRevision } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type {
@@ -324,6 +325,8 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             schedulingPaused: state.schedulingPaused,
             preparingAgentIds: preparingCronAgentIds(state.deps.env),
             requests: getCronRunQueueRequests(state, { includePendingEvents: true }),
+            hostProcessId: currentPluginCommandHostProcessId(),
+            pluginCommandHosts: state.deps.resolvePluginCommandScheduleHosts?.(),
           },
         }),
       {

@@ -21,6 +21,7 @@ import {
   normalizeAnthropicMessagesRequest,
 } from "./mock-anthropic-messages.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
+import { resolveAfterToolHttpFailure } from "./mock-openai-after-tool-failures.js";
 import {
   buildAssistantText,
   buildImageInspectionReply,
@@ -57,7 +58,6 @@ import {
   QA_BLOCK_STREAMING_PROMPT_RE,
   QA_TOOL_PROGRESS_PROMPT_RE,
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
-  QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
   QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
   QA_THREAD_REPLY_RECEIPT_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
@@ -327,20 +327,16 @@ const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recover
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
 const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
-// Complete ordinary retries inside their diagnostic request allowance, then
-// leave the fifth request active so recovery can honor both the cumulative
-// no-progress bound and the current request's own allowance. The stalled
-// request starts its response, then stays live with SSE keepalives, which reset
-// the client's idle watchdog but not its progress deadline, so it outlives that
-// allowance.
+// Fail three times, then start a quiet response inside the selected model's retry budget.
+// Its idle deadline settles it; keepalives must not extend that provider-owned wait.
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
 const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
-const QA_REPEATED_REQUEST_STALLED_KEEPALIVE_MS = 5_000;
-const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
+const QA_REPEATED_REQUEST_STALL_ATTEMPT = 4;
 // Stalled-turn recovery mirrors the repeated-request e2e timings: short failing
 // retries, then one held request the QA-tuned stuck detector must abort.
 const QA_STALLED_TURN_RESPONSE_PAUSE_MS = 8_000;
 const QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS = 90_000;
+const QA_STALLED_TURN_STALL_ATTEMPT = 5;
 
 function resolveCompactionSummaryFaultMode(params: {
   allInputText: string;
@@ -2046,6 +2042,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       repeatedRequestRecoveryAttempts: 0,
       stalledTurnRecoveryAttempts: 0,
       toolLoopReadAttempts: 0,
+      rateLimitAfterToolInjected: false,
     };
     scenarioStates.set(sessionId ?? "", scenarioState);
     const compactionSummaryFaultMode = resolveCompactionSummaryFaultMode({
@@ -2169,21 +2166,16 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         : undefined;
     const failure =
       injectedFailure ??
-      (QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input)
-        ? {
-            status: 503,
-            type: "server_error",
-            message: "Service Unavailable",
-            retryAfterSeconds: 120,
-          }
-        : undefined);
+      resolveAfterToolHttpFailure(allInputText, hasToolOutput(input), scenarioState);
     const recorded = requestLog.record({
       ...requestSnapshotBase,
       outcome:
         failure || events.some((event) => event.type === "response.failed") ? "error" : "success",
       ...(events.some((event) => event.type === "response.failed")
         ? { errorCode: "response_failed_no_details" }
-        : {}),
+        : failure?.code
+          ? { errorCode: failure.code }
+          : {}),
       plannedToolCallId: plannedTool.callId,
       ...(request.route === "responses" && plannedTool.itemId
         ? { plannedToolItemId: plannedTool.itemId }
@@ -2238,14 +2230,15 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         ? scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
           ? {
               responsePauseMs: repeatedRequestStalledResponsePauseMs,
-              responseKeepaliveMs: QA_REPEATED_REQUEST_STALLED_KEEPALIVE_MS,
+              // Start the SSE response, but leave it silent until the provider times out.
+              responseKeepaliveMs: repeatedRequestStalledResponsePauseMs,
             }
           : { responsePauseMs: repeatedRequestResponsePauseMs }
         : {}),
       ...(stalledTurnAttempt
         ? {
             responsePauseMs:
-              scenarioState.stalledTurnRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
+              scenarioState.stalledTurnRecoveryAttempts === QA_STALLED_TURN_STALL_ATTEMPT
                 ? QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS
                 : QA_STALLED_TURN_RESPONSE_PAUSE_MS,
           }

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { wrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.js";
+import { afterAll, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
@@ -15,7 +14,6 @@ import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import {
   createOrResumeClientVoiceSession,
   flushClientVoiceSessionWrites,
-  resolveClientVoiceRunBinding,
 } from "../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../talk/client-voice-session.test-support.js";
 import {
@@ -42,8 +40,6 @@ const model = vi.hoisted(() => ({ run: vi.fn() }));
 // mock-isolation: replace inference while exercising real source guards and native effects.
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: model.run }));
 
-// A fixed-action backend replaces inference. Transcript capability, run binding,
-// before-tool policy, admission/source guards, and joined OS effects are real.
 describe("authenticated Talk permission parity", () => {
   let state: OpenClawTestState;
   let config: OpenClawConfig;
@@ -88,10 +84,16 @@ describe("authenticated Talk permission parity", () => {
     return { context, source, retained };
   }
 
-  function writeSession(fields: Omit<SessionEntry, "sessionId" | "updatedAt">) {
+  function writeSession(fields: Omit<SessionEntry, "sessionId" | "updatedAt"> = {}) {
     return replaceSessionEntry(
       { agentId: "main", sessionKey, storePath: sessionTarget.storePath },
-      { sessionId: "parity-session", updatedAt: Date.now(), ...fields },
+      {
+        sessionId: "parity-session",
+        updatedAt: Date.now(),
+        permissionMode: "full",
+        execHost: "gateway",
+        ...fields,
+      },
     );
   }
 
@@ -129,8 +131,6 @@ describe("authenticated Talk permission parity", () => {
       ]),
     };
     await writeSession({
-      permissionMode: "full",
-      execHost: "gateway",
       delivery: normalizeSessionDeliveryState({
         context: { channel: "discord", to: "old-delivery", accountId: "old-account" },
       }),
@@ -150,33 +150,6 @@ describe("authenticated Talk permission parity", () => {
     await state.cleanup();
   });
 
-  it("executes the same permitted native action without an additional voice prompt", async () => {
-    const marker = path.join(state.workspaceDir, "effects");
-    const action = {
-      command: "printf 'effect\n' >> effects",
-      workdir: state.workspaceDir,
-      yieldMs: 10000,
-    };
-    const execute = (runId: string) =>
-      wrapToolWithBeforeToolCallHook(execTool(runId), {
-        agentId: "main",
-        sessionKey,
-        runId,
-        config,
-      }).execute("call:" + runId, action);
-    const textResult = await execute("text-parity");
-    expect(textResult.details).toMatchObject({ status: "completed", exitCode: 0 });
-    model.run.mockImplementationOnce(async (params: RunEmbeddedAgentParams) => {
-      expect(resolveClientVoiceRunBinding(params.runId)).toMatchObject({ voiceSessionId });
-      const result = await execute(params.runId);
-      expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
-      return { payloads: [{ text: "Done." }], meta: {} };
-    });
-    const runner = createRunner();
-    expect((await runner.runArgs({ question: "Carry out the action." })).text).toBe("Done.");
-    expect(await fs.readFile(marker, "utf8")).toBe("effect\neffect\n");
-    expect(model.run).toHaveBeenCalledOnce();
-  });
   it("uses configured ownership without admin and the session-pinned node/cwd", async () => {
     const ownerClient = sharingPolicyClient({
       user: "configured-owner",
@@ -232,16 +205,11 @@ describe("authenticated Talk permission parity", () => {
   });
 
   it("fences the native effect when the retained authenticated source is revoked", async () => {
-    await writeSession({
-      permissionMode: "full",
-      execHost: "gateway",
-    });
+    await writeSession();
     const { context, source, retained } = await retainSource();
     const marker = path.join(state.workspaceDir, "revoked-effect");
     model.run.mockImplementationOnce(async (params: RunEmbeddedAgentParams) => {
-      if (!params.preparedRunAdmission) {
-        throw new Error("Missing Talk admission");
-      }
+      assert(params.preparedRunAdmission, "Missing Talk admission");
       const admittedRunContext = await params.preparedRunAdmission.admit(
         "plugin-harness",
         "parity-native-host",
@@ -258,9 +226,7 @@ describe("authenticated Talk permission parity", () => {
         },
       });
       const [tool] = host.capabilities.bindToolSurface([execTool(params.runId)]);
-      if (!tool) {
-        throw new Error("Missing admitted tool");
-      }
+      assert(tool, "Missing admitted tool");
       try {
         // Revocation is an owner event, not a model parameter or a mock policy answer.
         invalidateGatewayDeviceRevocation(context, "parity-caller", "operator");

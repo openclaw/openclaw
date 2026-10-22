@@ -1,4 +1,3 @@
-import { createMemo } from "solid-js";
 import type { GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -15,11 +14,10 @@ const SESSION_RUN_STATUS_LABELS = {
 } as const satisfies Record<SessionRunStatus, string>;
 
 export function SessionStatusBadge(props: { row: GatewaySessionRow }) {
-  const active = createMemo(() => isSessionRunStateActive(props.row));
-  const idle = createMemo(
-    () => props.row.hasActiveRun === false && (!props.row.status || props.row.status === "running"),
-  );
-  const label = createMemo(() =>
+  const active = () => isSessionRunStateActive(props.row);
+  const idle = () =>
+    props.row.hasActiveRun === false && (!props.row.status || props.row.status === "running");
+  const label = () =>
     t(
       props.row.status === "queued"
         ? "sessionsView.statusQueued"
@@ -29,20 +27,22 @@ export function SessionStatusBadge(props: { row: GatewaySessionRow }) {
             ? "sessionsView.statusIdle"
             : (props.row.status && SESSION_RUN_STATUS_LABELS[props.row.status]) ||
               "sessionsView.statusUnknown",
-    ),
-  );
-  const kind = createMemo(() =>
+    );
+  const kind = (): "ok" | "warn" | "muted" | "danger" =>
     props.row.status === "queued"
       ? "warn"
       : active() || props.row.status === "done"
         ? "ok"
         : idle() || !props.row.status || props.row.status === "interrupted"
           ? "muted"
-          : "danger",
-  );
+          : "danger";
+  const detail = () => `${t("sessionsView.status")}: ${label()}`;
+  // The tooltip needs a focusable trigger for keyboard access.
   return (
-    <openclaw-tooltip prop:content={`${t("sessionsView.status")}: ${label()}`}>
-      <SettingsStatus kind={kind()} label={label()} />
+    <openclaw-tooltip prop:content={detail()}>
+      <span tabindex="0" aria-label={detail()}>
+        <SettingsStatus kind={kind()} label={label()} />
+      </span>
     </openclaw-tooltip>
   );
 }

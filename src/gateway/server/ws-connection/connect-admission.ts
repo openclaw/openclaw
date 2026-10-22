@@ -1,11 +1,13 @@
 // Gateway WebSocket connect admission validates protocol, role, and browser origin.
 import type { IncomingMessage } from "node:http";
 import { isDeepStrictEqual } from "node:util";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   hasGatewayClientCap,
+  isNativeAppUiClient,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
@@ -42,15 +44,10 @@ import { parseGatewayRole } from "../../role-policy.js";
 import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
 import type {
   AuthenticatedGatewayConnect,
   GatewayConnectPhaseContext,
 } from "./message-handler-types.js";
-
-function hasCredential(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 export function isStartupNodeConnect(connectParams: ConnectParams): boolean {
   return connectParams.role === "node" && connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE;
@@ -66,12 +63,12 @@ export function isStartupNodeBootstrapConnect(connectParams: ConnectParams): boo
     Array.isArray(connectParams.scopes) &&
     connectParams.scopes.length === 0 &&
     Boolean(device?.id.trim() && device.publicKey.trim()) &&
-    hasCredential(auth?.bootstrapToken) &&
-    !hasCredential(auth?.token) &&
-    !hasCredential(auth?.deviceToken) &&
-    !hasCredential(auth?.password) &&
-    !hasCredential(auth?.approvalRuntimeToken) &&
-    !hasCredential(auth?.agentRuntimeIdentityToken)
+    hasNonEmptyString(auth?.bootstrapToken) &&
+    !hasNonEmptyString(auth?.token) &&
+    !hasNonEmptyString(auth?.deviceToken) &&
+    !hasNonEmptyString(auth?.password) &&
+    !hasNonEmptyString(auth?.approvalRuntimeToken) &&
+    !hasNonEmptyString(auth?.agentRuntimeIdentityToken)
   );
 }
 

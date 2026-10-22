@@ -394,7 +394,7 @@ it.skipIf(process.platform === "win32").for(["uncertain", "confirmed"] as const)
   "settles durable capacity from the native cleanup certificate (%s)",
   { timeout: 20_000 },
   async (cleanupStatus, { signal }) => {
-    await using f = fixture({ capacity: 1, capacityWaitMs: 0 });
+    await using f = fixture({ capacity: 1 });
     const { supervisor, workspaceDir, capacities } = f;
     const input = testWorkerLaunchInput(workspaceDir, "uncertain-owner");
     const store = f.store();
@@ -439,9 +439,29 @@ it.skipIf(process.platform === "win32").for(["uncertain", "confirmed"] as const)
       const replacement = testWorkerLaunchInput(workspaceDir, "replacement-owner");
       replacement.descriptor.admission.environmentId = "replacement-environment";
       replacement.descriptor.admission.sessionId = "replacement-session";
-      await expect(supervisor.launch(replacement, TEST_WORKER_ENDPOINT)).rejects.toMatchObject({
-        code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
-      });
+      let clock: MockInstance<typeof Date.now> | undefined;
+      const capacityClaim = vi.spyOn(NodeWorkerLaunchStore.prototype, "claim");
+      try {
+        const launching = supervisor.launch(replacement, TEST_WORKER_ENDPOINT);
+        await vi.waitFor(async () => {
+          const results = await Promise.all(
+            capacityClaim.mock.results.flatMap((result) =>
+              result.type === "return" ? [result.value] : [],
+            ),
+          );
+          expect(results.some((result) => result.action === "at-capacity")).toBe(true);
+        });
+        // Expire the real policy only after the worker proves the slot remains reserved.
+        // Timers and database/process lifecycle keep their native behavior.
+        clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10_000);
+        await expect(launching).rejects.toMatchObject({
+          code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
+          message: "node worker capacity remained full for 10000 ms",
+        });
+      } finally {
+        clock?.mockRestore();
+        capacityClaim.mockRestore();
+      }
     } finally {
       capture.mockRestore();
       restoreConfirmation?.();
@@ -454,7 +474,6 @@ it.skipIf(process.platform === "win32")(
   async ({ signal }) => {
     const f = fixture({
       capacity: 1,
-      capacityWaitMs: 0,
     });
     const { env, supervisor, workspaceDir, capacities } = f;
     const input = testWorkerLaunchInput(workspaceDir, "unknown-turn");

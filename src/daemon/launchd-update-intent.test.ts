@@ -8,6 +8,7 @@ import { Writable } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { resolveGatewayLockPaths } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
@@ -59,7 +60,12 @@ const run = (sql: string, ...params: SQLInputValue[]) =>
 const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
 function servingPayload(ownerPid = pid) {
   return {
-    owner: { pid: ownerPid, host: hostname(), startedAt: getFileLockProcessStartTime(ownerPid) },
+    owner: {
+      pid: ownerPid,
+      host: hostname(),
+      startedAt: getFileLockProcessStartTime(ownerPid),
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
     port: 19483,
     mode: "supervised",
     supervisor: { kind: "launchd", name: label },

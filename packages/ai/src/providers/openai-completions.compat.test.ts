@@ -360,6 +360,29 @@ describe("OpenAI-compatible completions compatibility", () => {
     },
   );
 
+  it("uses host-normalized provider attribution for session-affinity headers", async () => {
+    configureAiTransportHost({
+      resolveProviderRequestCapabilities: (input) => ({
+        ...resolveTestCapabilities(input),
+        provider: "openrouter",
+      }),
+    });
+
+    await streamOpenAICompletions(
+      createModel({
+        provider: "OPENROUTER",
+        compat: { sendSessionAffinityHeaders: true },
+      }),
+      context,
+      { apiKey: "test", sessionId: "session-123" },
+    ).result();
+
+    expect(mockOpenAI.clientOptions).toHaveLength(1);
+    expect(mockOpenAI.clientOptions[0]).toMatchObject({
+      defaultHeaders: { "x-session-id": "session-123" },
+    });
+  });
+
   it("redacts OpenRouter terminal body and raw metadata from one error projection", async () => {
     const media = "QUJDRA==";
     mockOpenAI.nextError = Object.assign(new Error("400 status code (no body)"), {

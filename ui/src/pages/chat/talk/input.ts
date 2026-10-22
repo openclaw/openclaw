@@ -1,7 +1,10 @@
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { UserFacingError } from "../../../lib/format-error.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+
+registerChatComposerEnglish();
 
 export type RealtimeTalkInputDevice = {
   deviceId: string;

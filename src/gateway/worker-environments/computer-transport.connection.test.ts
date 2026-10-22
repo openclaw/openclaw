@@ -29,6 +29,7 @@ import { parseNodeWorkerComputerInput } from "../../worker/node-computer-protoco
 import { WorkerConnection } from "../../worker/worker-connection.js";
 import { createWorkerGatewayToolProxies } from "../../worker/worker-gateway-tools.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
+import { gatewayTestTextTransport } from "../server/connection-transport.test-support.js";
 import {
   attachWorkerWsMessageHandler,
   type WorkerConnectionService,
@@ -157,6 +158,7 @@ describe("worker computer connection lifetime", () => {
         let closed = false;
         const cleanup = attachWorkerWsMessageHandler({
           socket,
+          transport: gatewayTestTextTransport(socket),
           connectionWork,
           connId: "fixture-connection",
           service: serverService,

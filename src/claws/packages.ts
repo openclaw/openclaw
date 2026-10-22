@@ -13,8 +13,7 @@ import { defaultRuntime } from "../runtime.js";
 import { installSkillFromClawHub, preflightSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
 import {
   acquireClawPackageLifecycleLease,
-  maintainClawPackageLifecycleLease,
-  type MaintainedClawPackageLifecycleLease,
+  type ClawPackageLifecycleLease,
 } from "../state/claw-package-lifecycle-lease.js";
 import type { InstallClawPackagesOptions } from "./package-install-options.js";
 import { packageFromAction } from "./package-plan-action.js";
@@ -113,7 +112,7 @@ async function installClawPackagesUnlocked(
   const installedPackages: PersistedClawPackageRef[] = [];
 
   for (const action of plan.actions.filter((candidate) => candidate.kind === "package")) {
-    let packageLease: MaintainedClawPackageLifecycleLease | null = null;
+    let packageLease: ClawPackageLifecycleLease | null = null;
     try {
       const pkg = packageFromAction(action);
       const leaseArtifact =
@@ -128,10 +127,9 @@ async function installClawPackagesUnlocked(
       if (!acquired) {
         throw new Error(`Could not acquire package lifecycle lease for ${pkg.ref}.`);
       }
-      const activeLease = maintainClawPackageLifecycleLease(acquired);
-      packageLease = activeLease;
+      packageLease = acquired;
       const assertCurrent = () => {
-        activeLease.assertCurrent();
+        acquired.assertCurrent();
         options.assertCurrent?.();
       };
       const assertForwardCurrent = () => {
@@ -229,15 +227,12 @@ async function installClawPackagesUnlocked(
 
       const preflight = await preflightPluginInstall({
         clawhubPackage: pkg.ref,
-        rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,
         expectedVersion: pkg.version,
       });
       assertCurrent();
       if (!preflight.ok) {
         throw new Error(
-          preflight.code === "plugin_version_conflict"
-            ? `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${preflight.installedVersion}.`
-            : preflight.error,
+          `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${preflight.installedVersion}.`,
         );
       }
       if (preflight.action !== pkg.ownerAction) {

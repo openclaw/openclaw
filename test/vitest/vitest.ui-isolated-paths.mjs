@@ -15,6 +15,9 @@ export const uiIsolatedTestFiles = [
   "ui/src/components/app-sidebar.catalog.test.ts",
   "ui/src/components/gateway-url-confirmation.test.ts",
   "ui/src/components/link-reader-title-tooltip.test.ts",
+  // Import rejection fixtures must not poison the shared module registry.
+  "ui/src/components/lazy-entry-feedback.test.tsx",
+  "ui/src/components/sidebar-attention-lazy-failure.test.ts",
   "ui/src/components/markdown-tables.test.ts",
   "ui/src/components/mcp-app-bridge.test.ts",
   "ui/src/components/mcp-app-panel.test.tsx",
@@ -52,7 +55,6 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/components/chat-transcript-controller.test.ts",
   "ui/src/pages/chat/components/chat-transcript-geometry.test.ts",
   "ui/src/pages/chat/components/chat-transcript-invalidation.test.ts",
-  "ui/src/pages/chat/components/chat-transcript-message-controls.test.ts",
   "ui/src/pages/chat/components/chat-transcript-message-reveal.test.ts",
   "ui/src/pages/chat/components/chat-transcript-render.test.ts",
   "ui/src/pages/config/config-page.custom-theme.test.ts",

@@ -12,9 +12,11 @@ import {
   diagnosticEnvReportScript,
   withSyntheticDiagnosticEnv,
 } from "./diagnostic-env.test-support.js";
+import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import { spawnPsSync } from "./spawn-ps.js";
+import * as bootReader from "./update-managed-service-handoff-boot.js";
 
 const mocks = vi.hoisted(() => ({
   exec: vi.fn(),
@@ -50,14 +52,19 @@ function lockRecord(root: string, extra: { pid?: number; port?: number; startTim
     port: 43123,
     createdAt: "2026-09-03T00:00:00Z",
     configPath: path.join(root, "openclaw.json"),
+    processNamespace: readGatewayLockProcessNamespace(),
     ...extra,
   });
 }
 
 it("enforces the lock observation deadline after native argv inspection", async () => {
   const root = tempDirs.make("lock-argv-budget-");
-  await writeFile(path.join(root, "gateway.state.lock"), lockRecord(root));
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
+    platform: "darwin",
+    identity: "01234567-89ab-cdef-0123-456789abcdef",
+  }));
+  await writeFile(path.join(root, "gateway.state.lock"), lockRecord(root));
   vi.spyOn(process, "kill").mockReturnValue(true);
   mocks.identity.mockImplementation((pid) => ({
     pid,
@@ -97,14 +104,12 @@ it("stops a canceled lock observation before process inspection resumes", async 
     }
     return await readFile(filePath, options);
   });
-  const readProcessStartTime = vi.fn(() => 111);
   const controller = new AbortController();
   const observed = readActiveGatewayLockIdentity({
     env: { OPENCLAW_STATE_DIR: root },
     lockDir: root,
     requireInspection: true,
     signal: controller.signal,
-    readProcessStartTime,
   }).catch((error: unknown) => error);
   try {
     await entered.promise;
@@ -112,7 +117,7 @@ it("stops a canceled lock observation before process inspection resumes", async 
     controller.abort(reason);
     released.resolve(lockRecord(root, { pid: process.pid, startTime: 111, port: 48789 }));
     expect(await observed).toBe(reason);
-    expect(readProcessStartTime).not.toHaveBeenCalled();
+    expect(mocks.identity).not.toHaveBeenCalled();
   } finally {
     released.resolve("");
     await observed;

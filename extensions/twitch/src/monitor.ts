@@ -1,14 +1,82 @@
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  defineStableChannelIngressIdentity,
+  type ChannelIngressContextBinding,
+  type ChannelIngressIdentitySubjectInput,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { checkTwitchAccessControl } from "./access-control.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
 import { getTwitchRuntime } from "./runtime.js";
 import { sendMessageTwitchInternal } from "./send.js";
 import { createTwitchIngress } from "./twitch-ingress.js";
-import type { TwitchAccountConfig } from "./types.js";
+import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
+
+type TwitchPolicyKind = "open" | "allowFrom" | "role";
+
+const twitchUserIdentity = defineStableChannelIngressIdentity({
+  key: "sender-id",
+  entryIdPrefix: "twitch-user-entry",
+});
+
+const twitchRoleIdentity = defineStableChannelIngressIdentity({
+  // Roles authorize the sender; only the native user ID identifies the participant.
+  key: "sender-id",
+  normalizeEntry: () => null,
+  aliases: ["moderator", "owner", "vip", "subscriber"].map((role) => ({
+    key: `role-${role}`,
+    kind: "role",
+    normalizeEntry: (entry) => (normalizeTwitchRole(entry) === role ? role : null),
+    normalizeSubject: normalizeTwitchRole,
+  })),
+  resolveEntryId: ({ entryIndex }) => `twitch-role-entry-${entryIndex + 1}`,
+});
+
+function resolveTwitchPolicyKind(account: TwitchAccountConfig): TwitchPolicyKind {
+  if (account.allowFrom !== undefined) {
+    return "allowFrom";
+  }
+  if (account.allowedRoles && account.allowedRoles.length > 0) {
+    return "role";
+  }
+  return "open";
+}
+
+function twitchSubject(message: TwitchChatMessage): ChannelIngressIdentitySubjectInput {
+  return {
+    stableId: message.userId,
+    aliases: {
+      "role-moderator": message.isMod ? "moderator" : undefined,
+      "role-owner": message.isOwner ? "owner" : undefined,
+      "role-vip": message.isVip ? "vip" : undefined,
+      "role-subscriber": message.isSub ? "subscriber" : undefined,
+    },
+  };
+}
+
+function normalizeTwitchRole(value: string): string | null {
+  const role = normalizeLowercaseStringOrEmpty(value);
+  return role === "moderator" || role === "owner" || role === "vip" || role === "subscriber"
+    ? role
+    : null;
+}
+
+function mentionsBot(message: string, botUsername: string): boolean {
+  const expected = normalizeLowercaseStringOrEmpty(botUsername);
+  const mentionRegex = /@(\w+)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = mentionRegex.exec(message)) !== null) {
+    const username = match[1] ? normalizeLowercaseStringOrEmpty(match[1]) : "";
+    if (username === expected) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 type TwitchRuntimeEnv = {
   log?: (message: string) => void;
@@ -59,14 +127,46 @@ export async function monitorTwitchProvider(options: TwitchMonitorOptions) {
         return;
       }
 
-      const access = await checkTwitchAccessControl({
-        message,
-        account,
-        accountId,
-        botUsername,
-      });
-
-      if (!access.allowed) {
+      const checkAccess = (contextBinding?: ChannelIngressContextBinding) => {
+        const policyKind = resolveTwitchPolicyKind(account);
+        return core.channel.inbound.ingress
+          .createResolver({
+            channelId: "twitch",
+            accountId,
+            identity: policyKind === "role" ? twitchRoleIdentity : twitchUserIdentity,
+          })
+          .message({
+            subject: twitchSubject(message),
+            conversation: {
+              kind: "group",
+              id: message.channel,
+            },
+            contextBinding,
+            event: { mayPair: false },
+            mentionFacts: {
+              canDetectMention: true,
+              wasMentioned: mentionsBot(message.message, account.username),
+            },
+            dmPolicy: "open",
+            groupPolicy: policyKind === "open" ? "open" : "allowlist",
+            policy: {
+              activation: {
+                requireMention: account.requireMention ?? true,
+                allowTextCommands: false,
+                order: "before-sender",
+              },
+            },
+            // Canonical wildcard input keeps admission and participant evidence aligned.
+            groupAllowFrom:
+              policyKind === "allowFrom"
+                ? account.allowFrom
+                : policyKind === "role"
+                  ? account.allowedRoles?.map((role) => (role === "all" ? "*" : role))
+                  : undefined,
+          });
+      };
+      const access = await checkAccess();
+      if (access.ingress.admission !== "dispatch") {
         return;
       }
 
@@ -82,19 +182,13 @@ export async function monitorTwitchProvider(options: TwitchMonitorOptions) {
           id: message.channel,
         },
       });
-      const exactAccess = await checkTwitchAccessControl({
-        message,
-        account,
-        accountId,
-        botUsername: normalizeLowercaseStringOrEmpty(account.username),
-        contextBinding: {
-          agentId: route.agentId,
-          sessionKey: route.sessionKey,
-          messageId: message.id,
-          inboundEventKind: "user_request",
-        },
+      const exactAccess = await checkAccess({
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        messageId: message.id,
+        inboundEventKind: "user_request",
       });
-      if (!exactAccess.allowed) {
+      if (exactAccess.ingress.admission !== "dispatch") {
         return;
       }
 
@@ -122,7 +216,7 @@ export async function monitorTwitchProvider(options: TwitchMonitorOptions) {
               body: input.rawText,
             });
             const ctxPayload = channelRuntime.inbound.buildContext({
-              channelIngress: exactAccess.channelIngress,
+              channelIngress: exactAccess,
               channel: "twitch",
               accountId,
               messageId: input.id,

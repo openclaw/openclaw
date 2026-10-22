@@ -65,9 +65,6 @@
       "openclaw/plugin-sdk/node-selection-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/node-selection-runtime.d.ts"
       ],
-      "openclaw/plugin-sdk/heartbeat-runtime": [
-        "../../packages/plugin-sdk/dist/src/plugin-sdk/heartbeat-runtime.d.ts"
-      ],
       "openclaw/plugin-sdk/expect-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/expect-runtime.d.ts"
       ],

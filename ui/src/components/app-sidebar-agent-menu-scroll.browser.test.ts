@@ -50,12 +50,15 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu scrolling
       });
 
     const clickedMenuShown = menuShown();
-    trigger.click();
+    await page.elementLocator(trigger).click();
     await expect.poll(() => activeRow()?.dataset.value).toBe("agent:agent-39");
     await expect.poll(() => document.activeElement).toBe(activeRow());
     // Focus settles before the opening animation and selected-row reveal.
     await clickedMenuShown;
     await expect.poll(selectedAgentIsVisible).toBe(true);
+    expect(sidebar.querySelector(".sidebar-agent-menu [role=searchbox]")).toBeNull();
+    expect(sidebar.querySelectorAll('.sidebar-agent-menu [data-value^="agent:"]')).toHaveLength(40);
+    expect(sidebar.querySelector('.sidebar-agent-menu [data-value="scope:all"]')).not.toBeNull();
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
 
@@ -68,5 +71,12 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu scrolling
     await hoveredMenuShown;
     await expect.poll(selectedAgentIsVisible).toBe(true);
     expect(document.activeElement).toBe(input);
+
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
+    await expect.poll(() => document.activeElement).toBe(activeRow());
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
   });
 });

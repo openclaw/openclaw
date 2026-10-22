@@ -27,6 +27,14 @@ export async function recoverStuckDiagnosticSession(
   }
   try {
     const decision = await operation.watchdog.tick();
+    if (decision.action === "observe" && decision.reason === "model_recovery") {
+      return reportOutcome({
+        ...base,
+        status: "skipped",
+        action: "keep_lane",
+        reason: "model_attempt_recovery",
+      });
+    }
     const state = operation.watchdog.snapshot();
     const outcome: StuckSessionRecoveryOutcome =
       state.recovery?.status === "settled" && decision.action === "stop"

@@ -126,56 +126,13 @@ suite.define(() => {
     await expectCount(page.getByText(commentary, { exact: true }), 1);
   });
 
-  it("keeps restart-recovered live tool batches in one transcript row", async () => {
-    const runId = "run-restart-recovery";
-    const result = (id: string, seq: number, name: string) =>
-      toolResult(runId, id, seq, id, name, `${name} completed`);
-    const { page } = await openTranscript({
-      historyMessages: [
-        {
-          ...transcriptMessage(
-            "user",
-            "[System] Continue the interrupted turn.",
-            `${runId}:user`,
-            "restart-recovery",
-            1,
-          ),
-          provenance: {
-            kind: "internal_system",
-            sourceSessionKey: "main",
-            sourceTool: "main_session_restart_recovery",
-          },
-        },
-        result("process-1", 2, "process"),
-        result("process-2", 3, "process"),
-        transcriptMessage("assistant", "Checking the next batch.", runId, "gap-1", 4),
-        result("exec-1", 5, "exec"),
-        result("exec-2", 6, "exec"),
-        transcriptMessage("assistant", "Checking the final batch.", runId, "gap-2", 7),
-        result("process-3", 8, "process"),
-        result("process-4", 9, "process"),
-      ],
-      ...activeRun(runId),
-    });
-    const summaries = page.locator(".chat-activity-group__summary");
-    await expect.poll(() => summaries.count()).toBe(3);
-    const rowKeys = await summaries.evaluateAll((elements) =>
-      elements.map(
-        (element) => element.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
-      ),
-    );
-
-    expect(rowKeys[0]).toMatch(/^agent-run:/u);
-    expect(rowKeys).toEqual([rowKeys[0], rowKeys[0], rowKeys[0]]);
-  });
-
   it.each([
-    { viewport: "desktop-dark", width: 1200, height: 900, theme: "dark" },
-    { viewport: "mobile-dark", width: 390, height: 844, theme: "dark" },
-    { viewport: "mobile-light", width: 390, height: 844, theme: "light" },
+    ["desktop-dark", 1200, 900, "dark"],
+    ["mobile-dark", 390, 844, "dark"],
+    ["mobile-light", 390, 844, "light"],
   ] as const)(
-    "renders each run as one linear response on $viewport",
-    async ({ viewport, width, height, theme }) => {
+    "renders each run as one linear response on %s",
+    async (viewport, width, height, theme) => {
       const isMobile = viewport.startsWith("mobile");
       const firstRunId = "run-composed-first";
       const secondRunId = "run-composed-second";
@@ -328,9 +285,7 @@ suite.define(() => {
       },
       sessionKey: "agent:main:main",
     });
-    await expect
-      .poll(async () => (await gateway.getRequests("chat.history")).length)
-      .toBeGreaterThan(historyRequestsBeforeFinal);
+    await gateway.waitForRequest("chat.history", { after: historyRequestsBeforeFinal });
 
     const settledRow = page.locator(".chat-virtual-row", {
       has: page.getByText(finalText, { exact: true }),

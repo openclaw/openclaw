@@ -12,12 +12,19 @@ import {
   outboxStorageScope,
 } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
-import { readStoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
-import type { StoredChatOutboxScope as Scope } from "../../lib/chat/outbox-store-scope.ts";
+import {
+  readStoredChatOutbox as read,
+  listStoredChatOutboxes as listOutboxes,
+} from "../../lib/chat/outbox-store-projection.ts";
+import {
+  type StoredChatOutboxScope as Scope,
+  storedChatOutboxScopeKey,
+} from "../../lib/chat/outbox-store-scope.ts";
 import {
   applyStoredChatOutboxScope,
   subscribeStoredChatOutboxChanges,
   type captureChatOutboxAdmission,
+  type ChatComposerScope as Composer,
 } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
@@ -32,15 +39,11 @@ import {
   type ChatOutboxHostProjection as HostProjection,
 } from "./chat-outbox-owner.projection.ts";
 import { publishChatOutboxQueue, replaceChatOutboxQueue } from "./chat-outbox-queue.ts";
-import type { StoredChatQueueReplacement } from "./composer-persistence-state.ts";
 import {
+  type StoredChatQueueReplacement,
   admitStoredChatComposerQueueItemResult,
-  listStoredChatOutboxes,
-  removeStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItems,
-  storedChatOutboxScopeKey,
-  type ChatComposerScope as Composer,
-} from "./composer-persistence.ts";
+} from "./composer-queue-persistence.ts";
 import {
   captureOutboxPayloadOwner,
   failOutboxPayload,
@@ -81,7 +84,7 @@ class ChatOutboxGatewayOwner {
     }
     host.chatQueue = host.chatQueue.filter((item) => outboxPayloadMatchesOwner(host, item));
     const scope = resolveUiConversationIdentity(host, host.sessionKey);
-    const durableSeen = new Set(readStoredChatOutbox(host, scope)?.queue.map((item) => item.id));
+    const durableSeen = new Set(read(host, scope)?.queue.map((item) => item.id));
     const created: HostProjection = { byScope: new Map(), durableSeen, retryable: new Set() };
     if (host.chatQueue.length) {
       created.byScope.set(storedChatOutboxScopeKey(scope), {
@@ -136,7 +139,7 @@ class ChatOutboxGatewayOwner {
     this.publishAttention();
   }
   durable(host: Composer, id: string) {
-    return listStoredChatOutboxes(host).find(({ queue }) => queue.some((item) => item.id === id));
+    return listOutboxes(host).find(({ queue }) => queue.some((item) => item.id === id));
   }
   locate(host: Host, id: string) {
     const outbox = this.durable(host, id);
@@ -186,11 +189,7 @@ class ChatOutboxGatewayOwner {
       }
     }
   }
-  snapshot(
-    host: Host,
-    scope: Scope,
-    durable = readStoredChatOutbox(host, scope)?.queue ?? [],
-  ): ChatQueueItem[] {
+  snapshot(host: Host, scope: Scope, durable = read(host, scope)?.queue ?? []): ChatQueueItem[] {
     const key = storedChatOutboxScopeKey(scope);
     const state = this.state(host);
     const local = state.byScope.get(key)?.queue ?? [];
@@ -365,7 +364,7 @@ class ChatOutboxGatewayOwner {
     };
   }
   private reconcile(host: Host, state: HostProjection): void {
-    const outboxes = listStoredChatOutboxes(host);
+    const outboxes = listOutboxes(host);
     const durableIds = new Set(outboxes.flatMap((outbox) => outbox.queue.map((item) => item.id)));
     this.history.reconcile(host, outboxes);
     reconcileChatOutboxProjection(state, durableIds, (id) => this.observeDurable(id));
@@ -394,7 +393,7 @@ class ChatOutboxGatewayOwner {
     const state = this.state(host);
     const key = storedChatOutboxScopeKey(scope);
     const retained = [
-      ...(readStoredChatOutbox(host, scope)?.queue ?? []),
+      ...(read(host, scope)?.queue ?? []),
       ...[...this.hosts.values()].flatMap(
         (projection) =>
           projection.byScope.get(key)?.queue.filter((entry) => isActiveLocal(projection, entry)) ??
@@ -556,11 +555,10 @@ class ChatOutboxGatewayOwner {
         live.owner !== host &&
         !(local && durable && LIVE_VERSION_KEYS.every((key) => local[key] === durable[key]))) ||
       (located?.durable &&
-        !removeStoredChatComposerQueueItem(
+        !updateStoredChatComposerQueueItems(
           host,
           located.scope.sessionKey,
-          id,
-          located.item,
+          [{ expected: located.item, next: null }],
           located.scope.agentId,
         ))
     ) {
@@ -668,7 +666,7 @@ class ChatOutboxGatewayOwner {
     this.prune(host);
   }
   allItems(host: Host): ChatQueueItem[] {
-    const durable = listStoredChatOutboxes(host).flatMap((outbox) =>
+    const durable = listOutboxes(host).flatMap((outbox) =>
       this.snapshot(host, outbox, outbox.queue),
     );
     const local = [...this.state(host).byScope.values()].flatMap(({ queue }) => queue);
@@ -720,6 +718,6 @@ export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
 /** Read-only view of the existing tab/Gateway outbox; it does not claim a personal owner. */
 export function listChatOutboxAttention(host: Composer) {
   return readOfflineStorageScope(host)
-    ? projectChatOutboxAttention(listStoredChatOutboxes(host), owners.get(outboxOwnerKey(host)))
+    ? projectChatOutboxAttention(listOutboxes(host), owners.get(outboxOwnerKey(host)))
     : [];
 }

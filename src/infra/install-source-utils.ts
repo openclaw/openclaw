@@ -14,7 +14,7 @@ import {
 } from "semver";
 import { resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPath, tryParseJson } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
@@ -246,18 +246,12 @@ export async function resolveNpmSpecMetadata(params: {
   }
 }
 
-export type NpmIntegrityDrift = {
-  expectedIntegrity: string;
-  actualIntegrity: string;
-};
-
 /** Runs a callback in a private temp directory and removes it afterward. */
 export async function withInstallWorkspace<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
-  options?: { rootDir?: string },
 ): Promise<T> {
-  const rootDir = options?.rootDir ?? resolvePreferredOpenClawTmpDir();
+  const rootDir = resolvePreferredOpenClawTmpDir();
   return await withTempWorkspace({ rootDir, prefix }, async (tmp) => fn(tmp.dir));
 }
 
@@ -330,14 +324,7 @@ function parseNpmPackJsonOutput(
   }
 
   for (const candidate of candidates) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(candidate);
-    } catch {
-      continue;
-    }
-
-    const entries = resolveNpmJsonEntries(parsed);
+    const entries = resolveNpmJsonEntries(tryParseJson(candidate));
     let fallback: { filename?: string; metadata: NpmSpecResolution } | null = null;
     for (let i = entries.length - 1; i >= 0; i -= 1) {
       const normalized = normalizeNpmPackEntry(entries[i]);

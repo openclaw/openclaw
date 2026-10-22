@@ -110,15 +110,13 @@ it("runs registered ONNX decisions through the prepared catalog and local auth w
         usage: { inputTokens: 7 },
       },
     };
-    expect(
-      await runtime.evaluateV2(
-        { state: { type: "text", text: "The work is needed" }, questions },
-        { ...options(), reasoning: "auto" },
-      ),
-    ).toMatchObject(expected);
-    expect(
-      await runtime.evaluate({ state: "The work is needed", questions }, options()),
-    ).toMatchObject(expected);
+    const v2Result = await runtime.evaluateV2(
+      { state: { type: "text", text: "The work is needed" }, questions },
+      { ...options(), reasoning: "auto" },
+    );
+    expect(v2Result, JSON.stringify(v2Result)).toMatchObject(expected);
+    const v1Result = await runtime.evaluate({ state: "The work is needed", questions }, options());
+    expect(v1Result, JSON.stringify(v1Result)).toMatchObject(expected);
     expect(classify).toHaveBeenCalledTimes(2);
     expect(classify.mock.calls[0]?.[0]).toBe("gliclass-edge-v3.0");
     expect(classify.mock.calls[0]?.[3]).toBeTypeOf("function");

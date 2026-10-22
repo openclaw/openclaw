@@ -2,10 +2,16 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ApplicationContext } from "../../../app/context-types.ts";
+import type { ApplicationGatewaySnapshot } from "../../../app/gateway.ts";
+import { WIDGET_PROMPT_EVENT } from "../../../components/mcp-app-security.ts";
+import { ValueSignal } from "../../../lib/board/provider-signals.ts";
 import { mcpAppWidgetNameForViewId, type BoardProvider } from "../../../lib/board/provider.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
+import { projectGateway } from "../../../lib/reactive/application.ts";
 import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import * as toast from "../../../lib/toast.ts";
 import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext } from "../../../test-helpers/app-sidebar.ts";
 import {
@@ -13,15 +19,25 @@ import {
   createApplicationGateway,
 } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { SidebarPanel } from "./chat-sidebar-content.tsx";
 import { ToolPreview } from "./widget-card-view.tsx";
+import { ToolPreview as DeferredToolPreview } from "./widget-card.ts";
 import * as widgetExport from "./widget-export.ts";
+import { WidgetPinButton } from "./widget-pin-button.tsx";
 
 const canvasPreview = {
   kind: "canvas",
   surface: "assistant_message",
   render: "url",
 } as const;
+const sessionKey = "agent:main:main";
+const actionButton = (host: HTMLElement) =>
+  host.querySelector<HTMLButtonElement>('button[aria-label="Widget actions"]');
+const pinButton = (host: HTMLElement) => host.querySelector<HTMLButtonElement>("[data-pin-widget]");
+const menuLabels = (host: HTMLElement) =>
+  Array.from(host.querySelectorAll('[role="menuitem"]'), (item) => item.textContent?.trim());
 const widgetPorts: MessagePort[] = [];
 type PreviewState = {
   preview: Parameters<typeof ToolPreview>[0]["preview"];
@@ -32,6 +48,43 @@ const widgets = new Map<
   { update: (state: PreviewState) => void; unmount: () => void }
 >();
 
+function documentPreview(
+  id: string,
+  overrides: Partial<Extract<PreviewState["preview"], { kind: "canvas" }>> = {},
+) {
+  return {
+    ...canvasPreview,
+    url: `/__openclaw__/canvas/documents/${id}/index.html`,
+    sandbox: "scripts" as const,
+    ...overrides,
+  };
+}
+
+function connectedHost() {
+  return document.body.appendChild(document.createElement("div"));
+}
+
+function showCapability(preview: PreviewState["preview"], host: HTMLElement, capability: string) {
+  return mountWidget(
+    preview,
+    { canvasPluginSurfaceUrl: `https://canvas.test/__openclaw__/cap/${capability}` },
+    host,
+  );
+}
+
+function boardProvider(overrides: Partial<BoardProvider> = {}) {
+  const pinnedWidgets: { name: string }[] = [];
+  const snapshot = new ValueSignal({ widgets: pinnedWidgets });
+  const provider = {
+    sessionKey: "agent:main:main",
+    canPinWidgets: true,
+    pinWidget: vi.fn(async () => undefined),
+    snapshot$: snapshot,
+    ...overrides,
+  } as unknown as BoardProvider;
+  return { provider, snapshot };
+}
+
 function unmountWidget(host: HTMLElement) {
   widgets.get(host)?.unmount();
   widgets.delete(host);
@@ -40,7 +93,7 @@ function unmountWidget(host: HTMLElement) {
 function mountWidget(
   preview: PreviewState["preview"],
   options?: PreviewState["options"],
-  host = document.createElement("div"),
+  host: HTMLElement = document.createElement("div"),
 ) {
   const state = { preview, options };
   const mounted = widgets.get(host);
@@ -52,13 +105,7 @@ function mountWidget(
       () => {
         const [current, setCurrent] = createSignal(state);
         update = setCurrent;
-        return (
-          <ToolPreview
-            preview={current().preview}
-            surface="chat_message"
-            options={current().options}
-          />
-        );
+        return <ToolPreview {...current()} surface="chat_message" />;
       },
       { container: host },
     );
@@ -68,7 +115,7 @@ function mountWidget(
   return host;
 }
 
-function initializeWidgetFrame(frame: HTMLIFrameElement) {
+function initializeWidgetFrame(frame: HTMLIFrameElement, loaded = false) {
   const channel = new MessageChannel();
   widgetPorts.push(channel.port1, channel.port2);
   window.dispatchEvent(
@@ -79,14 +126,21 @@ function initializeWidgetFrame(frame: HTMLIFrameElement) {
       ports: [channel.port2],
     }),
   );
-  frame.dispatchEvent(new Event("load"));
+  if (!loaded) {
+    frame.dispatchEvent(new Event("load"));
+  }
+  return channel;
 }
 
-async function downloadWidget(host: HTMLElement) {
-  host.querySelector<HTMLButtonElement>('button[aria-label="Widget actions"]')!.click();
+async function openActions(host: HTMLElement) {
+  actionButton(host)!.click();
   await waitForSolid(() =>
     expect(host.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
   );
+}
+
+async function downloadWidget(host: HTMLElement) {
+  await openActions(host);
   host.querySelector<HTMLButtonElement>('[role="menuitem"][value="download"]')!.click();
 }
 
@@ -104,17 +158,150 @@ afterEach(async () => {
 });
 
 describe("widget-card", () => {
+  it.each(["transcript", "strict transcript", "sidebar"] as const)(
+    "retains the %s document through a blip and retires it on identity or access change",
+    async (surface) => {
+      // SAFETY: Raw frames only use the client as presentation identity; they issue no RPCs.
+      const client = { request: vi.fn() } as unknown as ApplicationGatewaySnapshot["client"];
+      const hello: ApplicationGatewaySnapshot["hello"] = {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"], recoveryScope: "reader-a" },
+      };
+      const fixture = createApplicationGateway();
+      fixture.publish({
+        ...fixture.gateway.snapshot,
+        client,
+        hello,
+        phase: "connected",
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
+        sessionKey: "agent:main:test",
+      });
+      // SAFETY: These leaf renderers consume only the Gateway capability.
+      const provider = createSolidApplicationContextProvider({
+        gateway: fixture.gateway,
+      } as ApplicationContext);
+      const entryUrl = "/__openclaw__/canvas/documents/cv_retained/index.html";
+      const root = mountSolid(
+        () => {
+          const gateway = projectGateway(fixture.gateway);
+          return surface !== "sidebar" ? (
+            <DeferredToolPreview
+              preview={documentPreview("cv_retained", {
+                sandbox: surface === "strict transcript" ? "strict" : "scripts",
+              })}
+              surface="chat_message"
+              options={{ canvasPluginSurfaceUrl: gateway.read().snapshot.canvasPluginSurfaceUrl }}
+            />
+          ) : (
+            <SidebarPanel
+              content={{ kind: "canvas", docId: "cv_retained", entryUrl }}
+              showingRawText={false}
+              error={null}
+              onRetry={() => {}}
+              onClose={() => {}}
+              onViewRawText={() => {}}
+              onClick={() => {}}
+              onKeydown={() => {}}
+              attachmentRuntime={{}}
+              canvasPluginSurfaceUrl={gateway.read().snapshot.canvasPluginSurfaceUrl}
+            />
+          );
+        },
+        { wrapper: provider.wrapper },
+      );
+      const frame = () => root.container.querySelector<HTMLIFrameElement>("iframe");
+      await vi.dynamicImportSettled();
+      await waitForSolid(() => expect(frame()).not.toBeNull());
+      const original = frame()!;
+      const src = original.getAttribute("src");
+      original.contentDocument!.open();
+      original.contentDocument!.write('<input value="draft">');
+      original.contentDocument!.close();
+      const draft = original.contentDocument!.querySelector("input")!;
+      draft.value = "unsaved work";
+      original.dispatchEvent(new Event("load"));
+      const prompts = vi.fn();
+      root.container.addEventListener(WIDGET_PROMPT_EVENT, prompts);
+      let expectPrompts: (count: number) => Promise<void> = async () => {};
+      if (surface === "transcript") {
+        const channel = initializeWidgetFrame(original, true);
+        original.checkVisibility = () => true;
+        original.focus();
+        expectPrompts = async (count) => {
+          await new Promise<void>((resolve) => {
+            channel.port2.addEventListener("message", () => resolve(), { once: true });
+            channel.port1.postMessage({ type: "openclaw:widget-prompt", prompt: "Keep working" });
+          });
+          expect(prompts).toHaveBeenCalledTimes(count);
+        };
+      }
+      await expectPrompts(1);
+      const publish = (patch: Partial<ApplicationGatewaySnapshot>) => {
+        bumpCanvasWidgetFrameConnectionGeneration();
+        fixture.publish({ ...fixture.gateway.snapshot, ...patch });
+        flush();
+      };
+      publish({ phase: "reconnecting", hello: null, canvasPluginSurfaceUrl: null });
+      expect(frame()).toBe(original);
+      expect(original.getAttribute("src")).toBe(src);
+      await expectPrompts(1);
+      publish({
+        phase: "connected",
+        hello,
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two",
+      });
+      expect(frame()).toBe(original);
+      expect(original.getAttribute("src")).toBe(src);
+      expect(original.contentDocument!.querySelector("input")).toBe(draft);
+      expect(draft.value).toBe("unsaved work");
+      await expectPrompts(2);
+      publish({ client: { request: vi.fn() } as unknown as ApplicationGatewaySnapshot["client"] });
+      expect(frame()).not.toBe(original);
+      publish({ hello: { ...hello, auth: { role: "operator", scopes: [] } } });
+      expect(frame()).toBeNull();
+    },
+  );
+  it("retains video playback through title changes after the player loads", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const preview = {
+      ...canvasPreview,
+      title: "Synthetic video",
+      url: "https://youtu.be/AbCdEfGhI_1",
+    };
+    const host = mountWidget(preview, { sessionKey: "agent:main:video" });
+    await waitForSolid(() =>
+      expect(host.querySelector('button[aria-label="Play Synthetic video"]')).not.toBeNull(),
+    );
+    host.querySelector<HTMLButtonElement>('button[aria-label="Play Synthetic video"]')!.click();
+    flush();
+    const frame = host.querySelector("iframe");
+    expect(frame).not.toBeNull();
+
+    mountWidget(
+      { ...preview, title: "Updated video title" },
+      { sessionKey: "agent:main:video" },
+      host,
+    );
+
+    expect(host.querySelector("iframe")).toBe(frame);
+    expect(frame?.title).toBe("YouTube player: Updated video title");
+  });
+
   it("exports the current raw frame after replacing its URL", async () => {
     const exportImage = vi.spyOn(widgetExport, "exportWidget").mockResolvedValue("png");
     onTestFinished(() => exportImage.mockRestore());
-    const host = document.createElement("div");
-    document.body.append(host);
-    const preview = {
-      ...canvasPreview,
-      title: "Raw widget",
-      url: "/__openclaw__/canvas/documents/cv_export_one/index.html",
-      sandbox: "scripts",
-    } as const;
+    const host = connectedHost();
+    const preview = documentPreview("cv_export_one", { title: "Raw widget" });
     mountWidget(preview, undefined, host);
     const first = host.querySelector("iframe")!;
     await downloadWidget(host);
@@ -152,13 +339,10 @@ describe("widget-card", () => {
       disposeSidebarContextLifecycles();
     });
     mountWidget(
-      {
-        ...canvasPreview,
+      documentPreview("cv_export_managed", {
         title: "Managed widget",
         viewId: "cv_export_managed",
-        url: "/__openclaw__/canvas/documents/cv_export_managed/index.html",
-        sandbox: "scripts",
-      },
+      }),
       undefined,
       host,
     );
@@ -182,10 +366,9 @@ describe("widget-card", () => {
   });
 
   it("keeps theme delivery attached to a retained mounted frame", async () => {
-    const host = document.createElement("div");
-    document.body.append(host);
+    const host = connectedHost();
     mountWidget(
-      { ...canvasPreview, url: "https://example.test/theme-widget", sandbox: "scripts" },
+      documentPreview("unused", { url: "https://example.test/theme-widget" }),
       { allowExternalEmbedUrls: true },
       host,
     );
@@ -204,155 +387,61 @@ describe("widget-card", () => {
     );
   });
 
-  it("keeps initialized frames stable through capability and transport generations", () => {
-    const firstPreview = {
-      ...canvasPreview,
-      url: "/__openclaw__/canvas/documents/cv_surface_lease_one/index.html",
-      sandbox: "scripts",
-    } as const;
-    const host = document.createElement("div");
-    document.body.append(host);
-    mountWidget(
-      firstPreview,
-      {
-        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
-      },
-      host,
-    );
-    const originalFrame = host.querySelector<HTMLIFrameElement>("iframe");
-    const originalSrc = originalFrame?.getAttribute("src");
+  it.each([true, false])("rotates capabilities with an initialized=%s frame", (initialized) => {
+    const preview = documentPreview("cv_surface_lease_one");
+    const host = connectedHost();
+    showCapability(preview, host, "one");
+    const original = host.querySelector("iframe")!;
+    const originalSrc = original.getAttribute("src");
     expect(originalSrc).toContain("/__openclaw__/cap/one/");
-    initializeWidgetFrame(originalFrame!);
-
-    mountWidget(
-      firstPreview,
-      {
-        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two",
-      },
-      host,
+    if (initialized) {
+      initializeWidgetFrame(original);
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: "openclaw:widget-size", height: 48 },
+          source: original.contentWindow,
+        }),
+      );
+      expect(original.style.height).toBe("48px");
+      showCapability(preview, host, "one");
+      expect(original.getAttribute("style")).toContain("48px");
+    } else {
+      // HTTP error documents dispatch load without offering a widget bridge.
+      original.dispatchEvent(new Event("load"));
+    }
+    showCapability(preview, host, "two");
+    const current = host.querySelector("iframe")!;
+    expect(current === original).toBe(initialized);
+    if (initialized) {
+      expect(current.getAttribute("src")).toBe(originalSrc);
+      expect(current.getAttribute("style")).toContain("48px");
+    } else {
+      expect(current.getAttribute("src")).toContain("/__openclaw__/cap/two/");
+      initializeWidgetFrame(current);
+    }
+    showCapability(preview, host, "three");
+    expect(host.querySelector("iframe")).toBe(current);
+    expect(current.getAttribute("src")).toContain(
+      `/__openclaw__/cap/${initialized ? "one" : "two"}/`,
     );
-    expect(host.querySelector("iframe")).toBe(originalFrame);
-    expect(host.querySelector("iframe")?.getAttribute("src")).toBe(originalSrc);
 
     unmountWidget(host);
-    mountWidget(
-      firstPreview,
-      {
-        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two",
-      },
-      host,
-    );
+    showCapability(preview, host, "two");
     const remountedFrame = host.querySelector("iframe");
-    expect(remountedFrame).not.toBe(originalFrame);
+    expect(remountedFrame).not.toBe(current);
     expect(remountedFrame?.getAttribute("src")).toContain("/__openclaw__/cap/two/");
     initializeWidgetFrame(remountedFrame!);
 
     bumpCanvasWidgetFrameConnectionGeneration();
-    mountWidget(
-      firstPreview,
-      {
-        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/three",
-      },
-      host,
-    );
+    showCapability(preview, host, "three");
     expect(host.querySelector("iframe")).toBe(remountedFrame);
   });
 
-  it.each(["failed"] as const)(
-    "replaces an uninitialized %s frame when its capability rotates",
-    (loadState) => {
-      const preview = {
-        ...canvasPreview,
-        url: "/__openclaw__/canvas/documents/cv_initial_rotation/index.html",
-        sandbox: "scripts",
-      } as const;
-      const host = document.createElement("div");
-      document.body.append(host);
-      const show = (capability: string) =>
-        mountWidget(
-          preview,
-          {
-            canvasPluginSurfaceUrl: `https://canvas.test/__openclaw__/cap/${capability}`,
-          },
-          host,
-        );
-
-      show("hello");
-      const original = host.querySelector("iframe")!;
-      if (loadState === "failed") {
-        // HTTP error documents also dispatch load, but offer no widget bridge.
-        original.dispatchEvent(new Event("load"));
-      }
-      show("renewed");
-      const renewed = host.querySelector("iframe")!;
-      expect(renewed).not.toBe(original);
-      expect(renewed.getAttribute("src")).toContain("/__openclaw__/cap/renewed/");
-
-      initializeWidgetFrame(renewed);
-      show("next");
-      expect(host.querySelector("iframe")).toBe(renewed);
-      expect(renewed.getAttribute("src")).toContain("/__openclaw__/cap/renewed/");
-    },
-  );
-
-  it("keeps a short reported frame height across a capability rotation", () => {
-    const preview = {
-      ...canvasPreview,
-      url: "/__openclaw__/canvas/documents/cv_surface_lease_height/index.html",
-      sandbox: "scripts",
-    } as const;
-    const host = document.createElement("div");
-    document.body.append(host);
-    mountWidget(
-      preview,
-      {
-        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
-      },
-      host,
-    );
-    const frame = host.querySelector<HTMLIFrameElement>("iframe");
-    initializeWidgetFrame(frame!);
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        data: { type: "openclaw:widget-size", height: 48 },
-        source: frame?.contentWindow,
-      }),
-    );
-    expect(frame?.style.height).toBe("48px");
-
-    // Re-render at the same URL so the style binding itself carries the
-    // remembered height; only then can a later rotation clear it.
-    mountWidget(
-      preview,
-      {
-        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
-      },
-      host,
-    );
-    expect(frame?.getAttribute("style")).toContain("48px");
-
-    // The in-frame reporter only posts when its own height changes, so a
-    // rotation that lost the remembered height would strand the frame at its
-    // default until the widget content happened to resize.
-    mountWidget(
-      preview,
-      {
-        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two",
-      },
-      host,
-    );
-    expect(host.querySelector("iframe")).toBe(frame);
-    expect(frame?.getAttribute("style")).toContain("48px");
-    host.remove();
-  });
-
   it("unloads an external frame when external embeds become disallowed", () => {
-    const preview = {
-      ...canvasPreview,
+    const preview = documentPreview("external-policy", {
       viewId: "external-policy",
       url: "https://example.test/widget",
-      sandbox: "scripts",
-    } as const;
+    });
     const host = mountWidget(preview, { allowExternalEmbedUrls: true });
     const allowedFrame = host.querySelector("iframe");
     expect(allowedFrame?.getAttribute("src")).toBe("https://example.test/widget");
@@ -363,32 +452,23 @@ describe("widget-card", () => {
   });
 
   it("dispatches canvas HTML and MCP App content and ignores unknown kinds", async () => {
-    const canvas = mountWidget({
-      ...canvasPreview,
-      url: "/__openclaw__/canvas/documents/cv_dispatch/index.html",
-      preferredHeight: 320,
-    });
+    const canvas = mountWidget(
+      documentPreview("cv_dispatch", { preferredHeight: 320, sandbox: undefined }),
+    );
     expect(canvas.querySelector("iframe.chat-tool-card__preview-frame")).not.toBeNull();
     expect(canvas.querySelector("mcp-app-view")).toBeNull();
-    expect(canvas.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
+    expect(actionButton(canvas)).not.toBeNull();
     document.body.append(canvas);
-    canvas.querySelector<HTMLButtonElement>('button[aria-label="Widget actions"]')!.click();
-    await waitForSolid(() =>
-      expect(canvas.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
-    );
-    expect(
-      Array.from(canvas.querySelectorAll('[role="menuitem"]'), (item) => item.textContent?.trim()),
-    ).toEqual(["Copy as image", "Download as image"]);
+    await openActions(canvas);
+    expect(menuLabels(canvas)).toEqual(["Copy as image", "Download as image"]);
 
-    const app = mountWidget(
-      {
-        ...canvasPreview,
-        title: "App",
-        preferredHeight: 480,
-        mcpApp: { viewId: "view-dispatch" },
-      },
-      { sessionKey: "agent:main:main" },
-    );
+    const appPreview = {
+      ...canvasPreview,
+      title: "App",
+      preferredHeight: 480,
+      mcpApp: { viewId: "view-dispatch" },
+    };
+    const app = mountWidget(appPreview, { sessionKey });
     await vi.dynamicImportSettled();
     expect(customElements.get("mcp-app-view")).toBeDefined();
     expect(app.querySelector("mcp-app-view")).not.toBeNull();
@@ -396,19 +476,10 @@ describe("widget-card", () => {
       "mcp-app",
     );
     expect(app.querySelector("iframe")).toBeNull();
-    expect(app.querySelector('button[aria-label="Widget actions"]')).toBeNull();
+    expect(actionButton(app)).toBeNull();
 
-    mountWidget(
-      {
-        ...canvasPreview,
-        title: "App",
-        preferredHeight: 480,
-        mcpApp: { viewId: "view-dispatch" },
-      },
-      { sessionKey: "agent:main:main", rawText: "raw app payload" },
-      app,
-    );
-    expect(app.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
+    mountWidget(appPreview, { sessionKey, rawText: "raw app payload" }, app);
+    expect(actionButton(app)).not.toBeNull();
 
     const external = mountWidget(
       {
@@ -418,15 +489,8 @@ describe("widget-card", () => {
       { allowExternalEmbedUrls: true, rawText: "external raw payload" },
     );
     document.body.append(external);
-    external.querySelector<HTMLButtonElement>('button[aria-label="Widget actions"]')!.click();
-    await waitForSolid(() =>
-      expect(external.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
-    );
-    expect(
-      Array.from(external.querySelectorAll('[role="menuitem"]'), (item) =>
-        item.textContent?.trim(),
-      ),
-    ).toEqual(["Show raw details"]);
+    await openActions(external);
+    expect(menuLabels(external)).toEqual(["Show raw details"]);
 
     const unknown = mountWidget({ kind: "unknown" } as never);
     expect(unknown.childElementCount).toBe(0);
@@ -434,32 +498,17 @@ describe("widget-card", () => {
 
   it("pins default-script Canvas HTML through the board provider", async () => {
     const pinWidget = vi.fn(async () => undefined);
-    const snapshotSignal = {
-      value: {
-        sessionKey: "agent:main:main",
-        revision: 0,
-        tabs: [],
-        widgets: [],
-      } as BoardProvider["snapshot$"]["value"],
-      subscribe: () => () => {},
-    };
-    const provider = {
-      sessionKey: "agent:main:main",
-      canPinWidgets: true,
-      pinWidget,
-      snapshot$: snapshotSignal,
-    } as unknown as BoardProvider;
+    const { provider, snapshot } = boardProvider({ pinWidget });
     const canvas = mountWidget(
-      {
-        ...canvasPreview,
+      documentPreview("cv_release", {
         title: "Release status",
         viewId: " cv_release ",
-        url: "/__openclaw__/canvas/documents/cv_release/index.html",
-      },
+        sandbox: undefined,
+      }),
       { boardProvider: provider },
     );
     expect(canvas.querySelector("openclaw-canvas-widget-view")).not.toBeNull();
-    canvas.querySelector<HTMLButtonElement>("[data-pin-widget]")?.click();
+    pinButton(canvas)?.click();
     await vi.waitFor(() => {
       expect(pinWidget).toHaveBeenCalledWith({
         docId: "cv_release",
@@ -468,115 +517,193 @@ describe("widget-card", () => {
       });
     });
 
-    snapshotSignal.value = {
-      sessionKey: "agent:main:main",
-      revision: 1,
-      tabs: [],
-      widgets: [
-        {
-          name: "release-status",
-          tabId: "main",
-          contentKind: "html",
-          sizeW: 6,
-          sizeH: 4,
-          position: 0,
-          grantState: "none",
-          revision: 1,
-        },
-      ],
-    };
+    snapshot.value = { widgets: [{ name: "release-status" }] };
     const pinned = mountWidget(
-      {
-        ...canvasPreview,
-        viewId: "cv_release",
-        boardWidgetName: "release-status",
-        url: "/__openclaw__/canvas/documents/cv_release/index.html",
-        sandbox: "scripts",
-      },
+      documentPreview("cv_release", { viewId: "cv_release", boardWidgetName: "release-status" }),
       { boardProvider: provider },
     );
-    expect(pinned.querySelector<HTMLButtonElement>("[data-pin-widget]")?.disabled).toBe(true);
-    expect(pinned.querySelector("[data-pin-widget]")?.getAttribute("aria-label")).toBe("Pinned");
+    expect(pinButton(pinned)).toMatchObject({ disabled: true, ariaLabel: "Pinned" });
+  });
 
-    const external = mountWidget(
-      {
-        ...canvasPreview,
+  it("retains pin feedback through title updates and reconciles retries with the board", async () => {
+    const first = Promise.withResolvers<void>();
+    const retry = Promise.withResolvers<void>();
+    const pinWidget = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
+    const { provider, snapshot } = boardProvider({ pinWidget });
+    const preview = documentPreview("cv_pin_feedback", {
+      viewId: "cv_pin_feedback",
+      title: "Release status",
+    });
+    const host = mountWidget(preview, { boardProvider: provider });
+    const button = pinButton(host)!;
+    button.click();
+    button.click();
+    await waitForSolid(() =>
+      expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…" }),
+    );
+    expect(pinWidget).toHaveBeenCalledTimes(1);
+
+    mountWidget({ ...preview, title: "Updated release status" }, { boardProvider: provider }, host);
+    expect(pinButton(host)).toBe(button);
+    expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…", title: "Pinning…" });
+
+    first.reject(new Error("Synthetic pin failure"));
+    await waitForSolid(() =>
+      expect(button).toMatchObject({
+        disabled: false,
+        ariaLabel: "Pin to dashboard",
+        title: "Could not pin to dashboard. Try again.",
+      }),
+    );
+    mountWidget({ ...preview, title: "Retained failure" }, { boardProvider: provider }, host);
+    expect(pinButton(host)).toBe(button);
+    expect(button.title).toBe("Could not pin to dashboard. Try again.");
+    button.click();
+    await waitForSolid(() =>
+      expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…" }),
+    );
+    expect(pinWidget).toHaveBeenLastCalledWith({
+      docId: "cv_pin_feedback",
+      name: "canvas-cv_pin_feedback",
+      title: "Retained failure",
+    });
+    snapshot.set({ widgets: [{ name: "canvas-cv_pin_feedback" }] });
+    retry.resolve();
+    await waitForSolid(() => expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinned" }));
+    expect(button.hasAttribute("data-pinned")).toBe(true);
+
+    snapshot.set({ widgets: [] });
+    await waitForSolid(() =>
+      expect(button).toMatchObject({ disabled: false, ariaLabel: "Pin to dashboard" }),
+    );
+    expect(button.hasAttribute("data-pinned")).toBe(false);
+  });
+
+  it("announces a connected pin failure once across title updates", async () => {
+    const showToast = vi.spyOn(toast, "showToast").mockImplementation(() => true);
+    onTestFinished(() => showToast.mockRestore());
+    const completion = Promise.withResolvers<void>();
+    const { provider } = boardProvider({ pinWidget: () => completion.promise });
+    let setTitle!: (title: string) => void;
+    const root = mountSolid(() => {
+      const [title, updateTitle] = createSignal("Synthetic chart");
+      setTitle = updateTitle;
+      return (
+        <WidgetPinButton
+          target={{ board: provider, name: "chart", viewId: "chart", mcpApp: false }}
+          title={title()}
+        />
+      );
+    });
+    onTestFinished(root.unmount);
+    const button = pinButton(root.container)!;
+    button.click();
+    completion.reject(new Error("Synthetic pin failure"));
+    await waitForSolid(() => expect(button.title).toBe("Could not pin to dashboard. Try again."));
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      message: "Could not pin to dashboard. Try again.",
+    });
+    setTitle("Updated chart");
+    flush();
+    expect(pinButton(root.container)).toBe(button);
+    expect(button.title).toBe("Could not pin to dashboard. Try again.");
+    expect(showToast).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps pin failure feedback on the focused button without replaying its toast", async () => {
+    const pending = Promise.withResolvers<void>();
+    const { provider, snapshot } = boardProvider({ pinWidget: vi.fn(() => pending.promise) });
+    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    onTestFinished(() => showToast.mockRestore());
+    const host = connectedHost();
+    const root = mountSolid(
+      () => (
+        <WidgetPinButton
+          target={{ board: provider, name: "widget", viewId: "view", mcpApp: false }}
+        />
+      ),
+      { container: host },
+    );
+    onTestFinished(root.unmount);
+    const button = pinButton(host)!;
+    button.focus();
+    button.click();
+    pending.reject(new Error("Synthetic pin failure"));
+    await waitForSolid(() => expect(button.title).toBe("Could not pin to dashboard. Try again."));
+    expect(pinButton(host)).toBe(button);
+    expect(document.activeElement).toBe(button);
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({ message: button.title });
+
+    snapshot.set({ widgets: [{ name: "widget" }] });
+    await waitForSolid(() => expect(button.title).toBe("Pinned"));
+    snapshot.set({ widgets: [] });
+    await waitForSolid(() => expect(button.title).toBe("Pin to dashboard"));
+    expect(showToast).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces a pin target while its previous board write is still pending", async () => {
+    const pending = Promise.withResolvers<void>();
+    const first = boardProvider({ pinWidget: vi.fn(() => pending.promise) });
+    const nextPin = vi.fn(async () => undefined);
+    const next = boardProvider({ pinWidget: nextPin });
+    const host = mountWidget(documentPreview("cv_first", { viewId: "cv_first" }), {
+      boardProvider: first.provider,
+    });
+    const previousButton = pinButton(host)!;
+    previousButton.click();
+    try {
+      await waitForSolid(() => expect(previousButton.ariaLabel).toBe("Pinning…"));
+      mountWidget(
+        documentPreview("cv_next", { viewId: "cv_next" }),
+        { boardProvider: next.provider },
+        host,
+      );
+      await waitForSolid(() => {
+        expect(pinButton(host)).not.toBe(previousButton);
+        expect(pinButton(host)).toMatchObject({ disabled: false, ariaLabel: "Pin to dashboard" });
+      });
+      pinButton(host)!.click();
+      expect(nextPin).toHaveBeenCalledWith({ docId: "cv_next", name: "canvas-cv_next" });
+    } finally {
+      pending.resolve();
+    }
+  });
+
+  it.each([
+    [
+      "external",
+      documentPreview("cv_external", {
         viewId: "cv_external",
         url: "https://example.com/widget.html",
-        sandbox: "scripts",
-      },
-      { allowExternalEmbedUrls: true, boardProvider: provider },
-    );
-    expect(external.querySelector("[data-pin-widget]")).toBeNull();
-
-    const mismatched = mountWidget(
-      {
-        ...canvasPreview,
-        viewId: "cv_expected",
-        url: "/__openclaw__/canvas/documents/cv_other/index.html",
-        sandbox: "scripts",
-      },
-      { boardProvider: provider },
-    );
-    expect(mismatched.querySelector("[data-pin-widget]")).toBeNull();
-
-    const strict = mountWidget(
-      {
-        ...canvasPreview,
-        viewId: "cv_strict",
-        url: "/__openclaw__/canvas/documents/cv_strict/index.html",
-        sandbox: "strict",
-      },
-      { boardProvider: provider },
-    );
-    expect(strict.querySelector("[data-pin-widget]")).toBeNull();
-
-    const app = mountWidget(
-      {
-        ...canvasPreview,
-        viewId: "cv_app",
-        mcpApp: { viewId: "cv_app" },
-      },
-      { boardProvider: provider, sessionKey: "agent:main:main" },
-    );
-    expect(app.querySelector("[data-pin-widget]")).toBeNull();
+      }),
+    ],
+    ["mismatched", documentPreview("cv_other", { viewId: "cv_expected" })],
+    ["strict", documentPreview("cv_strict", { viewId: "cv_strict", sandbox: "strict" })],
+    ["MCP App", { ...canvasPreview, viewId: "cv_app", mcpApp: { viewId: "cv_app" } }],
+  ] as const)("does not offer Canvas pinning for %s content", (_label, preview) => {
+    const { provider } = boardProvider();
+    const host = mountWidget(preview, {
+      boardProvider: provider,
+      sessionKey,
+      allowExternalEmbedUrls: true,
+    });
+    expect(pinButton(host)).toBeNull();
   });
 
   it("pins an MCP App using only its view identity", async () => {
     const pinMcpApp = vi.fn(async () => undefined);
-    const provider = {
-      sessionKey: "agent:main:main",
-      canPinWidgets: true,
-      canPinMcpApps: true,
-      pinMcpApp,
-      snapshot$: {
-        value: {
-          sessionKey: "agent:main:main",
-          revision: 0,
-          tabs: [],
-          widgets: [],
-        },
-        subscribe: () => () => {},
-      },
-    } as unknown as BoardProvider;
+    const { provider } = boardProvider({ canPinMcpApps: true, pinMcpApp });
     const preview = {
       ...canvasPreview,
       title: "Weather",
       mcpApp: {
         viewId: " mcp-app-source ",
         serverName: "weather",
-        toolName: "show",
-        uiResourceUri: "ui://weather/app",
-        toolCallId: "call-1",
-        originSessionKey: "agent:main:main",
       },
     };
 
-    const origin = mountWidget(preview, {
-      boardProvider: provider,
-      sessionKey: "agent:main:main",
-    });
-    origin.querySelector<HTMLButtonElement>("[data-pin-widget]")?.click();
+    const origin = mountWidget(preview, { boardProvider: provider, sessionKey });
+    pinButton(origin)?.click();
     await vi.waitFor(() =>
       expect(pinMcpApp).toHaveBeenCalledWith({
         viewId: "mcp-app-source",
@@ -588,19 +715,16 @@ describe("widget-card", () => {
     const unsupportedProvider = { ...provider, canPinMcpApps: false } as BoardProvider;
     const unsupported = mountWidget(preview, {
       boardProvider: unsupportedProvider,
-      sessionKey: "agent:main:main",
+      sessionKey,
     });
-    expect(unsupported.querySelector("[data-pin-widget]")).toBeNull();
+    expect(pinButton(unsupported)).toBeNull();
 
     const missingView = mountWidget(
       { ...preview, mcpApp: { ...preview.mcpApp, viewId: "   " } },
-      { boardProvider: provider, sessionKey: "agent:main:main" },
+      { boardProvider: provider, sessionKey },
     );
-    expect(missingView.querySelector("[data-pin-widget]")).toBeNull();
+    expect(pinButton(missingView)).toBeNull();
   });
-});
-
-describe("widget-card presentation", () => {
   it("releases placement observation while a retained widget is hidden", () => {
     const observers: ResizeObserverStub[] = [];
     class ResizeObserverStub implements ResizeObserver {
@@ -679,58 +803,22 @@ describe("widget-card presentation", () => {
     expect(root.container.querySelector("iframe")).toBe(frame);
   });
 
-  const preview = {
-    ...canvasPreview,
-    title: "Clock",
-    viewId: "cv_clock",
-    url: "/__openclaw__/canvas/documents/cv_clock/index.html",
-    sandbox: "scripts",
-  } as const;
-
-  function providerWith(presentation?: "card" | "full-bleed" | "frameless"): BoardProvider {
-    return {
-      sessionKey: "agent:main:main",
-      canPinWidgets: true,
-      pinWidget: vi.fn(async () => undefined),
-      snapshot$: {
-        value: {
-          sessionKey: "agent:main:main",
-          revision: 1,
-          tabs: [],
-          widgets: [
-            {
-              name: "canvas-cv_clock",
-              tabId: "main",
-              contentKind: "html",
-              ...(presentation ? { presentation } : {}),
-              sizeW: 6,
-              sizeH: 4,
-              position: 0,
-              grantState: "none",
-              revision: 1,
-            },
-          ],
-        },
-        subscribe: () => () => {},
-      },
-    } as unknown as BoardProvider;
-  }
+  const preview = documentPreview("cv_clock", { title: "Clock", viewId: "cv_clock" });
 
   it.each([
     ["strict", "scripts", false],
     ["trusted", undefined, true],
     ["trusted", "strict", false],
   ] as const)("applies %s policy to preview sandbox %s", (embedSandboxMode, sandbox, scripted) => {
+    const { provider, snapshot } = boardProvider();
+    snapshot.value = { widgets: [{ name: "canvas-cv_clock" }] };
     const host = mountWidget(
       { ...preview, sandbox },
-      {
-        embedSandboxMode,
-        boardProvider: providerWith(),
-      },
+      { embedSandboxMode, boardProvider: provider },
     );
     const managedView = host.querySelector("openclaw-canvas-widget-view");
     expect(managedView !== null).toBe(sandbox !== "strict");
-    expect(host.querySelector("[data-pin-widget]") !== null).toBe(scripted);
+    expect(pinButton(host) !== null).toBe(scripted);
     if (managedView) {
       expect(managedView.allowScripts).toBe(scripted);
       expect(host.querySelector("iframe")).toBeNull();

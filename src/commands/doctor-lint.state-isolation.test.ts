@@ -15,6 +15,7 @@ import {
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { resolveMcpOAuthAccessToken } from "../agents/mcp-oauth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import type { HealthCheckContext } from "../flows/health-checks.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
@@ -40,10 +41,10 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { collectDoctorFindings } from "./doctor-lint-runner.js";
+import { collectDoctorFindings, runDoctorLintCliInProcess } from "./doctor-lint-runner.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { verifyDoctorLintOAuthStateIsolation } from "./doctor-lint.oauth-isolation.test-support.js";
 import { verifyDoctorLintPrivateAuthRetirement } from "./doctor-lint.private-auth-retirement.test-support.js";
@@ -198,6 +199,143 @@ describe("doctor lint state isolation", () => {
         }
       },
     );
+  });
+
+  it.each(["rehearsal-worker", "ordinary-default"] as const)(
+    "inspects heartbeat source state and restores private inspection state (%s)",
+    async (mode) => {
+      await withOpenClawTestState({ prefix: "doctor-lint-heartbeat-source-" }, async (state) => {
+        const config: OpenClawConfig = {
+          agents: {
+            ownership: "explicit",
+            defaults: { heartbeat: { every: "15m" } },
+            entries: { main: {} },
+          },
+          plugins: { enabled: false },
+          memory: { search: { enabled: false } },
+        };
+        await state.writeConfig(config);
+        const storePath = resolveCronJobsStorePathFromConfig(config, state.env);
+        writeConfigMachineState("doctorLint.source", "unchanged");
+        await closeOpenClawStateDatabaseAsync();
+        const sourcePath = resolveOpenClawStateSqlitePath(state.env);
+        const before = snapshotDoctorLintSqliteFamily(sourcePath);
+        const actual = await vi.importActual<
+          typeof import("../flows/doctor-health-contributions.js")
+        >("../flows/doctor-health-contributions.js");
+        const heartbeat = (await actual.resolveDoctorContributionHealthChecks()).find(
+          (check) => check.id === "core/doctor/heartbeat-cadence-migration",
+        );
+        if (!heartbeat) {
+          throw new Error("heartbeat cadence contribution is missing");
+        }
+        let privateDatabase: ReturnType<typeof openOpenClawStateDatabase> | undefined;
+        mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
+          heartbeat,
+          {
+            id: "core/doctor/project-clone-shape",
+            kind: "core",
+            description: "inspects mutable plugin state after the source-bound check",
+            async detect(ctx: HealthCheckContext) {
+              expect(ctx.cfg.agents?.defaults).not.toHaveProperty("heartbeat");
+              expect(process.env.OPENCLAW_STATE_DIR).not.toBe(state.stateDir);
+              writeConfigMachineState("doctorLint.private", "private only");
+              privateDatabase = openOpenClawStateDatabase();
+              return [];
+            },
+          },
+        ]);
+        const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+        try {
+          await withEnvAsync(
+            { OPENCLAW_CONFIG_PATH: mode === "rehearsal-worker" ? state.configPath : undefined },
+            async () => {
+              // Default selection keeps the outer source snapshot eager; --only hides this overlap.
+              const exitCode =
+                mode === "rehearsal-worker"
+                  ? await runDoctorLintCliInProcess(
+                      runtime,
+                      { json: true },
+                      { commandStartedAtMs: Date.now() },
+                    )
+                  : await runDoctorLintCli(runtime, { json: true });
+              const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+              expect(report.findings).toEqual([
+                expect.objectContaining({
+                  checkId: heartbeat.id,
+                  severity: "warning",
+                  requirement: "heartbeat-retirement",
+                  path: storePath,
+                  fixHint: expect.stringContaining("openclaw doctor --fix"),
+                }),
+              ]);
+              expect(exitCode).toBe(1);
+              expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+              expect(process.env.OPENCLAW_CONFIG_PATH).toBe(
+                mode === "rehearsal-worker" ? state.configPath : undefined,
+              );
+            },
+          );
+          expect(privateDatabase).toBeDefined();
+          expect(privateDatabase?.db.isOpen).toBe(false);
+          expect(fs.existsSync(privateDatabase!.path)).toBe(false);
+          expect(snapshotDoctorLintSqliteFamily(sourcePath)).toEqual(before);
+        } finally {
+          stdout.mockRestore();
+        }
+      });
+    },
+  );
+
+  it("rejects malformed retired heartbeat before running health checks", async () => {
+    await withOpenClawTestState({ prefix: "doctor-lint-heartbeat-invalid-" }, async (state) => {
+      await state.writeConfig({
+        agents: {
+          ownership: "explicit",
+          defaults: { heartbeat: { every: "not-a-duration" } },
+          entries: { main: {} },
+        },
+        plugins: { enabled: false },
+        memory: { search: { enabled: false } },
+      });
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        const exitCode = await runDoctorLintCli(runtime, { json: true });
+        const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+        expect(exitCode).toBe(1);
+        expect(report.findings).toEqual([
+          expect.objectContaining({
+            checkId: "core/doctor/final-config-validation",
+            severity: "error",
+            path: "agents.defaults",
+          }),
+        ]);
+        expect(mocks.resolveDoctorContributionHealthChecks).not.toHaveBeenCalled();
+      } finally {
+        stdout.mockRestore();
+      }
+    });
+  });
+
+  it("rejects config syntax errors before running health checks", async () => {
+    await withOpenClawTestState({ prefix: "doctor-lint-config-syntax-" }, async (state) => {
+      fs.writeFileSync(state.configPath, "{ malformed");
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        const exitCode = await runDoctorLintCli(runtime, { json: true });
+        const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+        expect(exitCode).toBe(1);
+        expect(report.findings).toEqual([
+          expect.objectContaining({
+            checkId: "core/doctor/final-config-validation",
+            severity: "error",
+          }),
+        ]);
+        expect(mocks.resolveDoctorContributionHealthChecks).not.toHaveBeenCalled();
+      } finally {
+        stdout.mockRestore();
+      }
+    });
   });
 
   it("retains auth findings and source paths when mixed lint uses legacy-main shared auth", async () => {
@@ -463,7 +601,7 @@ describe("doctor lint state isolation", () => {
             const findings = JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings;
             expect(isolated).toBe(true);
             expect(findings).toEqual(
-              exists ? [] : [expect.objectContaining({ severity: "error", path: credentials })],
+              exists ? [] : [expect.objectContaining({ severity: "warning", path: credentials })],
             );
             expect(fs.existsSync(credentials)).toBe(exists);
           } finally {

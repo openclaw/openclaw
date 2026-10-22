@@ -11,7 +11,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { WorktreeGcProgress } from "../../agents/worktrees/gc-progress.js";
 import { initializeGitFixture } from "../../agents/worktrees/git-fixture.test-support.js";
-import { WorktreeSnapshotError } from "../../agents/worktrees/service.js";
+import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type {
   ManagedWorktreeGcResult,
   ManagedWorktreeRecord,
@@ -27,11 +27,12 @@ import {
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { startWorktreeMaintenance } from "../worktree-maintenance.js";
 import * as localStateOwner from "./local-state-owner.js";
-import { createWorktreesHandlers } from "./worktrees.js";
+import { worktreesHandlers } from "./worktrees.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
@@ -53,12 +54,29 @@ const emptyConfigContext = { getRuntimeConfig: () => ({}) };
 const admin = { client: { connect: { scopes: ["operator.admin"] } }, context: emptyConfigContext };
 const writer = { client: { connect: { scopes: ["operator.write"] } }, context: emptyConfigContext };
 function requests(
-  service: Partial<Parameters<typeof createWorktreesHandlers>[0]>,
+  service: Partial<typeof managedWorktrees>,
   defaults: Record<string, unknown> = {},
 ) {
-  const handlers = createWorktreesHandlers(service as never);
+  // mock-isolation: Keep the serving handler bound to its real service module.
+  if (service.list) {
+    vi.spyOn(managedWorktrees, "list").mockImplementation(service.list);
+  }
+  if (service.create) {
+    vi.spyOn(managedWorktrees, "create").mockImplementation(service.create);
+  }
+  if (service.remove) {
+    vi.spyOn(managedWorktrees, "remove").mockImplementation(service.remove);
+  }
+  if (service.restore) {
+    vi.spyOn(managedWorktrees, "restore").mockImplementation(service.restore);
+  }
+  if (service.listRepositoryBranches) {
+    vi.spyOn(managedWorktrees, "listRepositoryBranches").mockImplementation(
+      service.listRepositoryBranches,
+    );
+  }
   return async (method: string, params = {}, extras = defaults, respond = vi.fn()) => {
-    await handlers[`worktrees.${method}`]?.({ params, respond, ...extras } as never);
+    await worktreesHandlers[`worktrees.${method}`]?.({ params, respond, ...extras } as never);
     return respond.mock.calls[0];
   };
 }
@@ -189,13 +207,12 @@ it("returns queued, running and completed GC receipts", async () => {
   const clock = createGatewaySchedulerClock();
   const scheduler = createTestGatewayScheduler(clock.clock);
   const sweep = createDeferred<ManagedWorktreeGcResult>();
-  const runGc = vi.fn(() => sweep.promise);
+  const runGc = vi.spyOn(managedWorktrees, "gc").mockReturnValue(sweep.promise);
   const config = {};
   const context = { getRuntimeConfig: () => config };
   const maintenance = startWorktreeMaintenance({
     scheduler,
     getRuntimeConfig: context.getRuntimeConfig,
-    runGc,
     onComplete: vi.fn(),
     onError: vi.fn(),
   });
@@ -242,6 +259,7 @@ it("returns queued, running and completed GC receipts", async () => {
     await running;
     await maintenance.stop();
     await scheduler.stop();
+    runGc.mockRestore();
   }
 });
 

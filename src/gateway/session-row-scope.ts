@@ -239,16 +239,13 @@ export function selectMatchingSessionRows<T extends SessionRowScopeTarget>(
   if (!candidates) {
     return [];
   }
-  // oxlint-disable-next-line unicorn/no-new-array -- Exact capacity avoids growing a buffer for each keyed lookup.
-  const selected = new Array<T>(candidates.size);
-  let selectedCount = 0;
+  const selected: T[] = [];
   for (const id of candidates.keys()) {
     const row = rows.get(id);
     if (row !== undefined && matchesSessionRowScope(row, query, storePaths)) {
-      selected[selectedCount++] = row;
+      selected.push(row);
     }
   }
-  selected.length = selectedCount;
   return selected;
 }
 

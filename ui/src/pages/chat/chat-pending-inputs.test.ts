@@ -11,6 +11,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import * as outboxPayloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission,
   storageTargetForGateway,
@@ -20,6 +21,7 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
+import { createTestPageState } from "./chat-page-state.test-support.ts";
 import {
   input,
   makeChatPageHost,
@@ -33,12 +35,11 @@ import {
   getChatPendingInputs,
 } from "./chat-pending-inputs.ts";
 import { readChatQueueForScope } from "./chat-queue.ts";
-import { projectChatRun } from "./chat-run-projection.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
-import { listStoredChatOutboxes, loadChatComposerState } from "./composer-persistence.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
 import {
   admitChatSubmission,
   reduceChatSessionProjection,
@@ -105,17 +106,16 @@ afterEach(() => {
 
 describe("server-owned pending input display", () => {
   it("publishes custody changes through the run projection while retaining the pending view", () => {
-    const host = makeChatHost(pendingScope);
     const rendered: (readonly string[])[] = [];
-    const dispose = createRoot((stop) => {
-      projectChatRun(host);
+    const { host, dispose } = createRoot((stop) => {
+      const createdHost = createTestPageState(makeChatHost(pendingScope));
       createEffect(
-        () => getChatPendingInputs(host)?.page.items.map((item) => item.id) ?? [],
+        () => getChatPendingInputs(createdHost)?.page.items.map((item) => item.id) ?? [],
         (items) => {
           rendered.push(items);
         },
       );
-      return stop;
+      return { host: createdHost, dispose: stop };
     });
     onTestFinished(dispose);
     flush();
@@ -152,30 +152,10 @@ describe("server-owned pending input display", () => {
     );
   });
 
-  it.each(["held", "failed", "waiting-reconnect"] as const)(
-    "describes interrupted input with a %s browser owner accurately",
-    (sendState) => {
-      const items = buildPendingInputItems([{ ...input, state: "interrupted" }], undefined, [
-        {
-          id: "retained-input",
-          text: "Retained input",
-          createdAt: 1,
-          sendRunId: input.runId,
-          sendState,
-        },
-      ]);
-      expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([
-        sendState === "waiting-reconnect"
-          ? "Interrupted by a Gateway restart. This saved message will resume when the session is ready."
-          : "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
-      ]);
-    },
-  );
-
   it("shows a durable receipt while an accepted input waits for workspace sync", () => {
     const queued = { ...input, state: "queued" as const };
 
-    const items = buildPendingInputItems([queued], undefined, [], ["run-queued"]);
+    const items = buildPendingInputItems([queued], ["run-queued"]);
 
     expect(items).toEqual(
       expect.arrayContaining([
@@ -193,12 +173,12 @@ describe("server-owned pending input display", () => {
       state: "interrupted",
       runId: "run-queued",
       notice:
-        "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
+        "Interrupted before the agent started it. If it does not resume, copy it and send again.",
     },
   ] as const)(
     "keeps $state custody out of the worker-setup notice without eligible execution",
     ({ state, runId, notice }) => {
-      const items = buildPendingInputItems([{ ...input, state, runId }], undefined, [], [], true);
+      const items = buildPendingInputItems([{ ...input, state, runId }], [], true);
 
       expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
         notice ? [notice] : [],
@@ -907,7 +887,7 @@ describe("server-owned pending input display", () => {
       expect(items).toContainEqual(
         expect.objectContaining({
           kind: "notice",
-          text: expect.stringContaining("will resume"),
+          text: "Interrupted before the agent started it. If it does not resume, copy it and send again.",
         }),
       );
       expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);

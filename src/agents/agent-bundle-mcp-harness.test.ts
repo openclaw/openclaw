@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { executeMcpAppOperation } from "../gateway/mcp-app-operations.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
@@ -161,6 +162,75 @@ const heartbeatPolicy = {
   messageProvider: "telegram",
   modelProvider: "openai",
 };
+
+function repeatedDisposalFixture(sessionId: string) {
+  const runtime = makeRuntime({ sessionId, requesterSenderId: "alice" });
+  const releaseLease = vi.fn(runtime.acquireLease!());
+  runtime.acquireLease = () => releaseLease;
+  const entered = createDeferred();
+  const joinedAgain = createDeferred();
+  const cleanup = createDeferred();
+  const failure = new Error("native cleanup failed");
+  runtime.joinCleanup = vi
+    .fn(() => {
+      joinedAgain.resolve();
+      return cleanup.promise;
+    })
+    .mockImplementationOnce(() => {
+      entered.resolve();
+      return cleanup.promise;
+    });
+  return { runtime, releaseLease, entered, joinedAgain, cleanup, failure };
+}
+
+async function expectRepeatedDisposal(
+  fixture: ReturnType<typeof repeatedDisposalFixture>,
+  tools: { dispose: () => Promise<void> },
+  retirementCalls: number,
+) {
+  const { runtime, releaseLease, entered, joinedAgain, cleanup, failure } = fixture;
+  const first = tools.dispose();
+  await entered.promise;
+  const second = tools.dispose();
+  const settled = Promise.allSettled([first, second]);
+  try {
+    await awaitGateBeforeSettlement(
+      joinedAgain.promise,
+      second,
+      "Repeated harness disposal returned before joining native cleanup",
+    );
+    expect(runtime.activeLeases).toBe(0);
+    expect(releaseLease).toHaveBeenCalledOnce();
+    expect(mocks.retireSessionMcpRuntime).toHaveBeenCalledTimes(retirementCalls);
+  } finally {
+    cleanup.reject(failure);
+    await settled;
+  }
+  expect(await settled).toEqual([
+    { status: "rejected", reason: failure },
+    { status: "rejected", reason: failure },
+  ]);
+}
+
+it("joins captured cleanup and reports its failure to repeated static harness disposals", async () => {
+  const fixture = repeatedDisposalFixture("repeat-dispose-static");
+  delete fixture.runtime.requesterScope;
+  mocks.acquireSessionMcpRuntime.mockResolvedValue({
+    runtime: fixture.runtime,
+    releaseLease: fixture.releaseLease,
+  });
+  const tools = await staticTools("repeat-dispose-static", {
+    retireSessionRuntimeAfterDispose: true,
+  });
+  await expectRepeatedDisposal(fixture, tools, 1);
+});
+
+it("joins captured cleanup and reports its failure to repeated requester harness disposals", async () => {
+  const fixture = repeatedDisposalFixture("repeat-dispose-requester");
+  mocks.setResolveImpl(async () => fixture.runtime);
+  const tools = (await requesterTools("repeat-dispose-requester", { requesterSenderId: "alice" }))!;
+  await expectRepeatedDisposal(fixture, tools, 0);
+});
 
 describe("materializeStaticMcpToolsForHarnessRunCore", () => {
   it.each(["none", "release", "join"] as const)(
@@ -468,6 +538,9 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
   });
 
   it("keeps advertised specs stable and returns not-connected for unauthed senders", async () => {
+    const specs = (
+      tools: NonNullable<Awaited<ReturnType<typeof requesterTools>>>["advertisedTools"],
+    ) => tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
     mocks.setResolveImpl(async (params) => {
       const senderId = params.requesterSenderId;
       if (senderId !== "authed") {
@@ -478,11 +551,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
 
     const authed = await fullPermissionTools("session-stable", "authed");
     const advertisedNames = authed!.advertisedTools.map((tool) => tool.name);
-    const advertisedSpecs = authed!.advertisedTools.map(({ name, description, parameters }) => ({
-      name,
-      description,
-      parameters,
-    }));
+    const advertisedSpecs = specs(authed!.advertisedTools);
     expect(advertisedNames).toEqual(["user-mail__inbox"]);
 
     const live = await authed!.tools[0]!.execute("c1", {});
@@ -501,13 +570,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     });
     const busy = await fullPermissionTools("session-stable", "busy");
     expect(busy).toBeDefined();
-    expect(
-      busy!.advertisedTools.map(({ name, description, parameters }) => ({
-        name,
-        description,
-        parameters,
-      })),
-    ).toEqual(advertisedSpecs);
+    expect(specs(busy!.advertisedTools)).toEqual(advertisedSpecs);
     const unavailableResult = await busy!.tools[0]!.execute("busy-call", {});
     expect(unavailableResult.details).toMatchObject({ status: "error" });
     expect(unavailableCall).not.toHaveBeenCalled();
@@ -526,13 +589,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     await guest!.dispose();
 
     const recovered = await fullPermissionTools("session-stable", "authed");
-    expect(
-      recovered!.advertisedTools.map(({ name, description, parameters }) => ({
-        name,
-        description,
-        parameters,
-      })),
-    ).toEqual(advertisedSpecs);
+    expect(specs(recovered!.advertisedTools)).toEqual(advertisedSpecs);
     await recovered!.dispose();
   });
 

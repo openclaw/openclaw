@@ -1,11 +1,11 @@
-import { registerListener } from "../../../../src/shared/listeners.js";
+import { createChangeListeners, registerListener } from "../../../../src/shared/listeners.js";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import type { UiPreferences } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { trimHumanMentions, updateHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -19,7 +19,7 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { releaseChatAttachmentPayloads } from "../chat/attachment-payload-store.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 
-registerNewSessionSetupEnglish();
+registerNewSessionRuntimeEnglish();
 
 type CreationComposerContext = {
   readonly gateway: ApplicationGateway;
@@ -64,6 +64,7 @@ export class CreationComposer {
       attachments: this.attachmentDraft.attachments,
       pendingAttachmentReads: this.attachmentDraft.reads.pendingReads,
     }),
+    // The shared composer projection consumes this synchronous draft-owner contract.
     subscribe: (listener) => this.subscribe(listener),
   };
   message = "";
@@ -72,7 +73,7 @@ export class CreationComposer {
   error: string | null = null;
   flushInput: (() => void) | undefined;
   releasePresentation: (() => void) | undefined;
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   private readonly invalidations = new Set<() => void>();
   private readonly gatewayUrl;
   private readonly recoveryScope;
@@ -153,14 +154,10 @@ export class CreationComposer {
 
   readonly notify = () => {
     this.notifyDraft();
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   };
 
-  subscribe(listener: () => void): () => void {
-    return registerListener(this.listeners, listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
 
   setMessage(message: string, mentions?: readonly HumanMention[]): void {
     if (!this.canDisplay()) {
@@ -331,6 +328,7 @@ export function retainCreatedComposer(
       entries.clear();
       registry?.release();
     };
+    // Scope changes release accepted input custody even while its view is unmounted.
     const unsubscribe = context.gateway.subscribe(() => {
       for (const [entryKey, value] of entries) {
         if (!value.canRecover()) {

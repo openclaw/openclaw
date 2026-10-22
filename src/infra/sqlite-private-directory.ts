@@ -21,12 +21,24 @@ export async function createPrivateSqliteDirectory(directoryPath: string): Promi
 export function resolvePrivateSqliteSnapshotStagingRoot(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
+  // Shipped update drivers already give their candidate helpers a private TMPDIR.
+  // Keep disposable inspection images there, not beside retained recovery backups.
+  const updateTmp = env.OPENCLAW_UPDATE_IN_PROGRESS === "1" ? env.TMPDIR?.trim() : undefined;
+  if (updateTmp && path.isAbsolute(updateTmp)) {
+    return resolvePreferredOpenClawTmpDir({
+      preferredDir: path.join(updateTmp, "openclaw"),
+      tmpdir: () => updateTmp,
+    });
+  }
   const appData = process.platform === "win32" ? env.LOCALAPPDATA?.trim() : undefined;
   const defaultRoot = process.platform === "win32" ? "AppData/Local" : ".cache";
   const platformRoot = process.platform === "darwin" ? "Library/Caches" : defaultRoot;
+  // Update scratch follows the operator's volume; ordinary reads retain the cache default.
+  const updateTemp = env.OPENCLAW_UPDATE_IN_PROGRESS === "1" ? env.TMPDIR?.trim() : undefined;
   const cacheRoot =
-    [env.XDG_CACHE_HOME?.trim(), appData].find((root) => root && path.isAbsolute(root)) ??
-    path.join(resolveRequiredOsHomeDir(env), platformRoot);
+    [env.XDG_CACHE_HOME?.trim(), updateTemp, appData].find(
+      (root) => root && path.isAbsolute(root),
+    ) ?? path.join(resolveRequiredOsHomeDir(env), platformRoot);
   return resolvePreferredOpenClawTmpDir({
     preferredDir: path.join(cacheRoot, "openclaw"),
     tmpdir: () => cacheRoot,

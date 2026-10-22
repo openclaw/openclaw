@@ -377,11 +377,6 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     plan: SandboxFsCommandPlan & { signal?: AbortSignal },
   ): Promise<SandboxBackendCommandResult> {
     await this.pathGuard.assertPathChecks(plan.checks);
-    if (plan.recheckBeforeCommand) {
-      // Mutations that can create or swap path parents re-run the anchored
-      // checks immediately before command execution to close TOCTOU gaps.
-      await this.pathGuard.assertPathChecks(plan.checks);
-    }
     return await this.sandbox.backend.runShellCommand({
       script: plan.script,
       args: plan.args,

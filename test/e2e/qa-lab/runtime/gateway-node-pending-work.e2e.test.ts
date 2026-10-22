@@ -72,7 +72,7 @@ it(
       },
     });
     const identity = loadOrCreateDeviceIdentity({
-      path: path.join(gateway.tempRoot, "pending-work-node.sqlite"),
+      path: path.join(gateway.tempRoot, "pending-work-node", "client", "credentials.sqlite"),
     });
     const nodeId = identity.deviceId;
     const handlerErrors: Error[] = [];

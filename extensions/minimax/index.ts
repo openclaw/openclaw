@@ -71,13 +71,10 @@ function wrapMinimaxProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
     }
     const thinkingLevel = options?.reasoning ?? ctx.thinkingLevel;
     const effort = MINIMAX_M31_THINKING_LEVELS.find((level) => level === thinkingLevel) ?? "max";
-    const modelMaxTokens = model.maxTokens ?? M31_MAX_TOKENS;
     // The Anthropic client uses a manual budget for non-Claude models. Give that
     // calculation room to retain signed history; the payload keeps the real cap below.
     const resolvedModel =
-      model.maxTokens === undefined || modelMaxTokens < M31_MAX_TOKENS
-        ? { ...model, maxTokens: M31_MAX_TOKENS }
-        : model;
+      model.maxTokens < M31_MAX_TOKENS ? { ...model, maxTokens: M31_MAX_TOKENS } : model;
     // Resolve mandatory thinking before the client converts prior assistant messages.
     return streamWithPayloadPatch(
       underlying,
@@ -93,7 +90,7 @@ function wrapMinimaxProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
         };
         const maxTokens = options?.maxTokens ?? payload.max_tokens;
         if (typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0) {
-          payload.max_tokens = Math.min(Math.floor(maxTokens), modelMaxTokens);
+          payload.max_tokens = Math.min(Math.floor(maxTokens), model.maxTokens);
         }
       },
     );

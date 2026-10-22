@@ -20,13 +20,13 @@ import {
   type ExistingProviderConfig,
 } from "./models-config.merge.js";
 import {
-  enforceSourceManagedProviderSecrets,
   materializeConfiguredProviderCatalogModels,
   normalizeProviderCatalogModelsForConfig,
-  normalizeProviders,
-  resolveImplicitProviders,
-  type ProviderConfig,
-} from "./models-config.providers.js";
+} from "./models-config.providers.catalog.js";
+import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
+import { normalizeProviders } from "./models-config.providers.normalize.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
+import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 import {
   encodePluginModelCatalogRelativePath,
   filterGeneratedPluginModelCatalogProviders,
@@ -68,50 +68,6 @@ type ModelsJsonPlan =
       contents: string;
       pluginCatalogWrites?: Record<string, string>;
     };
-
-function splitProvidersByPluginOwner(params: {
-  providers: Record<string, ProviderConfig>;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners">;
-  explicitProviderIds: ReadonlySet<string>;
-  discoveredProviderPluginIds: ReadonlyMap<string, string>;
-}): {
-  rootProviders: Record<string, ProviderConfig>;
-  pluginProviders: Record<string, Record<string, ProviderConfig>>;
-} {
-  const rootProviders: Record<string, ProviderConfig> = {};
-  const pluginProviders: Record<string, Record<string, ProviderConfig>> = {};
-  for (const [providerId, provider] of Object.entries(params.providers)) {
-    const normalizedId = normalizeProviderId(providerId);
-    // Discovery output belongs to the plugin that produced it even when the owner lookup fails
-    // (a scoped snapshot, or a hook alias no manifest claims); only config reaches the root file.
-    const pluginId =
-      resolvePluginModelCatalogOwnerPluginId({
-        providerId,
-        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-      }) ??
-      (params.explicitProviderIds.has(normalizedId)
-        ? undefined
-        : params.discoveredProviderPluginIds.get(normalizedId));
-    if (!pluginId) {
-      rootProviders[providerId] = provider;
-      continue;
-    }
-    const pluginCatalog = (pluginProviders[pluginId] ??= {});
-    pluginCatalog[providerId] = provider;
-  }
-  return { rootProviders, pluginProviders };
-}
-
-function buildPluginCatalogWrites(
-  pluginProviders: Record<string, Record<string, ProviderConfig>>,
-): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(pluginProviders).map(([pluginId, providers]) => [
-      encodePluginModelCatalogRelativePath(pluginId),
-      `${JSON.stringify({ generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers }, null, 2)}\n`,
-    ]),
-  );
-}
 
 /** Resolves providers for models.json. */
 async function resolveProvidersForModelsJson(params: {
@@ -208,31 +164,6 @@ function filterWritableProviders(
   return Object.keys(next).length === Object.keys(providers).length ? providers : next;
 }
 
-/** Recovers only generated providers; manual root declarations never enter this source. */
-function collectGeneratedCatalogProviders(params: {
-  catalogs: readonly PersistedPluginModelCatalog[];
-  context: PreparedModelsConfigContext;
-}): Record<string, unknown> {
-  const providers: Record<string, unknown> = {};
-  for (const { pluginId, contents } of params.catalogs) {
-    const catalog = safeParseJsonRecord(contents);
-    if (!catalog || !isRecord(catalog.providers)) {
-      continue;
-    }
-    Object.assign(
-      providers,
-      filterGeneratedPluginModelCatalogProviders({
-        catalogPluginId: pluginId,
-        config: params.context.cfg,
-        parsedCatalog: catalog,
-        pluginMetadataSnapshot: params.context.pluginMetadataSnapshot,
-        providers: catalog.providers,
-      }),
-    );
-  }
-  return providers;
-}
-
 /** Plans root and plugin-owned model catalog writes for the current runtime. */
 export async function planOpenClawModelsJson(params: {
   context: PreparedModelsConfigContext;
@@ -285,14 +216,28 @@ export async function planOpenClawModelsJson(params: {
     (await (context.pluginMetadataSnapshot && providerPolicyManifestRegistry
       ? withPluginMetadataSnapshotScope(context.pluginMetadataSnapshot, normalize)
       : normalize())) ?? providers;
+  /** Recovers only generated providers; manual root declarations never enter this source. */
+  const existingPluginCatalogs = params.pluginCatalogs ?? [];
+  const generatedCatalogProviders: Record<string, unknown> = {};
+  for (const { pluginId, contents } of existingPluginCatalogs) {
+    const catalog = safeParseJsonRecord(contents);
+    if (!catalog || !isRecord(catalog.providers)) {
+      continue;
+    }
+    Object.assign(
+      generatedCatalogProviders,
+      filterGeneratedPluginModelCatalogProviders({
+        catalogPluginId: pluginId,
+        config: context.cfg,
+        parsedCatalog: catalog,
+        pluginMetadataSnapshot: context.pluginMetadataSnapshot,
+        providers: catalog.providers,
+      }),
+    );
+  }
   const mergedProviders = resolveProvidersForMode({
     mode,
-    existingParsed: {
-      providers: collectGeneratedCatalogProviders({
-        catalogs: params.pluginCatalogs ?? [],
-        context,
-      }),
-    },
+    existingParsed: { providers: generatedCatalogProviders },
     providers: normalizedProviders,
     secretRefManagedProviders,
   });
@@ -310,18 +255,40 @@ export async function planOpenClawModelsJson(params: {
   const explicitProviderIds = new Set(
     Object.keys(cfg.models?.providers ?? {}).map((providerId) => normalizeProviderId(providerId)),
   );
-  const splitProviders = splitProvidersByPluginOwner({
-    providers: finalizeProviders(mergedProviders),
-    pluginMetadataSnapshot: context.pluginMetadataSnapshot,
-    explicitProviderIds,
-    discoveredProviderPluginIds,
-  });
-  const pluginCatalogWrites = buildPluginCatalogWrites(splitProviders.pluginProviders);
+  const providersByOwner = finalizeProviders(mergedProviders);
+  const partitionMetadataSnapshot = context.pluginMetadataSnapshot;
+  const splitRootProviders: Record<string, ProviderConfig> = {};
+  const pluginProviders: Record<string, Record<string, ProviderConfig>> = {};
+  for (const [providerId, provider] of Object.entries(providersByOwner)) {
+    const normalizedId = normalizeProviderId(providerId);
+    // Discovery output belongs to the plugin that produced it even when the owner lookup fails
+    // (a scoped snapshot, or a hook alias no manifest claims); only config reaches the root file.
+    const pluginId =
+      resolvePluginModelCatalogOwnerPluginId({
+        providerId,
+        pluginMetadataSnapshot: partitionMetadataSnapshot,
+      }) ??
+      (explicitProviderIds.has(normalizedId)
+        ? undefined
+        : discoveredProviderPluginIds.get(normalizedId));
+    if (!pluginId) {
+      splitRootProviders[providerId] = provider;
+      continue;
+    }
+    const pluginCatalog = (pluginProviders[pluginId] ??= {});
+    pluginCatalog[providerId] = provider;
+  }
+  const pluginCatalogWrites = Object.fromEntries(
+    Object.entries(pluginProviders).map(([pluginId, catalogProviders]) => [
+      encodePluginModelCatalogRelativePath(pluginId),
+      `${JSON.stringify({ generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers: catalogProviders }, null, 2)}\n`,
+    ]),
+  );
   // Root models.json is author-owned even when a plugin also owns that provider id.
   const rootProviders = resolveProvidersForMode({
     mode,
     existingParsed: params.existingParsed,
-    providers: splitProviders.rootProviders,
+    providers: splitRootProviders,
     secretRefManagedProviders,
   });
   const nextContents = `${JSON.stringify(

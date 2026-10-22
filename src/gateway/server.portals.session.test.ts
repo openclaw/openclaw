@@ -298,7 +298,12 @@ async function createSessionPortalProof() {
         try {
           await acquireGatewayTestWebSocket(socket, 30_000);
           signal.throwIfAborted();
-          let deviceIdentityPath = path.join(process.env.OPENCLAW_STATE_DIR!, `${label}.sqlite`);
+          let deviceIdentityPath = path.join(
+            process.env.OPENCLAW_STATE_DIR!,
+            label,
+            "client",
+            "credentials.sqlite",
+          );
           if (node) {
             const paired = await pairDeviceIdentity({
               name: label,

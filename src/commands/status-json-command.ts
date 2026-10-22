@@ -111,7 +111,8 @@ export async function runStatusJsonCommand(params: {
     memory: scan.memory,
     memoryPlugin: scan.memoryPlugin,
     databaseEngines: {
-      experimental: databaseFamilies.some((family) => family.effective === "postgres"),
+      // All selectable engine/search features are supported; deployment qualification is separate.
+      experimental: false,
       families: databaseFamilies,
       ...databaseEngines,
     },

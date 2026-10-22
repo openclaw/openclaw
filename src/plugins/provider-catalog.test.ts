@@ -1,7 +1,6 @@
 import { normalizeModelCatalogProviderRows } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import {
   buildEffectiveManifestProviderConfig,
@@ -10,7 +9,6 @@ import {
   buildSingleProviderApiKeyCatalog,
   findCatalogTemplate,
 } from "./provider-catalog.js";
-import type { ProviderCatalogContext } from "./types.js";
 
 describe("manifest model size projection", () => {
   const providerId = "local-models";
@@ -60,22 +58,6 @@ function createProviderConfig(overrides: Partial<ModelProviderConfig> = {}): Mod
     baseUrl: "https://default.example/v1",
     models: [],
     ...overrides,
-  };
-}
-
-function createCatalogContext(params: {
-  config?: OpenClawConfig;
-  apiKeys?: Record<string, string | undefined>;
-}): ProviderCatalogContext {
-  return {
-    config: params.config ?? {},
-    env: {},
-    resolveProviderApiKey: (providerId) => ({
-      apiKey: providerId ? params.apiKeys?.[providerId] : undefined,
-    }),
-    resolveProviderAuth: () => {
-      throw new Error("Catalog must use API-key resolution");
-    },
   };
 }
 
@@ -146,14 +128,17 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       "https://api.z.ai/custom",
     ],
   ] as const)("%s", async (_name, providerId, apiKey, explicitUrl, expectedUrl) => {
-    const ctx = createCatalogContext({
-      apiKeys: { [providerId]: apiKey },
-      config: explicitUrl
-        ? { models: { providers: { [providerId]: { baseUrl: explicitUrl, models: [] } } } }
-        : {},
-    });
     const result = await buildSingleProviderApiKeyCatalog({
-      ctx,
+      ctx: {
+        config: explicitUrl
+          ? { models: { providers: { [providerId]: { baseUrl: explicitUrl, models: [] } } } }
+          : {},
+        env: {},
+        resolveProviderApiKey: (id) => ({ apiKey: id === providerId ? apiKey : undefined }),
+        resolveProviderAuth: () => {
+          throw new Error("Catalog must use API-key resolution");
+        },
+      },
       providerId,
       allowExplicitBaseUrl: explicitUrl ? true : undefined,
       buildProvider: () =>

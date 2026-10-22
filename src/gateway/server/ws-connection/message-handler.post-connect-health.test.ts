@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   ErrorCodes,
-  PROTOCOL_VERSION,
   validateUpdateStatusParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -49,7 +48,10 @@ import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test
 import { disconnectDisallowedGatewayPolicyClients } from "../ws-origin-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import type { GatewayWsClient } from "../ws-types.js";
-import { expectAuthenticatedOwnerReconnect } from "./message-handler.owner-reconnect.test-support.js";
+import {
+  expectAuthenticatedOwnerReconnect,
+  expectEphemeralOwnerConnect,
+} from "./message-handler.owner-reconnect.test-support.js";
 import {
   attachGatewayHarness,
   BACKEND_CONNECT_PARAMS,
@@ -419,33 +421,24 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     },
   );
 
-  it.each(["probe"])("keeps ephemeral %s connections unidentified", async (mode) => {
-    await withOpenClawTestState(
-      { label: "gateway-owner-ephemeral", prepareProfileCatalog: true },
-      async () => {
-        resolveConnectAuthStateMock.mockResolvedValueOnce({
-          authResult: { ok: true, method: "token" },
-          authOk: true,
-          authMethod: "token",
-          sharedAuthOk: true,
-        });
-        const harness = attachGatewayHarness({
-          connId: `ephemeral-${mode}`,
-          connectNonce: `nonce-${mode}`,
-        });
-        harness.sendConnect("connect", {
-          minProtocol: PROTOCOL_VERSION,
-          maxProtocol: PROTOCOL_VERSION,
-          client: { id: "gateway-client", version: "dev", platform: "test", mode },
-          role: "operator",
-          auth: { token: "owner-fixture" },
-          caps: [],
-        });
-        await waitForFast(() => expect(harness.client).not.toBeNull());
-        expect(harness.client).not.toHaveProperty("authenticatedUserProfile");
-      },
-    );
-  });
+  it.each([
+    ["cli", "token"],
+    ["backend", "token"],
+    ["probe", "token"],
+    ["probe", "none"],
+  ] as const)(
+    "keeps %s admission and identity independent of presence (auth: %s)",
+    async (mode, authMethod) => {
+      await withOpenClawTestState(
+        { label: "gateway-owner-ephemeral", prepareProfileCatalog: true },
+        async () => {
+          await expectEphemeralOwnerConnect(mode, authMethod);
+          expect(upsertPresenceMock).not.toHaveBeenCalled();
+          expect(prewarmGatewaySessionHistoryMock).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
 
   it("retains the watchdog through registration and holds pipelined frames until hello completion", async () => {
     const close = createCloseMock();
@@ -1820,7 +1813,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         scopes: ["operator.admin"],
         ...(remote ? { auth: { token: "gateway-token" } } : {}),
       });
-      await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());
+      await harness.whenAttached;
       const client = harness.client as GatewayWsClient;
       expect(client.clientIp).toBe(remote ? "203.0.113.50" : undefined);
       expect(client.internal?.isLocalClient).toBe(remote ? undefined : true);
@@ -1953,7 +1946,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             : { approvalRuntimeToken: await getOperatorApprovalRuntimeToken() }),
         },
       });
-      await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());
+      await harness.whenAttached;
       const client = harness.client as GatewayWsClient;
       if (kind === "missing") {
         expect(client.connect.scopes).toEqual(["operator.approvals"]);

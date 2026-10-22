@@ -14,7 +14,6 @@ import {
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
 import type { ModelRegistry } from "../sessions/model-registry.js";
-import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
   findInlineModelMatch,
@@ -375,7 +374,7 @@ export async function resolveModelWithPreparedRegistry(
   }
   return params.skipConfiguredFallback
     ? undefined
-    : buildConfiguredFallbackModel({
+    : normalizeConfiguredProviderModel({
         ...params,
         providerMetadataOwners: params.modelRegistry.getProviderMetadataOwners(),
       });

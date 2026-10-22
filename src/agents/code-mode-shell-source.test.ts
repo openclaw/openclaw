@@ -118,20 +118,13 @@ describe("isShellLikeCodeModeSource", () => {
   });
 
   it.each([
-    ["repeated quotes", `A=${'""'.repeat(22)}`],
-    ["escaped quotes", `A="${'\\"'.repeat(32_000)}`],
-  ])("classifies an unfinished assignment with %s promptly", (_name, source) => {
+    ["repeated quotes", `A=${'""'.repeat(22)}`, false],
+    ["escaped quotes", `A="${'\\"'.repeat(32_000)}`, false],
+    ["long assignment chain", `${"A=x ".repeat(32_000)}ls -1`, true],
+  ] as const)("classifies %s without pathological rescanning", (_name, source, expected) => {
     // Classification is synchronous; exclude time spent waiting for the shared host CPU.
     const started = process.threadCpuUsage();
-    expect(isShellLikeCodeModeSource(source)).toBe(false);
-    const cpu = process.threadCpuUsage(started);
-    expect((cpu.user + cpu.system) / 1_000).toBeLessThan(1_000);
-  });
-
-  it("classifies a long chain of assignments without rescanning each suffix", () => {
-    const source = `${"A=x ".repeat(32_000)}ls -1`;
-    const started = process.threadCpuUsage();
-    expect(isShellLikeCodeModeSource(source)).toBe(true);
+    expect(isShellLikeCodeModeSource(source)).toBe(expected);
     const cpu = process.threadCpuUsage(started);
     expect((cpu.user + cpu.system) / 1_000).toBeLessThan(1_000);
   });

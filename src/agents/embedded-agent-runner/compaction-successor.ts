@@ -333,7 +333,6 @@ function emitCompactionSessionLifecycleHooks(params: {
   }
   if (params.nextEntry.sessionId && params.storePath) {
     noteActiveSessionForShutdown({
-      cfg: params.cfg,
       sessionKey: params.sessionKey,
       sessionId: params.nextEntry.sessionId,
       storePath: params.storePath,

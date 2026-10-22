@@ -2,8 +2,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createGatewayHostLifecycle } from "../../cli/gateway-cli/host-lifecycle.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
-import { handleGatewayRequest } from "../server-methods.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import {
+  authorizationClient,
+  startExactAuthorizationRequest,
+} from "../server-methods.authorization.test-support.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 
 const { readActiveGatewayLockIdentity, prepareHostedGatewayStop } = vi.hoisted(() => ({
   readActiveGatewayLockIdentity: vi.fn(),
@@ -49,36 +53,28 @@ function dispatchStop(
     hasCurrentClientAuthority?: () => boolean;
   } = {},
 ) {
-  const respond = vi.fn();
-  const client: GatewayClient = {
-    connId: crypto.randomUUID(),
-    clientIp: "127.0.0.1",
-    connect: {
-      role: "operator",
-      scopes: options.scopes ?? ["operator.admin"],
+  const client = authorizationClient(
+    crypto.randomUUID(),
+    options.scopes ?? ["operator.admin"],
+    { clientIp: "127.0.0.1" },
+    {
       client: { id: "cli", version: "test", platform: "win32", mode: "cli" },
-      minProtocol: 1,
-      maxProtocol: 1,
     },
-  };
-  const request = handleGatewayRequest({
-    req: {
-      type: "req",
-      id: crypto.randomUUID(),
-      method: "gateway.stop.request",
-      params: options.params ?? { target },
+  );
+  const { request, respond } = startExactAuthorizationRequest(
+    "gateway.stop.request",
+    options.params ?? { target },
+    {
+      client,
+      context: createDirectChatContext({
+        getRuntimeConfig: () => ({}),
+        hostLifecycle: host.capability,
+      }),
+      signal: options.signal,
+      hasCurrentClientAuthority: options.hasCurrentClientAuthority,
     },
-    respond,
-    client,
-    isWebchatConnect: () => false,
-    context: {
-      getRuntimeConfig: () => ({}),
-      logGateway: { warn: vi.fn() },
-      hostLifecycle: host.capability,
-    } as unknown as GatewayRequestContext,
-    signal: options.signal,
-    hasCurrentClientAuthority: options.hasCurrentClientAuthority,
-  });
+    crypto.randomUUID(),
+  );
   return { request, respond, client };
 }
 
@@ -115,7 +111,7 @@ it.each([
     expect(readActiveGatewayLockIdentity).not.toHaveBeenCalled();
   }
   expect(acceptStop).not.toHaveBeenCalled();
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+  expectRpcError(respond, error);
 });
 
 it.each(["signal", "client invalidation", "transport authority", "stop preparation"] as const)(
@@ -123,18 +119,15 @@ it.each(["signal", "client invalidation", "transport authority", "stop preparati
   async (loss) => {
     const reached = createDeferred();
     const released = createDeferred();
+    const pause = async <T>(value: T) => {
+      reached.resolve();
+      await released.promise;
+      return value;
+    };
     if (loss === "stop preparation") {
-      prepareHostedGatewayStop.mockImplementationOnce(async () => {
-        reached.resolve();
-        await released.promise;
-        return nativeStop;
-      });
+      prepareHostedGatewayStop.mockImplementationOnce(() => pause(nativeStop));
     } else {
-      readActiveGatewayLockIdentity.mockImplementationOnce(async () => {
-        reached.resolve();
-        await released.promise;
-        return activeLock;
-      });
+      readActiveGatewayLockIdentity.mockImplementationOnce(() => pause(activeLock));
     }
     const abort = new AbortController();
     let current = true;
@@ -158,13 +151,9 @@ it.each(["signal", "client invalidation", "transport authority", "stop preparati
       expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
     }
     expect(acceptStop).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        ...(loss === "stop preparation" ? { message: "Gateway requester authority changed" } : {}),
-      }),
-    );
+    expectRpcError(respond, {
+      code: "UNAVAILABLE",
+      ...(loss === "stop preparation" ? { message: "Gateway requester authority changed" } : {}),
+    });
   },
 );

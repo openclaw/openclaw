@@ -23,6 +23,7 @@ import {
   runWorkspaceInventoryCommandToFile,
 } from "./workspace-sync-inventory.js";
 import { preflightWorkerWorkspace } from "./workspace-sync-preflight.js";
+import { writeWorkspaceFiles as files } from "./workspace-sync-scripts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let receipts: FixtureReceiptChannel;
@@ -97,16 +98,6 @@ function interceptOutput(target: string, intercept: (handle: FileHandle) => File
       ? (intercept(handle) ?? handle)
       : handle;
   });
-}
-
-async function files(root: string, entries: Record<string, string>) {
-  await Promise.all(
-    Object.entries(entries).map(async ([name, content]) => {
-      const file = path.join(root, name);
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, content);
-    }),
-  );
 }
 
 async function workspace(entries: Record<string, string> = {}, committed = false) {

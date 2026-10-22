@@ -26,7 +26,7 @@ export type SessionPlacementDraftAdvanceResult =
   | { status: "started"; messageId: string }
   | { status: "accepted"; consumedByEventId?: string }
   | { status: "paused"; recovery: SessionPlacementPausedRecovery }
-  | { status: "cancelled"; cleanupError?: string; recoveryPersisted: boolean }
+  | { status: "cancelled"; cleanupError?: string }
   | { status: "interrupted" }
   | { status: "ownership-lost" };
 
@@ -132,13 +132,11 @@ export async function advanceSessionPlacementDraft(params: {
     if (!params.cleanupOnCancellation()) {
       return { status: "interrupted" };
     }
-    const recoveryPersisted = persistRecovery && ensureRecovery();
+    if (persistRecovery) {
+      ensureRecovery();
+    }
     const cleanupError = await deleteDraft();
-    return {
-      status: "cancelled",
-      cleanupError,
-      recoveryPersisted: cleanupError ? recoveryPersisted : false,
-    };
+    return { status: "cancelled", cleanupError };
   }
   const recoveryPersisted = !persistRecovery || ensureRecovery();
   if (!isCurrentOwner() || !recoveryPersisted) {
@@ -149,11 +147,10 @@ export async function advanceSessionPlacementDraft(params: {
       return {
         status: "cancelled",
         cleanupError: "placement recovery storage is unavailable",
-        recoveryPersisted: false,
       };
     }
     const cleanupError = await deleteDraft();
-    return { status: "cancelled", cleanupError, recoveryPersisted };
+    return { status: "cancelled", cleanupError };
   }
 
   const placementStart = await startSessionPlacementInitialTurn(
@@ -199,11 +196,11 @@ export async function advanceSessionPlacementDraft(params: {
   }
   if (placementStart.status === "cancelled") {
     const cleanupError = await deleteDraft(false);
-    return { status: "cancelled", cleanupError, recoveryPersisted: persistRecovery };
+    return { status: "cancelled", cleanupError };
   }
   if (placementStart.status === "session-missing") {
     params.clearRecovery("resolved");
-    return { status: "cancelled", recoveryPersisted: false };
+    return { status: "cancelled" };
   }
   if ("error" in placementStart) {
     return pause(

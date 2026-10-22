@@ -374,15 +374,14 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
       close,
     });
     unregisterState = registerOpenClawStateDatabaseAsyncResource({
-      close: async (closedIdentity) => {
-        if (!closedIdentity || closedIdentity.key === state.identity.key) {
-          reportTerminal(
-            new AgentDatabaseExecutionAdmissionClosedError(
-              "Agent database Worker state admission closed",
-            ),
-          );
-          await close();
-        }
+      admission: state,
+      close: async () => {
+        reportTerminal(
+          new AgentDatabaseExecutionAdmissionClosedError(
+            "Agent database Worker state admission closed",
+          ),
+        );
+        await close();
       },
     });
     if (expectedDatabase) {

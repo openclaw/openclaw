@@ -1,10 +1,17 @@
+import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
+import { readSecretFile } from "@openclaw/fs-safe/secret";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ChannelApprovalKind } from "./approval-types.js";
-import type { DeviceIdentity } from "./device-identity.js";
-import { toErrorObject } from "./errors.js";
-import { getApnsBearerToken, type ApnsAuthConfig } from "./push-apns-auth.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "./device-identity-async.js";
+import { signDevicePayload } from "./device-identity.js";
+import { formatErrorMessage, toErrorObject } from "./errors.js";
+import { readResponseWithLimit } from "./http-body.js";
 import {
   APNS_HTTP2_CANCEL_CODE,
   appendApnsResponseBodyCapture,
@@ -23,13 +30,7 @@ import {
   type DirectApnsRegistration,
   type RelayApnsRegistration,
 } from "./push-apns-store.js";
-import {
-  type ApnsRelayConfig,
-  type ApnsRelayPushResponse,
-  type ApnsRelayRequestSender,
-  resolveApnsRelayConfigFromEnv,
-  sendApnsRelayPush,
-} from "./push-apns.relay.js";
+import { type ApnsRelayConfig, resolveApnsRelayConfigFromEnv } from "./push-apns.relay.js";
 
 export {
   ApnsRegistrationPairingChangedError,
@@ -40,8 +41,128 @@ export {
   registerApnsRegistration,
 } from "./push-apns-store.js";
 export type { ApnsRegistration } from "./push-apns-store.js";
-export { resolveApnsAuthConfigFromEnv } from "./push-apns-auth.js";
-export type { ApnsAuthConfig } from "./push-apns-auth.js";
+
+/** Direct APNs provider authentication used to mint ES256 bearer tokens. */
+export type ApnsAuthConfig = {
+  teamId: string;
+  keyId: string;
+  privateKey: string;
+};
+
+type ApnsAuthConfigResolution = { ok: true; value: ApnsAuthConfig } | { ok: false; error: string };
+
+const APNS_JWT_TTL_MS = 50 * 60 * 1000;
+
+let cachedJwt: { cacheKey: string; token: string; expiresAtMs: number } | null = null;
+
+function toBase64UrlJson(value: object): string {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+function getApnsBearerToken(auth: ApnsAuthConfig, nowMs: number = Date.now()): string {
+  const keyHash = createHash("sha256").update(auth.privateKey).digest("hex");
+  const cacheKey = `${auth.teamId}:${auth.keyId}:${keyHash}`;
+  if (cachedJwt && cachedJwt.cacheKey === cacheKey && nowMs < cachedJwt.expiresAtMs) {
+    return cachedJwt.token;
+  }
+
+  // APNs provider tokens are valid for one hour. Cache for slightly less so
+  // bursty wake/approval pushes avoid repeated ECDSA signing.
+  const iat = Math.floor(nowMs / 1000);
+  const header = toBase64UrlJson({ alg: "ES256", kid: auth.keyId, typ: "JWT" });
+  const payload = toBase64UrlJson({ iss: auth.teamId, iat });
+  const signingInput = `${header}.${payload}`;
+  const signature = signJwt("sha256", Buffer.from(signingInput, "utf8"), {
+    key: createPrivateKey(auth.privateKey),
+    dsaEncoding: "ieee-p1363",
+  });
+  const token = `${signingInput}.${signature.toString("base64url")}`;
+  cachedJwt = {
+    cacheKey,
+    token,
+    expiresAtMs: nowMs + APNS_JWT_TTL_MS,
+  };
+  return token;
+}
+
+function normalizePrivateKey(value: string): string {
+  return value.trim().replace(/\\n/g, "\n");
+}
+
+/** Resolves direct APNs provider auth from env, accepting inline or file-backed keys. */
+export async function resolveApnsAuthConfigFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ApnsAuthConfigResolution> {
+  const teamId = normalizeOptionalString(env.OPENCLAW_APNS_TEAM_ID);
+  const keyId = normalizeOptionalString(env.OPENCLAW_APNS_KEY_ID);
+  if (!teamId || !keyId) {
+    return {
+      ok: false,
+      error: "APNs auth missing: set OPENCLAW_APNS_TEAM_ID and OPENCLAW_APNS_KEY_ID",
+    };
+  }
+
+  const inlineKeyRaw =
+    normalizeOptionalString(env.OPENCLAW_APNS_PRIVATE_KEY_P8) ??
+    normalizeOptionalString(env.OPENCLAW_APNS_PRIVATE_KEY);
+  const resolved = (privateKey: string): ApnsAuthConfigResolution => ({
+    ok: true,
+    value: { teamId, keyId, privateKey },
+  });
+  if (inlineKeyRaw) {
+    return resolved(normalizePrivateKey(inlineKeyRaw));
+  }
+
+  const keyPath = normalizeOptionalString(env.OPENCLAW_APNS_PRIVATE_KEY_PATH);
+  if (!keyPath) {
+    return {
+      ok: false,
+      error:
+        "APNs private key missing: set OPENCLAW_APNS_PRIVATE_KEY_P8 or OPENCLAW_APNS_PRIVATE_KEY_PATH",
+    };
+  }
+  try {
+    const privateKey = normalizePrivateKey(await readSecretFile(keyPath, "APNs private key"));
+    return resolved(privateKey);
+  } catch (err) {
+    return {
+      ok: false,
+      error: `failed reading OPENCLAW_APNS_PRIVATE_KEY_PATH (${keyPath}): ${formatErrorMessage(err)}`,
+    };
+  }
+}
+
+// Hard cap on the relay response body. The hosted relay reply is a tiny JSON status object;
+// without a cap a buggy/hostile/compromised relay could stream an unbounded body and exhaust
+// gateway memory (the existing AbortSignal.timeout only bounds connection latency, not body size).
+const APNS_RELAY_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+const GATEWAY_DEVICE_ID_HEADER = "x-openclaw-gateway-device-id";
+const GATEWAY_SIGNATURE_HEADER = "x-openclaw-gateway-signature";
+const GATEWAY_SIGNED_AT_HEADER = "x-openclaw-gateway-signed-at-ms";
+
+function parseRelayEnvironment(value: unknown): ApnsEnvironment | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  return normalized === "sandbox" || normalized === "production" ? normalized : undefined;
+}
+
+type ApnsRelayPushResponse = {
+  ok: boolean;
+  status: number;
+  apnsId?: string;
+  reason?: string;
+  environment?: ApnsEnvironment;
+  tokenSuffix?: string;
+};
+
+// Sentinel marking an over-cap relay body. Carried as a distinct type so the response-read
+// catch path can fail closed on overflow instead of swallowing it into the malformed-JSON
+// (treat-as-empty-body) fallback that would otherwise report a successful send.
+class ApnsRelayResponseTooLargeError extends Error {
+  constructor(size: number, maxBytes: number) {
+    super(`APNs relay response exceeded ${maxBytes} bytes (${size} bytes received)`);
+    this.name = "ApnsRelayResponseTooLargeError";
+  }
+}
 
 type ApnsTransport = "direct" | "relay";
 
@@ -313,14 +434,11 @@ type DirectApnsTransportParams = ApnsTransportCommonParams & {
   auth: ApnsAuthConfig;
   requestSender?: ApnsRequestSender;
   relayConfig?: never;
-  relayRequestSender?: never;
 };
 
 type RelayApnsTransportParams = ApnsTransportCommonParams & {
   registration: RelayApnsRegistration;
   relayConfig: ApnsRelayConfig;
-  relayRequestSender?: ApnsRelayRequestSender;
-  relayGatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
   auth?: never;
   requestSender?: never;
 };
@@ -396,18 +514,89 @@ async function sendApnsPush(
   if (transport.registration.transport === "relay") {
     const relayParams = transport as RelayApnsTransportParams;
     const registration = relayParams.registration;
-    const response = await sendApnsRelayPush({
-      relayConfig: relayParams.relayConfig,
-      sendGrant: registration.sendGrant,
+    const gatewayIdentity = await loadOrCreateProcessDeviceIdentityAsync();
+    await requireCurrentApnsSend(lifecycleControls);
+    const signedAtMs = Date.now();
+    const bodyJson = JSON.stringify({
       relayHandle: registration.relayHandle,
-      payload: params.payload,
       pushType: params.pushType,
-      priority,
-      gatewayIdentity: relayParams.relayGatewayIdentity,
-      requestSender: relayParams.relayRequestSender,
-      ...lifecycleControls,
+      priority: Number(priority),
+      payload: params.payload,
     });
-    return toPushResult({ registration, response });
+    const signature = signDevicePayload(
+      gatewayIdentity.privateKeyPem,
+      // Domain-separate relay send signatures from other gateway/device signatures.
+      [
+        "openclaw-relay-send-v1",
+        gatewayIdentity.deviceId.trim(),
+        String(Math.trunc(signedAtMs)),
+        bodyJson,
+      ].join("\n"),
+    );
+    await requireCurrentApnsSend(lifecycleControls);
+    const timeoutSignal = AbortSignal.timeout(relayParams.relayConfig.timeoutMs);
+    const signal = lifecycleControls.signal
+      ? AbortSignal.any([lifecycleControls.signal, timeoutSignal])
+      : timeoutSignal;
+    const response = await fetch(`${relayParams.relayConfig.baseUrl}/v1/push/send`, {
+      method: "POST",
+      redirect: "manual",
+      headers: {
+        authorization: `Bearer ${registration.sendGrant}`,
+        "content-type": "application/json",
+        [GATEWAY_DEVICE_ID_HEADER]: gatewayIdentity.deviceId,
+        [GATEWAY_SIGNATURE_HEADER]: signature,
+        [GATEWAY_SIGNED_AT_HEADER]: String(signedAtMs),
+      },
+      body: bodyJson,
+      signal,
+    });
+    // Do not follow relay redirects; grants and signatures are scoped to the configured relay origin.
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel().catch(() => undefined);
+      return toPushResult({
+        registration,
+        response: { ok: false, status: response.status, reason: "RelayRedirectNotAllowed" },
+      });
+    }
+
+    let json: unknown;
+    try {
+      // Bound the relay body before buffering it; cancel the stream past the cap.
+      const buffer = await readResponseWithLimit(response, APNS_RELAY_MAX_RESPONSE_BYTES, {
+        onOverflow: ({ size, maxBytes }) => new ApnsRelayResponseTooLargeError(size, maxBytes),
+      });
+      json = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
+    } catch (err) {
+      if (err instanceof ApnsRelayResponseTooLargeError) {
+        // Fail closed: an oversized relay body must never be reported as a delivered push.
+        return toPushResult({
+          registration,
+          response: { ok: false, status: response.status, reason: "RelayResponseTooLarge" },
+        });
+      }
+      // Malformed/empty JSON (or a non-overflow body read error) keeps the prior behaviour:
+      // treat the body as absent and derive status/ok from the HTTP response.
+      json = null;
+    }
+    const body = isRecord(json) ? json : {};
+
+    const status =
+      typeof body.status === "number" && Number.isFinite(body.status)
+        ? Math.trunc(body.status)
+        : response.status;
+    const environment = parseRelayEnvironment(body.environment);
+    return toPushResult({
+      registration,
+      response: {
+        ok: typeof body.ok === "boolean" ? body.ok : response.ok && status >= 200 && status < 300,
+        status,
+        apnsId: normalizeOptionalString(body.apnsId),
+        reason: normalizeOptionalString(body.reason),
+        ...(environment ? { environment } : {}),
+        tokenSuffix: normalizeOptionalString(body.tokenSuffix),
+      },
+    });
   }
   const { auth, registration, timeoutMs, requestSender } = transport as DirectApnsTransportParams;
   const token = normalizeApnsToken(registration.token);

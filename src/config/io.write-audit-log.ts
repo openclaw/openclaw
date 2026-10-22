@@ -9,7 +9,8 @@ import {
   type ConfigWriteAuditResult,
 } from "./io.audit.js";
 import { withConfigWriteState } from "./io.meta.js";
-import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
+import { restoreConfigHealthBaselineForRolledBackWrite } from "./io.observe.js";
+import { restoreLoggedConfigWarningFingerprint } from "./io.state.js";
 import { resolveConfigStatMetadata } from "./io.write-safety.js";
 
 export function createConfigWriteAuditLog(
@@ -76,9 +77,11 @@ export function createConfigWriteAuditLog(
 
 export function createConfigWriteEffectRestorer(
   params: Parameters<typeof restoreConfigSnapshotAuditRecordAsync>[0] & {
+    deps: Parameters<typeof restoreConfigHealthBaselineForRolledBackWrite>[0];
     configPath: string;
     stateSelection: Parameters<typeof withConfigWriteState>[0];
     previousWarningFingerprint: string | undefined;
+    healthBaselineCompensation: Parameters<typeof restoreConfigHealthBaselineForRolledBackWrite>[1];
   },
 ) {
   return async (assertCurrent: () => void) => {
@@ -87,14 +90,9 @@ export function createConfigWriteEffectRestorer(
       restoreConfigSnapshotAuditRecordAsync(params, assertCurrent),
     );
     assertCurrent();
-    if (params.previousWarningFingerprint === undefined) {
-      loggedConfigWarningFingerprints.delete(params.configPath);
-    } else {
-      setBoundedConfigIoWarningEntry(
-        loggedConfigWarningFingerprints,
-        params.configPath,
-        params.previousWarningFingerprint,
-      );
-    }
+    restoreLoggedConfigWarningFingerprint(params.configPath, params.previousWarningFingerprint);
+    await withConfigWriteState(params.stateSelection, () =>
+      restoreConfigHealthBaselineForRolledBackWrite(params.deps, params.healthBaselineCompensation),
+    );
   };
 }

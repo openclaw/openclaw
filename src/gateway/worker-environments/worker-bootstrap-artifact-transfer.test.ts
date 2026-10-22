@@ -32,7 +32,8 @@ beforeEach(async () => {
   root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-bootstrap-wire-"));
   authorized = true;
   now = 1_000;
-  service = createWorkerBootstrapArtifactTransferService({ now: () => now });
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  service = createWorkerBootstrapArtifactTransferService();
   const callback = createArtifactTransferHttpCallback(service);
   server = http.createServer((req, res) => {
     void handleArtifactTransferHttpRequest({

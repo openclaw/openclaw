@@ -1,8 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  parseAgentSessionKey,
-  resolveMemoryDreamingPluginConfig,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resolveMemoryDreamingPluginConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT as DREAMING_SYSTEM_EVENT_TEXT,
   resolveMemoryDeepDreamingConfig,
@@ -14,7 +11,6 @@ import {
   normalizeOptionalString,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 import { type CronServiceLike, reconcileShortTermDreamingCronJob } from "./dreaming-cron.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import type { DreamNarrativeRequest, NarrativePhaseData } from "./dreaming-narrative.js";
@@ -48,22 +44,6 @@ function formatRepairSummary(repair: {
     actions.push("removed stale promotion lock");
   }
   return actions.join(", ");
-}
-
-function hasPendingManagedDreamingCronEvent(sessionKey?: string, agentId?: string): boolean {
-  if (
-    !sessionKey ||
-    (!parseAgentSessionKey(sessionKey) &&
-      sessionKey !== "global" &&
-      sessionKey !== "global:heartbeat")
-  ) {
-    return false;
-  }
-  return peekSystemEventEntries(sessionKey, agentId).some(
-    (event) =>
-      event.contextKey?.startsWith("cron:") === true &&
-      normalizeOptionalString(event.text) === DREAMING_SYSTEM_EVENT_TEXT,
-  );
 }
 
 async function runShortTermDreamingPromotion(params: {
@@ -569,7 +549,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     },
   });
 
-  api.on("gateway_start", async (_event, ctx) => {
+  api.on("gateway_start", (_event, ctx) => {
     const startupStartedAtMs = serviceStartedAtMs;
     if (disposed || startupStartedAtMs === undefined) {
       return;
@@ -578,7 +558,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       clearTimeout(startupDreamingCleanupTimer);
       startupDreamingCleanupTimer = null;
     }
-    await trackDreamingTask(() =>
+    // Historical cleanup is maintenance, not activation. Keep it owned by the
+    // instance and joined at service stop without consuming the start hook deadline.
+    void trackDreamingTask(() =>
       startDreamingSessionCleanup(ctx.config ?? api.config, startupStartedAtMs),
     ).catch((error: unknown) => {
       api.logger.warn(`memory-core: dreaming startup cleanup failed: ${formatErrorMessage(error)}`);
@@ -604,15 +586,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           return ctx.trigger === "cron"
             ? { handled: true, reason: "memory-core: short-term dreaming disabled" }
             : undefined;
-        }
-        if (
-          ctx.trigger === "heartbeat" &&
-          !hasPendingManagedDreamingCronEvent(
-            ctx.heartbeatEventQueueSessionKey ?? ctx.sessionKey,
-            ctx.agentId,
-          )
-        ) {
-          return undefined;
         }
         return await runShortTermDreamingPromotion({
           runInBackground: ctx.trigger === "cron" ? trackDreamingTask : undefined,

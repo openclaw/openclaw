@@ -206,7 +206,7 @@ describe("gateway plugin install authority", () => {
 
   async function openDeviceTokenClient(pluginId: string) {
     const identity = loadOrCreateDeviceIdentity({
-      path: state.path(`${pluginId}-identity.sqlite`),
+      path: state.path(`${pluginId}-identity`, "client", "credentials.sqlite"),
     });
     const client = { clientName: "test", mode: "test" } as const;
     const pending = await requestDevicePairing({

@@ -492,26 +492,22 @@ test("resolves consecutive workspaces without decoding unrelated payloads", () =
     }
     // Canonical store admission runs once before repeated startup workspace lookups.
     expect(loadExactSessionEntryReadOnly({ storePath, sessionKey: keys[0] })?.entry).toBeDefined();
-    const parse = vi.spyOn(JSON, "parse");
-    try {
-      for (const sessionKey of keys) {
-        using resolved = await targetFixture(sessionKey).select(
-          sessionRuntime(async (_kind, ownerId) => ({
-            id: ownerId,
-            ownerId,
-            path: `/synthetic/${ownerId}`,
-          })),
-          "placement identity changed",
-        );
-        expect(resolved.entry.sessionId).toBe(sessionKey);
-        expect(resolved.workspace).toEqual({ kind: "local", path: `/synthetic/${sessionKey}` });
-      }
-      expect(
-        parse.mock.calls.filter(([value]) => value.includes("unrelated-payload-")),
-      ).toHaveLength(0);
-    } finally {
-      parse.mockRestore();
+    using parse = vi.spyOn(JSON, "parse");
+    for (const sessionKey of keys) {
+      using resolved = await targetFixture(sessionKey).select(
+        sessionRuntime(async (_kind, ownerId) => ({
+          id: ownerId,
+          ownerId,
+          path: `/synthetic/${ownerId}`,
+        })),
+        "placement identity changed",
+      );
+      expect(resolved.entry.sessionId).toBe(sessionKey);
+      expect(resolved.workspace).toEqual({ kind: "local", path: `/synthetic/${sessionKey}` });
     }
+    expect(parse.mock.calls.filter(([value]) => value.includes("unrelated-payload-"))).toHaveLength(
+      0,
+    );
   }));
 
 test("resolves device folders without Git or the managed-worktree registry", () =>

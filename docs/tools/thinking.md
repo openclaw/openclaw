@@ -137,7 +137,7 @@ check the per-agent setting if the model default still does not take effect.
 
 ## Fast mode (/fast)
 
-- Levels: `auto|on|off|ultrafast|default`.
+- Levels: `auto|on|off|ultrafast|default`. `ultra` is accepted as shorthand for `ultrafast` and stores the same `ultrafast` value.
 - Directive-only message toggles a session fast-mode override and replies `Fast mode set to auto.`, `Fast mode enabled.`, or `Fast mode disabled.`. Use `/fast default` to clear the session override and inherit the configured default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
 - Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
 - OpenClaw resolves fast mode in this order:
@@ -165,8 +165,9 @@ check the per-agent setting if the model default still does not take effect.
 - Directive-only message toggles session verbose and replies `Verbose logging enabled.` / `Verbose logging disabled.`; invalid levels return a hint without changing state.
 - `/verbose off` stores an explicit session override; clear it via the Sessions UI by choosing `inherit`.
 - Authorized external channel senders may persist the session verbose override. Internal gateway/webchat clients need `operator.admin` to persist it.
-- Inline directive affects only that message; session/global defaults apply otherwise.
+- Inline directive affects only that message; session, per-agent, and global defaults apply otherwise.
 - Send `/verbose` (or `/verbose:`) with no argument to see the current verbose level.
+- Resolution order: inline directive, then session override, then per-agent default (`agents.entries.*.verboseDefault`), then global default (`agents.defaults.verboseDefault`), then fallback (`off`).
 - When verbose is on, agents that emit structured tool results send each tool call back as its own safe metadata-only message. Shell tools show their label without command text. These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.

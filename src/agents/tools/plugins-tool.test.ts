@@ -19,19 +19,22 @@ function fail(details: Record<string, unknown>) {
     new GatewayClientRequestError({ code: "UNAVAILABLE", message: "Activation failed", details }),
   );
 }
-function expectBounded(result: Result) {
+function expectBounded(result: Result, details?: Record<string, unknown>) {
   expect(Buffer.byteLength(json(result.details), "utf8")).toBeLessThanOrEqual(3_840);
+  if (details) {
+    expect(result).toMatchObject({
+      details,
+      content: [{ type: "text", text: json(result.details) }],
+    });
+  }
 }
 function expectCompleteReviewOmitted(result: Result) {
   expectBounded(result);
   expect(JSON.stringify(result)).not.toContain("complete-review-only");
 }
 function expectFailure(result: Result, details: Record<string, unknown>) {
-  expect(result).toMatchObject({
-    isError: true,
-    details,
-    content: [{ type: "text", text: json(result.details) }],
-  });
+  expect(result).toMatchObject({ isError: true });
+  expectBounded(result, details);
 }
 
 let refresh: ReturnType<typeof refreshes.createAgentPluginRuntimeRefresh>;
@@ -72,7 +75,6 @@ it("keeps saved-install and earlier-publication facts when a later failure excee
     runtimeAttempt: { generation: 3, committed: false, phase: "prepare" },
     next: expect.stringContaining("do not reinstall"),
   });
-  expectBounded(result);
 });
 
 it.each([
@@ -190,10 +192,7 @@ it.each([
   async ({ action, payload }) => {
     callGateway.mockResolvedValue(payload);
     const result = await execute({ action, pluginId: "local-tool", query: "large" });
-    expect(result).toMatchObject({
-      details: { ok: true, detailsOmitted: "response_budget_exceeded" },
-      content: [{ type: "text", text: json(result.details) }],
-    });
+    expectBounded(result, { ok: true, detailsOmitted: "response_budget_exceeded" });
     expectCompleteReviewOmitted(result);
     expect(result.terminate).toBeUndefined();
   },
@@ -210,18 +209,15 @@ it("keeps selected-entry guidance when a compact result requires a restart", asy
     warnings: ["x".repeat(4_000)],
   });
   const result = await reload();
-  expect(result).toMatchObject({
-    details: {
-      restartRequired: true,
-      runtime: { generation: runtime.generation },
-      next: expect.stringContaining(
-        "Selected entry: /plugins/local-tool/dist/index.js. Rebuild compiled output after source edits.",
-      ),
-    },
+  expectBounded(result, {
+    restartRequired: true,
+    runtime: { generation: runtime.generation },
+    next: expect.stringContaining(
+      "Selected entry: /plugins/local-tool/dist/index.js. Rebuild compiled output after source edits.",
+    ),
   });
   expect(result.details).toMatchObject({ next: expect.stringMatching(/restart the Gateway/i) });
   expect(JSON.stringify(result)).not.toContain("Start a new conversation");
-  expectBounded(result);
 });
 
 it.each([false, true])(

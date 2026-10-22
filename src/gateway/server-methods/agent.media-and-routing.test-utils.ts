@@ -12,6 +12,7 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import { registerAgentContinuationRecoveryTests } from "./agent-continuation-recovery.test-utils.js";
 import { registerAgentSendEventTests } from "./agent.session-events.test-utils.js";
+import { registerPluginSubagentToolForwardingTests } from "./agent.spawned-child.test-support.js";
 import {
   getAgentTestMocks,
   operatorWriteCliClient,
@@ -321,57 +322,7 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.pluginOwnerId).toBe("memory-core");
   });
 
-  it("forwards plugin-owned additive tools only for tracked plugin subagent runs", async () => {
-    primeMainAgentRun();
-
-    await invokeAgent(
-      {
-        message: "finish the workboard card",
-        sessionKey: "agent:main:subagent:workboard-card",
-        idempotencyKey: "plugin-tools-also-allow",
-      },
-      {
-        client: createSyntheticPluginRuntimeClient({
-          agentRunTracking: "plugin_subagent",
-          pluginRuntimeOwnerId: "workboard",
-          runtimePluginToolGrant: {
-            pluginId: "workboard",
-            toolNames: ["workboard_heartbeat", "workboard_complete"],
-          },
-        }),
-      },
-    );
-
-    const call = await waitForAgentCommandCall<{
-      runtimePluginToolGrant?: { pluginId: string; toolNames: readonly string[] };
-    }>();
-    expect(call.runtimePluginToolGrant).toEqual({
-      pluginId: "workboard",
-      toolNames: ["workboard_heartbeat", "workboard_complete"],
-    });
-  });
-
-  it("forwards a tracked plugin subagent exact empty tool cap", async () => {
-    primeMainAgentRun();
-
-    await invokeAgent(
-      {
-        message: "write a tool-free narrative",
-        sessionKey: "agent:main:subagent:dreaming-narrative",
-        idempotencyKey: "plugin-tools-disabled",
-      },
-      {
-        client: createSyntheticPluginRuntimeClient({
-          agentRunTracking: "plugin_subagent",
-          pluginRuntimeOwnerId: "memory-core",
-          pluginSubagentToolsAllow: [],
-        }),
-      },
-    );
-
-    const call = await waitForAgentCommandCall<{ toolsAllow?: string[] }>();
-    expect(call.toolsAllow).toEqual([]);
-  });
+  registerPluginSubagentToolForwardingTests();
 
   it("forwards trusted delegated policy handoffs only from internal client metadata", async () => {
     primeMainAgentRun();

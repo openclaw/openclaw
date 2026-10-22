@@ -104,6 +104,7 @@ export function handleChatDraftChange(
 
 function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] {
   if (
+    state.chatInputHistoryIndex !== -1 &&
     state.chatInputHistoryItems !== null &&
     state.chatInputHistorySessionKey === state.sessionKey
   ) {

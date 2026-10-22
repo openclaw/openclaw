@@ -14,20 +14,20 @@ import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.j
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { admitEventOccurrence } from "../../cron/event-occurrence-admission.js";
 import type {
   CronAgentAdmissionDisposition,
   RunCronAgentTurnResult,
 } from "../../cron/isolated-agent/run.types.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import type { CronExecutionIdentityAdmission } from "../../cron/service/state.js";
+import type { DeferredHookWake } from "../../cron/service/wake.js";
 import type { CronJob } from "../../cron/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
-import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -49,6 +49,7 @@ import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import {
   createHookWakeDispatcher,
+  deferHookEvent,
   resolveHookEventTarget,
   type HookEventTarget,
 } from "./hooks-event-dispatch.js";
@@ -191,6 +192,7 @@ export function createGatewayHookDispatcher(params: {
   deps: CliDeps;
   logHooks: SubsystemLogger;
   agentStartAdmissionTimeoutMs?: number;
+  deferHookWake?: DeferredHookWake;
   /**
    * Hook agent dispatch runs off a session-keyed queue, so the inbound HTTP
    * request scope is already unwound by the time the turn starts. Without this
@@ -237,7 +239,7 @@ export function createGatewayHookDispatcher(params: {
       "hook wake failed",
       sanitizeHookLogMetadata({ status: outcome.status, error: outcome.error }),
     );
-  });
+  }, params.deferHookWake);
 
   const dispatchAgentHook = async (
     value: HookAgentDispatchPayload,
@@ -306,7 +308,7 @@ export function createGatewayHookDispatcher(params: {
       updatedAtMs: nowMs,
       schedule: { kind: "at", at: resolveTimestampMsToIsoString(nowMs) },
       sessionTarget: value.sessionMode === "persistent" ? `session:${sessionKey}` : "isolated",
-      wakeMode: value.wakeMode,
+      wakeMode: "now",
       payload: {
         kind: "agentTurn",
         message: value.message,
@@ -353,14 +355,6 @@ export function createGatewayHookDispatcher(params: {
           }
           eventAgentId = globalTerminalAgentId;
         }
-        if (value.wakeMode === "next-heartbeat") {
-          const eventOptions = { sessionKey: eventSessionKey };
-          enqueueSystemEvent(
-            text,
-            isGlobalEvent ? withSystemEventOwner(eventOptions, eventAgentId) : eventOptions,
-          );
-          return;
-        }
         const expectedTarget =
           eventTarget.expectedTarget ??
           (hookEventTarget
@@ -368,6 +362,20 @@ export function createGatewayHookDispatcher(params: {
             : await captureSessionEventTargetForHost(eventAgentId, eventSessionKey));
         if (!expectedTarget) {
           throw new Error("Hook terminal target could not be captured before the run");
+        }
+        if (value.wakeMode === "next-heartbeat") {
+          await deferHookEvent(params.deferHookWake, {
+            text,
+            agentId: eventAgentId,
+            expectedTarget,
+            createIfMissing: true,
+            commitGuard: () => {
+              if (!listAgentIds(getRuntimeConfig()).includes(eventAgentId)) {
+                throw new Error("Hook terminal agent was removed before event admission");
+              }
+            },
+          });
+          return;
         }
         const receipt = enqueueSessionEventForHost(text, {
           agentId: eventAgentId,
@@ -520,20 +528,20 @@ export function createGatewayHookDispatcher(params: {
               resolvedAgentId: agentId,
             });
             hookEventTarget = eventTarget;
-            if (value.wakeMode === "now") {
-              eventTarget.expectedTarget = await captureSessionEventTargetForHost(
-                eventTarget.agentId,
-                eventTarget.eventSessionKey,
-              );
-            }
+            eventTarget.expectedTarget = await captureSessionEventTargetForHost(
+              eventTarget.agentId,
+              eventTarget.eventSessionKey,
+            );
             const { runCronIsolatedAgentTurn } = await loadIsolatedAgentModule();
             // Lazy module loading is the last Gateway-owned async boundary before
             // cron preparation, so recheck the deadline after it settles.
             if (startupAbortController.signal.aborted) {
               return;
             }
+            const ingressBoundary = pluginId ? "gateway.hooks.plugin" : "gateway.hooks.agent";
             const runHookIsolatedTurn = async () =>
               await runCronIsolatedAgentTurn({
+                occurrence: await admitEventOccurrence({ cfg, job, agentId, ingressBoundary }),
                 cfg,
                 deps,
                 job,
@@ -551,13 +559,13 @@ export function createGatewayHookDispatcher(params: {
                   ingress: pluginId
                     ? {
                         kind: "webhook",
-                        boundary: "gateway.hooks.plugin",
+                        boundary: ingressBoundary,
                         state: "present",
                         rawSourceRef: `${pluginId}:${safeName}`,
                       }
                     : {
                         kind: "webhook",
-                        boundary: "gateway.hooks.agent",
+                        boundary: ingressBoundary,
                         state: "present",
                         ...(acceptedValue.mappingId
                           ? { rawSourceRef: acceptedValue.mappingId }
@@ -721,6 +729,7 @@ export function createGatewayHooksRequestHandler(params: {
   port: number;
   logHooks: SubsystemLogger;
   agentStartAdmissionTimeoutMs?: number;
+  deferHookWake?: DeferredHookWake;
   resolveGatewayContext?: () => GatewayRequestContext | undefined;
   dispatcher?: GatewayHookDispatcher;
 }) {

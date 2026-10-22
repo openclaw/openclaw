@@ -711,7 +711,6 @@ export async function closeStaleClientVoiceSessions(params: {
 const clientVoiceSessionTesting = {
   readRecord,
   digestDeliveryPolicy: CLIENT_VOICE_MUTATION_DIGEST_POLICY,
-  digestDeliverySnapshot: () => mutationDigestDeliveryOwner.snapshot(),
   reset(): void {
     for (const [runId, owner] of voiceSessionByRunId) {
       retireClientVoiceRun(runId, owner, false);

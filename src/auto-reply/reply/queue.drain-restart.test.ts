@@ -5,6 +5,7 @@ import {
   getPreparedModelRuntimePluginGeneration,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import {
   beginGatewayRestartSignalAdmission,
   GatewayDrainingError,
@@ -39,7 +40,6 @@ import {
   installQueueRuntimeErrorSilencer,
   rejectQueuePreparation,
 } from "./queue.test-helpers.js";
-import { kickFollowupDrainIfIdle } from "./queue/drain.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/recent-message-ids.test-support.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
@@ -179,7 +179,7 @@ it("parks queued input when database admission closes until a fresh drain is req
       expect(settled).not.toHaveBeenCalled();
     });
     closing = false;
-    kickFollowupDrainIfIdle(key);
+    scheduleFollowupDrain(key, runFollowup);
     await vi.advanceTimersByTimeAsync(0);
     expect(attempts).toBe(2);
     expect(queuedState()).toBeUndefined();
@@ -476,7 +476,7 @@ it.each(["followup", "collect"] as const)(
       await vi.waitFor(() => expect(getExistingFollowupQueue(queueKey)?.draining).toBe(false));
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(execute).not.toHaveBeenCalled();
-      kickFollowupDrainIfIdle(queueKey);
+      scheduleFollowupDrain(queueKey, execute);
       await delivered.promise;
       await run.controllerInput!.settlement.promise;
       await run.controllerInput!.claim?.settlement.promise;
@@ -769,7 +769,7 @@ it("retires native inputs waiting behind a running turn without a followup callb
   const waiting = reserveSessionControllerSource(key, { policy: defaults });
   try {
     markGatewayRestartDraining();
-    expect(waiting.abortSignal.reason).toEqual(new Error("Session mailbox cleared"));
+    expect(isAgentRunRestartAbortReason(waiting.abortSignal.reason)).toBe(true);
     await waiting.settlement.promise;
     expect(running.abortSignal.aborted).toBe(false);
     expect(claim.abortController.signal.aborted).toBe(false);

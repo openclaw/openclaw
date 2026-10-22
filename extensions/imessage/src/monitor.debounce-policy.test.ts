@@ -130,17 +130,6 @@ it("changes iMessage batching delay without replacing the attached RPC client", 
     await ingress.waitForIdle();
     await debouncer.drain();
     expect(bodies()).toEqual(["immediate", "first second", "after disable"]);
-    console.log(
-      "MONITOR_DEBOUNCE_PROOF " +
-        JSON.stringify({
-          channel: "imessage",
-          pid: process.pid,
-          clock: "fake",
-          delaysMs: [0, 500, 0],
-          bodies: bodies(),
-          clientsCreated: vi.mocked(createIMessageRpcClient).mock.calls.length,
-        }),
-    );
     expect(createIMessageRpcClient).toHaveBeenCalledTimes(1);
   } finally {
     abort.abort();

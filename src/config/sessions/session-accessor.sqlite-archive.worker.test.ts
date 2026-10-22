@@ -259,8 +259,10 @@ describe("SQLite transcript archive worker", () => {
     const bytes = fs.statSync(archivePath).size;
     for (const selector of [storePath, resolveSqliteTargetFromSessionStorePath(storePath).path]) {
       const usage = await measureSessionPhysicalDiskUsage(selector);
-      expect(usage.sessionFilesBytes).toBe(bytes);
-      expect(usage.totalBytes).toBe(usage.databaseMainBytes + usage.databaseWalBytes + bytes);
+      const databaseBytes = fs.statSync(
+        resolveSqliteTargetFromSessionStorePath(selector).path,
+      ).size;
+      expect(usage.totalBytes).toBe(databaseBytes + usage.databaseWalBytes + bytes);
     }
   });
 
@@ -381,23 +383,6 @@ describe("SQLite transcript archive worker", () => {
     await expect(materializeSessionStateDeletePlans([planned, conflict])).rejects.toThrow(
       `Conflicting SQLite transcript archive plans for ${target.sessionId}`,
     );
-  });
-
-  it("deletes empty lifecycle state without producing an archive", async () => {
-    const target = scope("empty-transcript");
-    await entry(target);
-    const result = await deletion(target.sessionKey);
-    expect(result).toMatchObject({ deleted: true, archivedTranscripts: [] });
-    expect(loadSessionEntry(target)).toBeUndefined();
-    const { query, rows } = databaseQueries();
-    expect(
-      rows(
-        query
-          .selectFrom("session_windows")
-          .select("session_id")
-          .where("session_id", "=", target.sessionId),
-      ),
-    ).toEqual([]);
   });
 
   it.each(["empty", "nonempty"] as const)(

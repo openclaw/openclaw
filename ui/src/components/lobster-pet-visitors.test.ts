@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { beforeEach, afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import * as artworkLoader from "../pages/plugins/icon-loader.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getLobsterdex } from "./lobster-dex.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 import { planLobsterPasser, resolveLobsterPasserCrossMs } from "./lobster-pet-plans.ts";
@@ -200,3 +202,56 @@ it.each([
     }
   },
 );
+
+it("keeps a plugin visitor mounted while artwork loads or fails and retires pending artwork", async () => {
+  const first = createDeferred<string | null>();
+  const replacement = createDeferred<string | null>();
+  const retired = createDeferred<string | null>();
+  const fetchArtwork = vi
+    .spyOn(artworkLoader, "fetchPluginThemeArtworkBlobUrl")
+    .mockReturnValueOnce(first.promise)
+    .mockReturnValueOnce(replacement.promise)
+    .mockReturnValueOnce(retired.promise);
+  onTestFinished(() => fetchArtwork.mockRestore());
+  const element = await crossingPet(21, {
+    critters: ["ferris"],
+    critterArtwork: { ferris: { url: "/ferris?pending=first", crossMs: 5000 } },
+  });
+  await waitForSolid(() => expect(fetchArtwork).toHaveBeenCalledOnce());
+  const passer = element.querySelector<HTMLElement>(".lobster-pet--ferris")!;
+  expect(passer).not.toBeNull();
+  expect(passer.querySelector(".lobster-pet__body img, svg")).toBeNull();
+  first.resolve("blob:synthetic-first");
+  await waitForSolid(() =>
+    expect(passer.querySelector("img.lobster-pet__svg")?.getAttribute("src")).toBe(
+      "blob:synthetic-first",
+    ),
+  );
+  expect(passer.querySelector("img")?.getAttribute("alt")).toBe("");
+
+  await updatePet(element, {
+    critterArtwork: { ferris: { url: "/ferris?pending=replacement", crossMs: 5000 } },
+  });
+  await waitForSolid(() => {
+    expect(fetchArtwork).toHaveBeenCalledTimes(2);
+    expect(passer.querySelector("img, svg")).toBeNull();
+  });
+  replacement.reject(new Error("Synthetic artwork unavailable"));
+  await replacement.promise.catch(() => {});
+  await vi.dynamicImportSettled();
+  flush();
+  expect(element.querySelector(passerSelector)).toBe(passer);
+  expect(passer.querySelector("img, svg")).toBeNull();
+
+  await updatePet(element, {
+    critterArtwork: { ferris: { url: "/ferris?pending=retired", crossMs: 5000 } },
+  });
+  await waitForSolid(() => expect(fetchArtwork).toHaveBeenCalledTimes(3));
+  await updatePet(element, { critters: [] });
+  expect(element.querySelector(passerSelector)).toBeNull();
+  retired.resolve("blob:synthetic-retired");
+  await vi.dynamicImportSettled();
+  flush();
+  expect(element.querySelector(passerSelector)).toBeNull();
+  expect(element.querySelector('img[src="blob:synthetic-retired"]')).toBeNull();
+});

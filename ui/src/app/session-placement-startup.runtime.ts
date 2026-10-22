@@ -1,7 +1,6 @@
-import { registerListener } from "../../../src/shared/listeners.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../i18n/locales/en-new-session-runtime.ts";
 import type { ChatAttachment } from "../lib/chat/chat-types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
@@ -32,7 +31,7 @@ import {
   type ApplicationPlacementStartupStatus,
 } from "./session-placement-startup.ts";
 
-registerNewSessionSetupEnglish();
+registerNewSessionRuntimeEnglish();
 
 type PlacementStartupPhase = NonNullable<
   ReturnType<ApplicationPlacementStartupRuntime["get"]>
@@ -78,16 +77,10 @@ type PlacementStartupEntry = {
 
 export default function createApplicationPlacementStartupRuntime(
   params: ApplicationPlacementStartupDependencies,
+  publish: () => void,
 ): ApplicationPlacementStartupRuntime {
-  const listeners = new Set<() => void>();
   const entries = new Map<string, PlacementStartupEntry>();
   const connection = createGatewayConnectionLifecycle(params.gateway.snapshot);
-
-  const publish = () => {
-    for (const listener of listeners) {
-      listener();
-    }
-  };
 
   const findEntry = (sessionKey: string) => {
     for (const [key, entry] of entries) {
@@ -480,14 +473,12 @@ export default function createApplicationPlacementStartupRuntime(
       }
       restartEntry(entry, recovery, "retry");
     },
-    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       connection.dispose();
       for (const entry of entries.values()) {
         entry.abort.abort();
       }
       entries.clear();
-      listeners.clear();
     },
   };
 }

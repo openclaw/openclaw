@@ -4,11 +4,7 @@ import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/s
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
-import {
-  canArchiveSessionRow,
-  parseAgentSessionKey,
-  resolveUiConfiguredMainKey,
-} from "../lib/sessions/session-key.ts";
+import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import type {
   CatalogBackingSessionDisplay,
@@ -22,7 +18,6 @@ import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
-import "./elapsed-time.tsx";
 import "./tooltip.ts";
 
 /** Compose independently owned session state and context indicators. */
@@ -91,12 +86,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     narration = createMemo(() => subtitleState().narration),
     toolName = createMemo(() => subtitleState().toolName);
   const indicators = renderSidebarSessionIndicators(host, session, display, icon);
-  const running = createMemo(() => indicators.running),
-    stateId = createMemo(() => indicators.stateId),
-    metaId = createMemo(() => indicators.metaId),
-    pullRequest = createMemo(() => indicators.pullRequest),
-    persistentIndicator = createMemo(() => indicators.persistentIndicator),
-    childrenExpanded = createMemo(() => indicators.childrenExpanded);
+  const { running, stateId, metaId, pullRequest, childrenExpanded } = indicators;
   const controls: CatalogRowControls = {};
   const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
     handleContextMenuEvent(event, controls.link ?? null, (trigger, x, y) => {
@@ -227,7 +217,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
         aria-describedby={[stateId(), metaId()].filter(Boolean).join(" ") || undefined}
         onClick={(event: MouseEvent) => host().handleSessionRowClick(event, session())}
       >
-        {persistentIndicator()}
+        {indicators.persistentIndicator}
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__title-row">
             <Show when={session().titlePending} fallback={marqueeLabel()}>
@@ -366,41 +356,44 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   );
   return row;
 }
+type PendingSessionCreate = NonNullable<ReturnType<SessionListHost["pendingSessionCreate"]>>;
+
 /** The unadmitted create renders in the slot its admitted row will take: selected,
- *  actionless, and aligned with real rows. Roster groups pass their agent id. */
+ *  actionless, and aligned with real rows. A create for a rendered custom group
+ *  leads that group's list; any other create leads the session list. Only the
+ *  native session list has that slot: the agent-only roster shows no row for a
+ *  new session, so a handoff row there would flash under the agent and vanish on
+ *  admission. */
 export function renderPendingSessionCreateRow(
-  host: () => Pick<SessionListHost, "pendingSessionCreate" | "sidebarAgentsMode">,
-  agentId?: string,
+  pending: () => PendingSessionCreate | undefined,
+  listItem = false,
 ) {
-  const pending = createMemo(() => {
-    const value = host().pendingSessionCreate();
-    return value &&
-      (agentId === undefined ||
-        parseAgentSessionKey(value.creation.sessionKey)?.agentId === agentId)
-      ? value
-      : undefined;
-  });
   return (
     <Show when={pending()}>
-      {(value) => (
-        <div
-          class={[
-            "sidebar-recent-session session-row-host sidebar-recent-session--single-line sidebar-recent-session--active sidebar-recent-session--creating",
-            { "sidebar-recent-session--team": host().sidebarAgentsMode === "roster" },
-          ]}
-        >
-          <div class="sidebar-recent-session__link" aria-current="page" aria-busy="true">
-            <span class="sidebar-session-indicator" aria-hidden="true" />
-            <span class="sidebar-recent-session__text">
-              <span class="sidebar-recent-session__title-row">
-                <Show when={value().displayName} fallback={<SessionTitlePlaceholder />}>
-                  {(name) => <span class="sidebar-recent-session__name">{name()}</span>}
-                </Show>
+      {(value) => {
+        const row = (
+          <div class="sidebar-recent-session session-row-host sidebar-recent-session--single-line sidebar-recent-session--active sidebar-recent-session--creating">
+            <div class="sidebar-recent-session__link" aria-current="page" aria-busy="true">
+              <span class="sidebar-session-indicator" aria-hidden="true" />
+              <span class="sidebar-recent-session__text">
+                <span class="sidebar-recent-session__title-row">
+                  <Show when={value().displayName} fallback={<SessionTitlePlaceholder />}>
+                    {(name) => <span class="sidebar-recent-session__name">{name()}</span>}
+                  </Show>
+                </span>
               </span>
-            </span>
+            </div>
           </div>
-        </div>
-      )}
+        );
+        // Inside a section list it takes the tree wrapper its admitted row will have.
+        return listItem ? (
+          <div class="sidebar-session-tree" role="listitem">
+            {row}
+          </div>
+        ) : (
+          row
+        );
+      }}
     </Show>
   );
 }

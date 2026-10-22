@@ -372,7 +372,6 @@ export async function handleChatAbortRequestWithLifecycle(
       active.input.claim ||
       active.input.retirementRequested
     ) {
-      await stopWithoutCapturedRun();
       respond(true, { ok: true, aborted: false, runIds: [] });
       return;
     }

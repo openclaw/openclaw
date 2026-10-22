@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { callGateway } from "../../../gateway/call.js";
@@ -42,6 +43,7 @@ export function createSubagentPersistenceRuntime(call: typeof callGateway): Gate
     dispatchAgent: (params, timeoutMs) => call({ method: "agent", params, timeoutMs }),
     waitForAgent: (params, timeoutMs) => call({ method: "agent.wait", params, timeoutMs }),
     sendRecoveryNotice: vi.fn(),
+    resumeChatInput: vi.fn(),
   };
 }
 
@@ -61,13 +63,6 @@ export function activateSubagentPersistenceRegistry(
   return registry.activateSubagentRegistry(gateway.resolveGatewayContext);
 }
 
-function listFixtureAgentDatabases(
-  listDatabases: typeof listOpenClawAgentDatabasesForTest,
-  stateDir: string,
-) {
-  return listDatabases().filter((database) => isPathInside(stateDir, database.path));
-}
-
 export async function closeSubagentPersistenceFixtureDatabases(params: {
   stateDir: string;
   cleanupSessionState: typeof cleanupSessionStateForTest;
@@ -82,7 +77,7 @@ export async function closeSubagentPersistenceFixtureDatabases(params: {
     ["post-reset", params.listAgentDatabases],
   ] as const) {
     expect(
-      listFixtureAgentDatabases(listDatabases, params.stateDir),
+      listDatabases().filter((database) => isPathInside(params.stateDir, database.path)),
       `${label} agent handles closed before fixture removal`,
     ).toEqual([]);
   }
@@ -99,44 +94,38 @@ export function useSubagentPersistenceFixture() {
 
   beforeEach(() => {
     // Failed cleanup retains this case's stores and capture until its work retires.
-    if (tempStateDir !== null) {
-      throw new Error("Previous persistence fixture cleanup is incomplete");
-    }
+    expect(tempStateDir, "Previous persistence fixture cleanup is incomplete").toBeNull();
     setRuntimeConfigSnapshot({});
-    announceSpy.mockReset();
-    announceSpy.mockResolvedValue("delivered");
+    announceSpy.mockReset().mockResolvedValue("delivered");
     resetSubagentPersistenceGatewayCalls(callGateway);
-    vi.mocked(onAgentEvent).mockReset();
-    vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
+    vi.mocked(onAgentEvent)
+      .mockReset()
+      .mockReturnValue(() => undefined);
     settleRootWork = observeRootWork();
   });
 
   afterEach(async () => {
     const failures: unknown[] = [];
-    try {
-      await settle(false);
-    } catch (error) {
+    await settle(false).catch((error: unknown) => {
       failures.push(error);
-    }
+    });
     // Delivery results can settle before their tracked cleanup tails release the stores.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
         await resetSubagentRegistryForTests({ persist: false });
         if (tempStateDir) {
           await cleanupSessionStateForTest({ stateDir: tempStateDir });
-        }
-        if (tempStateDir) {
           // Resource cleanup finished; removal failure must not retain a retired owner.
-          try {
-            await fs.rm(tempStateDir, {
+          await fs
+            .rm(tempStateDir, {
               recursive: true,
               force: true,
               maxRetries: 5,
               retryDelay: 50,
+            })
+            .catch((error: unknown) => {
+              failures.push(error);
             });
-          } catch (error) {
-            failures.push(error);
-          }
         }
         clearRuntimeConfigSnapshot();
         envSnapshot.restore();
@@ -146,28 +135,25 @@ export function useSubagentPersistenceFixture() {
         failures.push(error);
       }
     }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "Subagent persistence cleanup failed");
+    if (failures.length) {
+      throw failures.length === 1
+        ? failures[0]
+        : new AggregateError(failures, "Subagent persistence cleanup failed");
     }
   });
 
   return {
     settle,
     async allocateStateDir() {
-      if (tempStateDir !== null) {
-        throw new Error("Persistence fixture already owns a state directory");
-      }
+      expect(tempStateDir, "Persistence fixture already owns a state directory").toBeNull();
       tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
       setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     },
     get stateDir(): string {
-      if (!tempStateDir) {
-        throw new Error("Persistence fixture has not initialized its state directory");
-      }
-      return tempStateDir;
+      return expectDefined(
+        tempStateDir,
+        "Persistence fixture has not initialized its state directory",
+      );
     },
   };
 }

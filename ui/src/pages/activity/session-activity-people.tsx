@@ -37,9 +37,8 @@ function PersonAvatar(props: {
   showPresence?: boolean;
   presentationRevision?: number;
 }) {
-  const resolvedPerson = createMemo(() =>
-    props.person && !isUnresolvedPerson(props.person) ? props.person : null,
-  );
+  const resolvedPerson = () =>
+    props.person && !isUnresolvedPerson(props.person) ? props.person : null;
   const activity = createMemo(() => {
     void props.presentationRevision;
     return props.person ? presenceViewerActivity(props.person) : "unknown";
@@ -120,7 +119,7 @@ export function PeopleControl(props: {
     popover?.hide();
     props.view.onFiltersChange({ ...props.view.filters, personId });
   };
-  const visible = createMemo(() => props.people.slice(0, 3));
+  const visible = () => props.people.slice(0, 3);
   const overflow = () => props.people.length - visible().length;
   const resolved = createMemo(() => props.people.filter((person) => !isUnresolvedPerson(person)));
   const unresolved = createMemo(() => props.people.filter(isUnresolvedPerson));

@@ -28,16 +28,7 @@ const CLIENT_RELATIVE_PATH = path.join(
 const SERVICE_PARENT_LABEL = "Computer Use service parent";
 const COPY_TIMEOUT_MS = 120_000;
 const INSPECT_TIMEOUT_MS = 30_000;
-const activeInstalls = new Map<string, Promise<CodexComputerUseServiceStatus>>();
-
-type CodexComputerUseServiceStatus = {
-  status: "installed" | "refreshed" | "already_current" | "source_missing" | "unsupported";
-  changed: boolean;
-  targetPath?: string;
-  sourcePath?: string;
-  sourceBuild?: string;
-  previousBuild?: string;
-};
+const activeInstalls = new Map<string, Promise<"source_missing" | void>>();
 
 type CopyServiceApp = (sourcePath: string, targetPath: string) => Promise<void>;
 type InspectServiceApp = (appPath: string) => Promise<CodexComputerUseServiceIdentity | undefined>;
@@ -56,7 +47,6 @@ type CodexComputerUseServiceIdentity = {
 /** Finds the first signed native service from one ordered desktop owner set. */
 export async function resolveCodexComputerUseServiceAppSourcePath(params: {
   platform?: NodeJS.Platform;
-  appServerCommand?: string;
   sourceAppCandidates?: readonly string[];
   inspectServiceApp?: InspectServiceApp;
 }): Promise<string | undefined> {
@@ -65,8 +55,7 @@ export async function resolveCodexComputerUseServiceAppSourcePath(params: {
     return undefined;
   }
   const candidates =
-    params.sourceAppCandidates ??
-    resolveMacOSDesktopCodexComputerUseServiceAppCandidates(platform, params.appServerCommand);
+    params.sourceAppCandidates ?? resolveMacOSDesktopCodexComputerUseServiceAppCandidates(platform);
   return (
     await findUsableServiceApp(candidates, params.inspectServiceApp ?? inspectTrustedServiceApp)
   )?.path;
@@ -82,10 +71,10 @@ export async function ensureCodexComputerUseServiceApp(params: {
   copyServiceApp?: CopyServiceApp;
   inspectServiceApp?: InspectServiceApp;
   assertCurrent?: () => void;
-}): Promise<CodexComputerUseServiceStatus> {
+}): Promise<"source_missing" | void> {
   const platform = params.platform ?? process.platform;
   if (platform !== "darwin") {
-    return { status: "unsupported", changed: false };
+    return;
   }
   const codexHome = path.resolve(params.codexHome);
   const ownershipRoot = path.resolve(params.ownershipRoot ?? path.dirname(codexHome));
@@ -106,7 +95,6 @@ export async function ensureCodexComputerUseServiceApp(params: {
     codexHome,
     ownershipRoot,
     targetParent,
-    targetPath,
     sourceAppCandidates: candidates,
   });
   activeInstalls.set(targetPath, install);
@@ -121,25 +109,17 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   codexHome: string;
   ownershipRoot: string;
   targetParent: string;
-  targetPath: string;
   sourceAppCandidates: readonly string[];
   copyServiceApp?: CopyServiceApp;
   inspectServiceApp?: InspectServiceApp;
   assertCurrent?: () => void;
-}): Promise<CodexComputerUseServiceStatus> {
+}): Promise<"source_missing" | void> {
   const inspectServiceApp = params.inspectServiceApp ?? inspectTrustedServiceApp;
   const source = await findUsableServiceApp(params.sourceAppCandidates, inspectServiceApp);
   if (!source) {
-    return { status: "source_missing", changed: false, targetPath: params.targetPath };
+    return "source_missing";
   }
   const { path: sourcePath, identity: sourceIdentity } = source;
-  const alreadyCurrent: CodexComputerUseServiceStatus = {
-    status: "already_current",
-    changed: false,
-    targetPath: params.targetPath,
-    sourcePath,
-    sourceBuild: sourceIdentity.build,
-  };
   const ownedParent = await prepareOwnedServiceParent({
     ownershipRoot: params.ownershipRoot,
     codexHome: params.codexHome,
@@ -147,13 +127,12 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   });
   const operationTargetPath = path.join(ownedParent.realPath, SERVICE_APP_NAME);
   await assertNotSymlink(operationTargetPath, "Computer Use service target");
-  const targetExisted = await pathExists(operationTargetPath);
   const initialIdentity = await inspectServiceApp(operationTargetPath);
   if (initialIdentity && identitiesMatch(initialIdentity, sourceIdentity)) {
-    return alreadyCurrent;
+    return;
   }
 
-  await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+  assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
   const stagingRoot = await fs.mkdtemp(path.join(ownedParent.realPath, ".service-app.staging-"));
   const stagingRootIdentity = await readRealDirectoryIdentity(
     stagingRoot,
@@ -167,11 +146,8 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   let backupCreated = false;
   try {
     await (params.copyServiceApp ?? copyServiceAppWithDitto)(sourcePath, stagedPath);
-    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-    await assertDirectoryIdentityStable(
-      stagingRootIdentity,
-      "Computer Use service staging directory",
-    );
+    assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+    assertDirectoryIdentityStable(stagingRootIdentity, "Computer Use service staging directory");
     await assertNotSymlink(stagedPath, "Copied Computer Use service app");
     const stagedIdentity = await inspectServiceApp(stagedPath);
     if (!stagedIdentity || !identitiesMatch(stagedIdentity, sourceIdentity)) {
@@ -179,57 +155,45 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
         `Copied Computer Use service app at ${stagedPath} does not match its selected signed source.`,
       );
     }
-    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-    await assertDirectoryIdentityStable(
-      stagingRootIdentity,
-      "Computer Use service staging directory",
-    );
+    assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+    assertDirectoryIdentityStable(stagingRootIdentity, "Computer Use service staging directory");
     await assertNotSymlink(operationTargetPath, "Computer Use service target");
     if (await pathExists(operationTargetPath)) {
-      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       params.assertCurrent?.();
       await fs.rename(operationTargetPath, backupPath);
       backupCreated = true;
     }
-    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+    assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
     params.assertCurrent?.();
     await fs.rename(stagedPath, operationTargetPath);
     await assertNotSymlink(operationTargetPath, "Installed Computer Use service app");
     const installedIdentity = await inspectServiceApp(operationTargetPath);
     if (!installedIdentity || !identitiesMatch(installedIdentity, sourceIdentity)) {
-      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       await fs.rm(operationTargetPath, { recursive: true, force: true });
       throw new Error(
         "Installed Computer Use service app failed post-install identity verification.",
       );
     }
     if (backupCreated) {
-      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       await assertNotSymlink(backupPath, "Computer Use service backup");
       await fs.rm(backupPath, { recursive: true, force: true });
       backupCreated = false;
     }
-    return {
-      ...alreadyCurrent,
-      status: targetExisted ? "refreshed" : "installed",
-      changed: true,
-      ...(initialIdentity ? { previousBuild: initialIdentity.build } : {}),
-    };
   } catch (error) {
     if (
       backupCreated &&
-      (await directoryIdentityIsStable(ownedParent)) &&
+      directoryIdentityIsStable(ownedParent) &&
       !(await pathExists(operationTargetPath))
     ) {
-      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       await fs.rename(backupPath, operationTargetPath);
     }
     throw error;
   } finally {
-    if (
-      (await directoryIdentityIsStable(ownedParent)) &&
-      (await directoryIdentityIsStable(stagingRootIdentity))
-    ) {
+    if (directoryIdentityIsStable(ownedParent) && directoryIdentityIsStable(stagingRootIdentity)) {
       await fs.rm(stagingRoot, { recursive: true, force: true });
     }
   }

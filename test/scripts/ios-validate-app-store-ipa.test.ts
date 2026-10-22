@@ -1,6 +1,6 @@
 // iOS IPA validation tests cover the App Store upload gate without real signing assets.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
@@ -20,27 +20,13 @@ function writeExecutable(filePath: string, body: string): void {
   chmodSync(filePath, 0o755);
 }
 
-type PlistValue = string | boolean | readonly string[] | { [key: string]: PlistValue };
-function plistValue(value: PlistValue): string {
-  if (typeof value === "string") {
-    return `<string>${value}</string>`;
-  }
-  if (typeof value === "boolean") {
-    return `<${value ? "true" : "false"}/>`;
-  }
-  if (Array.isArray(value)) {
-    return `<array>${value.map(plistValue).join("")}</array>`;
-  }
-  return `<dict>${Object.entries(value)
-    .map(([key, entry]) => `<key>${key}</key>${plistValue(entry)}`)
-    .join("")}</dict>`;
-}
-
-function plist(body: Record<string, PlistValue>): string {
+function plist(body: Record<string, string>): string {
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
     `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
-    `<plist version="1.0">${plistValue(body)}</plist>`,
+    `<plist version="1.0"><dict>${Object.entries(body)
+      .map(([key, value]) => `<key>${key}</key><string>${value}</string>`)
+      .join("")}</dict></plist>`,
   ].join("\n");
 }
 
@@ -49,65 +35,14 @@ const fakeTools = {
 const { readFileSync } = require("node:fs");
 const commandIndex = process.argv.indexOf("-c");
 if (commandIndex < 0) process.exit(2);
-const command = process.argv[commandIndex + 1] || "";
-const file = process.argv[commandIndex + 2];
-const keyPath = command.replace(/^Print:/, "").split(":").filter(Boolean);
-const xml = readFileSync(file, "utf8");
-const tokens = [...xml.matchAll(/<key>([^<]*)<\\/key>|<string>([^<]*)<\\/string>|<true\\/>|<false\\/>|<array>|<\\/array>|<dict>|<\\/dict>/g)];
-let i = 0;
-function parseValue() {
-  const token = tokens[i++];
-  if (!token) return undefined;
-  const text = token[0];
-  if (token[2] !== undefined) return token[2];
-  if (text === "<true/>") return true;
-  if (text === "<false/>") return false;
-  if (text === "<dict>") return parseDict();
-  if (text === "<array>") {
-    const values = [];
-    while (i < tokens.length && tokens[i][0] !== "</array>") {
-      const value = parseValue();
-      if (value !== undefined) values.push(value);
-    }
-    i++;
-    return values;
-  }
-  return undefined;
-}
-function parseDict() {
-  const obj = {};
-  while (i < tokens.length && tokens[i][0] !== "</dict>") {
-    const key = tokens[i++][1];
-    if (key === undefined) continue;
-    obj[key] = parseValue();
-  }
-  i++;
-  return obj;
-}
-while (i < tokens.length && tokens[i][0] !== "<dict>") i++;
-const root = parseValue();
-let current = root;
-for (const key of keyPath) {
-  if (!current || typeof current !== "object" || Array.isArray(current) || !(key in current)) {
-    process.exit(1);
-  }
-  current = current[key];
-}
-if (Array.isArray(current)) {
-  console.log("Array {");
-  for (const value of current) console.log("    " + value);
-  console.log("}");
-} else if (current && typeof current === "object") {
-  console.log("Dict {");
-  console.log("}");
-} else if (typeof current === "string") {
-  console.log(current);
-} else if (typeof current === "boolean") {
-  console.log(current ? "true" : "false");
-} else {
-  process.exit(1);
-}
+const key = process.argv[commandIndex + 1].replace(/^Print:/, "");
+const xml = readFileSync(process.argv[commandIndex + 2], "utf8");
+const values = Object.fromEntries([...xml.matchAll(/<key>([^<]*)<\\/key>\\s*<string>([^<]*)<\\/string>/g)]
+  .map((match) => [match[1], match[2]]));
+if (!Object.hasOwn(values, key)) process.exit(1);
+console.log(values[key]);
 `,
+  signing: "#!/usr/bin/env node\nthrow new Error('unexpected signing inspection');\n",
   plutil: `#!/usr/bin/env node
 const { readFileSync } = require("node:fs");
 if (process.argv[2] === "-convert" && process.argv[3] === "xml1") {
@@ -163,7 +98,7 @@ if (!ipaPath || !outputDir) process.exit(2);
 `,
 };
 
-async function writeValidFixture(
+async function writeUnsignedFixture(
   root: string,
   options: {
     buildCommit?: string;
@@ -172,27 +107,9 @@ async function writeValidFixture(
     localizedDisplayName?: string;
   } = {},
 ) {
-  const binDir = path.join(root, "bin");
-  const fixturesDir = path.join(root, "fixtures");
-  mkdirSync(binDir, { recursive: true });
-  mkdirSync(fixturesDir, { recursive: true });
   const zip = new JSZip();
   const appFile = (name: string, body: string) =>
     zip.file(`Payload/OpenClaw.app/${name}`, body, { date: new Date(0) });
-  const writeSigningFixture = (name: string, body: Record<string, PlistValue>) => {
-    const file = path.join(fixturesDir, `${name}.plist`);
-    writeFileSync(file, plist(body), "utf8");
-    const executable = path.join(binDir, name);
-    writeExecutable(
-      executable,
-      `#!/usr/bin/env bash
-set -euo pipefail
-cat "${file}"
-`,
-    );
-    return executable;
-  };
-
   const healthUsage = "OpenClaw reads Health data for Health Summaries.";
   const infoBody = {
     CFBundleIdentifier: "ai.openclawfoundation.app",
@@ -219,36 +136,13 @@ cat "${file}"
   );
   appFile("embedded.mobileprovision", "fixture profile");
 
-  const sharedEntitlements = {
-    "application-identifier": "FWJYW4S8P8.ai.openclawfoundation.app",
-    "aps-environment": "production",
-    "com.apple.developer.healthkit": true,
-    "com.apple.security.application-groups": ["group.ai.openclawfoundation.app.shared"],
-  };
-  const codesign = writeSigningFixture("codesign", {
-    ...sharedEntitlements,
-    "com.apple.developer.team-identifier": "FWJYW4S8P8",
-    "com.apple.developer.devicecheck.appattest-environment": "production",
-  });
-  const security = writeSigningFixture("security", {
-    Name: "OpenClaw App Store ai.openclawfoundation.app",
-    TeamIdentifier: ["FWJYW4S8P8"],
-    Entitlements: {
-      ...sharedEntitlements,
-      "com.apple.developer.devicecheck.appattest-environment": ["production"],
-    },
-  });
-
-  const plistBuddy = path.join(toolsDir, "plistbuddy");
-  const plutil = path.join(toolsDir, "plutil");
-  const unzip = path.join(toolsDir, "unzip");
   const ipaPath = path.join(root, "OpenClaw.ipa");
   writeFileSync(ipaPath, await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
-  return { ipaPath, plistBuddy, plutil, codesign, security, unzip };
+  return ipaPath;
 }
 
 function runValidator(
-  fixture: Awaited<ReturnType<typeof writeValidFixture>>,
+  fixture: Awaited<ReturnType<typeof writeUnsignedFixture>>,
   expected: { commit?: string; timestamp?: string } = {},
 ): { ok: boolean; stdout: string; stderr: string } {
   const result = spawnSync(
@@ -256,7 +150,7 @@ function runValidator(
     [
       ...(process.platform === "win32" ? [SCRIPT] : ["--noprofile", "--norc", SCRIPT]),
       "--ipa",
-      fixture.ipaPath,
+      fixture,
       "--expected-commit",
       expected.commit ?? BUILD_COMMIT,
       "--expected-build-timestamp",
@@ -266,11 +160,11 @@ function runValidator(
       cwd: process.cwd(),
       env: {
         ...process.env,
-        IOS_VALIDATE_PLIST_BUDDY_BIN: fixture.plistBuddy,
-        IOS_VALIDATE_PLUTIL_BIN: fixture.plutil,
-        IOS_VALIDATE_CODESIGN_BIN: fixture.codesign,
-        IOS_VALIDATE_SECURITY_BIN: fixture.security,
-        IOS_VALIDATE_UNZIP_BIN: fixture.unzip,
+        IOS_VALIDATE_PLIST_BUDDY_BIN: path.join(toolsDir, "plistbuddy"),
+        IOS_VALIDATE_PLUTIL_BIN: path.join(toolsDir, "plutil"),
+        IOS_VALIDATE_CODESIGN_BIN: path.join(toolsDir, "signing"),
+        IOS_VALIDATE_SECURITY_BIN: path.join(toolsDir, "signing"),
+        IOS_VALIDATE_UNZIP_BIN: path.join(toolsDir, "unzip"),
       },
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -282,17 +176,17 @@ function runValidator(
 const makeRoot = () => tempDirs.make("openclaw-ios-ipa-");
 
 async function expectRejected(
-  options: Parameters<typeof writeValidFixture>[1],
+  options: Parameters<typeof writeUnsignedFixture>[1],
   message: string,
   expected?: Parameters<typeof runValidator>[1],
 ) {
-  const result = runValidator(await writeValidFixture(makeRoot(), options), expected);
+  const result = runValidator(await writeUnsignedFixture(makeRoot(), options), expected);
   expect(result).toMatchObject({ ok: false, stderr: expect.stringContaining(message) });
 }
 
 describe("scripts/ios-validate-app-store-ipa.sh", () => {
   beforeAll(() => {
-    // Interpreters read fixture paths from argv; signing inputs remain case-owned.
+    // These metadata failures must occur before any signing inspection.
     toolsDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-tools-"));
     for (const [name, body] of Object.entries(fakeTools)) {
       writeExecutable(path.join(toolsDir, name), body);

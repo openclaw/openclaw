@@ -26,23 +26,9 @@ import {
   getAttachedBackend,
   lifecycleAdmissionByOperation,
 } from "../../sessions/session-controller.state.js";
-import type { ReplyTurnAdmissionParams } from "./reply-turn-admission.types.js";
 import { bindReplyOperationDatabaseAdmission } from "./reply-turn-database-admission.js";
 
 const log = createSubsystemLogger("auto-reply/reply-turn-admission");
-
-/** Keeps heartbeat preemption ahead of both source-claim and direct-turn waits. */
-export function yieldHeartbeatToReplyTurn(
-  activeOperation: ReplyOperation | undefined,
-  params: Pick<ReplyTurnAdmissionParams, "kind" | "upstreamAbortSignal" | "assertRequestCurrent">,
-): void {
-  if (params.kind !== "visible" || activeOperation?.turnKind !== "heartbeat") {
-    return;
-  }
-  params.assertRequestCurrent?.();
-  params.upstreamAbortSignal?.throwIfAborted();
-  activeOperation.supersede();
-}
 
 export async function releaseReplyRecoveryOwner(
   lease: MainSessionRecoveryOwnerLease | undefined,

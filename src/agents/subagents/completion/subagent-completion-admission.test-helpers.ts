@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
+import { sha256Hex } from "../../../infra/crypto-digest.js";
 import { loadPendingSessionDeliveries } from "../../../infra/session-delivery-queue-storage.js";
-import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -16,6 +16,7 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { createSubagentRegistrySweeper } from "../registry/subagent-registry-sweeper.js";
@@ -84,9 +85,7 @@ export function records() {
   const subagent = createSubagentRunRecord({
     runId: "completion-run",
     taskRunId: "original-run",
-    childSessionKey: "agent:main:subagent:child",
     childSessionIdentity: { sessionId: "session-id", lifecycleRevision: "session-revision" },
-    requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "agent:main:main",
     requesterAgentId: "main",
     requesterOrigin: { channel: "discord", to: "channel:requester", accountId: "primary" },
@@ -100,31 +99,12 @@ export function records() {
       status: "in_progress",
       disposition: "session_queued",
       generation: 1,
-      queueId: "placeholder",
+      queueId: sha256Hex("completion:1"),
       windowStartedAt: now,
       deadlineAt: now + 30 * 60_000,
     },
   });
-  const queueEntry = prepareClaimedSessionDelivery(
-    {
-      kind: "agentTurn",
-      sessionKey: subagent.requesterSessionKey,
-      message: "canonical result is loaded at delivery time",
-      messageId: "completion:1",
-      idempotencyKey: "completion:1",
-      owner: {
-        kind: "subagent_completion",
-        runId: subagent.runId,
-        taskId: subagent.taskRunId!,
-        generation: 1,
-        deadlineAt: subagent.delivery!.deadlineAt!,
-      },
-    },
-    125_000,
-    now,
-  );
-  subagent.delivery!.queueId = queueEntry.id;
-  return { queueEntry, subagent };
+  return { subagent };
 }
 
 export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
@@ -160,6 +140,7 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
     controller,
     wake,
     warn,
+    [Symbol.dispose]: () => controller.clearRuntimeState(),
     async sweep() {
       const sweeper = createSubagentRegistrySweeper({
         runs: subagentRuns,
@@ -287,6 +268,21 @@ export async function reopenCompletionFixtureOwners() {
 
 export function currentCompletionRun(input: { subagent: SubagentRunRecord }): SubagentRunRecord {
   return expectDefined(subagentRuns.get(input.subagent.runId), "published completion run");
+}
+
+export function updateCompletionOwner(
+  runId: string,
+  update: (current: SubagentRunRecord) => SubagentRunRecord | null,
+  options?: Pick<NonNullable<Parameters<typeof mutateSubagentRuns>[2]>, "context">,
+): Promise<void> {
+  return mutateSubagentRuns(
+    [runId],
+    (rows) => ({
+      value: undefined,
+      postimages: new Map([[runId, update(expectDefined(rows.get(runId), "completion owner"))]]),
+    }),
+    options,
+  );
 }
 
 /** Fixture convenience; production callers use the guarded mutation owner directly. */

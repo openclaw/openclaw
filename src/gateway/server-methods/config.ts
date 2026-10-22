@@ -90,7 +90,7 @@ import {
 } from "./open-path.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 const configWriteRecovery = new WeakMap<
   GatewayConfigRevisionProjector,
@@ -714,25 +714,24 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     respond(true, loadGatewayRuntimeConfigSchema(), undefined);
   },
-  "config.schema.lookup": ({ params, respond }) => {
-    if (
-      !assertValidParams(params, validateConfigSchemaLookupParams, "config.schema.lookup", respond)
-    ) {
-      return;
-    }
-    const { path } = params;
-    const schema = loadGatewayRuntimeConfigSchema();
-    const result = lookupConfigSchema(schema, path, resolveConfigReloadMetadata);
-    if (!result) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "config schema path not found"),
-      );
-      return;
-    }
-    respond(true, result, undefined);
-  },
+  "config.schema.lookup": defineValidatedGatewayHandler(
+    "config.schema.lookup",
+    validateConfigSchemaLookupParams,
+    ({ params, respond }) => {
+      const { path } = params;
+      const schema = loadGatewayRuntimeConfigSchema();
+      const result = lookupConfigSchema(schema, path, resolveConfigReloadMetadata);
+      if (!result) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "config schema path not found"),
+        );
+        return;
+      }
+      respond(true, result, undefined);
+    },
+  ),
   "config.set": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;

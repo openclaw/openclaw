@@ -43,6 +43,7 @@ export function sessionMenuReasons(params: {
       params: { key: session.key, ...patch },
       sessionScope,
       session,
+      allowDeferred: true,
     });
   const renameReason = patchReason({ label: null }, true);
   const promotionReason = !session.sessionId?.trim()

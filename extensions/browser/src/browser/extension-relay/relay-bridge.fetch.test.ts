@@ -3,37 +3,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 import {
   flush,
-  FakeSocket,
   replyFor,
   defaultTabs,
   sendHello,
   wireExtension,
 } from "./relay-bridge.test-support.js";
+import { createRelayClient } from "./relay-runtime.test-support.js";
 
-function connectRelayClient(bridge: ExtensionRelayBridge) {
-  const socket = new FakeSocket();
-  const handlers = bridge.attachCdpClientSocket(socket);
-  let nextId = 1;
-  const send = (method: string, sessionId?: string, params?: Record<string, unknown>) => {
-    const id = nextId++;
-    handlers.onMessage(JSON.stringify({ id, method, sessionId, params }));
-    return id;
-  };
-  const response = (id: number) => socket.frames().find((frame) => frame.id === id);
-  return {
-    socket,
-    send,
-    response,
-    close: handlers.onClose,
-    async request(method: string, sessionId?: string, params?: Record<string, unknown>) {
-      const id = send(method, sessionId, params);
-      await flush();
-      return response(id);
-    },
-  };
-}
-
-type RelayClient = ReturnType<typeof connectRelayClient>;
+type RelayClient = ReturnType<typeof createRelayClient>;
 
 function sessionFrom(value: unknown): string {
   expect(value).toMatchObject({ sessionId: expect.any(String) });
@@ -94,8 +71,8 @@ beforeEach(async () => {
     ...defaultTabs(),
     { tabId: 2, url: "https://other.example", title: "Other", active: false },
   ]);
-  owner = connectRelayClient(bridge);
-  observer = connectRelayClient(bridge);
+  owner = createRelayClient(bridge);
+  observer = createRelayClient(bridge);
   await Promise.all(
     [owner, observer].map((client) =>
       client.request("Target.setAutoAttach", undefined, autoAttach),
@@ -296,7 +273,7 @@ it("cleans up a successful enable reply that arrives after its client closes", a
   acknowledge(heldEnable);
   await closing;
   await flush();
-  expect(owner.response(enabling)).toBeUndefined();
+  expect(owner.frame(enabling)).toBeUndefined();
   expect.soft(commands().map((frame) => frame.method)).toEqual(["Fetch.enable", "Fetch.disable"]);
   await check(observer, "Fetch.enable", peerSession);
   emitPaused("after-closed-enable");
@@ -353,16 +330,16 @@ it("retires the native root of an uncertain child without disturbing another tab
 it("fences admission immediately and waits for cleanup and native detach before successor attach", async () => {
   const { closing, attaching } = await beginRetirement("Fetch.failRequest", "detach");
   await check(owner, "Page.getFrameTree", sessionId, undefined, denied);
-  expect(observer.response(attaching)).toBeUndefined();
+  expect(observer.frame(attaching)).toBeUndefined();
   expect(frames("attach", 1)).toHaveLength(1);
   acknowledge(commands("Fetch.failRequest")[0]);
   await flush();
-  expect(observer.response(attaching)).toBeUndefined();
+  expect(observer.frame(attaching)).toBeUndefined();
   reply = replyFor;
   acknowledge(frames("detach", 1)[0]);
   await flush();
-  expect(owner.response(closing)).toMatchObject(success);
-  const replacement = sessionFrom(observer.response(attaching)?.result);
+  expect(owner.frame(closing)).toMatchObject(success);
+  const replacement = sessionFrom(observer.frame(attaching)?.result);
   expect(replacement).not.toBe(sessionId);
   await check(observer, "Runtime.enable", replacement);
   expect(commands("Fetch.disable")).toEqual([]);
@@ -386,8 +363,8 @@ it.each(["last session", "live sibling"])(
     owner.send("Target.detachFromTarget", undefined, { sessionId });
     await vi.advanceTimersByTimeAsync(2001);
     expect(frames("detach", 1)).toHaveLength(1);
-    expect(owner.response(body)).toMatchObject(denied);
-    expect(owner.response(evaluation)).toMatchObject(denied);
+    expect(owner.frame(body)).toMatchObject(denied);
+    expect(owner.frame(evaluation)).toMatchObject(denied);
     expect(commands("Fetch.failRequest")).toEqual([
       expect.objectContaining({
         params: { requestId: "known-request", errorReason: "Aborted" },
@@ -400,7 +377,7 @@ it.each(["last session", "live sibling"])(
 
 it("disposes held cleanup on extension loss without sending through its successor", async () => {
   const { attaching: reattaching } = await beginRetirement("Fetch.failRequest");
-  expect(observer.response(reattaching)).toBeUndefined();
+  expect(observer.frame(reattaching)).toBeUndefined();
   const previous = extension;
   extension = wireExtension(bridge);
   sendHello(extension.handlers, defaultTabs());
@@ -408,7 +385,7 @@ it("disposes held cleanup on extension loss without sending through its successo
   const cleanup = previous.socket.frames().find((frame) => frame.method === "Fetch.failRequest")!;
   acknowledge(cleanup, previous);
   await flush();
-  expect(observer.response(reattaching)).toMatchObject(denied);
+  expect(observer.frame(reattaching)).toMatchObject(denied);
   expect(
     extension.socket
       .frames()

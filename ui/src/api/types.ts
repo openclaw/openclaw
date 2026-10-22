@@ -13,6 +13,7 @@ import type {
   SessionEntryArchiveReason,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { projectCronRunHistoryPage } from "../../../src/cron/run-history.js";
 import type { CronListPageResult } from "../../../src/cron/service/list-page-types.js";
 import type { CronStatusSummary } from "../../../src/cron/service/state.js";
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
@@ -41,6 +42,7 @@ export type {
   CronJob,
   CronRunLogEntry,
   CronScratchGetResult,
+  CronScratchSetResult,
   UpdateAvailable,
   UpdateHoldResult,
   UpdateReportResult,
@@ -76,13 +78,13 @@ export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
 export type {
+  AgentsCreateResult,
   AgentsListResult,
   ModelChoice as ModelCatalogEntry,
   ModelCatalogProviderOutcome,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 export type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 export type ChannelsStatusSnapshot = ChannelsStatusResult;
-export type ChannelUiMetaEntry = NonNullable<ChannelsStatusResult["channelMeta"]>[number];
 export type ChannelAccountSnapshot = ChannelsStatusResult["channelAccounts"][string][number];
 
 export type ChannelStatus = Omit<ChannelAccountSnapshot, "accountId" | "probe"> & {
@@ -140,6 +142,8 @@ export type SessionsListResult = SessionsListResultBase<
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   label?: GatewaySessionRow["label"];
+  icon?: GatewaySessionRow["icon"];
+  color?: GatewaySessionRow["color"];
   category?: GatewaySessionRow["category"];
   updatedAt?: number;
   createdAt?: number;
@@ -177,7 +181,6 @@ export type CronJobsTriggerFilter = NonNullable<CronListParams["trigger"]>;
 export type CronJobsSortBy = NonNullable<CronListParams["sortBy"]>;
 export type CronRunScope = NonNullable<CronRunsParams["scope"]>;
 export type CronRunsStatusValue = NonNullable<CronRunsParams["statuses"]>[number];
-export type CronRunsStatusFilter = NonNullable<CronRunsParams["status"]>;
 export type CronSortDir = NonNullable<CronListParams["sortDir"]>;
 export type CronPayload = ProtocolCronJob["payload"];
 
@@ -190,14 +193,7 @@ export type CronJobsListResult<Row = ProtocolCronJob> = Omit<CronListPageResult,
   jobs: Row[];
 };
 
-export type CronRunsResult = {
-  entries: ProtocolCronRunLogEntry[];
-  total?: number;
-  limit?: number;
-  offset?: number;
-  nextOffset?: number | null;
-  hasMore?: boolean;
-};
+export type CronRunsResult = ReturnType<typeof projectCronRunHistoryPage>;
 
 export type {
   SkillStatusEntry,

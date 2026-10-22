@@ -208,9 +208,9 @@ export async function attachAuthenticatedGatewayConnect(
     (authMethod === "token" ||
       authMethod === "password" ||
       remoteIngressPrincipal?.operatorRoleActor.kind === "system");
-  // Synthetic callers bypass WS admission; ephemeral control-plane clients stay unprofiled.
+  // Authenticated inputs need durable identity even when their presence is omitted.
   const ownerProfileExpected =
-    shouldTrackPresence &&
+    (shouldTrackPresence || (authMethod !== undefined && authMethod !== "none")) &&
     shouldUseGatewayOwnerProfile({ role, authenticatedUserId, authMethod, rolesConfigured });
   const identityStartedAt = performance.now();
   const profileAdmission = remoteIngressPrincipal

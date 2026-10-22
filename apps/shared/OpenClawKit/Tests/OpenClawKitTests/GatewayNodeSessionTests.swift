@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawProtocol
+import Synchronization
 import Testing
 @testable import OpenClawKit
 
@@ -925,6 +926,60 @@ extension GatewayChannelActor {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test(arguments: [false, true])
+    func `wire presence is reconstructed before bounded delivery and gaps resynchronize`(
+        versionGap: Bool) async throws
+    {
+        let session = FakeGatewayWebSocketSession()
+        let events = AsyncStream<EventFrame>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let patched = AsyncGate()
+        let disconnected = AsyncGate()
+        let channel = try GatewayChannelActor(
+            url: testURL("ws://gateway.example.invalid"), token: nil,
+            session: WebSocketSessionBox(session: session),
+            pushHandler: { push, _ in
+                guard case let .event(event) = push else { return }
+                events.continuation.yield(event)
+                if event.seq == 2 { await patched.markStarted() }
+            },
+            connectOptions: operatorConnectOptions(),
+            disconnectHandler: { _, _ in await disconnected.markStarted() })
+        do {
+            try await channel.connect()
+            let socket = try #require(session.latestTask())
+            let request = try #require(socket.sentRequests(method: "connect").first)
+            let params = try #require(request["params"] as? [String: Any])
+            #expect((params["caps"] as? [String])?.contains("presence-deltas") == true)
+            try socket.emitEvent(EventFrame(type: "event", event: "presence", payload: AnyCodable([
+                "reset": true, "version": 1, "keys": ["opaque"],
+                "presence": [["ts": 1, "connectionId": "one", "watchedSessions": ["old"]]],
+            ]), seq: 1))
+            try socket.emitEvent(EventFrame(type: "event", event: "presence", payload: AnyCodable([
+                "base": 1, "version": 2,
+                "upsert": [["key": "opaque", "set": ["ts": 2], "unset": ["watchedSessions"]]],
+                "remove": [], "order": ["opaque"],
+            ]), seq: 2))
+            await patched.waitUntilStarted()
+            var iterator = events.stream.makeAsyncIterator()
+            let event = try #require(await iterator.next())
+            #expect(event.payload == AnyCodable(["presence": [["ts": 2, "connectionId": "one"]]]))
+
+            try socket.emitEvent(EventFrame(type: "event", event: "presence", payload: AnyCodable([
+                "base": versionGap ? 3 : 2, "version": 4,
+                "upsert": [], "remove": ["opaque"], "order": [],
+            ]), seq: versionGap ? 3 : 4))
+            await disconnected.waitUntilStarted()
+            #expect(socket.state == .canceling)
+            await channel.shutdown()
+            events.continuation.finish()
+            #expect(await iterator.next() == nil)
+        } catch {
+            await channel.shutdown()
+            events.continuation.finish()
+            throw error
+        }
+    }
+
     @Test(arguments: [false, true])
     func `wire text is projected before bounded native delivery and loss retires the socket`(
         missingBaseline: Bool) async throws
@@ -3545,7 +3600,7 @@ struct GatewayNodeSessionTests {
         let request = try #require(task.sentRequests(method: "connect").first)
         let params = try #require(request["params"] as? [String: Any])
         #expect(params["modelCatalog"] == nil)
-        #expect(params["caps"] as? [String] == [])
+        #expect(params["caps"] as? [String] == ["presence-deltas", "health-summary"])
         await gateway.disconnect()
     }
 
@@ -3652,13 +3707,16 @@ struct GatewayNodeSessionTests {
     @Test(.stateDirectoryIsolated)
     func `failed device token write retains issuance without claiming persistence`() async throws {
         let gatewayID = "blocked-storage-gateway"
-        let stateDir = try #require(ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"])
-        let blocker = URL(fileURLWithPath: stateDir, isDirectory: true)
-            .appendingPathComponent("identity", isDirectory: false)
-        try Data().write(to: blocker)
-        // Block only the legacy auth directory. SQLite identity creation must
-        // still succeed so this test reaches the token persistence failure.
-        defer { try? FileManager.default.removeItem(at: blocker) }
+        let attemptedTokens = Mutex<[String]>([])
+        DeviceCredentialAccess.install { root, operation in
+            if operation.kind == .tokenReplace {
+                attemptedTokens.withLock { $0.append(operation.token?.token ?? "") }
+                throw CocoaError(.fileWriteNoPermission)
+            }
+            return try DeviceCredentialAccess.executeOffline(root: root, operation: operation)
+        }
+        defer { DeviceCredentialAccess.close() }
+        let identity = try DeviceIdentityStore.loadOrCreatePersistedOrThrow()
 
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "node-device-token",
@@ -3677,8 +3735,10 @@ struct GatewayNodeSessionTests {
             session: session)
 
         let authRoles = await gateway.currentDeviceAuthRoles()
+        #expect(attemptedTokens.withLock { $0 } == ["node-device-token"])
         #expect(authRoles.received == ["node"])
         #expect(authRoles.persisted.isEmpty)
+        #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node", gatewayID: gatewayID) == nil)
         await gateway.disconnect()
     }
 

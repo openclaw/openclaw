@@ -94,6 +94,7 @@ export function createSessionHistoryWorkerReaders(
     readAnchors: reader("transcript-anchors", (value) => value.facts),
     readRuntimeTarget: reader("session-runtime-target", (value) => value.target),
     readConversations: reader("conversation-rows", (value) => value.rows),
+    readConversationBindings: reader("conversation-bindings", (value) => value.snapshot),
     prewarm: reader("prewarm", () => undefined),
     readRetirement: reader("session-retirement-read", (value) => value.result),
     readPendingArchives: reader("session-pending-archives", (value) => value.pending),

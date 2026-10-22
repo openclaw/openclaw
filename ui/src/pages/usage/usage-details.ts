@@ -1,4 +1,5 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
+import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   beginPanelRefresh,
@@ -16,12 +17,10 @@ import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
 import {
   requestSessionUsage,
-  requestSessionUsageLogs,
-  requestSessionUsageTimeSeries,
   type SessionUsageQuery,
   type SessionUsageTarget,
 } from "../../lib/sessions/usage.ts";
-import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
+import type { SessionLogEntry, UsageSessionEntry } from "./usage-state-types.ts";
 
 type UsageDetailTarget = Pick<UsageSessionEntry, "key" | "agentId" | "sessionId">;
 
@@ -108,6 +107,9 @@ function createUsageDetailRequest<T>(
     get loading() {
       return pending !== null;
     },
+    get read() {
+      return task.read;
+    },
     async recover(sessionKey: string, loadInitial = false): Promise<void> {
       const target = resolveTarget(sessionKey);
       await pending;
@@ -166,7 +168,10 @@ export function createUsageDetails(
   const timeSeries = createUsageDetailRequest(
     notify,
     gateway,
-    requestSessionUsageTimeSeries,
+    (client, target) =>
+      client
+        .request<SessionUsageTimeSeries | undefined>("sessions.usage.timeseries", target)
+        .then((result) => result ?? null),
     resolveTarget,
     clearTimeSeriesRange,
   );
@@ -174,7 +179,10 @@ export function createUsageDetails(
     notify,
     gateway,
     async (client, target) => {
-      const payload = await requestSessionUsageLogs(client, target);
+      const payload = await client.request<{ logs?: unknown }>("sessions.usage.logs", {
+        ...target,
+        limit: 1000,
+      });
       // SAFETY: sessions.usage.logs returns entries normalized by the Gateway's loadSessionLogs.
       return Array.isArray(payload.logs) ? (payload.logs as SessionLogEntry[]) : null;
     },

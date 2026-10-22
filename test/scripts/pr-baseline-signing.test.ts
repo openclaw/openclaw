@@ -1,4 +1,4 @@
-import { spawnSync, type SpawnSyncOptionsWithBufferEncoding } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   existsSync,
@@ -10,39 +10,51 @@ import {
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
+import {
+  createBaselineFixture,
+  failRestore,
+  signBaselineRequest,
+} from "./pr-baseline-native.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
+function createSigningContext() {
+  const f = createBaselineFixture(dirs.make("openclaw-pr-signing-"), 1);
+  f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("initial upstream")));
+  const credit = "Co-authored-by: Ada Example <ada@example.invalid>";
+  f.prepGit("commit", "--allow-empty", "-qm", `fix: complete the reviewed correction\n\n${credit}`);
+  f.approve();
+  const source = f.publish();
+  const baseline = f.advanceMain("next upstream", [f.product[0]!]);
+  const signer = f.prepGit("show", "-s", "--format=%GF", "HEAD");
+  const before = f.snapshot([
+    "prepare-baseline.json",
+    "prep-context.env",
+    "prep.env",
+    "prepare-push-result.env",
+    "correction-review.json",
+    "review.json",
+  ]);
+  // The preparation host has verification authority but cannot sign.
+  f.git(f.repo, "config", "user.signingKey", join(f.root, "unavailable-key"));
+  const requestArgs = [...f.successor(baseline), "--signer", signer];
+  return { f, credit, source, baseline, before, requestArgs };
+}
+
+function createSignedContext() {
+  const context = createSigningContext();
+  const { f, credit, requestArgs } = context;
+  const signed = signBaselineRequest(f, requestArgs);
+  expect(signed.message).toBe(
+    `fix: refresh the reviewed correction baseline\n\nBaseline-Refresh: ${signed.bindingOid}\n${credit}\n`,
+  );
+  return { ...context, ...signed };
+}
+
 describePosix("native baseline signing handoff", () => {
-  it("seals a published successor request, rejects changed inputs, and recovers the same signed candidate", () => {
-    const f = createBaselineFixture(dirs.make("openclaw-pr-signing-"));
-    const gitBytes = (
-      cwd: string,
-      args: string[],
-      options: SpawnSyncOptionsWithBufferEncoding = {},
-    ) => {
-      const result = spawnSync("git", args, { cwd, env: f.env, ...options });
-      expect(result.status, result.stderr.toString()).toBe(0);
-      return result.stdout;
-    };
-    f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("initial upstream")));
-    f.approve();
-    const source = f.publish();
-    const baseline = f.advanceMain("next upstream", [f.product[0]!]);
-    const signer = f.prepGit("show", "-s", "--format=%GF", "HEAD");
-    const before = f.snapshot([
-      "prepare-baseline.json",
-      "prep-context.env",
-      "prep.env",
-      "prepare-push-result.env",
-      "correction-review.json",
-      "review.json",
-    ]);
-    // The preparation host has verification authority but cannot sign.
-    f.git(f.repo, "config", "user.signingKey", join(f.root, "unavailable-key"));
-    const requestArgs = [...f.successor(baseline), "--signer", signer];
+  it("seals a published successor request and rejects changed inputs", () => {
+    const { f, source, before, requestArgs } = createSigningContext();
     const refuseRequest = (message: string, extra: NodeJS.ProcessEnv = {}) => {
       const result = f.run("prepare-baseline-signing-request", requestArgs, extra);
       expect(result.status, result.stdout + result.stderr).not.toBe(0);
@@ -149,7 +161,6 @@ if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'c
     const oid = /Awaiting signature: request=([a-f0-9]{40})/u.exec(pending.stdout)![1]!;
     const requestPath = f.local(`prepare-baseline-signing.${oid}.json`);
     const requestBytes = readFileSync(requestPath);
-    const request = JSON.parse(requestBytes.toString());
     expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
     f.expectSnapshot(before);
     expect(existsSync(f.local("review-transition.json"))).toBe(false);
@@ -157,45 +168,23 @@ if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'c
     expect(duplicate.status).not.toBe(0);
     expect(duplicate.stderr).toContain("Retained signing request exists");
     expect(readFileSync(requestPath)).toEqual(requestBytes);
-
-    // A separate bare object store performs ordinary git commit-tree -S with
-    // the exact identities/dates/message from the request, not signature splicing.
-    const spool = join(f.root, "signer.git");
-    mkdirSync(spool);
-    f.git(spool, "init", "-q", "--bare");
-    const unsigned = Buffer.from(request.unsignedCommit, "base64");
-    const split = unsigned.indexOf("\n\n");
-    const headers = unsigned.subarray(0, split).toString();
-    const tree = /^tree ([a-f0-9]{40})$/mu.exec(headers)![1]!;
-    const parents = [...headers.matchAll(/^parent ([a-f0-9]{40})$/gmu)].map((m) => m[1]!);
-    const pack = gitBytes(f.worktree, ["pack-objects", "--stdout", "--revs"], {
-      maxBuffer: 16 * 1024 * 1024,
-      input: [tree, ...parents].join("\n") + "\n",
-    });
-    gitBytes(spool, ["index-pack", "--stdin"], { input: pack });
-    const identity: NodeJS.ProcessEnv = {};
-    for (const role of ["author", "committer"]) {
-      const [, name, email, date] = new RegExp(`^${role} (.*) <([^>]*)> (.*)$`, "mu").exec(
-        headers,
-      )!;
-      identity[`GIT_${role.toUpperCase()}_NAME`] = name;
-      identity[`GIT_${role.toUpperCase()}_EMAIL`] = email;
-      identity[`GIT_${role.toUpperCase()}_DATE`] = date;
-    }
-    const signingCommand = ["-c", "gpg.format=ssh", "commit-tree"];
-    const parentArgs = parents.flatMap((parent) => ["-p", parent]);
-    const sign = (key: string) => {
-      const result = gitBytes(spool, [...signingCommand, `-S${key}`, tree, ...parentArgs], {
-        env: { ...f.env, ...identity },
-        input: unsigned.subarray(split + 2),
-      });
-      const target = result.toString().trim();
-      return { target, bytes: gitBytes(spool, ["cat-file", "commit", target]) };
-    };
-    const signed = sign(f.key);
-    const response = f.local("signed-commit");
-    writeFileSync(response, signed.bytes);
-    const args = ["--request", oid, "--signed-commit", response];
+  });
+  it("rejects changed signatures, retained proof and current ownership", () => {
+    const {
+      f,
+      source,
+      baseline,
+      credit,
+      before,
+      identity,
+      request,
+      signed,
+      response,
+      args,
+      sign,
+      requestPath,
+      requestBytes,
+    } = createSignedContext();
     const refuse = (message: string) => {
       const result = f.run("prepare-baseline-signing-continue", args);
       expect(result.status, result.stdout + result.stderr).not.toBe(0);
@@ -207,6 +196,7 @@ if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'c
     for (const [from, to] of [
       [source, baseline],
       ["fix: refresh", "fix: changed"],
+      [credit, "Co-authored-by: Changed Example <changed@example.invalid>"],
       [identity.GIT_AUTHOR_EMAIL!, "changed@example.invalid"],
     ]) {
       writeFileSync(response, signed.bytes.toString().replace(from!, to!));
@@ -297,23 +287,16 @@ if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'c
     // must preserve it, and no fixture child remains after its joined return.
     expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-operation-locks/42")).toBe(baseline);
     f.git(f.repo, "update-ref", "-d", "refs/openclaw/pr-operation-locks/42", baseline);
-
-    const failRestore = join(f.root, "fail-restore");
-    const realGit = spawnSync("sh", ["-c", "command -v git"], {
-      env: f.env,
-      encoding: "utf8",
-    }).stdout.trim();
-    writeFileSync(
-      failRestore,
-      `#!/bin/bash
-if [ "$1" = --literal-pathspecs ] && [ "$2" = restore ]; then exit 72; fi
-exec '${realGit}' "$@"
-`,
-      { mode: 0o755 },
+  });
+  it("recovers and republishes the same signed candidate", () => {
+    const { f, source, baseline, before, signed, args, requestPath, requestBytes } =
+      createSignedContext();
+    const receipt = before["prepare-push-result.env"]!;
+    const interrupted = f.run(
+      "prepare-baseline-signing-continue",
+      args,
+      failRestore(f.root, f.env),
     );
-    const interrupted = f.run("prepare-baseline-signing-continue", args, {
-      OPENCLAW_PR_GIT: failRestore,
-    });
     expect(interrupted.status, interrupted.stdout + interrupted.stderr).not.toBe(0);
     const journalBytes = f.readLocal("review-transition.json");
     expect(JSON.parse(journalBytes.toString()).target).toBe(signed.target);
@@ -327,8 +310,7 @@ exec '${realGit}' "$@"
     expect(f.prepGit("show", "-s", "--format=%P", "HEAD")).toBe(`${source} ${baseline}`);
     f.prepGit("verify-commit", "HEAD");
     expect(f.readLocal("review.json")).toEqual(before["review.json"]);
-    expect(existsSync(f.local("review-transition.json"))).toBe(false);
-    expect(existsSync(f.local("correction-review.json"))).toBe(false);
+    f.expectAbsent("review-transition.json", "correction-review.json");
     f.pass("prepare-baseline-signing-continue", args);
     expect(f.prepGit("rev-parse", "HEAD")).toBe(signed.target);
     f.git(f.repo, "config", "user.signingKey", f.key);

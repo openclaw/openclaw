@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { isRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { inspectCronRowsForDoctor } from "../../commands/doctor/cron/store-inventory.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { runSqliteReadOnlyWorkerSync } from "../../infra/sqlite-readonly-worker.js";
@@ -14,6 +13,7 @@ import { cronRunRecordToRunLogEntry } from "../run-history-detail.js";
 import { serializeCronLoadError } from "./load-error.js";
 import { loadCronStoreFromDatabase } from "./load.kernel.js";
 import type {
+  CronReadOnlyRequest,
   CronReadOnlyResult,
   CronRunHistoryBinding,
   CronRunHistorySelector,
@@ -77,42 +77,15 @@ function selectTranscriptBinding(
   };
 }
 
-serveWorkerTasks(async (input, _channel, control): Promise<CronReadOnlyResult> => {
+serveWorkerTasks<CronReadOnlyResult, CronReadOnlyRequest>(async (input, _channel, control) => {
   try {
-    if (
-      !isRecord(input) ||
-      typeof input.location !== "string" ||
-      (input.storeKey !== undefined && typeof input.storeKey !== "string") ||
-      (input.stagingRoot !== undefined && typeof input.stagingRoot !== "string") ||
-      (input.history !== undefined &&
-        (typeof input.storeKey !== "string" ||
-          !isRecord(input.history) ||
-          (input.history.jobId !== undefined && typeof input.history.jobId !== "string") ||
-          (input.history.query !== undefined && typeof input.history.query !== "string") ||
-          (input.history.taskIds !== undefined &&
-            (!Array.isArray(input.history.taskIds) ||
-              input.history.taskIds.length > 200 ||
-              input.history.taskIds.some((id) => typeof id !== "string"))) ||
-          (input.history.view !== undefined &&
-            input.history.view !== "full" &&
-            input.history.view !== "summary") ||
-          (input.history.transcript !== undefined &&
-            (typeof input.history.jobId !== "string" ||
-              !isRecord(input.history.transcript) ||
-              (input.history.transcript.runId !== undefined &&
-                typeof input.history.transcript.runId !== "string") ||
-              (input.history.transcript.runAtMs !== undefined &&
-                typeof input.history.transcript.runAtMs !== "number")))))
-    ) {
+    if (input.history?.taskIds && input.history.taskIds.length > 200) {
       throw new Error(
         "Cron read-only worker requires a database location and an optional store key",
       );
     }
     const { location, storeKey, stagingRoot } = input;
     const jobNameById = input.history?.jobNameById;
-    if (jobNameById !== undefined && !isStringRecord(jobNameById)) {
-      throw new Error("Cron read-only worker requires string history job names");
-    }
     return await control.runNativeSection(() => {
       // Copying stays in a separate process; the parent owns every unpublished child artifact.
       const connection = isStatePostgres()
@@ -128,10 +101,10 @@ serveWorkerTasks(async (input, _channel, control): Promise<CronReadOnlyResult> =
       // The connection owner retains failed-close token custody without imposing a schema gate.
       const db = connection?.database.db ?? openNodeSqliteDatabase(location, { readOnly: true });
       try {
-        if (isRecord(input.history) && typeof storeKey === "string") {
+        if (input.history && storeKey !== undefined) {
           // History consumes the canonical released table only after read admission.
           assertStateReadSchema(db, location);
-          if (Array.isArray(input.history.taskIds)) {
+          if (input.history.taskIds) {
             return {
               ok: true,
               history: readCronRunHistoryRecordsInDatabase(
@@ -145,23 +118,18 @@ serveWorkerTasks(async (input, _channel, control): Promise<CronReadOnlyResult> =
           const candidates = readCronRunHistoryCandidatesInDatabase(
             db,
             storeKey,
-            typeof input.history.jobId === "string" ? input.history.jobId : undefined,
-            typeof input.history.query === "string" ? input.history.query : undefined,
+            input.history.jobId,
+            input.history.query,
             jobNameById,
           );
-          if (isRecord(input.history.transcript) && typeof storeKey === "string") {
+          if (input.history.transcript) {
             return {
               ok: true,
-              binding: selectTranscriptBinding(candidates.records, storeKey, {
-                runId:
-                  typeof input.history.transcript.runId === "string"
-                    ? input.history.transcript.runId
-                    : undefined,
-                runAtMs:
-                  typeof input.history.transcript.runAtMs === "number"
-                    ? input.history.transcript.runAtMs
-                    : undefined,
-              }),
+              binding: selectTranscriptBinding(
+                candidates.records,
+                storeKey,
+                input.history.transcript,
+              ),
             } satisfies CronReadOnlyResult;
           }
           return {

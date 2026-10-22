@@ -1,19 +1,49 @@
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { downloadXaiVideo } from "./video-generation-transport.js";
+import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
-function downloadVideo() {
-  return downloadXaiVideo({
-    url: "https://example.com/generated.mp4",
+function downloadVideo(
+  videoUrl = "https://example.com/generated.mp4",
+  allowPrivateNetwork = false,
+) {
+  const downloadFetch = globalThis.fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === videoUrl) {
+        return downloadFetch(input, init);
+      }
+      return Response.json(
+        url.endsWith("/videos/generations")
+          ? { request_id: "synthetic-request" }
+          : { status: "done", video: { url: videoUrl } },
+      );
+    }),
+  );
+  return buildXaiVideoGenerationProvider().generateVideo({
+    provider: "xai",
+    model: "grok-imagine-video",
+    prompt: "Synthetic video",
+    cfg: {
+      models: {
+        providers: {
+          xai: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "synthetic-key",
+            models: [],
+            request: { allowPrivateNetwork },
+          },
+        },
+      },
+    },
     timeoutMs: 5_000,
-    maxBytes: 10 * 1024 * 1024,
-    allowPrivateNetwork: false,
   });
 }
 
-describe("downloadXaiVideo", () => {
+describe("xAI generated video download", () => {
   it.each([
     { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
     { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
@@ -43,14 +73,9 @@ describe("downloadXaiVideo", () => {
         response.write('{"error":"still streaming');
       },
       async (baseUrl) => {
-        await expect(
-          downloadXaiVideo({
-            url: `${baseUrl}/generated.mp4`,
-            timeoutMs: 5_000,
-            maxBytes: 10 * 1024 * 1024,
-            allowPrivateNetwork: true,
-          }),
-        ).rejects.toThrow("xAI generated video download: malformed video response");
+        await expect(downloadVideo(`${baseUrl}/generated.mp4`, true)).rejects.toThrow(
+          "xAI generated video download: malformed video response",
+        );
 
         await expect(socketClosed).resolves.toBe(true);
       },

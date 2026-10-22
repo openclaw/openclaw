@@ -96,7 +96,7 @@ function prepareGatewaySessionStoreLookup(
     ),
     result:
       index === 0 && target.storePath === fallback.storePath && params.store !== undefined
-        ? ok(params.store)
+        ? params.store
         : undefined,
   }));
   return {
@@ -437,10 +437,8 @@ export async function withGatewaySessionStoreTarget<T>(
               };
               for (const [index, read] of reads.entries()) {
                 const owner = prepared[index]!;
-                read.result = ok(
-                  Object.fromEntries(
-                    owner.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-                  ),
+                read.result = Object.fromEntries(
+                  owner.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
                 );
                 read.readSource = { agentId: owner.database.agentId, path: owner.database.path };
                 read.capturedReadSource =

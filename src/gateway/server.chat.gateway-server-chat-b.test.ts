@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 // history limits, model overrides, inbound dispatch, and streaming event fanout.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -58,12 +57,8 @@ import {
   captureSessionControllerSettlement,
   runSessionMutation,
 } from "../sessions/session-controller.lifecycle.js";
-import {
-  isRpcSourceQueued,
-  requestRpcSourceCancellation,
-} from "../sessions/session-controller.rpc-sources.js";
+import { isRpcSourceQueued } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
-import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -99,6 +94,7 @@ import type {
   RespondFn,
 } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import { registerChatAbortAdmissionRetryTests } from "./server.chat-abort-admission.test-support.js";
 import {
   callDirectChatHandler,
   callDirectChat,
@@ -3366,148 +3362,14 @@ describe("gateway server chat", () => {
     }
   });
 
-  test.each([
-    { caseName: "tombstones an explicit abort", retryable: false, stopReason: "rpc" },
-    { caseName: "retains a restart interruption", retryable: true, stopReason: "restart" },
-  ])("chat.send $caseName after SQLite admission commits", async ({ retryable, stopReason }) => {
-    const { storePath } = openDirectChatSession();
-    const runId = `idem-restart-safe-abort-${stopReason}`;
-    let stopListening: (() => void) | undefined;
-    try {
-      await writeStoredMainSession(makeDoneSessionEntry());
-      const scope = makeMainSessionScope(storePath);
-      const context = createDirectChatContext();
-      const abortCommittedTurn = vi.fn(() => {
-        const activeRun = expectDefined(rpcSourceTesting.get(runId), "expected admitted chat run");
-        activeRun.adapter.abortStopReason = stopReason;
-        requestRpcSourceCancellation(activeRun);
-      });
-      // The transcript notification follows the atomic user-turn and recovery-claim commit.
-      stopListening = onSessionTranscriptUpdate((update) => {
-        if (
-          update.target.sessionKey === scope.sessionKey &&
-          update.target.sessionId === scope.sessionId &&
-          isRecord(update.message) &&
-          update.message.role === "user" &&
-          update.message.idempotencyKey === `${runId}:user`
-        ) {
-          abortCommittedTurn();
-        }
-      });
-      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-      await sendControlUiChat({
-        context,
-        idempotencyKey: runId,
-        message: "persist, then stop",
-        respond: captureChatResult(responses),
-      });
-      stopListening();
-      expect(abortCommittedTurn).toHaveBeenCalledOnce();
-      expect(responses).toEqual([
-        {
-          ok: true,
-          payload: expect.objectContaining({
-            runId,
-            status: "timeout",
-            summary: "aborted",
-            stopReason,
-          }),
-        },
-      ]);
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      const stored = loadSessionEntry(scope);
-      expect(stored).toMatchObject({
-        abortedLastRun: !retryable,
-        lastRunId: runId,
-        sessionId: "sess-main",
-        status: "killed",
-      });
-      expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
-      if (retryable) {
-        expect(stored?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
-        expect(stored?.restartRecoveryDeliveryRequestFingerprint).toEqual(
-          expect.stringMatching(/^hmac-sha256:v1:/u),
-        );
-        expect(stored?.restartRecoveryDeliveryRunId).toBe(runId);
-        expect(stored?.restartRecoveryDeliverySourceRunId).toBe(runId);
-        expect(stored?.restartRecoverySourceIngress).toBe("control-ui");
-        expect(stored?.restartRecoveryTerminalRunIds).toBeUndefined();
-      } else {
-        expect(stored?.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
-        expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
-        expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-        expect(stored?.restartRecoverySourceIngress).toBeUndefined();
-        expect(stored?.restartRecoveryTerminalRunIds).toEqual([runId]);
-      }
-      expect(loadTranscriptEventsSync(scope)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({
-              content: "persist, then stop",
-              idempotencyKey: `${runId}:user`,
-              role: "user",
-            }),
-          }),
-        ]),
-      );
-
-      const retryContext = createDirectChatContext();
-      const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
-      if (retryable) {
-        dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
-      }
-      await sendControlUiChat({
-        context: retryContext,
-        idempotencyKey: runId,
-        message: "persist, then stop",
-        respond: captureChatResult(retryResponses),
-      });
-      expect(retryResponses).toEqual([
-        {
-          ok: true,
-          payload: retryable
-            ? expect.objectContaining({ runId, status: "started" })
-            : { runId, status: "ok" },
-        },
-      ]);
-      if (retryable) {
-        await getDirectChatSessionWorkRelease();
-        expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
-        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-        const retryOptions = (
-          dispatchInboundMessageMock.mock.calls[0]?.[0] as
-            | { replyOptions?: GetReplyOptions }
-            | undefined
-        )?.replyOptions;
-        expect(retryOptions?.suppressNextUserMessagePersistence).toBe(true);
-      } else {
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      }
-      expect(
-        loadTranscriptEventsSync(scope).filter((event) => {
-          if (
-            typeof event !== "object" ||
-            event === null ||
-            !("type" in event) ||
-            event.type !== "message" ||
-            !("message" in event)
-          ) {
-            return false;
-          }
-          const message = event.message;
-          return (
-            typeof message === "object" &&
-            message !== null &&
-            "idempotencyKey" in message &&
-            message.idempotencyKey === `${runId}:user`
-          );
-        }),
-      ).toHaveLength(1);
-    } finally {
-      stopListening?.();
-      await resetDirectChatSession();
-    }
+  registerChatAbortAdmissionRetryTests({
+    withCommittedChatSession: (run) =>
+      withDirectChatSession(async (_sessionDir, storePath) => {
+        await writeStoredMainSession(makeDoneSessionEntry());
+        await run({ ...makeMainSessionScope(storePath), storePath });
+      }),
+    waitForSessionWork: getDirectChatSessionWorkRelease,
+    sendControlUiChat,
   });
 
   test("chat.send keeps a durable Control UI retry pending when recovery remains abandoned", async () => {

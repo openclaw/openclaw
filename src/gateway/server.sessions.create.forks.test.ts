@@ -3,8 +3,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { prepareDiscoveredContextTokenCache } from "../agents/context-cache-projection.js";
-import { replaceDiscoveredContextTokenCache } from "../agents/context-cache.js";
+import {
+  providerContextTokenCacheKey,
+  replaceDiscoveredContextTokenCache,
+} from "../agents/context-cache.js";
 import { resetContextWindowCacheForTest } from "../agents/context.test-support.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -361,11 +363,10 @@ test.each<{
     const selectable = model === "gpt-selectable";
     if (!window) {
       replaceDiscoveredContextTokenCache(
-        await prepareDiscoveredContextTokenCache({
-          modelCatalog: {
-            entries: [{ id: model, provider: "other-provider", contextTokens: 300_000 }],
-          },
-        }),
+        new Map([
+          [model, 300_000],
+          [providerContextTokenCacheKey("other-provider", model), 300_000],
+        ]),
       );
     } else {
       agentDiscoveryMock.models = [
@@ -386,10 +387,14 @@ test.each<{
       ];
     }
     if (nativeCatalog) {
+      if (!window) {
+        throw new Error("native catalog fixture requires a context window");
+      }
       replaceDiscoveredContextTokenCache(
-        await prepareDiscoveredContextTokenCache({
-          modelCatalog: { entries: agentDiscoveryMock.models },
-        }),
+        new Map([
+          [model, window],
+          [providerContextTokenCacheKey(provider, model), window],
+        ]),
       );
       if (nativeCatalog === "unknown") {
         agentDiscoveryMock.models.push({

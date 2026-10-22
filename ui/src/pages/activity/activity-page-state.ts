@@ -2,6 +2,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import type { RouteLocation } from "@openclaw/uirouter";
 import { onCleanup } from "solid-js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -11,7 +12,7 @@ import { readPresenceEntries, type PresencePayload } from "../../app/user-profil
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectPresencePayload } from "../../lib/presence-users.ts";
-import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import { createLiveActivity } from "./live-activity.ts";
 import {
@@ -50,6 +51,12 @@ export function createActivityPageState(context: ApplicationContext) {
   let presencePayload: PresencePayload | undefined;
   let sessionActivityRevision = -1;
   let inspectorAbort: AbortController | null = null;
+  let inspectorRead:
+    | {
+        kind: "executions" | "decisions" | "refresh";
+        completion: ReturnType<typeof createDeferredCore<void>>;
+      }
+    | undefined;
   let inspectorClient: GatewayBrowserClient | null = null;
   let inspectorEpoch = 0;
   let inspectorSelectorKey: string | null = null;
@@ -59,24 +66,17 @@ export function createActivityPageState(context: ApplicationContext) {
   let publish = () => {};
   const sessionActivity = createSessionActivity(reconcileSessions);
   const liveActivity = createLiveActivity(context.gateway, context.sessions);
-  const projection = projectSource(context, {
-    read: () => ({
-      context,
-      routeLocation,
-      routeData,
-      presentedRoute,
-      runInspector,
-      presencePayload,
-      sessionActivity,
-    }),
-    subscribe: (_source, notify) => {
-      publish = notify;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(context, () => ({
+    context,
+    routeLocation,
+    routeData,
+    presentedRoute,
+    runInspector,
+    inspectorRead,
+    presencePayload,
+    sessionActivity,
+  }));
+  publish = projection.publish;
   function setRouteLocation(location: RouteLocation | undefined) {
     routeLocation = location;
     routeData = location
@@ -169,6 +169,8 @@ export function createActivityPageState(context: ApplicationContext) {
 
   function cancelInspectorRequest() {
     inspectorEpoch += 1;
+    inspectorRead?.completion.resolve();
+    inspectorRead = undefined;
     inspectorAbort?.abort();
     inspectorAbort = null;
   }
@@ -245,13 +247,17 @@ export function createActivityPageState(context: ApplicationContext) {
     const epoch = inspectorEpoch;
     const abort = new AbortController();
     inspectorAbort = abort;
+    const read = { kind: pageKind, completion: createDeferredCore() };
+    inspectorRead = read;
+    // Inspection may settle after its route retires; preserve its error for an active reader.
+    void read.completion.promise.catch(() => undefined);
     inspectorClient = client;
     const pageStatus = pageKind === "decisions" ? "decisionPageStatus" : "executionPageStatus";
     runInspector = previousState
       ? pageKind === "refresh"
         ? { ...previousState, refreshError: undefined }
         : { ...previousState, [pageStatus]: "loading" }
-      : { status: "loading", waitingForGateway: false };
+      : { status: "loading" };
     publish();
     const requestSelectorKey = inspectorRequestKey(routeData);
     const isCurrent = () =>
@@ -296,6 +302,7 @@ export function createActivityPageState(context: ApplicationContext) {
         const merged = mergeDecisionPage(previousState.result, result);
         if (!merged && pageKind === "decisions") {
           runInspector = { ...previousState, decisionPageStatus: "error" };
+          read.completion.reject(new Error("The decision page no longer matches this execution."));
           return;
         }
         cursors = merged
@@ -343,11 +350,13 @@ export function createActivityPageState(context: ApplicationContext) {
               status: "error",
               recovery: decisionCursor && isExpiredDecisionCursorError(error) ? "restart" : "retry",
             };
+      read.completion.reject(error);
     } finally {
       if (inspectorAbort === abort) {
         inspectorAbort = null;
         publish();
       }
+      read.completion.resolve();
     }
   }
 
@@ -429,6 +438,7 @@ export function createActivityPageState(context: ApplicationContext) {
     agents: projectOwner(context.agents, (source) => source.state),
     read: projection.read,
     revision: projection.revision,
+    subscribe: projection.subscribe,
     setRouteLocation,
     syncSessionActivity,
     syncRunInspector,

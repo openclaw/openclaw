@@ -14,9 +14,9 @@ import {
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import {
   REPLY_OPERATION_RUN_STATE,
-  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 import { createMockReplyOperation } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();

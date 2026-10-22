@@ -85,7 +85,7 @@ function assertRequestedSource(
     throw new Error("GitHub publication requested session changed.");
   }
   if (input.kind === "shared") {
-    assertGitHubPublicationWorktreeSource(source, input.input.worktree);
+    assertGitHubPublicationWorktreeSource(source, input.input.worktree, true);
     const actor = input.input.requester.actor;
     if ((actor.kind === "operator" ? actor.profileId : undefined) !== selector.profileId) {
       throw new Error("GitHub publication requested actor changed.");
@@ -149,11 +149,15 @@ export const publicationRequestOperations = {
               if (claim.sessionId !== input.input.sessionId) {
                 throw new Error("GitHub publication requested turn session changed.");
               }
-              assertSharedGitHubPublicationClaimInDatabase(database.db, {
-                claim,
-                sessionKey: input.input.request.sessionKey,
-                agentId: input.input.request.agentId,
-              });
+              // Plain-local claims belong to the host placement owner and are checked
+              // by the source admission grant; remote claims remain transaction-owned.
+              if (claim.owner.kind !== "local" || claim.owner.environmentId !== undefined) {
+                assertSharedGitHubPublicationClaimInDatabase(database.db, {
+                  claim,
+                  sessionKey: input.input.request.sessionKey,
+                  agentId: input.input.request.agentId,
+                });
+              }
             }
             const row = insertGitHubPublicationRequest(database.db, {
               ...input.input,

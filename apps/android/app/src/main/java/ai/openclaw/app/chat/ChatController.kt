@@ -2079,9 +2079,15 @@ class ChatController internal constructor(
     previousState: ChatOutboxBranchState?,
     purpose: BranchRefreshPurpose,
     mutationLease: ChatOutboxMutationLease? = null,
+    historySequence: Long = synchronized(gatewayScopeApplyLock) { latestAppliedHistoryRequest },
   ): Boolean {
-    val generation = sessionBranchesRefreshGeneration.incrementAndGet()
-    val historySequence = synchronized(gatewayScopeApplyLock) { latestAppliedHistoryRequest }
+    val generation =
+      synchronized(gatewayScopeApplyLock) {
+        // Post-history outbox IO can finish after a newer history has started its branch read.
+        // The superseded history must not retire that read with stale branch evidence.
+        if (historySequence != latestAppliedHistoryRequest) return false
+        sessionBranchesRefreshGeneration.incrementAndGet()
+      }
 
     fun isCurrent(): Boolean =
       synchronized(gatewayScopeApplyLock) {
@@ -4456,7 +4462,7 @@ class ChatController internal constructor(
         publishOutbox()
         appliedHistoryEntry?.let { acknowledgeUnreadIfNeeded(it.key, it, requireActive = true) }
         if (refreshBranches && branchSnapshot != null) {
-          refreshSessionBranches(branchSnapshot, historyBranchState, BranchRefreshPurpose.Reconcile)
+          refreshSessionBranches(branchSnapshot, historyBranchState, BranchRefreshPurpose.Reconcile, historySequence = requestSequence)
         }
         pollHealthIfNeeded(sessionKey, generation)
         if (outboxChanged) kickFlushForRoutedBacklog()

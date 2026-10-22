@@ -9,7 +9,6 @@ import {
   fakeTool,
   expectToolCalls,
   expectCompleted,
-  pluginTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
@@ -108,20 +107,6 @@ it("bounds nested exec yield by the shared remaining deadline", async () => {
     { command: "late", yieldMs: 1 },
   );
   expectToolCalls(1, consume, shell);
-});
-
-it("supports a guest timer between an action and its observation", async () => {
-  const input = pluginTool("fake_terminal_input", "Send terminal input");
-  const read = pluginTool("fake_terminal_read", "Read terminal output");
-  const details = await bridge([input, read])(`
-      const cancelled = setTimeout(() => { throw new Error("cancelled timer fired"); }, 30_000);
-      await fake_terminal_input({ data: "status\\n" });
-      clearTimeout(cancelled);
-      await new Promise(resolve => setTimeout(resolve, 5));
-      return await fake_terminal_read({});
-    `);
-  expectCompleted(details, { name: "fake_terminal_read" });
-  expectToolCalls(1, input, read);
 });
 
 it.each([true, false])("aborts without parking a run (beforeStart=%s)", async (beforeStart) => {

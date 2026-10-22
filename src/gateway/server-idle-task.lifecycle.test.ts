@@ -11,7 +11,9 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import * as historyPrewarm from "./server-history-prewarm.js";
 import { scheduleGatewayIdleTask } from "./server-idle-task.js";
+import * as lazyCoreHandlers from "./server-methods/lazy-core-handlers.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 
@@ -20,12 +22,39 @@ let scheduler: GatewayScheduler;
 beforeEach(() => {
   clock = createGatewaySchedulerClock();
   scheduler = createTestGatewayScheduler(clock.clock);
+  vi.spyOn(lazyCoreHandlers, "prepareGatewayRequestHandler").mockImplementation(
+    async (handler) => handler,
+  );
 });
 
 afterEach(async () => {
   await scheduler.stop();
   resetGatewayWorkAdmission();
+  vi.restoreAllMocks();
 });
+
+function scheduleIdle(run: () => Promise<void>, log = { warn: vi.fn() }, retryDelayMs = 1) {
+  return scheduleGatewayIdleTask({
+    id: "test:idle",
+    scheduler,
+    delayMs: 0,
+    retryDelayMs,
+    isClosing: () => false,
+    isBusy: () => false,
+    run,
+    log,
+    errorMessage: "idle task failed",
+  });
+}
+
+function scheduleHandler(load: () => Promise<void>, log: { warn: (message: string) => void }) {
+  vi.spyOn(historyPrewarm, "prewarmGatewaySessionHistory").mockImplementation(load);
+  return scheduleGatewayHandlerPrewarm({
+    scheduler,
+    getConfig: () => ({}),
+    log,
+  });
+}
 
 it.each(["idle", "handler"] as const)(
   "joins started %s work before the Gateway sidecar owner closes",
@@ -40,29 +69,7 @@ it.each(["idle", "handler"] as const)(
       events.push("finished");
     };
     const log = { warn: vi.fn() };
-    const later = vi.fn(async () => {});
-    const handle =
-      kind === "idle"
-        ? scheduleGatewayIdleTask({
-            id: "test:idle",
-            scheduler,
-            delayMs: 0,
-            retryDelayMs: 1,
-            isClosing: () => false,
-            isBusy: () => false,
-            run,
-            log,
-            errorMessage: "idle lifecycle test failed",
-          })
-        : scheduleGatewayHandlerPrewarm({
-            scheduler,
-            getConfig: () => ({}),
-            log,
-            items: [
-              { name: "first", load: run },
-              { name: "later", load: later },
-            ],
-          });
+    const handle = kind === "idle" ? scheduleIdle(run, log) : scheduleHandler(run, log);
     const owner = createGatewaySidecarStopOwner();
     owner.publish(handle);
     let stopping: Promise<void> | undefined;
@@ -84,7 +91,10 @@ it.each(["idle", "handler"] as const)(
       await stopping;
     }
     expect(events).toEqual(["started", "finished", "closed"]);
-    expect(later).not.toHaveBeenCalled();
+    if (kind === "handler") {
+      expect(historyPrewarm.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
+      expect(lazyCoreHandlers.prepareGatewayRequestHandler).not.toHaveBeenCalled();
+    }
     expect(log.warn).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   },
@@ -97,26 +107,10 @@ it.each(["suspension", "restart signal"] as const)(
     const restart = kind === "restart signal" ? beginGatewayRestartSignalAdmission() : null;
     expect(suspension?.commit() ?? Boolean(restart)).toBe(true);
     const run = vi.fn(async () => {});
-    const handle = scheduleGatewayIdleTask({
-      id: "test:idle",
-      scheduler,
-      delayMs: 0,
-      retryDelayMs: 10,
-      isClosing: () => false,
-      isBusy: () => false,
-      run,
-      log: { warn: vi.fn() },
-      errorMessage: "idle task failed",
-    });
-    let stopping: Promise<void> | undefined;
+    const handle = scheduleIdle(run, undefined, 10);
     try {
       await clock.advanceBy(0);
-      let closed = false;
-      stopping = Promise.resolve(handle.stop()).then(() => {
-        closed = true;
-      });
-      await stopping;
-      expect(closed).toBe(true);
+      await expect(Promise.resolve(handle.stop())).resolves.toBeUndefined();
       expect(run).not.toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
@@ -124,7 +118,6 @@ it.each(["suspension", "restart signal"] as const)(
       suspension?.release();
       restart?.rollback();
       await closing;
-      await stopping;
     }
     await clock.advanceBy(10);
     expect(run).not.toHaveBeenCalled();
@@ -133,7 +126,6 @@ it.each(["suspension", "restart signal"] as const)(
 
 it("joins the outgoing handler when shutdown begins in its warning callback", async () => {
   const events: string[] = [];
-  const later = vi.fn(async () => {});
   let rootsAfterStop: number | undefined;
   let stopping: Promise<void> | undefined;
   const warn = vi.fn(() => {
@@ -143,31 +135,19 @@ it("joins the outgoing handler when shutdown begins in its warning callback", as
       events.push("closed");
     });
   });
-  const sidecar = scheduleGatewayHandlerPrewarm({
-    scheduler,
-    getConfig: () => ({}),
-    log: { warn },
-    items: [
-      {
-        name: "first",
-        load: async () => {
-          events.push("started");
-          throw new Error("cold load failed");
-        },
-      },
-      { name: "later", load: later },
-    ],
-  });
-  try {
-    await Promise.resolve();
-    await clock.advanceBy(0);
-    await stopping;
-    expect(warn).toHaveBeenCalledOnce();
-    expect(events).toEqual(["started", "warning", "closed"]);
-    expect(rootsAfterStop).toBe(0);
-    expect(later).not.toHaveBeenCalled();
-  } finally {
-    await sidecar.stop();
-    await stopping;
-  }
+  const sidecar = scheduleHandler(
+    async () => {
+      events.push("started");
+      throw new Error("cold load failed");
+    },
+    { warn },
+  );
+  await Promise.resolve();
+  await clock.advanceBy(0);
+  await stopping;
+  expect(warn).toHaveBeenCalledOnce();
+  expect(events).toEqual(["started", "warning", "closed"]);
+  expect(rootsAfterStop).toBe(0);
+  expect(historyPrewarm.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
+  expect(lazyCoreHandlers.prepareGatewayRequestHandler).not.toHaveBeenCalled();
 });

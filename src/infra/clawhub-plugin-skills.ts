@@ -22,10 +22,12 @@ import {
 
 /** A release inventory supplies both the declared boundary and exact hashes; no archive or install. */
 export async function fetchClawHubPluginSkill(
-  params: Pick<
-    ClawHubRequestParams,
-    "baseUrl" | "token" | "skipAuth" | "timeoutMs" | "fetchImpl"
-  > & { packageName: string; version: string; skillName: string; path?: string },
+  params: Pick<ClawHubRequestParams, "baseUrl" | "token" | "skipAuth" | "timeoutMs"> & {
+    packageName: string;
+    version: string;
+    skillName: string;
+    path?: string;
+  },
 ): Promise<PluginsSkillsReadResult> {
   // Inventory plus one selected body share the request budget; never prefetch siblings.
   if (params.path !== undefined) {

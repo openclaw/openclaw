@@ -4,7 +4,6 @@ import {
   FeishuSecretRefUnavailableError,
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
-  resolveDefaultFeishuAccountSelection,
   resolveFeishuAccount,
   resolveFeishuCredentials,
   resolveFeishuRuntimeAccount,
@@ -47,12 +46,36 @@ describe("Feishu account resolution", () => {
   });
 
   it.each([
-    [{ defaultAccount: "router-d", accounts: {} }, "router-d", "explicit-default"],
-    [{ accounts: { default: credentials } }, "default", "mapped-default"],
-  ] as const)("reports selection source for %j", (config, accountId, source) => {
+    [{ defaultAccount: "router-d", accounts: {} }, "router-d"],
+    [{ accounts: { default: credentials } }, "default"],
+  ] as const)("selects the configured default account for %j", (config, accountId) => {
     const cfg = createFeishuTestConfig(config);
-    expect(resolveDefaultFeishuAccountSelection(cfg)).toEqual({ accountId, source });
+    expect(resolveFeishuAccount({ cfg }).accountId).toBe(accountId);
   });
+  it("resolves a punctuation-bearing account key to its own configuration and credentials", () => {
+    const cfg = createFeishuTestConfig({
+      ...credentials,
+      tools: { perm: true },
+      accounts: {
+        "sales.eu": {
+          appId: "app-sales",
+          appSecret: "sec-sales", // pragma: allowlist secret
+          tools: { perm: false },
+        },
+      },
+    });
+
+    expect(resolveFeishuAccount({ cfg, accountId: "sales.eu" })).toMatchObject({
+      appId: "app-sales",
+      config: { tools: { perm: false } },
+    });
+    expect(resolveFeishuAccount({ cfg, accountId: "sales-eu" })).toMatchObject({
+      accountId: "sales-eu",
+      appId: "app-sales",
+      config: { tools: { perm: false } },
+    });
+  });
+
   it("resolves env SecretRef objects in inspect mode", () => {
     withEnv({ [FEISHU_SELECTED_SECRET_ENV]: " secret_from_env " }, () => {
       const cfg = asConfig({ ...credentials, appSecret: envRef() as never });

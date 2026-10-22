@@ -99,7 +99,6 @@ function isExecutableSafeBinFile(value: string): boolean {
 function resolveTrustedSafeBinTargetDirs(
   entries: readonly string[],
   safeBins: readonly string[],
-  forComparison = true,
 ): string[] {
   const dirs: string[] = [];
   const bins = Array.from(
@@ -119,7 +118,7 @@ function resolveTrustedSafeBinTargetDirs(
       }
       try {
         const targetDir = path.dirname(fs.realpathSync(candidate));
-        const normalized = normalizeTrustedDir(targetDir, forComparison);
+        const normalized = normalizeTrustedDir(targetDir);
         if (normalized) {
           dirs.push(normalized);
         }
@@ -133,16 +132,14 @@ function resolveTrustedSafeBinTargetDirs(
 
 export function getTrustedSafeBinDirs(
   params: {
-    baseDirs?: readonly string[];
     extraDirs?: readonly string[];
     safeBins?: readonly string[];
   } = {},
 ): Set<string> {
-  const baseDirs = params.baseDirs ?? DEFAULT_SAFE_BIN_TRUSTED_DIRS;
   const extraDirs = params.extraDirs ?? [];
   const safeBins = params.safeBins ?? [];
   const entries = [
-    ...normalizeTrustedSafeBinDirs(baseDirs),
+    ...normalizeTrustedSafeBinDirs(DEFAULT_SAFE_BIN_TRUSTED_DIRS),
     ...normalizeTrustedSafeBinDirs(extraDirs),
   ];
   const targetDirs = resolveTrustedSafeBinTargetDirs(entries, safeBins);

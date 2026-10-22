@@ -72,7 +72,10 @@ export function snapshotSections(
   const retained = new Set<string>(sections.map((section) => section.id));
   return {
     sections,
-    collapsedSections: [...collapsedSections].filter((id) => id === "online" || retained.has(id)),
+    // Pinned and Online render outside the projected list sections.
+    collapsedSections: [...collapsedSections].filter(
+      (id) => id === "pinned" || id === "online" || retained.has(id),
+    ),
   };
 }
 

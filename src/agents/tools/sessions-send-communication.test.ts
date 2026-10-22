@@ -1,6 +1,10 @@
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimeConfig from "../../config/config.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { runSessionRegistryMaintenanceForStore } from "../../config/sessions/session-registry-maintenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionSendDeliveryAdmission } from "../../gateway/session-send-delivery.js";
@@ -10,8 +14,11 @@ import {
 } from "../../sessions/communication-admission.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { acceptCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
+const tempDirs = useSessionStoreTempDirs(afterAll, "sessions-send-lineage-");
 const state = vi.hoisted(() => ({
   config: {} as OpenClawConfig,
   rows: new Map<string, CommunicationEndpoint>(),
@@ -68,6 +75,20 @@ function endpoint(name: string, entry: Partial<SessionEntry> = {}): Communicatio
   state.rows.set(row.sessionKey, row);
   return row;
 }
+async function rotatedParent() {
+  const parent = endpoint("parent");
+  parent.storePath = path.join(tempDirs.make(), "sessions.sqlite");
+  for (const sessionId of ["original", "rollover", "recovered"]) {
+    await upsertSessionEntryCore(parent, { sessionId, updatedAt: 1 });
+  }
+  const entry: SessionEntry = {
+    sessionId: "recovered",
+    previousSessionId: "rollover",
+    updatedAt: 1,
+  };
+  parent.entry = entry;
+  return { parent, entry };
+}
 function operation(source = endpoint("source"), target = endpoint("target")) {
   const callGateway = vi.mocked(callAgentToolGatewayRequest);
   return { config: state.config, source, target, message: "exact peer message", callGateway };
@@ -76,7 +97,7 @@ function agentRequest(input: ReturnType<typeof operation>, extra: Record<string,
   return {
     method: "agent" as const,
     params: {
-      agentId: "main",
+      agentId: input.target.agentId,
       sessionKey: input.target.sessionKey,
       message: input.message,
       ...extra,
@@ -156,6 +177,62 @@ describe("sessions_send communication boundary", () => {
       expect(input.callGateway).toHaveBeenCalledOnce();
     });
   });
+  it.each([false, true])(
+    "retains durable delivery identity for owned-task fallback=%s",
+    async (ownedTask) => {
+      const source = endpoint("source");
+      const target = endpoint(
+        "target",
+        ownedTask
+          ? {
+              spawnedBy: source.sessionKey,
+              parentSessionId: "source",
+            }
+          : {},
+      );
+      if (ownedTask) {
+        state.task = {
+          runId: "task",
+          requesterSessionKey: source.sessionKey,
+          requesterAgentId: "main",
+        };
+      }
+      const input = operation(source, target);
+      const inputProvenance = {
+        kind: "inter_session" as const,
+        sourceTool: "sessions_send",
+        sourceSessionKey: input.source.sessionKey,
+      };
+      input.callGateway.mockImplementation(async () => {
+        const admitted = readSessionSendDeliveryAdmission({
+          agentId: "main",
+          sessionKey: input.target.sessionKey,
+          sessionId: "target",
+          runId: "saved-peer",
+        });
+        expect(admitted).toBeDefined();
+        expect(admitted!.delivery.source).not.toHaveProperty("lifecycleRevision");
+        expect(admitted!.delivery.target).not.toHaveProperty("lifecycleRevision");
+      });
+      const gate = await prepareSessionsSendCommunication({ ...input, inputProvenance });
+      try {
+        const dispatch = ownedTask ? gate.callDurableGateway : gate.callGateway;
+        await dispatch({
+          method: "agent",
+          params: {
+            agentId: "main",
+            sessionKey: input.target.sessionKey,
+            message: input.message,
+            idempotencyKey: "saved-peer",
+            inputProvenance,
+          },
+        });
+        expect(input.callGateway).toHaveBeenCalledOnce();
+      } finally {
+        gate.close();
+      }
+    },
+  );
 
   it.each([
     [undefined, undefined, false],
@@ -222,6 +299,168 @@ describe("sessions_send communication boundary", () => {
     );
     await expect(prepareSessionsSendCommunication(input)).rejects.toThrow("disabled");
   });
+  it("delivers parent and peer sends through recorded same-key rollover/recovery lineage", async () => {
+    const { parent, entry: parentEntry } = await rotatedParent();
+    const target = endpoint("child", {
+      spawnedBy: parent.sessionKey,
+      parentSessionId: "original",
+    });
+    for (const source of [parent, endpoint("source")]) {
+      const input = operation(source, target);
+      input.callGateway.mockClear();
+      await withGate(input, async (gate) => {
+        await gate.callGateway(agentRequest(input));
+        expect(input.callGateway).toHaveBeenCalledOnce();
+      });
+    }
+    parentEntry.communication = { receive: "never" };
+    vi.mocked(callAgentToolGatewayRequest).mockClear();
+    await denied(operation(undefined, target), "disabled");
+  });
+  it.each([
+    ["main", "subagent:child", false],
+    ["worker", "subagent:child", false],
+    ["main", "cron:dispatch:run:child", false],
+    ["worker", "subagent:child", true],
+  ] as const)(
+    "keeps expired cron parents reachable until their %s/%s child is archived (archived intermediary=%s)",
+    async (childAgentId, childName, archivedIntermediary) => {
+      const expiredAt = Date.now() - 8 * 24 * 60 * 60_000;
+      const parent = endpoint("cron:dispatch:run:old", { updatedAt: expiredAt });
+      parent.storePath = path.join(tempDirs.make(), "sessions.sqlite");
+      const ancestor = archivedIntermediary
+        ? endpoint("subagent:archived", {
+            spawnedBy: parent.sessionKey,
+            parentSessionId: parent.entry!.sessionId,
+            archivedAt: Date.now(),
+          })
+        : parent;
+      ancestor.storePath = parent.storePath;
+      const target = {
+        ...endpoint(childName, {
+          updatedAt: Date.now(),
+          spawnedBy: ancestor.sessionKey,
+          parentSessionId: ancestor.entry!.sessionId,
+        }),
+        agentId: childAgentId,
+        sessionKey: `agent:${childAgentId}:${childName}`,
+        storePath:
+          childAgentId === "main"
+            ? parent.storePath
+            : path.join(tempDirs.make(), "sessions.sqlite"),
+      };
+      state.rows.set(target.sessionKey, target);
+      state.config = { tools: { agentToAgent: { enabled: true, allow: ["*"] } } };
+      await replaceSessionEntry(parent, parent.entry!);
+      expect(loadSessionEntry(parent)?.updatedAt).toBe(expiredAt);
+      if (archivedIntermediary) {
+        await replaceSessionEntry(ancestor, ancestor.entry!);
+      }
+      await replaceSessionEntry(target, target.entry!);
+      const maintain = (apply: boolean) =>
+        runSessionRegistryMaintenanceForStore({
+          agentId: "main",
+          storePath: parent.storePath,
+          childStores: [parent, ...(childAgentId === "main" ? [] : [target])],
+          apply,
+          retentionMs: 7 * 24 * 60 * 60_000,
+          runningCronJobIds: new Set(),
+        });
+      for (const apply of [false, true]) {
+        expect((await maintain(apply)).pruned).toBe(0);
+      }
+      parent.entry = loadSessionEntry(parent);
+      expect(parent.entry).toBeDefined();
+      const input = operation(undefined, target);
+      await withGate(input, async (gate) => {
+        await gate.callGateway(agentRequest(input));
+        expect(input.callGateway).toHaveBeenCalledOnce();
+      });
+      parent.entry!.communication = { receive: "never" };
+      input.callGateway.mockClear();
+      await denied(input, "disabled");
+      await upsertSessionEntryCore(target, { archivedAt: Date.now() });
+      expect((await maintain(true)).pruned).toBe(1);
+      expect(loadSessionEntry(parent)).toBeUndefined();
+    },
+  );
+  it("refuses delivery when parent lineage changes during approval", async () => {
+    const { parent, entry } = await rotatedParent();
+    const input = operation(
+      undefined,
+      endpoint("child", {
+        spawnedBy: parent.sessionKey,
+        parentSessionId: "original",
+        ...askReceive,
+      }),
+    );
+    state.approve.mockImplementation(async () => {
+      await upsertSessionEntryCore(parent, { previousSessionId: undefined });
+      entry.previousSessionId = undefined;
+    });
+    await denied(input, "changed before delivery");
+  });
+  it("keeps owner-committed compaction lineage changes admissible", async () => {
+    const input = operation();
+    input.target.storePath = path.join(tempDirs.make(), "sessions.sqlite");
+    await upsertSessionEntryCore(input.target, input.target.entry!);
+    await withGate(input, async (gate) => {
+      await acceptCompactionSuccessor({
+        currentTarget: { ...input.target, sessionId: "target" },
+        expectedEntry: {
+          sessionId: "target",
+          lifecycleRevision: undefined,
+          activeWriterRunId: undefined,
+        },
+        assertActive: gate.assertCurrent,
+        result: {
+          ok: true,
+          compacted: true,
+          result: {
+            summary: "Compacted context",
+            tokensBefore: 2,
+            tokensAfter: 1,
+            sessionId: "compacted",
+          },
+        },
+        onCommitted: ({ entry }) =>
+          state.rows.set(input.target.sessionKey, { ...input.target, entry }),
+      });
+      await gate.callGateway(agentRequest(input));
+      expect(input.callGateway).toHaveBeenCalledOnce();
+    });
+  });
+  it.each([undefined, "missing-original", "foreign-original"])(
+    "refuses unconnected parent lineage (predecessor=%s) with respawn guidance",
+    async (previousSessionId) => {
+      const parent = endpoint("parent");
+      parent.storePath = path.join(tempDirs.make(), "sessions.sqlite");
+      if (previousSessionId === "foreign-original") {
+        await upsertSessionEntryCore(
+          { ...parent, sessionKey: "agent:main:other-parent" },
+          {
+            sessionId: previousSessionId,
+            updatedAt: 1,
+          },
+        );
+      }
+      await upsertSessionEntryCore(parent, {
+        sessionId: "parent",
+        previousSessionId,
+        updatedAt: 1,
+      });
+      await denied(
+        operation(
+          undefined,
+          endpoint("child", {
+            spawnedBy: parent.sessionKey,
+            parentSessionId: previousSessionId ?? "missing-original",
+          }),
+        ),
+        "The child's parent session lineage changed; re-spawn the child.",
+      );
+    },
+  );
   it("does not request fresh consent during durable delivery recovery", async () => {
     const input = operation(endpoint("source", askSend));
     await expect(

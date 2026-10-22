@@ -9,23 +9,19 @@ import {
 } from "./presence-users.ts";
 
 it.each([
-  [{ id: "gateway-owner" }, { name: "Shared owner", isSharedOwner: true }],
-  [
-    { id: "gateway-owner", name: "Saved owner name" },
-    { name: "Shared owner", isSharedOwner: true },
-  ],
-  [
-    { id: "person", name: "Example person", email: "person@example.test" },
-    { name: "Example person", isSharedOwner: false },
-  ],
-  [
-    { id: "person", email: "person@example.test" },
-    { name: "person@example.test", isSharedOwner: false },
-  ],
-  [{ id: "person" }, { name: "person", isSharedOwner: false }],
-])("labels presence without presenting the shared identity as a person: %j", (user, expected) => {
-  expect(presenceUserLabel(user)).toEqual(expected);
-});
+  [{ id: "gateway-owner" }, "Shared owner", true],
+  [{ id: "gateway-owner", name: "Saved owner name" }, "Saved owner name · Shared owner", true],
+  [{ id: "gateway-owner", name: "  " }, "Shared owner", true],
+  [{ id: "gateway-owner", email: "shared@example.test" }, "Shared owner", true],
+  [{ id: "person", name: "Example person", email: "person@example.test" }, "Example person", false],
+  [{ id: "person", email: "person@example.test" }, "person@example.test", false],
+  [{ id: "person" }, "person", false],
+] as const)(
+  "labels presence without presenting the shared identity as a person: %j",
+  (user, name, isSharedOwner) => {
+    expect(presenceUserLabel(user)).toEqual({ name, isSharedOwner });
+  },
+);
 
 it("isolates namespaces while merging renamed tabs and excluding disconnected facts", () => {
   const id = "synthetic-shared-id";
@@ -49,28 +45,16 @@ it("isolates namespaces while merging renamed tabs and excluding disconnected fa
   const forward = projectPresencePayload({ presence });
   expect(forward.users).toHaveLength(2);
   expect(
-    forward.users.map(({ id: userId, identity, name, watchedSessions, entries }) => ({
-      id: userId,
+    forward.users.map(({ id: userId, identity, name, watchedSessions, entries }) => [
+      userId,
       identity,
       name,
       watchedSessions,
-      tabs: entries?.length,
-    })),
+      entries?.length,
+    ]),
   ).toEqual([
-    {
-      id,
-      identity: profile.identity,
-      name: profile.name,
-      watchedSessions: ["profile-extra", "profile-session"],
-      tabs: 2,
-    },
-    {
-      id,
-      identity: undefined,
-      name: raw.name,
-      watchedSessions: ["raw-extra", "raw-session"],
-      tabs: 2,
-    },
+    [id, profile.identity, profile.name, ["profile-extra", "profile-session"], 2],
+    [id, undefined, raw.name, ["raw-extra", "raw-session"], 2],
   ]);
   expect(projectPresencePayload({ presence: presence.toReversed() })).toEqual(forward);
 });
@@ -91,6 +75,7 @@ it.each([true, false])(
     const other = qualified ? raw : profile;
     const instance = qualified ? "profile-tab" : "raw-tab";
     const otherSession = qualified ? "raw-session" : "profile-session";
+    const selfSession = qualified ? "profile-session" : "raw-session";
     // An unchanged payload must still exclude the current self qualification.
     projectPresenceViewers(payload, other);
     for (const [explicitSelf, fallbackInstance] of [
@@ -99,19 +84,10 @@ it.each([true, false])(
       [self, qualified ? "raw-tab" : "profile-tab"],
     ] as const) {
       const viewers = projectPresenceViewers(payload, explicitSelf, fallbackInstance);
-      expect(viewers).toHaveLength(1);
-      expect(viewers[0]?.identity).toEqual(other.identity);
-      expect(hasSessionPresenceViewers(payload, explicitSelf, fallbackInstance, otherSession)).toBe(
-        true,
-      );
-      expect(
-        hasSessionPresenceViewers(
-          payload,
-          explicitSelf,
-          fallbackInstance,
-          qualified ? "profile-session" : "raw-session",
-        ),
-      ).toBe(false);
+      expect(viewers.map((user) => user.identity)).toEqual([other.identity]);
+      const hasViewers = (key: string) =>
+        hasSessionPresenceViewers(payload, explicitSelf, fallbackInstance, key);
+      expect([hasViewers(otherSession), hasViewers(selfSession)]).toEqual([true, false]);
     }
     expect(projectOnlinePresenceViewers(payload).map((user) => user.identity)).toEqual([
       profile.identity,
@@ -153,35 +129,13 @@ it.each([
 
 it("ages person interaction independently of connection beacons and native input recency", () => {
   const now = 1_000_000;
-  const viewer = (entries: Parameters<typeof presenceViewerActivity>[0]["entries"]) => ({
-    id: "person",
-    watchedSessions: [],
-    entries,
-  });
-  expect(presenceViewerActivity(viewer([{ ts: now, lastInputSeconds: 0 }]), now)).toBe("unknown");
-  expect(presenceViewerActivity(viewer([{ ts: now, lastActivityAt: now - 120_000 }]), now)).toBe(
-    "idle",
-  );
-  expect(presenceViewerActivity(viewer([{ ts: now, lastActivityAt: now - 119_999 }]), now)).toBe(
-    "active",
-  );
-  expect(
-    presenceViewerActivity(
-      viewer([
-        { ts: now, lastActivityAt: now - 600_000 },
-        { ts: now, lastActivityAt: now - 5_000 },
-        { ts: now },
-      ]),
-      now,
-    ),
-  ).toBe("active");
-  expect(
-    presenceViewerActivity(
-      viewer([
-        { ts: now, lastActivityAt: now - 600_000 },
-        { ts: now, lastActivityAt: now, reason: "disconnect" },
-      ]),
-      now,
-    ),
-  ).toBe("idle");
+  type Entry = NonNullable<Parameters<typeof presenceViewerActivity>[0]["entries"]>[number];
+  const activity = (...entries: Entry[]) =>
+    presenceViewerActivity({ id: "person", watchedSessions: [], entries }, now);
+  const at = (age: number) => ({ ts: now, lastActivityAt: now - age });
+  expect(activity({ ts: now, lastInputSeconds: 0 })).toBe("unknown");
+  expect(activity(at(120_000))).toBe("idle");
+  expect(activity(at(119_999))).toBe("active");
+  expect(activity(at(600_000), at(5_000), { ts: now })).toBe("active");
+  expect(activity(at(600_000), { ...at(0), reason: "disconnect" })).toBe("idle");
 });

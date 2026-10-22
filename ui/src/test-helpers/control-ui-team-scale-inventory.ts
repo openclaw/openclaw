@@ -15,29 +15,28 @@ export function createTeamScaleSessionInventory({
   now,
   people,
   counts,
+  offRosterSession = false,
 }: {
   now: number;
+  offRosterSession?: boolean;
   people: ControlUiMockPresenceUser[];
-  counts: {
-    sessions: number;
-    owners: number;
-    pinned: number;
-    childSessions: number;
-    cronSessions: number;
-    systemSessions: number;
-  };
+  counts: Record<
+    "sessions" | "owners" | "pinned" | "childSessions" | "cronSessions" | "systemSessions",
+    number
+  >;
 }) {
   const sessions: TeamScaleSession[] = Array.from({ length: counts.sessions }, (_, index) => {
     const pinned = index >= counts.sessions - counts.pinned;
     const owner = people[index % counts.owners]!;
     const running = index < 24;
-    return {
+    const row: TeamScaleSession = {
       key:
         index === 0
           ? "agent:main:main"
           : `agent:main:${pinned ? "dashboard" : "chat"}:00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
       ...(index === 0 ? { isMain: true } : {}),
       sessionId: `team-session-${index + 1}`,
+      childOwnerSessionKeys: [],
       agentId: "main",
       kind: "direct",
       label: pinned ? `Project dashboard ${index - 269}` : `Project discussion ${index + 1}`,
@@ -49,7 +48,6 @@ export function createTeamScaleSessionInventory({
       snoozedUntil: index >= 160 && index < 220 ? now + 3_600_000 + index * 60_000 : undefined,
       createdAt: now - 86_400_000 - index * 1_000,
       snapshotAt: now,
-      owner: { actor: { type: "human", id: owner.id, label: owner.name } },
       participants: [{ identity: { type: "profile", id: owner.id }, label: owner.name }],
       hasActiveRun: running,
       status: running ? "running" : "done",
@@ -64,20 +62,21 @@ export function createTeamScaleSessionInventory({
       contextTokens: 200_000,
       totalTokens: 4_000 + index * 31,
       pinned,
-      ...(pinned
-        ? {
-            pinnedAt: now - index,
-            hasBoard: true,
-            boardFace: "dashboard" as const,
-          }
-        : {}),
       lastMessagePreview: `Synthetic project ${index + 1}: reviewed the implementation and recorded the next concrete step.`,
     };
+    if (pinned) {
+      Object.assign(row, { pinnedAt: now - index, hasBoard: true, boardFace: "dashboard" });
+    }
+    return row;
   });
   prepareTeamScaleSessionOwnership(sessions, people.slice(0, counts.owners));
   const pinnedRows = sessions.slice(-counts.pinned);
-  const pinnedKeys = pinnedRows.map((row) => row.key);
-  const selectedSessionKey = pinnedKeys[0]!;
+  const selectedSessionKey = pinnedRows[0]!.key;
+  if (offRosterSession) {
+    pinnedRows[0]!.pinned = false;
+    delete pinnedRows[0]!.pinnedAt;
+  }
+  const pinnedKeys = pinnedRows.filter((row) => row.pinned).map((row) => row.key);
   for (const row of pinnedRows.slice(1, -1)) {
     if (!row.participants?.some((participant) => participant.identity.id === people[0]!.id)) {
       row.participants?.push({

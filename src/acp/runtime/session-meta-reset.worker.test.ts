@@ -30,8 +30,8 @@ import { rebindDurableAcpSessionMetaAfterReset } from "./session-meta-reset.js";
 const withState = (label: string, run: (state: OpenClawTestState) => Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal", label }, run);
 
-it("retains incognito reset context until its memory owner closes", async () => {
-  await withState("incognito-reset-context", async (state) => {
+it("retains incognito reset context until its memory owner closes", () =>
+  withState("incognito-reset-context", async (state) => {
     const f = await fixture(state, true);
     let captured: SessionResetCommitContext | undefined;
     const sql = observeHostDataSql();
@@ -55,8 +55,7 @@ it("retains incognito reset context until its memory owner closes", async () => 
     } finally {
       sql.restore();
     }
-  });
-});
+  }));
 
 const META = createAcpMeta({
   agent: "fixture",
@@ -117,8 +116,8 @@ it.each([
   [true, true],
 ])(
   "rebinds and publishes the reset receipt (native owner: %s, lost reply: %s)",
-  async (native, loseReply) => {
-    await withState("acp-reset-receipt", async (state) => {
+  (native, loseReply) =>
+    withState("acp-reset-receipt", async (state) => {
       const f = await fixture(state);
       if (native) {
         openOpenClawAgentDatabase({ ...f.source, env: state.env });
@@ -182,14 +181,13 @@ it.each([
         intercepted.mockRestore();
         unsubscribe();
       }
-    });
-  },
+    }),
 );
 
 it.each(["foreign-lifecycle", "pinned-lifecycle", "in-process-writer", "authority"] as const)(
   "refuses reset metadata when %s changes while the shared worker request is pending",
-  async (replacement) => {
-    await withState("acp-reset-refusal", async (state) => {
+  (replacement) =>
+    withState("acp-reset-refusal", async (state) => {
       const f = await fixture(state);
       const native = openOpenClawAgentDatabase({ ...f.source, env: state.env });
       await resetSessionEntryLifecycle(f.reset);
@@ -277,6 +275,5 @@ it.each(["foreign-lifecycle", "pinned-lifecycle", "in-process-writer", "authorit
         await outcome;
         intercepted.mockRestore();
       }
-    });
-  },
+    }),
 );

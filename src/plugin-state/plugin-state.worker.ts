@@ -216,10 +216,9 @@ export function executePluginStateCommand(
             const result = withPluginStateWorkerReceipt(
               store.db,
               () => executePluginStateOperation(store, command.input, handler),
-              (completed): PluginStateOperationCommit => ({
+              (): PluginStateOperationCommit => ({
                 pluginStateOperation: {
                   receiptId: command.input.receiptId,
-                  validUntil: completed.validUntil,
                 },
               }),
             );

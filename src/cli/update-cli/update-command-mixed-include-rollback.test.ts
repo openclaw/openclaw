@@ -127,6 +127,7 @@ it.each([false, true])(
         const completeDoctor = createPackageUpdateDoctorCompletion({
           root: packageRoot,
           progress: {},
+          results: [],
           configSnapshot: before,
           onConfigSnapshot: (value) => {
             activationConfig = value;

@@ -3,7 +3,6 @@ import path from "node:path";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ObservationRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import type { saveRemoteMedia as SaveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMedia } from "./delivery.resolve-media.js";
@@ -50,33 +49,28 @@ vi.mock("openclaw/plugin-sdk/file-access-runtime", () => ({
   }),
 }));
 
-vi.mock("./delivery.resolve-media.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./delivery.resolve-media.runtime.js")>();
-  class MediaFetchError extends Error {
-    code: string;
-    status?: number;
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
+  saveRemoteMedia: (params: Parameters<typeof SaveRemoteMedia>[0]) => saveRemoteMedia(params),
+}));
 
-    constructor(code: string, message: string, options?: { cause?: unknown; status?: number }) {
-      super(message, options);
-      this.name = "MediaFetchError";
-      this.code = code;
-      this.status = options?.status;
-    }
-  }
-  return {
-    ...actual,
-    readRemoteMediaBuffer: (...args: unknown[]) => readRemoteMediaBuffer(...args),
-    formatErrorMessage: coerceErrorMessage,
-    logVerbose: () => {},
-    MediaFetchError,
-    resolveTelegramApiBase: (apiRoot?: string) =>
-      apiRoot?.trim() ? apiRoot.replace(/\/+$/u, "") : "https://api.telegram.org",
-    sleepWithAbort,
-    saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
-    saveRemoteMedia: (params: Parameters<typeof SaveRemoteMedia>[0]) => saveRemoteMedia(params),
-    shouldRetryTelegramTransportFallback: vi.fn(() => false),
-  };
-});
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  logVerbose: () => {},
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  formatErrorMessage: coerceErrorMessage,
+}));
+
+vi.mock("../fetch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../fetch.js")>()),
+  resolveTelegramApiBase: (apiRoot?: string) =>
+    apiRoot?.trim() ? apiRoot.replace(/\/+$/u, "") : "https://api.telegram.org",
+  shouldRetryTelegramTransportFallback: vi.fn(() => false),
+}));
 
 vi.mock("../sticker-cache.js", () => ({
   cacheSticker: () => {},

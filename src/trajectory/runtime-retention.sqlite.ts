@@ -14,6 +14,7 @@ import {
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { readSqliteNativeMutationRevision } from "../infra/sqlite-schema-facts.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import type { AgentDatabaseExecutionFileIdentity } from "../state/openclaw-agent-execution-contract.js";
@@ -271,12 +272,7 @@ export function selectTrajectoryRuntimeRetentionBatch(
   }
   if (input.snapshot && !sweep.plan) {
     sweep.plan = { ...input.snapshot, runs: [] };
-    const sessions = new Map<string, Run[]>();
-    for (const run of input.snapshot.runs) {
-      const rows = sessions.get(run.sessionId) ?? [];
-      rows.push(run);
-      sessions.set(run.sessionId, rows);
-    }
+    const sessions = groupRecords(input.snapshot.runs, (run) => run.sessionId);
     for (const [sessionId, rows] of sessions) {
       replaceSession(sweep, sessionId, sweep.receipts.get(sessionId) ?? rows);
     }

@@ -1,23 +1,13 @@
 import { createMemo, Match, Show, Switch } from "solid-js";
-import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import "./chat-permission-card.tsx";
-import "./chat-run-failure-notice.tsx";
+import { ChatPermissionCard } from "./chat-permission-card.tsx";
+import { ChatRunFailureNotice } from "./chat-run-failure-notice.tsx";
 import { ChatSkillLearnedNotice } from "./chat-skill-learned-notice.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
-
-export function ChatPermissionCard(props: {
-  request: NodePermissionRequest;
-  onRetry?: (message: string) => void;
-}) {
-  return (
-    <openclaw-chat-permission-card prop:request={props.request} prop:onRetry={props.onRetry} />
-  );
-}
 
 function SystemLine(props: {
   icon?: Extract<ChatItem, { kind: "divider" }>["icon"];
@@ -127,10 +117,7 @@ function FailureNotice(props: ChatNoticeProps) {
       data-ts={String(props.item.timestamp)}
       data-run-failure={failure().runId}
     >
-      <openclaw-chat-run-failure-notice
-        prop:summary={failure().summary}
-        prop:onRetry={actions()?.onRetry}
-      />
+      <ChatRunFailureNotice summary={failure().summary} onRetry={actions()?.onRetry} />
     </div>
   );
 }

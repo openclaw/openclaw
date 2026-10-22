@@ -5,7 +5,6 @@ import { defaultRuntime } from "../runtime.js";
 import type { SecretsApplyPlan } from "../secrets/plan.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { formatCliCommand } from "./command-format.js";
-import { formatGatewayCommandFailure } from "./error-format.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
 import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
@@ -121,12 +120,19 @@ export function registerSecretsCli(program: Command): void {
         }),
       (err) => {
         rethrowExpectedCliError(err);
+        const raw = err instanceof Error ? err.message : String(err);
+        const message = raw
+          .replace(/\s*Run [`"]?openclaw doctor[`"]? for diagnostics\.?/gi, "")
+          .replace(/\s+Gateway target:\s+.*$/isu, "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .replace(/[.。]+$/u, "");
+        const detail = message ? `: ${message}` : "";
         defaultRuntime.error(
           danger(
-            formatGatewayCommandFailure({
-              action: "reload secrets",
-              error: err,
-            }),
+            `Could not reload secrets because the Gateway did not respond${detail}. Run \`${formatCliCommand(
+              "openclaw gateway status --deep",
+            )}\` to inspect the active Gateway.`,
           ),
         );
       },

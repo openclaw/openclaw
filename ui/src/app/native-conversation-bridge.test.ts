@@ -46,6 +46,15 @@ function fixture(features: string[] = []) {
   const row = { key: data.sessionKey, label: "Native conversation", hasActiveRun: false };
   const navigateAndWait = vi.fn(async () => {});
   const elements: HTMLElement[] = [];
+  const mountPane = () => {
+    const page = document.createElement("openclaw-chat-page");
+    const pane = document.createElement("openclaw-chat-pane");
+    pane.active = true;
+    page.append(pane);
+    document.body.append(page);
+    elements.push(page, pane);
+    return pane;
+  };
   const context = {
     basePath: "",
     routeOutlet: {
@@ -105,6 +114,7 @@ function fixture(features: string[] = []) {
   return {
     messages,
     elements,
+    mountPane,
     messagesOf: (type: string) => messages.filter((message) => message.type === type),
     expectMessage: (message: Record<string, unknown>) =>
       expect(messages).toContainEqual(expect.objectContaining(message)),
@@ -171,12 +181,7 @@ describe("native conversation contract", () => {
       capabilities: ["navigate", "presentation", "focus-composer", "session-facts-v1"],
     });
     expect(f.messagesOf("session-facts")).toEqual([
-      {
-        ...f.binding,
-        type: "session-facts",
-        revision: 1,
-        sessions: [row],
-      },
+      { ...f.binding, type: "session-facts", revision: 1, sessions: [row] },
     ]);
     f.bridge.publishSessionFacts([]);
     await flush();
@@ -219,14 +224,9 @@ describe("native conversation contract", () => {
     "waits for rendered session actions without opening a stale menu (%s)",
     async (owner) => {
       const f = fixture(["session-actions-v1"]);
-      const page = document.createElement("openclaw-chat-page");
-      const pane = document.createElement("openclaw-chat-pane");
+      const pane = f.mountPane();
       pane.sessionKey = f.data.sessionKey;
-      pane.active = true;
-      f.elements.push(page, pane);
       pane.classList.add("chat-pane-cache__pane--active");
-      page.append(pane);
-      document.body.append(page);
       await f.send("open-session-actions", target(f.data.sessionKey));
       await vi.dynamicImportSettled();
       await flush();
@@ -359,9 +359,7 @@ describe("native conversation contract", () => {
         expect(f.navigateAndWait).toHaveBeenCalledTimes(1);
         expect(f.navigateAndWait).toHaveBeenCalledWith(
           "chat",
-          expect.objectContaining({
-            pathname: expect.stringContaining("/chat/"),
-          }),
+          expect.objectContaining({ pathname: expect.stringContaining("/chat/") }),
         );
       }
       f.expectLast({ type: "state", context: { sessionKey: destination.sessionKey } });
@@ -639,18 +637,13 @@ describe("native conversation contract", () => {
 
   it("applies presentation and focuses the existing composer", async () => {
     const f = fixture();
-    const page = document.createElement("openclaw-chat-page");
-    const pane = document.createElement("openclaw-chat-pane");
+    const pane = f.mountPane();
     const composer = document.createElement("textarea");
-    pane.active = true;
     pane.focusComposerInput = () => {
       composer.focus({ preventScroll: true });
       return true;
     };
     pane.append(composer);
-    page.append(pane);
-    document.body.append(page);
-    f.elements.push(page, pane);
     const listener = vi.fn();
     f.bridge.subscribe(listener);
     await f.send("presentation", { visible: false, active: false });

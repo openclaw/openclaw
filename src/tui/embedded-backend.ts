@@ -154,8 +154,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   onEvent?: (evt: TuiEvent) => void;
   onConnected?: () => void;
-  onDisconnected?: (reason: string) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
 
   private readonly deps = createDefaultDeps();
   private readonly localSenderId = randomUUID();
@@ -165,12 +163,18 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private previousRuntimeError?: typeof defaultRuntime.error;
   private seq = 0;
   private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly pluginApprovalBroker = new EmbeddedPluginApprovalBroker();
   private readonly scheduler = new GatewayScheduler();
-  private readonly questionBroker = new EmbeddedQuestionBroker(this.scheduler);
+  private readonly emitBrokerEvent = (event: { event: string; payload: unknown }) => {
+    if (!this.scheduler.signal.aborted) {
+      this.emit(event.event, event.payload);
+    }
+  };
+  private readonly pluginApprovalBroker = new EmbeddedPluginApprovalBroker(this.emitBrokerEvent);
+  private readonly questionBroker = new EmbeddedQuestionBroker(
+    this.scheduler,
+    this.emitBrokerEvent,
+  );
   private readonly preparedModelRuntime = new EmbeddedPreparedModelRuntimeHost();
-  private unsubscribePluginApprovals?: () => void;
-  private unsubscribeQuestions?: () => void;
   private unsubscribeConfigWrites?: () => void;
   private sessionProjection?: Promise<SessionRowProjection>;
   private unbindSessionProjection?: () => void;
@@ -196,13 +200,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     // Keep this synchronous so the shared event bus can isolate listener failures.
     this.unsubscribe = onAgentEvent((evt) => this.handleAgentEvent(evt));
     setEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
-    this.unsubscribePluginApprovals = this.pluginApprovalBroker.subscribe((event) => {
-      this.emit(event.event, event.payload);
-    });
     setEmbeddedQuestionBroker(this.questionBroker);
-    this.unsubscribeQuestions = this.questionBroker.subscribe((event) => {
-      this.emit(event.event, event.payload);
-    });
     // Local mode shares the Gateway's session-store readiness checks.
     this.sessionProjection = (async () => {
       const config = await captureRuntimeConfigAsyncReader()();
@@ -231,11 +229,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async stop() {
     this.scheduler.beginClose();
     clearEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
-    this.unsubscribePluginApprovals?.();
-    this.unsubscribePluginApprovals = undefined;
     clearEmbeddedQuestionBroker(this.questionBroker);
-    this.unsubscribeQuestions?.();
-    this.unsubscribeQuestions = undefined;
     const maintenancePromises: Promise<void>[] = [];
     for (const run of this.runs.values()) {
       run.textUpdates?.stop();
@@ -272,10 +266,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unsubscribe = undefined;
     this.pendingLifecycleErrors.forEach(clearTimeout);
     this.pendingLifecycleErrors.clear();
-    for (const run of this.runs.values()) {
-      run.controller.abort();
-    }
-    this.runs.clear();
     defaultRuntime.log = this.previousRuntimeLog ?? defaultRuntime.log;
     defaultRuntime.error = this.previousRuntimeError ?? defaultRuntime.error;
     this.previousRuntimeLog = undefined;
@@ -1130,7 +1120,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private async runTurn(runId: string, run: LocalRunState, opts: ChatSendOptions) {
-    // This turn owns its state until finally; stop waits for owned promises before clearing runs.
+    // This turn owns its state until finally; stop waits for every owned promise.
     const { controller, queuedAfter } = run;
     try {
       if (queuedAfter) {

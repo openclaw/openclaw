@@ -7,8 +7,11 @@ const installAttachmentTestTransport = useAttachmentTestTransport();
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
-import { buildMSTeamsGraphMessageUrl, resolveMSTeamsAdvertisedMedia } from "./attachments.js";
-import { downloadMSTeamsGraphMedia as downloadGraphMedia } from "./attachments/graph.js";
+import {
+  buildMSTeamsGraphMessageUrl,
+  downloadMSTeamsGraphMedia as downloadGraphMedia,
+} from "./attachments/graph.js";
+import { resolveMSTeamsAdvertisedMedia } from "./attachments/html.js";
 import { encodeGraphShareId } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 

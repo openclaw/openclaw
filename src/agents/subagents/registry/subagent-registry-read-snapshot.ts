@@ -34,7 +34,7 @@ export type SubagentRunReadSelection = {
 };
 
 export type SubagentRunReadScope =
-  | { runIds: ReadonlySet<string> }
+  | { runIds: ReadonlySet<string>; yieldedChildren?: boolean }
   | { childSessionKeys: readonly string[] }
   | { sessionKeys: readonly string[]; descendants: boolean }
   | "all";
@@ -81,6 +81,23 @@ export function mergeSubagentRunReadScope(
     if ("runIds" in readScope) {
       liveKeys = live.selectRunIds(readScope.runIds);
       persistedKeys = durable.selectRunIds(readScope.runIds, liveKeys);
+      const yielded = readScope.yieldedChildren
+        ? [...new Set([...persistedKeys, ...liveKeys])].flatMap((key) => {
+            const entry = inMemoryRuns.get(key) ?? compact.get(key);
+            return entry?.pauseReason === "sessions_yield" ? [entry.childSessionKey] : [];
+          })
+        : [];
+      if (yielded.length > 0) {
+        // A yielded run's announced children decide whether it is a leaf.
+        const childLive = live.selectReadScope(yielded, durable, false, liveKeys);
+        liveKeys = [...new Set([...liveKeys, ...childLive])];
+        persistedKeys = [
+          ...new Set([
+            ...persistedKeys,
+            ...durable.selectReadScope(yielded, live, false, liveKeys),
+          ]),
+        ];
+      }
     } else if ("childSessionKeys" in readScope) {
       const keys = new Set(readScope.childSessionKeys.map((key) => key.trim()).filter(Boolean));
       liveKeys = live.selectChildren(keys);
@@ -274,13 +291,7 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
     },
     { context, current: true },
   );
-  if (
-    reply &&
-    (!reply.ok ||
-      reply.type !== "subagents.runs" ||
-      reply.projection === "maintenance" ||
-      !reply.descendants)
-  ) {
+  if (reply && (reply.projection === "maintenance" || !reply.descendants)) {
     throw new Error("Subagent descendant read omitted its selection");
   }
   const persisted = reply?.runs ?? new Map<string, SubagentRunRecord>();
@@ -371,10 +382,7 @@ export async function prepareSubagentMaintenanceReadSnapshot(
         { type: "subagents.runs", scope: { kind: "maintenance" } },
         { context, current: true, live: options?.live },
       );
-      if (
-        reply &&
-        (!reply.ok || reply.type !== "subagents.runs" || reply.projection !== "maintenance")
-      ) {
+      if (reply && reply.projection !== "maintenance") {
         throw new Error("Unexpected subagent maintenance read result");
       }
       return reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
