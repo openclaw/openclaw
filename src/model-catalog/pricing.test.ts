@@ -52,6 +52,22 @@ const privateUrl = "http://127.0.0.1:8080/v1";
 function tokenRates(input: number, output: number, cacheRead = 0, cacheWrite = 0) {
   return { input, output, cacheRead, cacheWrite };
 }
+const catalogRates = tokenRates(2, 8, 0.5, 1);
+const catalogTiers: ModelDefinitionConfig["cost"]["tieredPricing"] = [
+  { ...catalogRates, range: [0, 201] },
+  { ...tokenRates(4, 16, 1, 2), range: [201, Infinity] },
+];
+type MetadataPlugins = NonNullable<
+  Parameters<typeof createPluginMetadataSnapshotFixture>[0]
+>["plugins"];
+function stubMetadata(plugins: MetadataPlugins) {
+  vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValue(
+    createPluginMetadataSnapshotFixture({ plugins }),
+  );
+}
+function modelDefinition(id: string, cost = tokenRates(0, 0)): ModelDefinitionConfig {
+  return { id, name: id, reasoning: false, input: ["text"], cost, maxTokens: 8192 };
+}
 function storedCatalog(bundle: Record<string, unknown>) {
   return {
     id: 1,
@@ -118,11 +134,8 @@ describe("hosted model pricing", () => {
             {
               id: "gpt-authored",
               cost: {
-                ...tokenRates(2, 8, 0.5, 1),
-                tieredPricing: [
-                  { ...tokenRates(2, 8, 0.5, 1), range: [0, 201] },
-                  { ...tokenRates(4, 16, 1, 2), range: [201] },
-                ],
+                ...catalogRates,
+                tieredPricing: [catalogTiers[0], { ...tokenRates(4, 16, 1, 2), range: [201] }],
               },
             },
           ],
@@ -143,14 +156,7 @@ describe("hosted model pricing", () => {
 
   it("keeps normalized indexes scoped to their policy and observes model-file prices", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-prepared-pricing-"));
-    const model = {
-      id: "alias",
-      name: "Alias",
-      reasoning: false,
-      input: ["text" as const],
-      cost: tokenRates(3, 0),
-      maxTokens: 8192,
-    };
+    const model = modelDefinition("alias", tokenRates(3, 0));
     const providers = { fixture: { baseUrl: "https://fixture.invalid", models: [model] } };
     const firstConfig: OpenClawConfig = { models: { providers } };
     const secondConfig: OpenClawConfig = { models: { providers } };
@@ -281,10 +287,14 @@ describe("hosted model pricing", () => {
     return { cli: resolve("claude-cli"), anthropic: resolve("anthropic") };
   }
 
-  it("prices a priceAs provider with its target's catalog row", async () => {
-    const { cli, anthropic } = await resolveClaudeCliCost({});
-    expect(cli).toMatchObject({ input: 4, output: 20 });
-    expect(cli).toEqual(anthropic);
+  it.each([false, true])("prices a priceAs provider (own price=%s)", async (ownPrice) => {
+    const { cli, anthropic } = await resolveClaudeCliCost(
+      ownPrice ? { "claude-cli/claude-opus-5-5": { input: 1, output: 2 } } : {},
+    );
+    expect(cli).toMatchObject(ownPrice ? { input: 1, output: 2 } : { input: 4, output: 20 });
+    if (!ownPrice) {
+      expect(cli).toEqual(anthropic);
+    }
   });
 
   it("never follows priceAs past the source provider's pricing exclusions", () => {
@@ -315,18 +325,6 @@ describe("hosted model pricing", () => {
     expect(resolveModelPricing(contextFor(privateEndpoint, true), key)).toBeUndefined();
   });
 
-  it("keeps a priceAs provider's own price ahead of its target's", async () => {
-    const { cli } = await resolveClaudeCliCost({
-      "claude-cli/claude-opus-5-5": { input: 1, output: 2 },
-    });
-    expect(cli).toMatchObject({ input: 1, output: 2 });
-  });
-
-  const catalogRates = tokenRates(2, 8, 0.5, 1);
-  const catalogTiers: ModelDefinitionConfig["cost"]["tieredPricing"] = [
-    { ...catalogRates, range: [0, 201] },
-    { ...tokenRates(4, 16, 1, 2), range: [201, Infinity] },
-  ];
   const preparedRates = tokenRates(11, 13, 17, 19);
   function pricingCase(
     name: string,
@@ -579,14 +577,7 @@ describe("OpenRouter routing shortcut estimates", () => {
     const agentDir = tempDirs.make("openclaw-routing-pricing-");
     const model = "openai/gpt-catalog:nitro";
     const rates = { input: 1, output: 2 };
-    const entry: ModelDefinitionConfig = {
-      id: model,
-      name: "Routing shortcut",
-      reasoning: false,
-      input: ["text"],
-      cost: tokenRates(0, 0),
-      maxTokens: 8192,
-    };
+    const entry = modelDefinition(model);
     const configWith = (baseUrl: string, modelEntry = entry) =>
       configFor(baseUrl, [modelEntry], "openrouter");
     const resolve = (config: OpenClawConfig) => {
@@ -657,34 +648,27 @@ describe("standalone v2 pricing", () => {
   beforeEach(async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-v2-standalone-"));
     MODELS_JSON_STATE.costCache.clear();
-    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "gateway",
-            providers: ["gateway"],
-            modelPricing: {
-              providers: { gateway: { openRouter: passthrough, liteLLM: passthrough } },
-            },
+    stubMetadata([
+      ...["gateway", "litegate"].map((id) => ({
+        id,
+        providers: [id],
+        modelPricing: {
+          providers: {
+            [id]: { openRouter: id === "gateway" ? passthrough : false, liteLLM: passthrough },
           },
-          {
-            id: "litegate",
-            providers: ["litegate"],
-            modelPricing: { providers: { litegate: { openRouter: false, liteLLM: passthrough } } },
-          },
-          {
-            id: "vendor",
-            providers: ["vendor"],
-            modelCatalog: {
-              providers: { vendor: { models: [{ id: "catalogued" }, { id: "rowpriced" }] } },
-            },
-            modelIdNormalization: {
-              providers: { vendor: { aliases: { "catalogued-latest": "catalogued" } } },
-            },
-          },
-        ],
-      }),
-    );
+        },
+      })),
+      {
+        id: "vendor",
+        providers: ["vendor"],
+        modelCatalog: {
+          providers: { vendor: { models: [{ id: "catalogued" }, { id: "rowpriced" }] } },
+        },
+        modelIdNormalization: {
+          providers: { vendor: { aliases: { "catalogued-latest": "catalogued" } } },
+        },
+      },
+    ]);
     useCatalog(() =>
       storedCatalog({
         schemaVersion: 2,
@@ -744,19 +728,17 @@ describe("inline v2 pricing", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-v2-pricing-"));
     MODELS_JSON_STATE.costCache.clear();
     pricing = { ...known, input: 0, output: 0, source: "models.dev" };
-    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: ["fixture", "other"].map((provider) => ({
-          id: provider,
-          providers: [provider],
-          modelCatalog: {
-            providers: {
-              [provider]: { models: [{ id: "native/model", cost: { input: 9, output: 18 } }] },
-            },
+    stubMetadata(
+      ["fixture", "other"].map((provider) => ({
+        id: provider,
+        providers: [provider],
+        modelCatalog: {
+          providers: {
+            [provider]: { models: [{ id: "native/model", cost: { input: 9, output: 18 } }] },
           },
-          modelPricing: { providers: { [provider]: { external: true } } },
-        })),
-      }),
+        },
+        modelPricing: { providers: { [provider]: { external: true } } },
+      })),
     );
     useCatalog(() =>
       storedCatalog({

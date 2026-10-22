@@ -1,4 +1,3 @@
-// Manifest model-catalog planner tests cover plugin-owned row planning, filters, conflicts, and suppressions.
 import type {
   ModelCatalogProvider,
   ModelInferenceCapabilities,
@@ -8,6 +7,25 @@ import {
   planManifestModelCatalogRows,
   planManifestModelCatalogSuppressions,
 } from "./manifest-planner.js";
+
+type Registry = Parameters<typeof planManifestModelCatalogRows>[0]["registry"];
+type Plugin = Registry["plugins"][number];
+function makeRegistry(modelCatalog: Plugin["modelCatalog"], providers?: string[]): Registry {
+  return { plugins: [{ id: "owner", providers, modelCatalog }] };
+}
+function expectedRow(provider: string, id: string) {
+  return {
+    provider,
+    id,
+    ref: `${provider}/${id}`,
+    mergeKey: `${provider}::${id}`,
+    name: id,
+    source: "manifest",
+    input: ["text"],
+    reasoning: false,
+    status: "available",
+  };
+}
 
 describe("manifest model catalog planner", () => {
   it("overlays only declared providers and keeps remote transport fields inert", () => {
@@ -19,34 +37,29 @@ describe("manifest model catalog planner", () => {
       undeclared: { models: [{ id: "ignored" }] },
     };
     const params: Parameters<typeof planManifestModelCatalogRows>[0] = {
-      registry: {
-        plugins: [
-          {
-            id: "anthropic",
-            providers: ["anthropic"],
-            modelCatalog: {
-              aliases: {
-                "anthropic-alias": { provider: "anthropic", api: "anthropic-messages" },
-              },
-              providers: {
-                anthropic: {
-                  api: "anthropic-messages",
-                  baseUrl: "https://api.anthropic.com",
-                  models: [
-                    {
-                      id: "old",
-                      name: "Bundled",
-                      baseUrl: "https://model.api.anthropic.com",
-                      headers: { "X-Trusted": "yes" },
-                    },
-                    { id: "kept" },
-                  ],
+      registry: makeRegistry(
+        {
+          aliases: {
+            "anthropic-alias": { provider: "anthropic", api: "anthropic-messages" },
+          },
+          providers: {
+            anthropic: {
+              api: "anthropic-messages",
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  id: "old",
+                  name: "Bundled",
+                  baseUrl: "https://model.api.anthropic.com",
+                  headers: { "X-Trusted": "yes" },
                 },
-              },
+                { id: "kept" },
+              ],
             },
           },
-        ],
-      },
+        },
+        ["anthropic"],
+      ),
       resolveRemoteProvider: (provider) => remoteOverlay[provider],
     };
     const plan = planManifestModelCatalogRows(params);
@@ -93,42 +106,40 @@ describe("manifest model catalog planner", () => {
         billing: { unit: "requests", source: "provider-docs" },
       },
     } satisfies ModelInferenceCapabilities;
-    const registry = {
-      plugins: [
-        {
-          id: "fixture",
-          providers: ["fixture"],
-          modelCatalog: {
-            providers: {
-              fixture: {
-                api: "openai-responses" as const,
-                baseUrl: "https://fixture.invalid/v1",
-                models: [{ id: "typed", baseUrl: "https://fixture.invalid/v1", inference }],
-              },
-            },
-            aliases: {
-              same: { provider: "fixture", baseUrl: "https://fixture.invalid/v1/" },
-              endpoint: { provider: "fixture", baseUrl: "https://routed.invalid/v1" },
-              protocol: { provider: "fixture", api: "openai-completions" as const },
-            },
+    const routeRegistry = makeRegistry(
+      {
+        providers: {
+          fixture: {
+            api: "openai-responses" as const,
+            baseUrl: "https://fixture.invalid/v1",
+            models: [{ id: "typed", baseUrl: "https://fixture.invalid/v1", inference }],
           },
         },
-      ],
-    };
+        aliases: {
+          same: { provider: "fixture", baseUrl: "https://fixture.invalid/v1/" },
+          endpoint: { provider: "fixture", baseUrl: "https://routed.invalid/v1" },
+          protocol: { provider: "fixture", api: "openai-completions" as const },
+        },
+      },
+      ["fixture"],
+    );
 
     it.each([
       { provider: "same", expected: inference },
       { provider: "endpoint", expected: { chat: false } },
       { provider: "protocol", expected: { chat: false } },
     ])("binds alias facts to the effective route: $provider", ({ provider, expected }) => {
-      const plan = planManifestModelCatalogRows({ registry, providerFilter: provider });
+      const plan = planManifestModelCatalogRows({
+        registry: routeRegistry,
+        providerFilter: provider,
+      });
       expect(plan.rows).toHaveLength(1);
       expect(plan.rows[0]?.inference).toEqual(expected);
     });
 
     it("retains matching hosted facts when a remote row replaces its label", () => {
       const plan = planManifestModelCatalogRows({
-        registry,
+        registry: routeRegistry,
         resolveRemoteProvider: () => ({ models: [{ id: "typed", name: "Refreshed" }] }),
       });
       expect(plan.rows).toMatchObject([
@@ -140,7 +151,7 @@ describe("manifest model catalog planner", () => {
       "clears facts when remote provider defaults change the effective API: %j",
       ({ models }) => {
         const plan = planManifestModelCatalogRows({
-          registry,
+          registry: routeRegistry,
           resolveRemoteProvider: () => ({ api: "openai-completions", models }),
         });
         expect(plan.rows).toMatchObject([
@@ -153,7 +164,10 @@ describe("manifest model catalog planner", () => {
       { baseUrl: "https://remote.invalid/v1", models: [{ id: "typed", inference }] },
       { models: [{ id: "typed", baseUrl: "https://remote.invalid/v1", inference }] },
     ])("does not attach remote declarations to a retained trusted endpoint: %j", (remote) => {
-      const plan = planManifestModelCatalogRows({ registry, resolveRemoteProvider: () => remote });
+      const plan = planManifestModelCatalogRows({
+        registry: routeRegistry,
+        resolveRemoteProvider: () => remote,
+      });
       expect(plan.rows).toMatchObject([
         { baseUrl: "https://fixture.invalid/v1", inference: { chat: false } },
       ]);
@@ -162,7 +176,7 @@ describe("manifest model catalog planner", () => {
     it("replaces a hosted contract as a whole when remote metadata supplies one", () => {
       const replacement = { chat: true };
       const plan = planManifestModelCatalogRows({
-        registry,
+        registry: routeRegistry,
         resolveRemoteProvider: () => ({ models: [{ id: "typed", inference: replacement }] }),
       });
       expect(plan.rows[0]?.inference).toEqual(replacement);
@@ -282,22 +296,20 @@ describe("manifest model catalog planner", () => {
 
   it("keeps conflicting model rows excluded from every catalog selection", () => {
     const registry = {
-      plugins: [
-        {
-          id: "first-owner",
-          modelCatalog: {
-            providers: { shared: { models: [{ id: "conflicted" }] } },
-            discovery: { shared: "static" as const },
+      plugins: (["static", "runtime"] as const).map((discovery) => ({
+        id: `${discovery}-owner`,
+        modelCatalog: {
+          providers: {
+            shared: {
+              models:
+                discovery === "static"
+                  ? [{ id: "conflicted" }, { id: "kept", name: "Kept" }]
+                  : [{ id: "CONFLICTED" }],
+            },
           },
+          discovery: { shared: discovery },
         },
-        {
-          id: "second-owner",
-          modelCatalog: {
-            providers: { shared: { models: [{ id: "conflicted" }] } },
-            discovery: { shared: "runtime" as const },
-          },
-        },
-      ],
+      })),
     };
 
     for (const selection of [undefined, "static"] as const) {
@@ -305,139 +317,71 @@ describe("manifest model catalog planner", () => {
         registry,
         ...(selection ? { selection } : {}),
       });
-      expect(plan.rows, selection).toEqual([]);
-      expect(plan.conflicts, selection).toHaveLength(1);
+      expect(plan.entries).toHaveLength(2);
+      expect(plan.rows, selection).toEqual([{ ...expectedRow("shared", "kept"), name: "Kept" }]);
+      expect(plan.conflicts, selection).toEqual([{ provider: "shared", modelId: "conflicted" }]);
     }
-  });
-
-  it("builds manifest rows from plugin-owned catalog providers", () => {
-    const plan = planManifestModelCatalogRows({
-      registry: {
-        plugins: [
-          {
-            id: "moonshot",
-            modelCatalog: {
-              discovery: {
-                moonshot: "static",
-              },
-              providers: {
-                Moonshot: {
-                  api: "openai-responses",
-                  baseUrl: "https://api.moonshot.ai/v1",
-                  models: [
-                    {
-                      id: "kimi-k2.6",
-                      input: ["text", "image"],
-                      contextWindow: 256000,
-                    },
-                  ],
-                },
-              },
-            },
-          },
-        ],
-      },
-    });
-
-    expect(plan.entries).toEqual([
-      {
-        provider: "moonshot",
-        discovery: "static",
-        rows: [
-          {
-            provider: "moonshot",
-            id: "kimi-k2.6",
-            ref: "moonshot/kimi-k2.6",
-            mergeKey: "moonshot::kimi-k2.6",
-            name: "kimi-k2.6",
-            source: "manifest",
-            input: ["text", "image"],
-            reasoning: false,
-            status: "available",
-            api: "openai-responses",
-            baseUrl: "https://api.moonshot.ai/v1",
-            contextWindow: 256000,
-          },
-        ],
-      },
-    ]);
-    expect(plan.rows.map((row) => row.ref)).toEqual(["moonshot/kimi-k2.6"]);
-    expect(plan.conflicts).toStrictEqual([]);
   });
 
   // Regression for #73876: an OpenRouter org slug must resolve to the direct provider.
   it("plans moonshotai alias rows from the moonshot provider catalog", () => {
     const plan = planManifestModelCatalogRows({
       providerFilter: "moonshotai",
-      registry: {
-        plugins: [
-          {
-            id: "moonshot",
-            providers: ["moonshot"],
-            modelCatalog: {
-              aliases: {
-                moonshotai: {
-                  provider: "moonshot",
-                },
-                "moonshot-ai": {
-                  provider: "moonshot",
-                },
-              },
-              discovery: {
-                moonshot: "static",
-              },
-              providers: {
-                moonshot: {
-                  api: "openai-completions",
-                  baseUrl: "https://api.moonshot.ai/v1",
-                  models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
-                },
-              },
+      registry: makeRegistry(
+        {
+          aliases: {
+            moonshotai: {
+              provider: "moonshot",
+            },
+            "moonshot-ai": {
+              provider: "moonshot",
             },
           },
-        ],
-      },
+          discovery: {
+            moonshot: "static",
+          },
+          providers: {
+            Moonshot: {
+              api: "openai-completions",
+              baseUrl: "https://api.moonshot.ai/v1",
+              models: [
+                {
+                  id: "kimi-k2.6",
+                  name: "Kimi K2.6",
+                  input: ["text", "image"],
+                  contextWindow: 256000,
+                },
+              ],
+            },
+          },
+        },
+        ["moonshot"],
+      ),
     });
 
     const rows = [
       {
-        provider: "moonshotai",
-        id: "kimi-k2.6",
-        ref: "moonshotai/kimi-k2.6",
-        mergeKey: "moonshotai::kimi-k2.6",
+        ...expectedRow("moonshotai", "kimi-k2.6"),
         name: "Kimi K2.6",
-        source: "manifest",
-        input: ["text"],
-        reasoning: false,
-        status: "available",
+        input: ["text", "image"],
+        contextWindow: 256000,
         api: "openai-completions",
         baseUrl: "https://api.moonshot.ai/v1",
       },
     ];
     expect(plan.entries).toEqual([{ provider: "moonshotai", discovery: "static", rows }]);
     expect(plan.rows).toEqual(rows);
+    expect(plan.conflicts).toEqual([]);
   });
 
   it("sorts fresh normalized rows without mutating frozen manifest inputs", () => {
     const models = [{ id: "z" }, { id: "a" }];
     models.forEach(Object.freeze);
     Object.freeze(models);
-    const registry = {
-      plugins: [{ id: "owner", modelCatalog: { providers: { fixture: { models } } } }],
-    };
-    const plan = planManifestModelCatalogRows({ registry });
-    const repeated = planManifestModelCatalogRows({ registry });
-    const rows = ["a", "z"].map((id) => ({
-      id,
-      provider: "fixture",
-      ref: `fixture/${id}`,
-      mergeKey: `fixture::${id}`,
-      name: id,
-      source: "manifest",
-      input: ["text"],
-      reasoning: false,
-      status: "available",
-    }));
+    const frozenRegistry = makeRegistry({ providers: { fixture: { models } } });
+    const plan = planManifestModelCatalogRows({ registry: frozenRegistry });
+    const repeated = planManifestModelCatalogRows({ registry: frozenRegistry });
+    const rows = ["a", "z"].map((id) => expectedRow("fixture", id));
     expect(plan).toStrictEqual({
       entries: [{ provider: "fixture", discovery: undefined, rows }],
       rows,
@@ -453,14 +397,9 @@ describe("manifest model catalog planner", () => {
 
   it("resolves raw overlay IDs before reporting normalized ID conflicts", () => {
     const plan = planManifestModelCatalogRows({
-      registry: {
-        plugins: [
-          {
-            id: "owner",
-            modelCatalog: { providers: { fixture: { models: [{ id: " a ", name: "Local" }] } } },
-          },
-        ],
-      },
+      registry: makeRegistry({
+        providers: { fixture: { models: [{ id: " a ", name: "Local" }] } },
+      }),
       resolveRemoteProvider: () => ({ models: [{ id: "a", name: "Remote" }] }),
     });
     expect(plan.entries[0]?.rows.map((row) => [row.id, row.name, row.source])).toEqual([
@@ -475,53 +414,13 @@ describe("manifest model catalog planner", () => {
       },
     ]);
   });
-
-  it("reports duplicate provider/model keys and excludes conflicted rows", () => {
-    const plan = planManifestModelCatalogRows({
-      registry: {
-        plugins: [
-          {
-            id: "z-first",
-            modelCatalog: {
-              providers: {
-                openai: {
-                  models: [
-                    { id: "gpt-5.4", name: "First GPT-5.4" },
-                    { id: "gpt-5.5", name: "GPT-5.5" },
-                  ],
-                },
-              },
-            },
-          },
-          {
-            id: "a-second",
-            modelCatalog: {
-              providers: {
-                openai: {
-                  models: [{ id: "GPT-5.4", name: "Second GPT-5.4" }],
-                },
-              },
-            },
-          },
-        ],
-      },
-    });
-
-    expect(plan.entries).toHaveLength(2);
-    expect(plan.conflicts).toEqual([
-      {
-        provider: "openai",
-        modelId: "gpt-5.4",
-      },
-    ]);
-    expect(plan.rows).toHaveLength(1);
-    expect(plan.rows[0]?.mergeKey).toBe("openai::gpt-5.5");
-    expect(plan.rows[0]?.name).toBe("GPT-5.5");
-  });
 });
 
 describe("manifest model catalog suppression planner", () => {
   it("plans suppressions for owned providers and declared provider aliases", () => {
+    const model = "gpt-5.3-codex-spark";
+    const reason = "Use openai/gpt-5.5.";
+    const when = { baseUrlHosts: ["api.openai.com"] };
     const plan = planManifestModelCatalogSuppressions({
       registry: {
         plugins: [
@@ -529,29 +428,11 @@ describe("manifest model catalog suppression planner", () => {
             id: "openai",
             providers: ["openai", "openai"],
             modelCatalog: {
-              aliases: {
-                "azure-openai-responses": {
-                  provider: "openai",
-                },
-              },
+              aliases: { "azure-openai-responses": { provider: "openai" } },
               suppressions: [
-                {
-                  provider: "openai",
-                  model: "gpt-5.3-codex-spark",
-                  reason: "Use openai/gpt-5.5.",
-                  when: {
-                    baseUrlHosts: ["api.openai.com"],
-                  },
-                },
-                {
-                  provider: "azure-openai-responses",
-                  model: "GPT-5.3-Codex-Spark",
-                  reason: "Use openai/gpt-5.5.",
-                },
-                {
-                  provider: "openrouter",
-                  model: "foreign-row",
-                },
+                { provider: "openai", model, reason, when },
+                { provider: "azure-openai-responses", model: "GPT-5.3-Codex-Spark", reason },
+                { provider: "openrouter", model: "foreign-row" },
               ],
             },
           },
@@ -559,24 +440,14 @@ describe("manifest model catalog suppression planner", () => {
       },
     });
 
+    const common = { pluginId: "openai", model, reason };
     expect(plan.suppressions).toEqual([
       {
-        pluginId: "openai",
+        ...common,
         provider: "azure-openai-responses",
-        model: "gpt-5.3-codex-spark",
-        mergeKey: "azure-openai-responses::gpt-5.3-codex-spark",
-        reason: "Use openai/gpt-5.5.",
+        mergeKey: `azure-openai-responses::${model}`,
       },
-      {
-        pluginId: "openai",
-        provider: "openai",
-        model: "gpt-5.3-codex-spark",
-        mergeKey: "openai::gpt-5.3-codex-spark",
-        reason: "Use openai/gpt-5.5.",
-        when: {
-          baseUrlHosts: ["api.openai.com"],
-        },
-      },
+      { ...common, provider: "openai", mergeKey: `openai::${model}`, when },
     ]);
   });
 });
