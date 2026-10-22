@@ -141,7 +141,11 @@ export function startupMethods<T extends (...args: never[]) => unknown>(request:
   return request.mock.calls.map(([method]) => method);
 }
 
-type StartupRequestParams = { idempotencyKey?: string; [key: string]: unknown };
+type StartupRequestParams = {
+  idempotencyKey?: string;
+  archived?: boolean;
+  [key: string]: unknown;
+};
 
 export function startupRequest(
   handlers: Record<string, (params: StartupRequestParams) => unknown>,
