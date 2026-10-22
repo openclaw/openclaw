@@ -71,6 +71,15 @@ that subagent in the **Subagents** panel, or its session when the panel does not
 list it. The rows reuse the chat's loaded subagent list; they do not load each
 child's transcript.
 
+When a direct child session, such as a visible session started with
+`sessions_spawn`, asks with `ask_user`, its pending question also docks above
+this chat's composer, marked **Asked by** with a link to the child's session.
+The composer remains available without interrupting typing or removing
+attachments. Collapsing the panel does not cancel the question. Answering from
+either session resolves the same question; the child continues and the answered
+question stays in its transcript. Only the immediate parent receives this panel;
+Home's implicit links to other sessions do not count as delegation.
+
 When a turn hands off with `sessions_yield` and its subagents are still active,
 their live rows stay under that reply without a separate **Waiting on…** line.
 One muted timer at the far right of those rows shows the total time since your

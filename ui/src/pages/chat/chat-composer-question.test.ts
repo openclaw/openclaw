@@ -16,6 +16,79 @@ import { questionPanelIn } from "./components/chat-question-card.test-support.ts
 afterEach(() => resetComposerFixture());
 
 describe("composer question takeover", () => {
+  it("keeps a child's question above the live draft, attachments, and IME without taking focus", async () => {
+    const container = createComposerContainer();
+    document.body.append(container);
+    const first = questionPrompt("child-first", "Choose a release target");
+    const second = questionPrompt("child-second", "Choose a release format");
+    first.sessionKey = second.sessionKey = "agent:main:dashboard:release-checks";
+    first.agentId = second.agentId = "main";
+    const skip = vi.fn();
+    const composerProps = props({
+      sessionKey: "agent:main:dashboard:parent",
+      draft: "Keep this draft",
+      attachments: [{ id: "notes", mimeType: "text/plain", fileName: "release-notes.txt" }],
+      gatewayQuestionPrompts: [],
+      gatewayQuestionSources: new Map([
+        [first.id, "Release checks"],
+        [second.id, "Release checks"],
+      ]),
+      onGatewayQuestionSkip: skip,
+    });
+    const draw = () => renderComposerInto(container, composerProps);
+    draw();
+    await waitForSolid(() => expect(container.textContent).toContain("release-notes.txt"));
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.focus();
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "Keep this draft 日本";
+    textarea.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertCompositionText",
+        isComposing: true,
+      }),
+    );
+    composerProps.gatewayQuestionPrompts = [first, second];
+    draw();
+    let panel = await questionPanelIn(container);
+    expect(container.querySelector(".agent-chat__composer-combobox textarea")).toBe(textarea);
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.value).toBe("Keep this draft 日本");
+    expect(composerProps.draft).toBe("Keep this draft");
+    expect(container.textContent).toContain("release-notes.txt");
+    expect(container.querySelectorAll("openclaw-chat-question-panel")).toHaveLength(1);
+    expect(panel.textContent).toContain("1/2");
+    expect(panel.textContent).toContain("Waiting for your answer");
+    const link = panel.querySelector<HTMLAnchorElement>(".chat-question-panel__source a")!;
+    expect(link.textContent).toBe("Release checks");
+    expect(link.dataset.sessionKey).toBe(first.sessionKey);
+    expect(link.href).toContain("release-checks");
+    panel.props!.onCollapsedChange!(true);
+    draw();
+    panel = await questionPanelIn(container);
+    expect(first.status).toBe("pending");
+    expect(skip).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("Keep this draft 日本");
+    panel.props!.onNextRequest!();
+    draw();
+    panel = await questionPanelIn(container);
+    expect(panel.textContent).toContain("Choose a release format");
+    expect(container.querySelector(".agent-chat__composer-combobox textarea")).toBe(textarea);
+    expect(document.activeElement).toBe(textarea);
+    first.status = second.status = "answered";
+    draw();
+    await waitForSolid(() =>
+      expect(container.querySelector("openclaw-chat-question-panel")).toBeNull(),
+    );
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.value).toBe("Keep this draft 日本");
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    expect(composerProps.draft).toBe("Keep this draft 日本");
+    expect(container.textContent).toContain("release-notes.txt");
+    container.remove();
+  });
+
   it.each([
     { progressOpen: true, takeover: "expand" },
     { progressOpen: false, takeover: "next" },

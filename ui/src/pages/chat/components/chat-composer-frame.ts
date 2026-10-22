@@ -224,6 +224,7 @@ export function createChatComposerContext(
   const showComposer =
     !questionPanelProps ||
     questionPanelProps.model.nonBlocking === true ||
+    questionPanelProps.model.requestedBySession !== undefined ||
     questionPanelProps.model.collapsed;
 
   // Offline text and attachments may enter the persisted reconnect queue, but
