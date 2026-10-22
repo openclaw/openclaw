@@ -8,16 +8,12 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type {
-  PluginBlobEntry,
-  PluginBlobStoreWithReceipts,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerDiffsPlugin } from "./plugin.js";
-import { createTempDiffRoot } from "./test-helpers.js";
+import { createDiffStoreHarness, createTempDiffRoot } from "./test-helpers.js";
 
 const { launchMock } = vi.hoisted(() => ({
   launchMock: vi.fn(),
@@ -29,6 +25,12 @@ const toolContext = {
   agentAccountId: "default",
 };
 const browserConfig: OpenClawConfig = { browser: { executablePath: process.execPath } };
+const cleanups: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    await cleanup();
+  }
+});
 
 let PlaywrightDiffScreenshotter: typeof import("./browser.runtime.js").PlaywrightDiffScreenshotter;
 type ScreenshotParams = Parameters<
@@ -164,7 +166,7 @@ describe("PlaywrightDiffScreenshotter", () => {
       gateway: { publicOrigin: "https://explicit.example" },
       browser: { executablePath: process.execPath },
     };
-    const { render } = createRegistrationHarness({}, processConfig);
+    const { render } = await createRegistrationHarness({}, processConfig);
     launchMock.mockResolvedValue(createMockBrowser([]));
 
     const { details } = await render({ config: explicitConfig });
@@ -233,7 +235,7 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 });
 
-function createRegistrationHarness(
+async function createRegistrationHarness(
   pluginConfig: Record<string, unknown> = {},
   initialConfig = createRuntimeConfig(pluginConfig),
 ) {
@@ -243,14 +245,30 @@ function createRegistrationHarness(
     httpHandler?: Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]["handler"];
   } = {};
   const on = vi.fn();
-  const blobStore = createMemoryBlobStore();
+  const fixture = await createDiffStoreHarness("openclaw-diffs-registration-");
+  const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
+  cleanups.push(async () => {
+    try {
+      for (const [service] of registerService.mock.calls) {
+        if (service.apiVersion !== 2) {
+          await service.stop?.({
+            config,
+            stateDir: path.dirname(fixture.rootDir),
+            logger: api.logger,
+          });
+        }
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
   const api = createTestPluginApi({
     id: "diffs",
     config: { gateway: { port: 18789, bind: "loopback" } },
     pluginConfig,
     runtime: {
       config: { current: () => config },
-      state: { openBlobStore: () => blobStore },
+      state: { openBlobStore: () => fixture.blobStore },
     } as never,
     registerTool(tool) {
       registered.tool = tool;
@@ -259,6 +277,7 @@ function createRegistrationHarness(
       registered.httpHandler = route.handler;
     },
     on,
+    registerService,
   });
   registerDiffsPlugin(api);
   const registration = expectDefined(registered.tool, "registered diffs tool");
@@ -272,11 +291,10 @@ function createRegistrationHarness(
     setConfig: (next: OpenClawConfig) => {
       config = next;
     },
-    get: async (viewerPath: string, headers?: IncomingMessage["headers"]) => {
+    get: async (url: string, headers: IncomingMessage["headers"] = {}) => {
       const res = createMockServerResponse();
-      expect(await handleRequest(localReq({ method: "GET", url: viewerPath, headers }), res)).toBe(
-        true,
-      );
+      const req = { method: "GET", url, headers, socket: { remoteAddress: "127.0.0.1" } };
+      expect(await handleRequest(req as IncomingMessage, res)).toBe(true);
       return res;
     },
     render: async (context: OpenClawPluginToolContext = toolContext) => {
@@ -315,7 +333,7 @@ describe("diffs plugin registration", () => {
       viewerBaseUrl: "https://startup.example.com/openclaw",
       defaults: STARTUP_DIFFS_DEFAULTS,
     };
-    const { render, get, setConfig } = createRegistrationHarness(startupConfig);
+    const { render, get, setConfig } = await createRegistrationHarness(startupConfig);
 
     setConfig(
       createRuntimeConfig({
@@ -345,7 +363,7 @@ describe("diffs plugin registration", () => {
   });
 
   it("uses live runtime viewer-access config through the registered HTTP handler", async () => {
-    const { on, render, get, setConfig } = createRegistrationHarness(
+    const { on, render, get, setConfig } = await createRegistrationHarness(
       { defaults: STARTUP_DIFFS_DEFAULTS, security: { allowRemoteViewer: true } },
       createRuntimeConfig({ security: { allowRemoteViewer: true } }),
     );
@@ -386,7 +404,7 @@ describe("diffs plugin registration", () => {
   });
 
   it("fails closed for remote viewer access when the live diffs plugin entry is removed", async () => {
-    const { render, get, setConfig } = createRegistrationHarness({
+    const { render, get, setConfig } = await createRegistrationHarness({
       security: { allowRemoteViewer: true },
     });
 
@@ -398,97 +416,6 @@ describe("diffs plugin registration", () => {
     expect(proxiedRes.statusCode).toBe(404);
   });
 });
-
-function createMemoryBlobStore<TMetadata>(): PluginBlobStoreWithReceipts<TMetadata> {
-  const entries = new Map<string, PluginBlobEntry<TMetadata>>();
-  const read = (key: string): PluginBlobEntry<TMetadata> | undefined => {
-    const entry = entries.get(key);
-    if (!entry || (entry.expiresAt !== undefined && entry.expiresAt <= Date.now())) {
-      entries.delete(key);
-      return undefined;
-    }
-    return { ...entry, bytes: entry.bytes.slice() };
-  };
-  const register = (
-    key: string,
-    bytes: Uint8Array,
-    metadata: TMetadata,
-    opts?: { ttlMs?: number },
-  ) => {
-    const createdAt = Date.now();
-    const receipt = { createdAt, ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}) };
-    entries.set(key, {
-      key,
-      sizeBytes: bytes.byteLength,
-      bytes: bytes.slice(),
-      metadata,
-      ...receipt,
-    });
-    return receipt;
-  };
-  const info = ({ bytes: _bytes, ...entry }: PluginBlobEntry<TMetadata>) => entry;
-  const deleteExpiredKey = async (key: string) => {
-    const entry = entries.get(key);
-    if (!entry || entry.expiresAt === undefined || entry.expiresAt > Date.now()) {
-      return undefined;
-    }
-    entries.delete(key);
-    return info(entry);
-  };
-  return {
-    async register(key, bytes, metadata, opts) {
-      register(key, bytes, metadata, opts);
-    },
-    async registerIfAbsent(key, bytes, metadata, opts) {
-      if (read(key)) {
-        return false;
-      }
-      register(key, bytes, metadata, opts);
-      return true;
-    },
-    async registerIfAbsentWithReceipt(key, bytes, metadata, opts) {
-      return read(key) ? undefined : register(key, bytes, metadata, opts);
-    },
-    async lookup(key) {
-      return read(key);
-    },
-    async entries() {
-      return [...entries.keys()].flatMap((key) => {
-        const entry = read(key);
-        return entry ? [info(entry)] : [];
-      });
-    },
-    async delete(key) {
-      return entries.delete(key);
-    },
-    deleteExpiredKey,
-    async deleteExpired() {
-      const expired = [];
-      for (const key of entries.keys()) {
-        const entry = await deleteExpiredKey(key);
-        if (entry) {
-          expired.push(entry);
-        }
-      }
-      return expired;
-    },
-    async clear() {
-      entries.clear();
-    },
-  };
-}
-
-function localReq(input: {
-  method: string;
-  url: string;
-  headers?: IncomingMessage["headers"];
-}): IncomingMessage {
-  return {
-    ...input,
-    headers: input.headers ?? {},
-    socket: { remoteAddress: "127.0.0.1" },
-  } as unknown as IncomingMessage;
-}
 
 async function createScreenshotterHarness(options?: Parameters<typeof createMockPage>[0]) {
   const pages: Array<ReturnType<typeof createMockPage>> = [];

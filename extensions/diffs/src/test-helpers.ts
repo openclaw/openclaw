@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-// Diffs helper module supports test helpers behavior.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,10 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginHttpRouteHandler } from "openclaw/plugin-sdk/plugin-entry";
-import type {
-  OpenBlobStoreOptions,
-  PluginBlobStoreWithReceipts,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenBlobStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginBlobStoreForTests,
   createPluginBlobKernelStore,
@@ -122,10 +118,7 @@ export async function ensureCuratedViewerRuntimeForTests(): Promise<void> {
   );
 }
 
-export async function createTempDiffRoot(prefix: string): Promise<{
-  rootDir: string;
-  cleanup: () => Promise<void>;
-}> {
+export async function createTempDiffRoot(prefix: string) {
   const rootDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), prefix));
   return {
     rootDir,
@@ -138,16 +131,7 @@ export async function createTempDiffRoot(prefix: string): Promise<{
 export async function createDiffStoreHarness(
   prefix: string,
   options: { nativeKernel?: boolean } = {},
-): Promise<{
-  rootDir: string;
-  store: DiffArtifactStore;
-  blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
-  reopen: () => Promise<{
-    store: DiffArtifactStore;
-    blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
-  }>;
-  cleanup: () => Promise<void>;
-}> {
+) {
   const { rootDir: harnessRoot, cleanup } = await createTempDiffRoot(prefix);
   const rootDir = path.join(harnessRoot, "files");
   const env = {

@@ -97,7 +97,9 @@ describe("diffs tool", () => {
   });
 
   function createTool(
-    overrides: Partial<Parameters<typeof createDiffsTool>[0]> = {},
+    overrides: Omit<Partial<Parameters<typeof createDiffsTool>[0]>, "defaults"> & {
+      defaults?: Partial<Parameters<typeof createDiffsTool>[0]["defaults"]>;
+    } = {},
     screenshotter?: DiffScreenshotter,
   ) {
     if (screenshotter) {
@@ -106,8 +108,8 @@ describe("diffs tool", () => {
     return createDiffsTool({
       getConfig: () => ({}),
       store,
-      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
       ...overrides,
+      defaults: { ...DEFAULT_DIFFS_TOOL_DEFAULTS, ...overrides.defaults },
     });
   }
 
@@ -167,9 +169,7 @@ describe("diffs tool", () => {
   });
 
   it("prefers per-call baseUrl over configured viewerBaseUrl", async () => {
-    const tool = createTool({
-      viewerBaseUrl: "https://example.com/openclaw",
-    });
+    const tool = createTool({ viewerBaseUrl: "https://example.com/openclaw" });
 
     const result = await executeDiff(tool, {
       path: "README.md",
@@ -177,12 +177,9 @@ describe("diffs tool", () => {
       baseUrl: "https://preview.example.com/review",
     });
 
-    expect(readTextContent(result, 0)).toContain(
-      "https://preview.example.com/review/plugins/diffs/view/",
-    );
-    expect(String(readDetails(result).viewerUrl)).toContain(
-      "https://preview.example.com/review/plugins/diffs/view/",
-    );
+    const url = "https://preview.example.com/review/plugins/diffs/view/";
+    expect(readTextContent(result, 0)).toContain(url);
+    expect(readDetails(result).viewerUrl).toContain(url);
   });
 
   it("renders PDF output when fileFormat is pdf", async () => {
@@ -190,9 +187,7 @@ describe("diffs tool", () => {
       expect(outputPath).toMatch(/preview\.pdf$/);
     });
 
-    const tool = createTool({}, screenshotter);
-
-    const result = await executeDiff(tool, {
+    const result = await executeDiff(createTool({}, screenshotter), {
       mode: "image",
       fileFormat: "pdf",
     });
@@ -240,9 +235,7 @@ describe("diffs tool", () => {
         throw new Error("browser missing");
       }),
     };
-    const tool = createTool();
-
-    const result = await executeDiff(tool, { mode: "both" });
+    const result = await executeDiff(createTool(), { mode: "both" });
 
     expect(result?.content).toHaveLength(1);
     expect(readTextContent(result, 0)).toContain("File rendering failed");
@@ -251,9 +244,7 @@ describe("diffs tool", () => {
   });
 
   it("falls back to view output when the default image renderer cannot load", async () => {
-    const tool = createTool();
-
-    const result = await executeDiff(tool, { mode: "both" });
+    const result = await executeDiff(createTool(), { mode: "both" });
 
     expect(readTextContent(result, 0)).toContain("Diff viewer ready.");
     expect(readDetails(result).viewerUrl).toEqual(expect.any(String));
@@ -297,7 +288,6 @@ describe("diffs tool", () => {
   it("uses configured defaults when tool params omit them", async () => {
     const tool = createTool({
       defaults: {
-        ...DEFAULT_DIFFS_TOOL_DEFAULTS,
         mode: "view",
         theme: "light",
         layout: "split",
@@ -312,8 +302,7 @@ describe("diffs tool", () => {
     const result = await executeDiff(tool, { path: "README.md" });
 
     expect(readTextContent(result, 0)).toContain("Diff viewer ready.");
-    expect(readDetails(result).mode).toBe("view");
-    expect(readDetails(result).context).toEqual(toolContext);
+    expect(readDetails(result)).toMatchObject({ mode: "view", context: toolContext });
     const html = await readViewerHtml(store, result);
     expect(html).toContain('body data-theme="light"');
     expect(html).toContain("--diffs-font-size: 17px;");
@@ -334,7 +323,6 @@ describe("diffs tool", () => {
       {
         context: toolContext,
         defaults: {
-          ...DEFAULT_DIFFS_TOOL_DEFAULTS,
           mode: "view",
           theme: "light",
           layout: "split",
