@@ -238,7 +238,7 @@ it.each(cases)(
       };
       mocks.checkout.mockImplementation(async (_root, _options, run) => {
         if (source) {
-          return;
+          return undefined;
         }
         await pauseOnce();
         return await run(lease);

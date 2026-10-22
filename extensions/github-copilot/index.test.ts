@@ -673,7 +673,9 @@ describe("github-copilot plugin", () => {
           : { env: { COPILOT_GITHUB_DOMAIN: domain }, secretInputMode: "plaintext" },
       );
       noCalls(prompter.confirm);
-      expect(result?.profiles[0]).toEqual(storedToken(token));
+      expect(result?.profiles[0]).toEqual(
+        publicLogin ? storedToken(token) : { profileId: PROFILE, credential: tokenProfile(token) },
+      );
       expect(domainOf(result?.configPatch)).toBe(publicLogin ? undefined : domain);
       if (publicLogin) {
         const [message] = expectDefined(
