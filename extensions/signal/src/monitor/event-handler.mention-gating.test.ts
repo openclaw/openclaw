@@ -113,17 +113,18 @@ function createMentionHandler(params: {
 
 function createSignalConfig(params: { requireMention: boolean; mentionPattern?: string | null }) {
   const mentionPatterns = params.mentionPattern === null ? [] : [params.mentionPattern ?? "@bot"];
+  return groupConfig({ "*": { requireMention: params.requireMention } }, mentionPatterns);
+}
+
+function groupConfig(
+  groups: NonNullable<NonNullable<OpenClawConfig["channels"]>["signal"]>["groups"],
+  mentionPatterns = ["@bot"],
+  signal: NonNullable<NonNullable<OpenClawConfig["channels"]>["signal"]> = {},
+): OpenClawConfig {
   return {
-    messages: {
-      inbound: { debounceMs: 0 },
-      groupChat: { mentionPatterns },
-    },
-    channels: {
-      signal: {
-        groups: { "*": { requireMention: params.requireMention } },
-      },
-    },
-  } as unknown as OpenClawConfig;
+    messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns } },
+    channels: { signal: { groups, ...signal } },
+  };
 }
 
 async function expectSkippedGroupHistory(
@@ -194,19 +195,10 @@ describe("signal mention gating", () => {
   it("allows explicitly configured Signal groups by group id without a mention", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            inbound: { debounceMs: 0 },
-            groupChat: { mentionPatterns: ["@bot"] },
-          },
-          channels: {
-            signal: {
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["group:g1"],
-              groups: { g1: {} },
-            },
-          },
-        } as unknown as OpenClawConfig,
+        cfg: groupConfig({ g1: {} }, ["@bot"], {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["group:g1"],
+        }),
         groupPolicy: "allowlist",
         groupAllowFrom: ["group:g1"],
       }),
@@ -336,17 +328,10 @@ async function receiveSilentIngest(overrideGroup = false) {
   internalHookMocks.triggerInternalHook.mockClear();
   const handler = createSignalEventHandler(
     createBaseSignalEventHandlerDeps({
-      cfg: {
-        messages: { groupChat: { mentionPatterns: ["@bot"] } },
-        channels: {
-          signal: {
-            groups: {
-              "*": { requireMention: true, ingest: true },
-              ...(overrideGroup ? { "group-123": { requireMention: true, ingest: false } } : {}),
-            },
-          },
-        },
-      } as never,
+      cfg: groupConfig({
+        "*": { requireMention: true, ingest: true },
+        ...(overrideGroup ? { "group-123": { requireMention: true, ingest: false } } : {}),
+      }),
     }),
   );
   await handler(
@@ -364,35 +349,33 @@ describe("signal mention-skip silent ingest", () => {
   it("emits internal message:received when ingest is enabled", async () => {
     await receiveSilentIngest();
     expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
-    const [type, action, sessionKey, context] = expectDefined(
-      internalHookMocks.createInternalHookEvent.mock.calls[0],
-      "internal hook call",
-    );
-    expect(type).toBe("message");
-    expect(action).toBe("received");
-    expect(sessionKey).toContain("signal");
-    expect(context).toEqual({
-      from: "group:group-123",
-      content: "hello without mention",
-      timestamp: 1700000000000,
-      channelId: "signal",
-      accountId: "default",
-      conversationId: "group:group-123",
-      messageId: "1700000000000",
-      metadata: {
-        to: "group:group-123",
-        provider: "signal",
-        surface: "signal",
-        threadId: undefined,
-        senderId: "+15550001111",
-        senderName: "Alice",
-        senderUsername: undefined,
-        senderE164: undefined,
-        guildId: undefined,
-        channelName: undefined,
-        topicName: undefined,
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "received",
+      expect.stringContaining("signal"),
+      {
+        from: "group:group-123",
+        content: "hello without mention",
+        timestamp: 1700000000000,
+        channelId: "signal",
+        accountId: "default",
+        conversationId: "group:group-123",
+        messageId: "1700000000000",
+        metadata: {
+          to: "group:group-123",
+          provider: "signal",
+          surface: "signal",
+          threadId: undefined,
+          senderId: "+15550001111",
+          senderName: "Alice",
+          senderUsername: undefined,
+          senderE164: undefined,
+          guildId: undefined,
+          channelName: undefined,
+          topicName: undefined,
+        },
       },
-    });
+    );
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
