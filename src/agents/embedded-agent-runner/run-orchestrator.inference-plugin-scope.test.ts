@@ -10,7 +10,7 @@ import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { immediateEnqueue } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { runEmbeddedAgent } from "./run-orchestrator.js";
+import { runEmbeddedAgent } from "./run.js";
 
 const loop = vi.hoisted(() => vi.fn<(typeof import("./run-loop.js"))["runPreparedEmbeddedLoop"]>());
 // Keep orchestration, metadata, plugin selection, registration, and resource ownership real.
