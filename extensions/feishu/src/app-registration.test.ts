@@ -34,12 +34,14 @@ const hermeticPublicLookup: LookupFn = async () => [{ address: "93.184.216.34", 
 
 async function withRegistrationServer(
   handler: (req: IncomingMessage, res: ServerResponse) => void,
-  run: (options: RegistrationFetchOptions) => Promise<void>,
+  run: (options: RegistrationFetchOptions, requests: string[]) => Promise<void>,
 ) {
   return withServer(handler, async (origin) => {
+    const requests: string[] = [];
     const realFetch = globalThis.fetch.bind(globalThis);
     const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : input.toString());
+      requests.push(url.toString());
       if (url.hostname === "accounts.feishu.cn" || url.hostname === "accounts.larksuite.com") {
         return await realFetch(
           new URL(`${url.pathname}${url.search}`, origin),
@@ -50,7 +52,7 @@ async function withRegistrationServer(
     });
     const options = { fetchImpl };
     mockRegistrationFetch(options);
-    return await run(options);
+    return await run(options, requests);
   });
 }
 
@@ -66,7 +68,7 @@ const pollParams = { deviceCode: "dev", interval: 30, expireIn: 600 };
 
 function beginRegistrationJson(
   overrides: Record<string, unknown>,
-  run: (options: RegistrationFetchOptions) => Promise<void>,
+  run: (options: RegistrationFetchOptions, requests: string[]) => Promise<void>,
 ) {
   return withRegistrationServer((req, res) => {
     void readRequestBody(req).then((body) => {
@@ -88,20 +90,22 @@ describe("Feishu app registration", () => {
     renderQrTerminalMock.mockClear();
   });
 
-  it("defaults unsafe begin polling lifetimes from provider responses", async () => {
-    await beginRegistrationJson(
-      {
-        interval: Number.POSITIVE_INFINITY,
-        expire_in: Number.POSITIVE_INFINITY,
-      },
-      async () => {
+  it.each([
+    { name: "unsafe", value: Number.POSITIVE_INFINITY, expireIn: 600 },
+    { name: "valid", value: undefined, expireIn: 300 },
+  ])(
+    "normalizes $name begin lifetimes through the real SSRF guard",
+    async ({ value, expireIn }) => {
+      const overrides = value === undefined ? {} : { interval: value, expire_in: value };
+      await beginRegistrationJson(overrides, async (_options, requests) => {
         await expect(beginAppRegistration("feishu")).resolves.toMatchObject({
           ...beginResult,
-          expireIn: 600,
+          expireIn,
         });
-      },
-    );
-  });
+        expect(requests).toEqual(["https://accounts.feishu.cn/oauth/v1/app/registration"]);
+      });
+    },
+  );
 
   it("clamps unsafe poll sleeps from provider intervals", async () => {
     vi.useFakeTimers();
@@ -200,20 +204,5 @@ describe("Feishu app registration", () => {
 
     expect(streamState?.canceled()).toBe(true);
     expect(streamState?.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
-  });
-
-  it("sends bound reads through the real SSRF guard before local socket redirect", async () => {
-    const fetchCalls: string[] = [];
-    await beginRegistrationJson({}, async (options) => {
-      const recordingFetch: typeof fetch = withFetchPreconnect(async (input, init) => {
-        fetchCalls.push(input instanceof Request ? input.url : input.toString());
-        return await options.fetchImpl(input, init);
-      });
-
-      mockRegistrationFetch({ ...options, fetchImpl: recordingFetch });
-      await expect(beginAppRegistration("feishu")).resolves.toMatchObject(beginResult);
-    });
-
-    expect(fetchCalls).toEqual(["https://accounts.feishu.cn/oauth/v1/app/registration"]);
   });
 });

@@ -9,11 +9,7 @@ const topLevelWebhookBase = {
   appId: "cli_top",
   appSecret: "secret_top", // pragma: allowlist secret
 };
-const accountWebhookBase = {
-  connectionMode: "webhook",
-  appId: "cli_main",
-  appSecret: "secret_main", // pragma: allowlist secret
-};
+const accountWebhookBase = { ...topLevelWebhookBase, appId: "cli_main" };
 
 function expectSchemaIssue(value: unknown, issuePath: string) {
   const result = FeishuConfigSchema.safeParse(value);

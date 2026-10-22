@@ -78,12 +78,10 @@ function createConfig(
   };
 }
 
-function existingAgent() {
-  return {
-    workspace: path.join(tempRoot, "existing-workspace"),
-    agentDir: path.join(tempRoot, "existing-agent"),
-  };
-}
+const existingAgent = () => ({
+  workspace: path.join(tempRoot, "existing-workspace"),
+  agentDir: path.join(tempRoot, "existing-agent"),
+});
 
 function binding(agentId: string, accountId?: string, sender = "ou_sender") {
   return {
@@ -206,9 +204,8 @@ it("uses the current maxAgents limit instead of stale request policy", async () 
 });
 
 it("adds only the missing binding for an agent found in the cloned mutation roster", async () => {
-  const cfg = createConfig();
   const mutationCfg = createConfig({}, { "feishu-ou_sender": existingAgent() });
-  const { result, commitConfig } = await scenario(cfg, { mutation: mutationCfg });
+  const { result, commitConfig } = await scenario(createConfig(), { mutation: mutationCfg });
 
   expect(result.created).toBe(true);
   expect(commitConfig).toHaveBeenCalledTimes(1);

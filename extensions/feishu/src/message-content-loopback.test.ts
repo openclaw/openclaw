@@ -52,8 +52,8 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
   ]);
 
   await withServer(
-    (request, response) => {
-      void (async () => {
+    async (request, response) => {
+      try {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
         const body = JSON.parse((await readText(request)) || "{}") as Record<string, unknown>;
         const record = recordRequest(request, url, body);
@@ -151,10 +151,10 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
         }
 
         sendItems([{ message_id: messageId, chat_id: chatId, chat_type: "group", ...message }]);
-      })().catch((error: unknown) => {
+      } catch (error) {
         response.writeHead(500, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: String(error) }));
-      });
+      }
     },
     async (loopbackOrigin) => {
       // Preserve the real SDK domain; its path filler interprets custom :port
@@ -204,9 +204,6 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
           "- [2024-03-09T16:00:01.000Z] ou_loopback_unknown: second context";
 
         for (const [messageId, malformed] of sensitiveContentByMessageId) {
-          expect(() => JSON.parse(malformed.content)).toThrow(SyntaxError);
-          expect(() => JSON.parse(malformed.content)).toThrow(malformed.content);
-
           await readMessage(messageId, {
             chatId,
             contentType: malformed.type,

@@ -100,16 +100,28 @@ describe("Feishu thread bindings", () => {
     });
   });
 
-  it("expires idle bindings from manager and service lookups at the deadline", async () => {
+  it.each([
+    ["idle deadline", 86_400_000, undefined],
+    ["maximum age after activity", 3_600_000, { idleHours: 2, maxAgeHours: 1 }],
+    ["touch after expiry", 86_400_000, undefined],
+  ] as const)("expires bindings at %s", async (mode, lifetime, threadBindings) => {
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    const manager = createManager();
+    const manager = createManager({
+      ...baseCfg,
+      session: { ...baseCfg.session, threadBindings },
+    });
     const targetSessionKey = "agent:codex:acp:binding:feishu:default:expired";
     const conversation = conversationRef("oc_group_chat:topic:om_expired_root");
     const binding = await bindTo(conversation, targetSessionKey);
     await bindTo(conversationRef("oc_group_chat:topic:om_expired_list_root"), targetSessionKey);
-    const expiresAt = startedAt + 86_400_000;
+    const expiresAt = startedAt + lifetime;
     expect(binding.expiresAt).toBe(expiresAt);
 
+    if (mode === "maximum age after activity") {
+      now.mockReturnValue(startedAt + 30 * 60_000);
+      service.touch(binding.bindingId);
+      expect(service.resolveByConversation(conversation)?.expiresAt).toBe(expiresAt);
+    }
     now.mockReturnValue(expiresAt - 1);
     expect(manager.getByConversationId(conversation.conversationId)).toBeDefined();
     expect(manager.listBySessionKey(targetSessionKey)).toHaveLength(2);
@@ -117,45 +129,13 @@ describe("Feishu thread bindings", () => {
     expect(service.listBySession(targetSessionKey)).toHaveLength(2);
 
     now.mockReturnValue(expiresAt);
+    if (mode === "touch after expiry") {
+      service.touch(binding.bindingId, expiresAt + 1);
+    }
     expect(service.resolveByConversation(conversation)).toBeNull();
     expect(manager.getByConversationId(conversation.conversationId)).toBeUndefined();
     expect(manager.listBySessionKey(targetSessionKey)).toEqual([]);
     expect(service.listBySession(targetSessionKey)).toEqual([]);
-  });
-
-  it("expires bindings at their maximum age even after activity refreshes idle time", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    createManager({
-      session: { ...baseCfg.session, threadBindings: { idleHours: 2, maxAgeHours: 1 } },
-    });
-    const conversation = conversationRef("oc_group_chat:topic:om_max_age_root");
-    const binding = await bindTo(conversation, "agent:codex:acp:binding:feishu:default:max-age");
-
-    now.mockReturnValue(startedAt + 30 * 60_000);
-    service.touch(binding.bindingId);
-    expect(service.resolveByConversation(conversation)?.expiresAt).toBe(startedAt + 60 * 60_000);
-
-    now.mockReturnValue(startedAt + 60 * 60_000);
-    expect(service.resolveByConversation(conversation)).toBeNull();
-    expect(service.listBySession(binding.targetSessionKey)).toEqual([]);
-  });
-
-  it("does not revive an expired binding when its conversation is touched", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    const manager = createManager();
-    const conversation = conversationRef("oc_group_chat:topic:om_expired_touch_root");
-    const binding = await bindTo(
-      conversation,
-      "agent:codex:acp:binding:feishu:default:expired-touch",
-    );
-    const expiresAt = startedAt + 86_400_000;
-    expect(binding.expiresAt).toBe(expiresAt);
-
-    now.mockReturnValue(expiresAt);
-    service.touch(binding.bindingId, expiresAt + 1);
-
-    expect(manager.getByConversationId(conversation.conversationId)).toBeUndefined();
-    expect(service.resolveByConversation(conversation)).toBeNull();
   });
 
   it("keeps active bindings touchable and unbindable", async () => {
