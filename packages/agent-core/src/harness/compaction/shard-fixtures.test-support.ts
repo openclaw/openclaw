@@ -1,12 +1,37 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Message, Model, StreamFn } from "../../llm.js";
+import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 import { compact, generateSummary } from "./compaction.js";
-import { createMessageEntry } from "./compaction.test-support.js";
+import { createMessageEntry, createContextUsage } from "./compaction.test-support.js";
 import type { SummarizationCompletionParams } from "./summarization-completion.js";
 import { createFileOps } from "./utils.js";
+
+export const entries = (...messages: AgentMessage[]) => messages.map(createMessageEntry);
+export function contains(value: string, ...expected: string[]) {
+  for (const part of expected) {
+    expect(value).toContain(part);
+  }
+}
+export function excludes(value: string, ...unexpected: string[]) {
+  for (const part of unexpected) {
+    expect(value).not.toContain(part);
+  }
+}
+export function modelReply(
+  model: Model,
+  content: string | AssistantMessage["content"] = "summary",
+  overrides: Partial<AssistantMessage> = {},
+) {
+  return assistant(content, {
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    ...overrides,
+  });
+}
 
 export const userEntry = (content: string, index: number) =>
   createMessageEntry(user(content, index + 1), index);
@@ -54,6 +79,7 @@ export function promptText(context: Parameters<StreamFn>[1]) {
 
 export function captureStream(reply: (model: Model, prompt: string) => AssistantMessage) {
   const prompts: string[] = [];
+  const outputBudgets: (number | undefined)[] = [];
   let systemPrompt = "";
   let maxOutputTokens: number | undefined;
   const streamFn = vi.fn<StreamFn>((model, context, options) => {
@@ -61,13 +87,32 @@ export function captureStream(reply: (model: Model, prompt: string) => Assistant
     prompts.push(prompt);
     systemPrompt = context.systemPrompt ?? "";
     maxOutputTokens = options?.maxTokens;
+    outputBudgets.push(maxOutputTokens);
     return responseStream(reply(model, prompt));
   });
   return {
     streamFn,
     prompts,
+    outputBudgets,
     readCapture: () => ({ prompt: prompts.at(-1) ?? "", systemPrompt, maxOutputTokens }),
   };
+}
+
+export function captureCompletion(reply: (prompt: string) => AssistantMessage) {
+  const prompts: string[] = [];
+  let systemPrompt = "";
+  const runtime: AgentCoreCompletionRuntimeDeps = {
+    completeSimple: async (_model, context) => {
+      const content = context.messages[0]?.content;
+      if (!Array.isArray(content) || content.length !== 1 || content[0]?.type !== "text") {
+        throw new Error("expected one text-only summarization input");
+      }
+      prompts.push(content[0].text);
+      systemPrompt = context.systemPrompt ?? "";
+      return reply(content[0].text);
+    },
+  };
+  return { prompts, runtime, systemPrompt: () => systemPrompt };
 }
 
 export const text = (value: string) => ({ type: "text" as const, text: value });
@@ -81,6 +126,8 @@ export function custom(content: Custom["content"], overrides: Partial<Custom> = 
   return { role: "custom", customType: "test", content, display: true, timestamp: 1, ...overrides };
 }
 
+const { contextUsage: _contextUsage, ...zeroUsage } = createContextUsage(0);
+
 export function assistant(
   content: string | AssistantMessage["content"],
   overrides: Partial<AssistantMessage> = {},
@@ -91,14 +138,7 @@ export function assistant(
     api: "test-api",
     provider: "test-provider",
     model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: { ...zeroUsage, cost: { ...zeroUsage.cost } },
     stopReason: "stop",
     timestamp: 1,
     ...overrides,

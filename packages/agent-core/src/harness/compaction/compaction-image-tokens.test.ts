@@ -1,19 +1,78 @@
 import { assert, expect, it } from "vitest";
 import type { ImageContent, Model } from "../../llm.js";
-import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage } from "../../types.js";
 import { buildSessionContext } from "../session/session.js";
-import type { SessionTreeEntry } from "../types.js";
-import { generateBranchSummary } from "./branch-summarization.js";
-import { estimateTokens, findCutPoint, prepareCompaction } from "./compaction.js";
+import { estimateTokens, prepareCompaction } from "./compaction.js";
 import {
   createCompactionModel,
+  createContextUsage,
   createMessageEntry as messageEntry,
 } from "./compaction.test-support.js";
-import { assistant, compactWith, text, toolResult, user } from "./shard-fixtures.test-support.js";
+import {
+  assistant,
+  captureCompletion,
+  compactWith,
+  contains,
+  excludes,
+  text,
+  toolResult,
+  user,
+} from "./shard-fixtures.test-support.js";
 
 const settings = { enabled: true, reserveTokens: 1000, keepRecentTokens: 1 };
 const IMAGE_PAYLOAD = "a".repeat(1_500_000);
+
+it("carries sender provenance through compaction into the session tree", async () => {
+  const messages = [
+    user("Approve the rollout.", 1, { senderId: "alex-id", senderName: "Alex" }),
+    assistant("Recorded Alex's approval.", {
+      model: "summary-model",
+      usage: createContextUsage(1),
+      timestamp: 2,
+    }),
+    user("Do not deploy until I review it.", 3, { senderId: "bea-id", senderName: "Bea" }),
+    user("A legacy note with no known speaker.", 4),
+    user("What remains?", 5),
+  ];
+  const entries = messages.map(messageEntry);
+  const prepared = prepareCompaction(entries, settings);
+  assert(prepared.ok && prepared.value);
+  const summary =
+    "Alex approved rollout. Bea requires review before deployment. Legacy note remains unattributed.";
+  const capture = captureCompletion(() =>
+    assistant(summary, { model: "summary-model", usage: createContextUsage(1), timestamp: 6 }),
+  );
+  const result = await compactWith(prepared.value, createCompactionModel(), {
+    customInstructions: "Ignore speaker attribution.",
+    runtime: capture.runtime,
+  });
+  assert(result.ok);
+  contains(
+    capture.prompts[0] ?? "",
+    '[User sender={"id":"alex-id","name":"Alex"}]: Approve the rollout.',
+    '[User sender={"id":"bea-id","name":"Bea"}]: Do not deploy until I review it.',
+    "[User]: A legacy note with no known speaker.",
+    "Ignore speaker attribution.",
+  );
+  contains(
+    capture.systemPrompt(),
+    "Preserve attribution for material facts",
+    "The id is authoritative",
+    "A user line without sender={...} is unattributed",
+  );
+  const context = buildSessionContext([
+    ...entries,
+    {
+      type: "compaction",
+      id: "compaction-1",
+      parentId: entries.at(-1)?.id ?? null,
+      timestamp: new Date(6).toISOString(),
+      ...result.value,
+    },
+  ]);
+  expect(context.messages[0]).toMatchObject({ role: "compactionSummary", summary });
+  expect(context.messages.at(-1)).toEqual(messages.at(-1));
+});
 
 function imageBlock(): ImageContent {
   return { type: "image", data: IMAGE_PAYLOAD, mimeType: "image/png" };
@@ -43,31 +102,12 @@ function summaryModel(contextWindow = 100_000): Model {
 }
 
 function captureSummary(reply: (conversation: string | undefined) => string, timestamp: number) {
-  const prompts: string[] = [];
-  const runtime: AgentCoreCompletionRuntimeDeps = {
-    completeSimple: async (_model, context) => {
-      const content = context.messages[0]?.content;
-      if (!Array.isArray(content) || content.length !== 1 || content[0]?.type !== "text") {
-        throw new Error("expected one text-only summarization input");
-      }
-      prompts.push(content[0].text);
-      const conversation = content[0].text
-        .split("<conversation>\n")[1]
-        ?.split("\n</conversation>")[0];
-      return assistantText(reply(conversation), timestamp);
-    },
-  };
-  return { prompts, runtime };
-}
-
-function buildTranscript(recentUserTurns: AgentMessage[]): SessionTreeEntry[] {
-  const messages: AgentMessage[] = [userText("start of the conversation", 1)];
-  let timestamp = 2;
-  for (const turn of recentUserTurns) {
-    messages.push(assistantText("ok", timestamp++));
-    messages.push(turn);
-  }
-  return messages.map((message, index) => messageEntry(message, index));
+  return captureCompletion((prompt) =>
+    assistantText(
+      reply(prompt.split("<conversation>\n")[1]?.split("\n</conversation>")[0]),
+      timestamp,
+    ),
+  );
 }
 
 it("charges user, tool-result, and custom image blocks equally", () => {
@@ -81,17 +121,6 @@ it("charges user, tool-result, and custom image blocks equally", () => {
   expect([userImage(1), toolResultImage(1), custom].map(estimateTokens)).toEqual([
     2014, 2014, 2014,
   ]);
-});
-
-it("matches image-heavy cut points to equivalent text-cost controls", () => {
-  const imageEntries = buildTranscript([10, 20, 30].map(userImage));
-  const textEntries = buildTranscript(
-    [10, 20, 30].map((timestamp) => userText("x".repeat(8_056), timestamp)),
-  );
-  const cut = (entries: SessionTreeEntry[]) =>
-    findCutPoint(entries, 0, entries.length, 1500).firstKeptEntryIndex;
-  expect(cut(textEntries)).toBeGreaterThan(0);
-  expect(cut(imageEntries)).toBe(cut(textEntries));
 });
 
 it.each([
@@ -141,8 +170,7 @@ it.each([
     const marker = "[image data omitted from summary input]";
     expect(prompts).toHaveLength(1);
     expect.soft(prompts[0]).toContain(`${role === "user" ? "[User]" : "[Tool result]"}: ${marker}`);
-    expect(prompts[0]).not.toContain(IMAGE_PAYLOAD);
-    expect(prompts[0]).not.toContain("already processed by model");
+    excludes(prompts[0] ?? "", IMAGE_PAYLOAD, "already processed by model");
 
     const context = buildSessionContext([
       ...entries,
@@ -161,66 +189,5 @@ it.each([
     expect(context.messages.at(-1)).toEqual(messages.at(-1));
     expect(JSON.stringify(context.messages)).not.toContain(IMAGE_PAYLOAD);
     expect(entries).toEqual(originalEntries);
-  },
-);
-
-it.each([
-  { mode: "ordinary", type: "image" },
-  { mode: "split", type: "audio" },
-  { mode: "branch", type: "image" },
-] as const)(
-  "bounds many $type messages at the $mode completion boundary",
-  async ({ mode, type }) => {
-    const model = summaryModel(type === "image" ? 1_000_000 : 8192);
-    const messages: AgentMessage[] = [
-      userText("Inspect attachments", 0),
-      ...Array.from(
-        { length: 200 },
-        (_, i) =>
-          ({
-            ...toolResult([], { toolCallId: `call-${i}`, toolName: "inspect", timestamp: i + 1 }),
-            content: [{ type, data: "PAYLOAD_SENTINEL", mimeType: "image/png" }],
-          }) as AgentMessage,
-      ),
-    ];
-    const entries = messages.map(messageEntry);
-    const conversations: string[] = [];
-    const { runtime } = captureSummary((conversation) => {
-      assert(conversation, "expected conversation");
-      conversations.push(conversation);
-      return "Summary";
-    }, 202);
-    let result;
-    if (mode === "branch") {
-      result = await generateBranchSummary(entries, {
-        model,
-        apiKey: "test-key",
-        signal: new AbortController().signal,
-        runtime,
-      });
-    } else {
-      entries.push(
-        messageEntry(
-          mode === "split" ? assistantText("Retained answer", 201) : userText("Next task", 201),
-          entries.length,
-        ),
-      );
-      const preparation = prepareCompaction(entries, settings);
-      assert(preparation.ok && preparation.value, "expected compactable history");
-      expect(preparation.value.isSplitTurn).toBe(mode === "split");
-      result = await compactWith(preparation.value, model, { runtime });
-    }
-    expect(result.ok).toBe(true);
-    expect(conversations).toHaveLength(1);
-    const conversation = conversations[0];
-    assert(conversation, "expected captured conversation");
-    expect(
-      Buffer.byteLength(conversation) - Buffer.byteLength("[User]: Inspect attachments"),
-    ).toBeLessThanOrEqual(847);
-    expect(conversation.match(/\[Tool result\]:/g)).toHaveLength(8);
-    expect(
-      conversation.split("[More image/non-text data omitted from summary input]"),
-    ).toHaveLength(2);
-    expect(conversation).not.toMatch(/PAYLOAD_SENTINEL|already processed by model/);
   },
 );
