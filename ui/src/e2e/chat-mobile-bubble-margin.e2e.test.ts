@@ -85,11 +85,11 @@ suite.define(() => {
             }
             if (testCase.id === "assistant-video") {
               // Metadata replaces the video's initial 150px height with its intrinsic ratio.
-              const video = page.locator(".chat-assistant-video-frame video");
-              await expectBrowser(video).toBeVisible();
+              const videoElement = page.locator(".chat-assistant-video-frame video");
+              await expectBrowser(videoElement).toBeVisible();
               await expect
                 .poll(() =>
-                  video.evaluate(
+                  videoElement.evaluate(
                     (element) =>
                       element instanceof HTMLVideoElement &&
                       element.readyState >= HTMLMediaElement.HAVE_METADATA &&
