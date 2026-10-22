@@ -124,10 +124,13 @@ for (const engine of ["sqlite", "postgres"] as const) {
             engine === "postgres" ? new pg.Client({ connectionString: connection }) : undefined;
           await client?.connect();
           const runs: PtyRun[] = [];
-          const start = async (args: string[]) =>
+          const start = async (
+            args: string[],
+            entryArgs = [path.join(runtimeRoot, "dist", "entry.js")],
+          ) =>
             await startRuntimePty(
               nodeExecutable,
-              [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
+              [...ISOLATED_RUNTIME_NODE_ARGS, ...entryArgs, ...args],
               {
                 activeRuns: runs,
                 cwd: runtimeRoot,
@@ -136,6 +139,16 @@ for (const engine of ["sqlite", "postgres"] as const) {
                 outputTimeoutMs: commandTimeoutMs,
               },
             );
+          const assertUnrepaired = async () => {
+            expect(await fs.readFile(configPath, "utf8")).toBe(
+              `synthetic warning\n${initialConfig}`,
+            );
+            expect(
+              (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
+                file.endsWith(".sqlite"),
+              ),
+            ).toEqual([]);
+          };
           try {
             const args =
               entry === "bare-root"
@@ -156,26 +169,12 @@ for (const engine of ["sqlite", "postgres"] as const) {
               await answer(setup, "Continue?");
               await setup.waitForOutput("Config invalid. Run");
               expect((await setup.waitForExit()).exitCode, setup.output()).toBe(1);
-              expect(await fs.readFile(configPath, "utf8")).toBe(
-                `synthetic warning\n${initialConfig}`,
-              );
-              expect(
-                (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
-                  file.endsWith(".sqlite"),
-                ),
-              ).toEqual([]);
+              await assertUnrepaired();
               return;
             }
             if (recoverConfig) {
               await setup.waitForOutput('Run "openclaw doctor --fix" now?');
-              expect(
-                (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
-                  file.endsWith(".sqlite"),
-                ),
-              ).toEqual([]);
-              expect(await fs.readFile(configPath, "utf8")).toBe(
-                `synthetic warning\n${initialConfig}`,
-              );
+              await assertUnrepaired();
               await setup.write("\r");
               await setup.waitForOutput("Removed non-JSON prefix");
             }
@@ -195,10 +194,9 @@ for (const engine of ["sqlite", "postgres"] as const) {
             expect((await setup.waitForExit()).exitCode, setup.output()).toBe(0);
 
             const config = JSON.parse(await fs.readFile(configPath, "utf8"));
-            expect(config.wizard.securityAcknowledgedAt).toEqual(expect.any(String));
-            expect(config.telemetry).toMatchObject({
-              enabled: false,
-              consentedAt: expect.any(String),
+            expect(config).toMatchObject({
+              wizard: { securityAcknowledgedAt: expect.any(String) },
+              telemetry: { enabled: false, consentedAt: expect.any(String) },
             });
             if (entry !== "crestodian") {
               expect(config.wizard.accessMode).toBe("guarded");
@@ -271,11 +269,8 @@ for (const engine of ["sqlite", "postgres"] as const) {
                 },
               }),
             );
-            const gateway = await startRuntimePty(
-              nodeExecutable,
+            const gateway = await start(
               [
-                ...ISOLATED_RUNTIME_NODE_ARGS,
-                "--import",
                 path.join(runtimeRoot, "scripts", "tsx.mjs"),
                 fileURLToPath(
                   new URL(
@@ -286,13 +281,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
                 path.join(runtimeRoot, "dist", "entry.js"),
                 String(port.port),
               ],
-              {
-                activeRuns: runs,
-                cwd: runtimeRoot,
-                env,
-                exitTimeoutMs: commandTimeoutMs,
-                outputTimeoutMs: commandTimeoutMs,
-              },
+              ["--import"],
             );
             await gateway.waitForOutput("Onboarding child authenticated and ready");
             await gateway.write("\x03");

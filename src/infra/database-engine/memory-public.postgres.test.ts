@@ -47,6 +47,7 @@ const capabilityFixtures = [
 ] as const;
 const providerId = "postgres-memory-fixture";
 const sapphireHit = [{ path: "memory/sapphire.md" }];
+const completeIndex = { fts: { available: true }, vector: { index: { state: "complete" } } };
 let root: string;
 const capabilityRoots: string[] = [];
 let workspace: string;
@@ -296,12 +297,7 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
     expect(await hybrid.search("blue-coordinate", { lexicalOnly: true })).toEqual([]);
     expect(await hybrid.search("blue-coordinate", { maxResults: 1 })).toMatchObject(sapphireHit);
     const indexed = await hybrid.statusAsync();
-    expect(indexed).toMatchObject({
-      files: 3,
-      chunks: 3,
-      fts: { available: true },
-      vector: { index: { state: "complete" } },
-    });
+    expect(indexed).toMatchObject({ files: 3, chunks: 3, ...completeIndex });
     await runtime.closeAllMemorySearchManagers?.();
 
     assert(indexed.dbPath);
@@ -330,8 +326,7 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
         { source: "memory", files: 2, chunks: 2, eligible: 2, issues: [] },
         { source: "sessions", files: 1, chunks: 1, eligible: 1, issues: [] },
       ],
-      fts: { available: true },
-      vector: { index: { state: "complete" } },
+      ...completeIndex,
     });
     await runtime.closeAllMemorySearchManagers?.();
     expect(await indexRows()).toEqual(beforeDiagnostic);
@@ -377,20 +372,19 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
     });
   });
 
-  it("refuses configured trigram search without pg_trgm and names the administrator action", async () => {
-    await selectCapabilityDatabase(noTrigramDatabase);
-    const cfg = config("none");
-    cfg.agents!.entries!.trigram = { workspace };
-    cfg.memory!.search!.store = { fts: { tokenizer: "trigram" } };
-    await expect(searchWithConfig(cfg, "trigram")).rejects.toThrow(
-      /PostgreSQL pg_trgm capability unavailable.*CREATE EXTENSION/,
-    );
-  });
-
-  it("refuses full-text admission without unaccent and names the administrator action", async () => {
-    await selectCapabilityDatabase(noUnaccentDatabase);
-    await expect(searchWithConfig(config("none"))).rejects.toThrow(
-      /PostgreSQL unaccent capability unavailable.*CREATE EXTENSION/,
-    );
-  });
+  it.each([
+    [noTrigramDatabase, "trigram", /PostgreSQL pg_trgm capability unavailable.*CREATE EXTENSION/],
+    [noUnaccentDatabase, "main", /PostgreSQL unaccent capability unavailable.*CREATE EXTENSION/],
+  ] as const)(
+    "refuses missing search capability in %s and names the administrator action",
+    async (database, agentId, error) => {
+      await selectCapabilityDatabase(database);
+      const cfg = config("none");
+      if (agentId === "trigram") {
+        cfg.agents!.entries!.trigram = { workspace };
+        cfg.memory!.search!.store = { fts: { tokenizer: "trigram" } };
+      }
+      await expect(searchWithConfig(cfg, agentId)).rejects.toThrow(error);
+    },
+  );
 });

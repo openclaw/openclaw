@@ -1,6 +1,7 @@
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as configIO from "../../config/io.factory.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
@@ -40,12 +41,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       const statements: unknown[] = [];
       const observation = channel("openclaw.database.statement");
       const observe = (event: unknown) => {
-        if (
-          event &&
-          typeof event === "object" &&
-          "engine" in event &&
-          event.engine === "postgres"
-        ) {
+        if (isRecord(event) && event.engine === "postgres") {
           statements.push(event);
         }
       };

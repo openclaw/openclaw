@@ -36,12 +36,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       const { path: storePath } = withEngineStoreAdmission(() =>
         openOpenClawAgentDatabase({ agentId: "main" }),
       );
-      scope = {
-        agentId: "main",
-        sessionKey: `agent:main:${sessionId}`,
-        sessionId,
-        storePath,
-      };
+      scope = { agentId: "main", sessionKey: `agent:main:${sessionId}`, sessionId, storePath };
       await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
     });
     const stage = async (runId: string, trackCompletion = false) => {
