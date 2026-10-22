@@ -189,6 +189,16 @@ function configureSubagentDefaults(
   Object.assign((defaults.subagents ??= {}), subagents);
 }
 
+const acpAgent = (agent = "codex", backend?: string): AgentEntryConfig => ({
+  runtime: { type: "acp", acp: { agent, ...(backend ? { backend } : {}) } },
+});
+
+function expectRegisteredRun(expected: Parameters<typeof expectRegisteredSubagentRun>[1]) {
+  expectRegisteredSubagentRun(hoisted.registerSubagentRunMock, expected, {
+    assertCurrent: undefined,
+  });
+}
+
 function registerBindingAdapter(
   channel: string,
   accountId = "default",
@@ -460,11 +470,7 @@ describe("spawnAcpDirect", () => {
         sessionKey: childSessionKey,
       });
       if (rawHarness) {
-        expectRegisteredSubagentRun(
-          hoisted.registerSubagentRunMock,
-          { childSessionKey, childAgentId: "main", requesterAgentId: "main" },
-          { assertCurrent: undefined },
-        );
+        expectRegisteredRun({ childSessionKey, childAgentId: "main", requesterAgentId: "main" });
       }
     } finally {
       await fs.rm(workspace.workspaceRoot, { recursive: true, force: true });
@@ -475,9 +481,7 @@ describe("spawnAcpDirect", () => {
     const cfg = hoisted.state.cfg;
     cfg.agents = {
       ...cfg.agents,
-      entries: {
-        reviewer: { runtime: { type: "acp", acp: { agent: "codex", backend: "fallback" } } },
-      },
+      entries: { reviewer: acpAgent("codex", "fallback") },
     };
     const resumeSessionId = "fixture-resume";
     hoisted.readAcpResumeSessionOwnerMock.mockResolvedValue({
@@ -684,60 +688,49 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
-  it.each<{
-    name: string;
-    agent: Partial<AgentEntryConfig>;
-    defaults?: Partial<AgentDefaultsConfig>;
-    thinking?: ThinkLevel;
-    expected: { model?: string; thinking?: ThinkLevel };
-  }>([
-    {
-      name: "target-provider alias",
-      agent: {
-        model: "anthropic/claude-sonnet-4-6",
-        subagents: { model: "opus", thinking: "low" },
-      },
-      defaults: { models: { "claude-opus-4-6": { alias: "opus" } } },
-      expected: { model: "anthropic/claude-opus-4-6", thinking: "low" },
-    },
-    {
-      name: "explicit max",
-      agent: {},
-      thinking: "max",
-      defaults: { subagents: { thinking: "low" } },
-      expected: { thinking: "max" },
-    },
-    {
-      name: "configured model with global thinking default",
-      agent: { model: "anthropic/claude-sonnet-4-6" },
-      defaults: { thinkingDefault: "off" },
-      expected: { model: "anthropic/claude-sonnet-4-6", thinking: "off" },
-    },
-    {
-      name: "opaque harness model",
-      agent: { model: "harness-only[context=272k,reasoning=medium,fast=false]" },
-      expected: { model: "harness-only[context=272k,reasoning=medium,fast=false]" },
-    },
-    {
-      name: "owner thinking without model override",
-      agent: { thinkingDefault: "off" },
-      defaults: { thinkingDefault: "high" },
-      expected: { thinking: "off" },
-    },
-    {
-      name: "model-profile thinking default",
-      agent: { model: "openai/gpt-5.4" },
-      defaults: { models: { "openai/gpt-5.4": { params: { thinking: "high" } } } },
-      expected: { model: "openai/gpt-5.4", thinking: "high" },
-    },
-  ])("resolves ACP runtime options: $name", async ({ agent, defaults, thinking, expected }) => {
+  it.each<
+    [
+      string,
+      Partial<AgentEntryConfig>,
+      Partial<AgentDefaultsConfig>,
+      { model?: string; thinking?: ThinkLevel },
+      ThinkLevel?,
+    ]
+  >([
+    [
+      "target-provider alias",
+      { model: "anthropic/claude-sonnet-4-6", subagents: { model: "opus", thinking: "low" } },
+      { models: { "claude-opus-4-6": { alias: "opus" } } },
+      { model: "anthropic/claude-opus-4-6", thinking: "low" },
+    ],
+    ["explicit max", {}, { subagents: { thinking: "low" } }, { thinking: "max" }, "max"],
+    [
+      "configured model with global thinking default",
+      { model: "anthropic/claude-sonnet-4-6" },
+      { thinkingDefault: "off" },
+      { model: "anthropic/claude-sonnet-4-6", thinking: "off" },
+    ],
+    [
+      "opaque harness model",
+      { model: "harness-only[context=272k,reasoning=medium,fast=false]" },
+      {},
+      { model: "harness-only[context=272k,reasoning=medium,fast=false]" },
+    ],
+    [
+      "owner thinking without model override",
+      { thinkingDefault: "off" },
+      { thinkingDefault: "high" },
+      { thinking: "off" },
+    ],
+    [
+      "model-profile thinking default",
+      { model: "openai/gpt-5.4" },
+      { models: { "openai/gpt-5.4": { params: { thinking: "high" } } } },
+      { model: "openai/gpt-5.4", thinking: "high" },
+    ],
+  ])("resolves ACP runtime options: %s", async (_name, agent, defaults, expected, thinking) => {
     hoisted.state.cfg.agents = {
-      entries: {
-        "codex-acp": {
-          runtime: { type: "acp", acp: { agent: "codex" } },
-          ...agent,
-        },
-      },
+      entries: { "codex-acp": { ...acpAgent(), ...agent } },
       defaults: {
         model: "openai/gpt-5.4",
         ...defaults,
@@ -1065,7 +1058,7 @@ describe("spawnAcpDirect", () => {
         entries: {
           main: {},
           "bot-alpha": {},
-          reviewer: { runtime: { type: "acp", acp: { agent: "codex" } } },
+          reviewer: acpAgent(),
         },
       };
       hoisted.state.cfg.bindings = [
@@ -1102,17 +1095,13 @@ describe("spawnAcpDirect", () => {
         { channel: "matrix", accountId: "bot-alpha", conversationId: boundRoom },
         { accountId: "bot-alpha", to: `room:${boundRoom}` },
       );
-      expectRegisteredSubagentRun(
-        hoisted.registerSubagentRunMock,
-        {
-          requesterOrigin: expect.objectContaining({
-            channel: "matrix",
-            accountId: "bot-alpha",
-            to: `room:${boundRoom}`,
-          }),
-        },
-        { assertCurrent: undefined },
-      );
+      expectRegisteredRun({
+        requesterOrigin: expect.objectContaining({
+          channel: "matrix",
+          accountId: "bot-alpha",
+          to: `room:${boundRoom}`,
+        }),
+      });
     },
   );
 
@@ -1197,16 +1186,12 @@ describe("spawnAcpDirect", () => {
         return;
       }
       expectAcceptedSpawn(result);
-      expectRegisteredSubagentRun(
-        hoisted.registerSubagentRunMock,
-        {
-          requesterSessionKey: "global",
-          childSessionKey: expect.stringMatching(/^agent:research:acp:/),
-          childAgentId: "research",
-          requesterAgentId: "research",
-        },
-        { assertCurrent: undefined },
-      );
+      expectRegisteredRun({
+        requesterSessionKey: "global",
+        childSessionKey: expect.stringMatching(/^agent:research:acp:/),
+        childAgentId: "research",
+        requesterAgentId: "research",
+      });
     },
   );
 

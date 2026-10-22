@@ -238,16 +238,21 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expectFragments(["codex: final answer"], ["coordination draft"]);
   });
 
-  it("flushes visible commentary before final answer text", () => {
-    const relay = progressRelay("run-commentary-final");
-
-    relay.assistant("Note: Checking the requested response shape only.", "commentary");
-    relay.assistant("ready");
-    vi.advanceTimersByTime(2_500);
-
+  it.each(["final", "status"] as const)("flushes commentary before %s output", (boundary) => {
+    const relay = progressRelay(
+      `run-commentary-${boundary}`,
+      boundary === "status" ? { stream: { tagVisibility: { plan: true } } } : undefined,
+    );
+    relay.assistant("checking files", "commentary");
+    if (boundary === "final") {
+      relay.assistant("ready");
+      vi.advanceTimersByTime(2_500);
+    } else {
+      relay.status("plan: inspect the runtime handoff first", "plan");
+    }
     expect(collectedTexts()).toEqual([
-      "codex: Note: Checking the requested response shape only.",
-      "codex: ready",
+      "codex: checking files",
+      boundary === "final" ? "codex: ready" : "codex: plan: inspect the runtime handoff first",
     ]);
   });
 
@@ -281,109 +286,81 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expect(collectedTexts()).toEqual(expected);
   });
 
-  it.each<{
-    name: string;
+  type Streaming = { mode?: "progress" | "off"; progress?: { commentary: boolean } };
+  type CommentaryOptions = {
     channel?: string;
-    streaming?: { mode?: "progress" | "off"; progress?: { commentary: boolean } };
+    streaming?: Streaming;
     accountStreaming?: { mode?: "off"; progress?: { commentary: boolean } };
     configuredAccount?: string;
     accountId?: string;
-    stream: "assistant" | "item";
-    visible?: boolean;
-  }>([
-    {
-      name: "defaults commentary on in explicit Discord progress mode",
-      channel: "discord",
-      streaming: { mode: "progress" },
-      stream: "assistant",
-      visible: true,
-    },
-    {
-      name: "suppresses Discord commentary when streaming is unset",
-      channel: "discord",
-      stream: "item",
-    },
-    {
-      name: "suppresses preamble progress when commentary is disabled",
-      streaming: { mode: "progress", progress: { commentary: false } },
-      stream: "item",
-    },
-    {
-      name: "applies normalized account commentary opt-outs",
-      streaming: { mode: "progress" },
-      accountStreaming: { progress: { commentary: false } },
-      configuredAccount: "Carey Notifications",
-      accountId: "carey-notifications",
-      stream: "item",
-    },
-    {
-      name: "applies account streaming mode opt-outs",
-      streaming: { mode: "progress", progress: { commentary: true } },
-      accountStreaming: { mode: "off" },
-      stream: "item",
-    },
-    {
-      name: "inherits parent progress mode for account commentary overrides",
-      streaming: { mode: "progress" },
-      accountStreaming: { progress: { commentary: true } },
-      stream: "assistant",
-      visible: true,
-    },
-    {
-      name: "preserves channel streaming off for account commentary overrides",
-      channel: "discord",
-      streaming: { mode: "off" },
-      accountStreaming: { progress: { commentary: true } },
-      stream: "assistant",
-    },
-  ])(
-    "$name",
-    ({
-      name,
+  };
+  const progress: Streaming = { mode: "progress" };
+  const on = { progress: { commentary: true } };
+  const off = { progress: { commentary: false } };
+  it.each<[string, CommentaryOptions, "assistant" | "item", boolean]>([
+    ["Discord progress", { channel: "discord", streaming: progress }, "assistant", true],
+    ["Discord unset", { channel: "discord" }, "item", false],
+    ["commentary disabled", { streaming: { ...progress, ...off } }, "item", false],
+    [
+      "normalized account opt-out",
+      {
+        streaming: progress,
+        accountStreaming: off,
+        configuredAccount: "Carey Notifications",
+        accountId: "carey-notifications",
+      },
+      "item",
+      false,
+    ],
+    [
+      "account mode opt-out",
+      {
+        streaming: { ...progress, ...on },
+        accountStreaming: { mode: "off" },
+      },
+      "item",
+      false,
+    ],
+    ["account inherits mode", { streaming: progress, accountStreaming: on }, "assistant", true],
+    [
+      "channel mode off",
+      {
+        channel: "discord",
+        streaming: { mode: "off" },
+        accountStreaming: on,
+      },
+      "assistant",
+      false,
+    ],
+  ])("%s", (name, options, stream, visible) => {
+    const {
       channel = "forum",
       streaming,
       accountStreaming,
       configuredAccount = "work",
       accountId = configuredAccount,
-      stream,
-      visible,
-    }) => {
-      const relay = createRelay(name, {
-        cfg: {
-          channels: {
-            [channel]: {
-              streaming,
-              ...(accountStreaming
-                ? { accounts: { [configuredAccount]: { streaming: accountStreaming } } }
-                : {}),
-            },
+    } = options;
+    const relay = createRelay(name, {
+      cfg: {
+        channels: {
+          [channel]: {
+            streaming,
+            ...(accountStreaming
+              ? { accounts: { [configuredAccount]: { streaming: accountStreaming } } }
+              : {}),
           },
         },
-        deliveryContext: { ...progressCommentaryDeliveryContext, channel, accountId },
-      });
-      relay.emit(
-        stream,
-        stream === "assistant"
-          ? { delta: "Checking progress.", phase: "commentary" }
-          : { itemId: "preamble-1", kind: "preamble", progressText: "Checking progress." },
-      );
-      vi.advanceTimersByTime(2_500);
-      expect(collectedTexts()).toEqual(visible ? ["codex: Checking progress."] : []);
-    },
-  );
-
-  it("flushes buffered commentary before ACP status progress", () => {
-    const relay = progressRelay("run-commentary-status-boundary", {
-      stream: { tagVisibility: { plan: true } },
+      },
+      deliveryContext: { ...progressCommentaryDeliveryContext, channel, accountId },
     });
-
-    relay.assistant("checking files", "commentary");
-    relay.status("plan: inspect the runtime handoff first", "plan");
-
-    expect(collectedTexts()).toEqual([
-      "codex: checking files",
-      "codex: plan: inspect the runtime handoff first",
-    ]);
+    relay.emit(
+      stream,
+      stream === "assistant"
+        ? { delta: "Checking progress.", phase: "commentary" }
+        : { itemId: "preamble-1", kind: "preamble", progressText: "Checking progress." },
+    );
+    vi.advanceTimersByTime(2_500);
+    expect(collectedTexts()).toEqual(visible ? ["codex: Checking progress."] : []);
   });
 
   it("does not relay ACP status tags hidden by default when progress commentary is enabled", () => {
