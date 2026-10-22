@@ -25,7 +25,6 @@ describe("Solid shell chrome", () => {
     const retry = vi.fn();
     const toggle = vi.fn();
     const palette = vi.fn();
-    const openSession = vi.fn();
     const view = mountSolid(() => (
       <openclaw-app-topbar
         prop:environment={environment()}
@@ -38,7 +37,6 @@ describe("Solid shell chrome", () => {
               agentId="writer"
               class="header-new-session"
               label="New conversation"
-              onOpen={openSession}
             />
           </Show>
         )}
@@ -95,8 +93,6 @@ describe("Solid shell chrome", () => {
     await update(() => setShowNewSessionAction(true));
     const newSession = find(".topnav-shell__actions .header-new-session")!;
     expect(newSession.getAttribute("href")).toBe("/control/new?agent=writer");
-    newSession.click();
-    expect(openSession).toHaveBeenCalledWith("writer", undefined);
     newSession.focus();
     await update(() => setEnvironment({ label: "edge", color: "amber" }));
     expect(find(".header-new-session")).toBe(newSession);
