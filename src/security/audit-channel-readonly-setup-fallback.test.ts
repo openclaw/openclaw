@@ -1,6 +1,7 @@
 // Covers channel readonly setup fallback audit behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { stubAuditChannelPlugin } from "./audit-channel-test-helpers.js";
 
 type CollectParams = Parameters<
   typeof import("./audit-channel.js").collectChannelSecurityFindingsCore
@@ -69,7 +70,14 @@ const { runSecurityAuditCore } = await import("./audit.js");
 
 describe("security audit channel read-only setup fallback", () => {
   it("passes setup fallback plugins to channel security collection", async () => {
-    const plugin = { id: "telegram" };
+    const plugin = stubAuditChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      commands: undefined,
+      collectAuditFindings: undefined,
+      inspectAccount: () => ({ enabled: true, configured: true }),
+      resolveAccount: () => ({}),
+    });
     const cfg = {
       agents: { entries: { main: {} } },
       session: { dmScope: "main" },

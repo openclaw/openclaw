@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
@@ -79,12 +78,9 @@ describe("security audit install metadata findings", () => {
   let fixtureRoot = "";
   let caseId = 0;
 
-  const makeTmpDir = async (label: string, extensions: string[] = []) => {
+  const makeTmpDir = async (label: string) => {
     const dir = path.join(fixtureRoot, `case-${caseId++}-${label}`);
     await fs.mkdir(dir, { recursive: true });
-    for (const name of extensions) {
-      await fs.mkdir(path.join(dir, "extensions", name), { recursive: true });
-    }
     return dir;
   };
 
@@ -103,11 +99,13 @@ describe("security audit install metadata findings", () => {
   const requireInstallFinding = (
     findings: Awaited<ReturnType<typeof runInstallMetadataAudit>>,
     checkId: string,
-  ) =>
-    expectDefined(
-      findings.find((entry) => entry.checkId === checkId),
-      checkId,
-    );
+  ) => {
+    const finding = findings.find((entry) => entry.checkId === checkId);
+    if (!finding) {
+      throw new Error(`Expected ${checkId} finding`);
+    }
+    return finding;
+  };
 
   const writePluginIndexInstallRecords = async (
     stateDir: string,
@@ -143,42 +141,50 @@ describe("security audit install metadata findings", () => {
     }
   });
 
-  it.each<{
-    name: string;
-    flags: Partial<Record<"pinned" | "integrity" | "resolved" | "drift", boolean>>;
-    present: string[];
-    absent: string[];
-  }>`
-    name                        | flags                                             | present                                        | absent
-    ${"unpinned"}               | ${{}}                                             | ${["unpinned_npm_specs", "missing_integrity"]} | ${[]}
-    ${"pinned"}                 | ${{ pinned: true, integrity: true }}              | ${[]}                                          | ${["unpinned_npm_specs", "missing_integrity"]}
-    ${"unpinned with metadata"} | ${{ integrity: true, resolved: true }}            | ${["unpinned_npm_specs"]}                      | ${["missing_integrity"]}
-    ${"version drift"}          | ${{ pinned: true, integrity: true, drift: true }} | ${["version_drift"]}                           | ${[]}
-  `("audits $name install records", async ({ name, flags, present, absent }) => {
-    const stateDir = await makeTmpDir(name);
-    const record = (packageName: string, integrity: string): HookInstallRecord => ({
-      source: "npm",
-      spec: `@openclaw/${packageName}${flags.pinned ? "@1.2.3" : ""}`,
-      ...(flags.integrity ? { integrity } : {}),
-      ...(flags.resolved ? { resolvedSpec: `@openclaw/${packageName}@1.2.3` } : {}),
-      ...(flags.drift ? { resolvedVersion: "1.2.3" } : {}),
-    });
-    await writePluginIndexInstallRecords(stateDir, {
-      "voice-call": record("voice-call", "sha512-plugin"),
-    });
-    writeHookInstalls(stateDir, { "test-hooks": record("test-hooks", "sha512-hook") });
-    const findings = await runInstallMetadataAudit({}, stateDir);
-    for (const owner of ["plugins", "hooks"]) {
-      for (const suffix of present) {
-        expect(findings, name).toContainEqual(
-          expect.objectContaining({ checkId: `${owner}.installs_${suffix}`, severity: "warn" }),
-        );
-      }
-      for (const suffix of absent) {
-        expect(
-          findings.some(({ checkId }) => checkId === `${owner}.installs_${suffix}`),
-          name,
-        ).toBe(false);
+  it("evaluates install metadata findings", async () => {
+    type Flags = Partial<Record<"pinned" | "integrity" | "resolved" | "drift", boolean>>;
+    const cases: Array<[string, Flags, string[], string[]]> = [
+      ["unpinned", {}, ["unpinned_npm_specs", "missing_integrity"], []],
+      [
+        "pinned",
+        { pinned: true, integrity: true },
+        [],
+        ["unpinned_npm_specs", "missing_integrity"],
+      ],
+      [
+        "unpinned with resolved metadata",
+        { integrity: true, resolved: true },
+        ["unpinned_npm_specs"],
+        ["missing_integrity"],
+      ],
+      ["version drift", { pinned: true, integrity: true, drift: true }, ["version_drift"], []],
+    ];
+    for (const [name, flags, present, absent] of cases) {
+      const stateDir = await makeTmpDir(name);
+      const record = (packageName: string, integrity: string): HookInstallRecord => ({
+        source: "npm",
+        spec: `@openclaw/${packageName}${flags.pinned ? "@1.2.3" : ""}`,
+        ...(flags.integrity ? { integrity } : {}),
+        ...(flags.resolved ? { resolvedSpec: `@openclaw/${packageName}@1.2.3` } : {}),
+        ...(flags.drift ? { resolvedVersion: "1.2.3" } : {}),
+      });
+      await writePluginIndexInstallRecords(stateDir, {
+        "voice-call": record("voice-call", "sha512-plugin"),
+      });
+      writeHookInstalls(stateDir, { "test-hooks": record("test-hooks", "sha512-hook") });
+      const findings = await runInstallMetadataAudit({}, stateDir);
+      for (const owner of ["plugins", "hooks"]) {
+        for (const suffix of present) {
+          expect(findings, name).toContainEqual(
+            expect.objectContaining({ checkId: `${owner}.installs_${suffix}`, severity: "warn" }),
+          );
+        }
+        for (const suffix of absent) {
+          expect(
+            findings.some(({ checkId }) => checkId === `${owner}.installs_${suffix}`),
+            name,
+          ).toBe(false);
+        }
       }
     }
   });
@@ -260,32 +266,51 @@ describe("security audit install metadata findings", () => {
     );
   });
 
-  it.each<{ installed: string; allow: string[]; phantom: string }>`
-    installed                  | allow                                                | phantom
-    ${"some-installed-plugin"} | ${["discord", "anthropic", "some-installed-plugin"]} | ${""}
-    ${"installed-plugin"}      | ${["installed-plugin", "ghost-plugin-xyz"]}          | ${"ghost-plugin-xyz"}
-  `("audits phantom entries beside $installed", async ({ installed, allow, phantom }) => {
-    const stateDir = await makeTmpDir("phantom", [installed]);
-    const findings = await runInstallMetadataAudit({ plugins: { allow } }, stateDir);
-    const finding = findings.find(({ checkId }) => checkId === "plugins.allow_phantom_entries");
-    if (!phantom) {
-      expect(finding).toBeUndefined();
-    } else {
-      expect(expectDefined(finding, "phantom entry")).toMatchObject({ severity: "warn" });
-      expect(finding?.detail).toContain(phantom);
-      expect(finding?.detail).not.toContain(installed);
-    }
+  it("evaluates phantom allowlist findings", async () => {
+    const bundledStateDir = await makeTmpDir("phantom-bundled-excluded");
+    await fs.mkdir(path.join(bundledStateDir, "extensions", "some-installed-plugin"), {
+      recursive: true,
+    });
+
+    const bundledFindings = await runInstallMetadataAudit(
+      {
+        plugins: { allow: ["discord", "anthropic", "some-installed-plugin"] },
+      },
+      bundledStateDir,
+    );
+    expect(
+      bundledFindings.find((finding) => finding.checkId === "plugins.allow_phantom_entries"),
+    ).toBeUndefined();
+
+    const reportedStateDir = await makeTmpDir("phantom-reported");
+    await fs.mkdir(path.join(reportedStateDir, "extensions", "installed-plugin"), {
+      recursive: true,
+    });
+
+    const reportedFindings = await runInstallMetadataAudit(
+      {
+        plugins: { allow: ["installed-plugin", "ghost-plugin-xyz"] },
+      },
+      reportedStateDir,
+    );
+    const phantomFinding = requireInstallFinding(reportedFindings, "plugins.allow_phantom_entries");
+    expect(phantomFinding.severity).toBe("warn");
+    expect(phantomFinding.detail).toContain("ghost-plugin-xyz");
+    expect(phantomFinding.detail).not.toContain("installed-plugin");
   });
 
   it("ignores install backup and debris dirs when auditing installed plugin roots", async () => {
-    const stateDir = await makeTmpDir("installed-plugin-debris", [
+    const stateDir = await makeTmpDir("installed-plugin-debris");
+    for (const name of [
       "live-plugin",
       ".openclaw-install-backups",
       "node_modules",
       "old-plugin.backup-20260502",
       "old-plugin.disabled.20260502",
       "old-plugin.bak",
-    ]);
+    ]) {
+      await fs.mkdir(path.join(stateDir, "extensions", name), { recursive: true });
+    }
 
     const findings = await runInstallMetadataAudit({}, stateDir);
 
@@ -301,38 +326,13 @@ describe("security audit install metadata findings", () => {
       ".openclaw-install-backups",
     );
   });
-  const reachable = "plugins.tools_reachable_permissive_policy";
-  const declared = ["some_plugin_tool"];
-  const allowed: OpenClawConfig = { plugins: { allow: ["some-plugin"] } };
-  const grouped: OpenClawConfig = {
-    ...allowed,
-    tools: { profile: "coding", alsoAllow: ["group:plugins"] },
-  };
-  const agentScoped: OpenClawConfig = {
-    ...allowed,
-    agents: { entries: { ops: { tools: { profile: "full" } } } },
-  };
-  const denied: OpenClawConfig = { ...grouped, tools: { ...grouped.tools, deny: declared } };
-  it.each<{
-    name: string;
-    cfg: OpenClawConfig;
-    tools: string[] | undefined;
-    checkId: string | false;
-    detail: string;
-  }>`
-    name                  | cfg                                             | tools        | checkId                              | detail
-    ${"no allowlist"}     | ${{}}                                           | ${declared}  | ${"plugins.extensions_no_allowlist"} | ${""}
-    ${"permissive"}       | ${allowed}                                      | ${declared}  | ${reachable}                         | ${""}
-    ${"agent scope"}      | ${agentScoped}                                  | ${declared}  | ${reachable}                         | ${"- agents.entries.ops"}
-    ${"restrictive"}      | ${{ ...allowed, tools: { profile: "coding" } }} | ${declared}  | ${false}                             | ${""}
-    ${"plugin group"}     | ${grouped}                                      | ${declared}  | ${reachable}                         | ${""}
-    ${"missing contract"} | ${grouped}                                      | ${undefined} | ${reachable}                         | ${""}
-    ${"empty contract"}   | ${allowed}                                      | ${[]}        | ${false}                             | ${""}
-    ${"concrete deny"}    | ${denied}                                       | ${declared}  | ${false}                             | ${""}
-  `("audits extension tools: $name", async ({ name, cfg, tools, checkId, detail }) => {
-    const root = await makeTmpDir("reachability");
-    const home = path.join(root, "home");
-    const stateDir = path.join(root, "shared-extensions-state");
+});
+
+describe("security audit extension tool reachability findings", () => {
+  it("evaluates extension tool reachability findings", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-extensions-"));
+    const home = path.join(fixtureRoot, "home");
+    const stateDir = path.join(fixtureRoot, "shared-extensions-state");
     const isolatedEnv = createPathResolutionEnv(home, { OPENCLAW_HOME: home });
     const scopedEnv = Object.fromEntries(
       [
@@ -353,24 +353,57 @@ describe("security audit install metadata findings", () => {
         mode: 0o700,
       });
       await withEnvAsync(scopedEnv, async () => {
-        mockPluginTools.names = tools;
-        const findings = await collectPluginsTrustFindings({ cfg, stateDir });
-        if (checkId) {
-          expect(findings, name).toContainEqual(
-            expect.objectContaining({ checkId, severity: "warn" }),
-          );
-        } else {
-          expect(
-            findings.some((entry) => entry.checkId === reachable),
-            name,
-          ).toBe(false);
-        }
-        if (detail) {
-          expect(findings.find((entry) => entry.checkId === reachable)?.detail).toContain(detail);
+        const reachable = "plugins.tools_reachable_permissive_policy";
+        const declared = ["some_plugin_tool"];
+        const allowed: OpenClawConfig = { plugins: { allow: ["some-plugin"] } };
+        const grouped: OpenClawConfig = {
+          ...allowed,
+          tools: { profile: "coding", alsoAllow: ["group:plugins"] },
+        };
+        const cases: Array<
+          [string, OpenClawConfig, string[] | undefined, string | false, string?]
+        > = [
+          ["no allowlist", {}, declared, "plugins.extensions_no_allowlist"],
+          ["permissive", allowed, declared, reachable],
+          [
+            "agent scope",
+            { ...allowed, agents: { entries: { ops: { tools: { profile: "full" } } } } },
+            declared,
+            reachable,
+            "- agents.entries.ops",
+          ],
+          ["restrictive", { ...allowed, tools: { profile: "coding" } }, declared, false],
+          ["plugin group", grouped, declared, reachable],
+          ["missing contract", grouped, undefined, reachable],
+          ["empty contract", allowed, [], false],
+          [
+            "concrete deny",
+            { ...grouped, tools: { ...grouped.tools, deny: declared } },
+            declared,
+            false,
+          ],
+        ];
+        for (const [name, cfg, tools, checkId, detail] of cases) {
+          mockPluginTools.names = tools;
+          const findings = await collectPluginsTrustFindings({ cfg, stateDir });
+          if (checkId) {
+            expect(findings, name).toContainEqual(
+              expect.objectContaining({ checkId, severity: "warn" }),
+            );
+          } else {
+            expect(
+              findings.some((entry) => entry.checkId === reachable),
+              name,
+            ).toBe(false);
+          }
+          if (detail) {
+            expect(findings.find((entry) => entry.checkId === reachable)?.detail).toContain(detail);
+          }
         }
       });
     } finally {
       homedirSpy.mockRestore();
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
   });
 });

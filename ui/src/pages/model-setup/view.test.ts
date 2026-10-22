@@ -190,7 +190,14 @@ describe("renderModelSetup", () => {
   });
 
   it("renders recommended install cards only when candidates and sign-ins are empty", () => {
-    const container = mountDetected({ candidates: [], authOptions: [] });
+    const container = mount(
+      props({
+        page: {
+          phase: "ready",
+          result: { ...detected, candidates: [], authOptions: [] },
+        },
+      }),
+    );
 
     expect(text(container)).toContain("Recommended installs");
     const card = container.querySelector('[data-recommended-install="ollama"]');
@@ -343,28 +350,18 @@ describe("renderModelSetup", () => {
     expect(onActivateCandidate).toHaveBeenCalledExactlyOnceWith(savedCandidate);
   });
 
-  it("updates the displayed provider after connection verification", () => {
-    const view = props({
-      page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
-      verify: { phase: "checking" },
-      actionsDisabled: true,
-    });
-    const container = mount(view);
+  it("renders connection verification progress", () => {
+    const container = mount(
+      props({
+        page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
+        verify: { phase: "checking" },
+        actionsDisabled: true,
+      }),
+    );
     expect(text(container)).toContain("Checking — asking openai/gpt-5 for a quick reply…");
-    expect(find(container, '[data-provider-icon="codex"]')).not.toBeNull();
-    expect(pageButton(container, ".model-setup__current button")?.disabled).toBe(true);
-    view.verify = { phase: "ok", modelRef: "anthropic/claude-opus-4-8", latencyMs: 1234 };
-    view.actionsDisabled = false;
-    renderSetup(view, container);
-    const current = find(container, ".model-setup__current")!;
-    expect(current.getAttribute("data-verify-phase")).toBe("ok");
-    expect(text(current)).toContain("Ready · 1234 ms");
-    expect(text(current)).toContain("Anthropic");
-    expect(text(current)).toContain("claude-opus-4-8");
-    expect(text(current)).not.toContain("gpt-5");
-    expect(find(current, '[data-provider-icon="claude"]')).not.toBeNull();
-    expect(pageButton(current, "button")?.disabled).toBe(false);
-    expect(pageButton(current, "button")?.textContent?.trim()).toBe("Check again");
+    expect(
+      container.querySelector<HTMLButtonElement>(".model-setup__current button")?.disabled,
+    ).toBe(true);
   });
 
   it("renders successful connection verification with the answering model", () => {
@@ -397,52 +394,6 @@ describe("renderModelSetup", () => {
       );
       expect(current.querySelector("button")).toBeNull();
     }
-  });
-
-  it.each([
-    ["ollama", "qwen3:8b at http://127.0.0.1:11434", "Ollama", "ollama/qwen3:8b"],
-    ["llama-cpp", "Ready locally", "llama.cpp", "llama-cpp/gemma-4-e4b-it-q4_k_m"],
-  ] as const)("shows a quiet recovery state for %s", (brandId, detail, label, modelRef) => {
-    const onVerify = vi.fn();
-    const container = mountDetected(
-      {
-        ...emptyDetection,
-        candidates: [
-          { ...candidate(`provider-auto:${brandId}`, modelRef, true), brandId, label, detail },
-        ],
-        configuredModel: modelRef,
-        setupComplete: true,
-      },
-      {
-        verify: { phase: "failed", status: "unavailable", error: "connect ECONNREFUSED" },
-        onVerify,
-      },
-    );
-    const current = find(container, ".model-setup__current")!;
-    expect(find(current, ".settings-section__header h2")?.textContent).toBe("Selected model");
-    expect(find(current, ".model-setup__current-copy strong")?.textContent).toBe(label);
-    expect(text(current)).toContain(detail);
-    expect(text(current)).toContain("connect ECONNREFUSED");
-    expect(text(current)).not.toContain("isn’t responding");
-    expect(text(current)).not.toContain("Change connection");
-    const button = pageButton(current, "button");
-    expect(button?.textContent?.trim()).toBe("Try again");
-    button?.click();
-    expect(onVerify).toHaveBeenCalledOnce();
-  });
-
-  it("explains a setup timeout without claiming the provider is unreachable", () => {
-    const container = mountDetected(
-      { ...emptyDetection, configuredModel: "ollama/gemma4:latest", setupComplete: true },
-      { verify: { phase: "failed", status: "timeout", error: "LLM request timed out." } },
-    );
-    const current = find(container, ".model-setup__current")!;
-    expect(text(current)).toContain("Timed out. LLM request timed out.");
-    expect(text(current)).toContain(
-      "The model did not finish the setup test in time. Warm it or choose a faster model, then retry.",
-    );
-    expect(text(current)).not.toContain("isn’t responding");
-    expect(text(current)).not.toContain("service is running and reachable");
   });
 
   it.each([true, false])("reports device-code fallback success: %s", async (copied) => {

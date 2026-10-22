@@ -10,7 +10,6 @@ import type { SecurityAuditFinding } from "./audit.types.js";
 const getFinding = (findings: SecurityAuditFinding[], checkId: string) =>
   findings.find((entry) => entry.checkId === checkId);
 const openAccount = () => ({ policy: "open", allowFrom: ["*"] });
-const mainSession = { dmScope: "main" } as const;
 const mayShare = {
   title: expect.stringContaining("may share"),
   detail: expect.stringContaining("can resolve to the same session bucket"),
@@ -25,8 +24,25 @@ function createDmPlugin(
   accounts: Accounts = { default: { policy: "allowlist", allowFrom: ["user-a", "user-b"] } },
   dmRouting?: NonNullable<ChannelPlugin["security"]>["dmRouting"],
   id: "telegram" | "whatsapp" = "whatsapp",
-): ChannelPlugin & { security: NonNullable<ChannelPlugin["security"]> } {
+) {
   const accountIds = Object.keys(accounts);
+  const security: NonNullable<ChannelPlugin["security"]> = {
+    resolveDmPolicy: ({ accountId }: { accountId?: string | null }) => {
+      const resolvedAccountId = accountId ?? "default";
+      const policy = accounts[resolvedAccountId];
+      return policy
+        ? {
+            policy: policy.policy ?? "allowlist",
+            allowFrom: policy.allowFrom,
+            policyPath: `channels.${id}.accounts.${resolvedAccountId}.dmPolicy`,
+            allowFromPath: `channels.${id}.accounts.${resolvedAccountId}.`,
+            approveHint: `approve ${resolvedAccountId}`,
+          }
+        : null;
+    },
+    ...(dmRouting ? { dmRouting } : {}),
+  };
+
   return {
     ...createChannelTestPluginBase({
       id,
@@ -34,38 +50,15 @@ function createDmPlugin(
       config: {
         listAccountIds: () => accountIds,
         defaultAccountId: () => accountIds[0] ?? "default",
-        inspectAccount: () => ({ enabled: true, configured: true }),
+        inspectAccount: (_cfg, accountId) => ({
+          accountId: accountId ?? "default",
+          enabled: true,
+          configured: true,
+        }),
       },
     }),
-    security: {
-      resolveDmPolicy: ({ accountId = "default" }) => {
-        const key = accountId ?? "default";
-        const account = accounts[key];
-        return account
-          ? {
-              policy: account.policy ?? "allowlist",
-              allowFrom: account.allowFrom,
-              policyPath: `channels.${id}.accounts.${key}.dmPolicy`,
-              allowFromPath: `channels.${id}.accounts.${key}.`,
-              approveHint: `approve ${key}`,
-            }
-          : null;
-      },
-      ...(dmRouting ? { dmRouting } : {}),
-    },
+    security,
   } satisfies ChannelPlugin;
-}
-
-function collect(
-  cfg: OpenClawConfig,
-  plugins: ChannelPlugin | ChannelPlugin[],
-  mode?: "audit" | "doctor",
-) {
-  return collectChannelSecurityFindingsCore({
-    cfg,
-    plugins: Array.isArray(plugins) ? plugins : [plugins],
-    mode,
-  });
 }
 
 function dmBinding(id: string, dmScope: DmScope, accountId?: string) {
@@ -82,18 +75,20 @@ function dmBinding(id: string, dmScope: DmScope, accountId?: string) {
 
 describe("security audit channel dm policy", () => {
   it("reports unowned DM routes without losing sibling findings in audit mode", async () => {
-    const findings = await collect(
-      {
+    const findings = await collectChannelSecurityFindingsCore({
+      mode: "audit",
+      cfg: {
         agents: { entries: { main: {}, research: {} } },
         bindings: [{ agentId: "research", match: { channel: "whatsapp", accountId: "owned" } }],
       },
-      createDmPlugin({
-        finite: { allowFrom: ["user-a", "user-b"] },
-        open: openAccount(),
-        owned: { allowFrom: ["user-c", "user-d"] },
-      }),
-      "audit",
-    );
+      plugins: [
+        createDmPlugin({
+          finite: { allowFrom: ["user-a", "user-b"] },
+          open: openAccount(),
+          owned: { allowFrom: ["user-c", "user-d"] },
+        }),
+      ],
+    });
 
     for (const account of ["finite", "open"]) {
       expect(
@@ -138,22 +133,96 @@ describe("security audit channel dm policy", () => {
     expect(report.summary.critical).toBe(baseline.summary.critical + 1);
   });
 
-  it.each<{
-    name: string;
-    cfg: OpenClawConfig;
-    plugins: ChannelPlugin | ChannelPlugin[];
-    expected: Record<string, unknown>[];
-  }>`
-    name                                                   | cfg                                                                                                                                                                                                                         | plugins                                                                                                                                                                            | expected
-    ${"identity-linked aliases"}                           | ${{ session: { ...mainSession, identityLinks: { alice: ["whatsapp:user-a", "whatsapp:user-b"] } } }}                                                                                                                        | ${createDmPlugin()}                                                                                                                                                                | ${[]}
-    ${"distinct principals"}                               | ${{ session: mainSession }}                                                                                                                                                                                                 | ${createDmPlugin()}                                                                                                                                                                | ${[{}]}
-    ${"separate collision topologies"}                     | ${{ agents: { entries: { alpha: {}, beta: {} } }, session: mainSession, bindings: ["a", "b", "c", "d"].map((accountId, index) => ({ agentId: index < 2 ? "alpha" : "beta", match: { channel: "whatsapp", accountId } })) }} | ${createDmPlugin(Object.fromEntries(["a", "b", "c", "d"].map((id) => [id, { allowFrom: [`user-${id}`] }])))}                                                                       | ${[{}, {}]}
-    ${"per-channel wildcard intersects a concrete sender"} | ${{ session: { dmScope: "per-channel-peer" } }}                                                                                                                                                                             | ${createDmPlugin({ open: openAccount(), finite: { allowFrom: ["user-b"] } }, { resolveDmRoute: ({ principalId }) => (principalId === undefined ? { kind: "core" } : undefined) })} | ${[mayShare]}
-    ${"per-peer wildcard subsumes a per-channel wildcard"} | ${{}}                                                                                                                                                                                                                       | ${(["whatsapp", "telegram"] as const).map((id) => createDmPlugin({ open: openAccount() }, { resolveDmScope: () => (id === "whatsapp" ? "per-peer" : "per-channel-peer") }, id))}   | ${[mayShare]}
-    ${"finite probes cannot hide an open-DM collision"}    | ${{ session: mainSession, bindings: [1, 2].map((n) => dmBinding(`__openclaw_audit_unmatched_dm_${n}__`, "per-channel-peer")) }}                                                                                             | ${createDmPlugin({ default: openAccount() })}                                                                                                                                      | ${[{}]}
-    ${"exact DM bindings admitted by wildcard policy"}     | ${{ session: { dmScope: "per-account-channel-peer" }, bindings: [dmBinding("bound-a", "main", "*"), dmBinding("bound-b", "main", " WORK ")] }}                                                                              | ${createDmPlugin({ work: openAccount() })}                                                                                                                                         | ${[{ title: "DM principals share a session", detail: expect.stringContaining("2 distinct admitted DM principals") }]}
-  `("audits collision topology for $name", async ({ cfg, plugins, expected }) => {
-    const findings = await collect(cfg, plugins);
+  it.each([
+    ...[true, false].map((linked) => ({
+      name: linked ? "identity-linked aliases" : "distinct principals",
+      cfg: {
+        session: {
+          dmScope: "main" as const,
+          ...(linked ? { identityLinks: { alice: ["whatsapp:user-a", "whatsapp:user-b"] } } : {}),
+        },
+      },
+      plugins: [createDmPlugin()],
+      expected: linked ? [] : [{}],
+    })),
+    {
+      name: "separate collision topologies",
+      cfg: {
+        agents: { entries: { alpha: {}, beta: {} } },
+        session: { dmScope: "main" as const },
+        bindings: ["a", "b", "c", "d"].map((accountId, index) => ({
+          agentId: index < 2 ? "alpha" : "beta",
+          match: { channel: "whatsapp", accountId },
+        })),
+      },
+      plugins: [
+        createDmPlugin({
+          a: { allowFrom: ["user-a"] },
+          b: { allowFrom: ["user-b"] },
+          c: { allowFrom: ["user-c"] },
+          d: { allowFrom: ["user-d"] },
+        }),
+      ],
+      expected: [{}, {}],
+    },
+    {
+      name: "per-channel wildcard intersects a concrete sender on the same channel",
+      expected: [mayShare],
+      cfg: { session: { dmScope: "per-channel-peer" as const } },
+      plugins: [
+        createDmPlugin(
+          {
+            open: openAccount(),
+            finite: { allowFrom: ["user-b"] },
+          },
+          {
+            resolveDmRoute: ({ principalId }) =>
+              principalId === undefined ? { kind: "core" } : undefined,
+          },
+        ),
+      ],
+    },
+    {
+      name: "per-peer wildcard subsumes an overlapping per-channel wildcard",
+      expected: [mayShare],
+      cfg: {},
+      plugins: (["whatsapp", "telegram"] as const).map((id) =>
+        createDmPlugin(
+          { open: openAccount() },
+          {
+            resolveDmScope: () => (id === "whatsapp" ? "per-peer" : "per-channel-peer"),
+          },
+          id,
+        ),
+      ),
+    },
+    {
+      name: "finite probe bindings cannot hide an open-DM collision",
+      expected: [{}],
+      cfg: {
+        session: { dmScope: "main" },
+        bindings: [1, 2].map((n) =>
+          dmBinding(`__openclaw_audit_unmatched_dm_${n}__`, "per-channel-peer"),
+        ),
+      } satisfies OpenClawConfig,
+      plugins: [createDmPlugin({ default: openAccount() })],
+    },
+    {
+      name: "exact DM bindings admitted by wildcard policy",
+      expected: [
+        {
+          title: "DM principals share a session",
+          detail: expect.stringContaining("2 distinct admitted DM principals"),
+        },
+      ],
+      cfg: {
+        session: { dmScope: "per-account-channel-peer" },
+        bindings: [dmBinding("bound-a", "main", "*"), dmBinding("bound-b", "main", " WORK ")],
+      } satisfies OpenClawConfig,
+      plugins: [createDmPlugin({ work: openAccount() })],
+    },
+  ])("audits collision topology for $name", async ({ cfg, plugins, expected }) => {
+    const findings = await collectChannelSecurityFindingsCore({ cfg, plugins });
     const collisions = collisionFindings(findings);
     expect(collisions).toEqual(expected.map((shape) => expect.objectContaining(shape)));
     if (expected.length > 1) {
@@ -163,16 +232,18 @@ describe("security audit channel dm policy", () => {
   });
 
   it("warns when custom finite routing omits an unknown-principal policy", async () => {
-    const findings = await collect(
-      { session: mainSession },
-      createDmPlugin(
-        { default: openAccount() },
-        {
-          resolveDmRoute: ({ principalId, route }) =>
-            principalId === undefined ? undefined : { sessionKey: route.sessionKey },
-        },
-      ),
-    );
+    const findings = await collectChannelSecurityFindingsCore({
+      cfg: { session: { dmScope: "main" } },
+      plugins: [
+        createDmPlugin(
+          { default: openAccount() },
+          {
+            resolveDmRoute: ({ principalId, route }) =>
+              principalId === undefined ? undefined : { sessionKey: route.sessionKey },
+          },
+        ),
+      ],
+    });
 
     const finding = getFinding(
       findings,

@@ -178,6 +178,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/browser/plugin-registration.dashboard-discovery.test.ts",
   "extensions/browser/browser-maintenance.cold.test.ts",
   "extensions/browser/browser-maintenance.transport.test.ts",
+  "extensions/browser/src/browser-dashboard.concurrency.test.ts",
   "extensions/browser/src/browser/routes/agent.act.dashboard-ownership.test.ts",
   "extensions/browser/src/browser/routes/agent.act.transfers-ownership.test.ts",
   "extensions/browser/src/browser/routes/agent.state.dashboard-ownership.test.ts",

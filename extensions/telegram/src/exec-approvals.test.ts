@@ -161,7 +161,9 @@ describe("telegram exec approvals", () => {
     to,
     accountId,
   });
-  it.each([
+  it.each<
+    [string, boolean, NonNullable<Target>[number], string?, string?, ("targets" | "session")?]
+  >([
     ["prefixed DM/account", true, makeTarget("tg:12345", "Work Bot"), "work-bot"],
     ["different sender", false, makeTarget(), undefined, "99999"],
     ["different account", false, makeTarget("12345", "work"), "personal"],
@@ -170,14 +172,7 @@ describe("telegram exec approvals", () => {
     ["inactive forwarding", false, makeTarget(), undefined, undefined, "session"],
     ["unscoped target", true, makeTarget(), "any-account"],
     ["unspecified callback account", true, makeTarget("12345", "work")],
-  ] satisfies [
-    string,
-    boolean,
-    NonNullable<Target>[number],
-    string?,
-    string?,
-    ("targets" | "session")?,
-  ][])("checks %s", (_name, expected, target, accountId, senderId = "12345", mode = "targets") => {
+  ])("checks %s", (_name, expected, target, accountId, senderId = "12345", mode = "targets") => {
     const cfg: OpenClawConfig = {
       channels: { telegram: { botToken: "tok" } },
       approvals: { exec: { enabled: true, mode, targets: [target] } },

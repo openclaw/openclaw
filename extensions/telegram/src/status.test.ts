@@ -139,7 +139,7 @@ describe("resolveTelegramAllowedReactions", () => {
   const reactions = (available_reactions: TelegramChatDetails["available_reactions"]) => ({
     available_reactions,
   });
-  it.each([
+  it.each<[string, TelegramChatDetails, unknown, TelegramGetChat?]>([
     ["missing metadata", { id: 1 }, null],
     [
       "standard/custom but not paid",
@@ -153,12 +153,9 @@ describe("resolveTelegramAllowedReactions", () => {
     ],
     ["malformed payload", { available_reactions: emoji("👍") } as never, []],
     ["getChat fallback", { id: 1 }, [emoji("👍")], async () => reactions([emoji("👍")])],
-  ] satisfies Array<[string, TelegramChatDetails, unknown, TelegramGetChat?]>)(
-    "resolves allowed reactions from %s",
-    async (_name, chat, expected, getChat) => {
-      await expect(allowed(chat, getChat)).resolves.toEqual(expected);
-    },
-  );
+  ])("resolves allowed reactions from %s", async (_name, chat, expected, getChat) => {
+    await expect(allowed(chat, getChat)).resolves.toEqual(expected);
+  });
 });
 
 describe("resolveTelegramReactionVariant", () => {

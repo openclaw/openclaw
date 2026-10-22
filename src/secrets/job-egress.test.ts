@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { withSetupSecretEgress } from "../plugin-sdk/secret-egress-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
@@ -12,6 +11,7 @@ import { resolveSecretSentinel } from "./sentinel.js";
 import { inspectSetupSecretMigration } from "./setup-secret-migration.js";
 import { writeSecretStoreEntries } from "./store/secret-store.js";
 
+const { withSetupSecretEgress } = await import("../plugin-sdk/secret-egress-runtime.js");
 const { proxy, revoke } = useEgressProxyMock();
 const stop = proxy.stop;
 let state: OpenClawTestState;

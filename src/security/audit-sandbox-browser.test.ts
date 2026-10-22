@@ -15,11 +15,27 @@ afterEach(() => {
 });
 
 describe("security audit sandbox browser findings", () => {
-  it.each<{ name: string; labels: Record<string, string>; ports: string; expected: unknown[] }>`
-    name                               | labels                                                                | ports                                                         | expected
-    ${"missing and stale hash labels"} | ${{ old: "abc123\tepoch-v0\n", missing: "<no value>\t<no value>\n" }} | ${""}                                                         | ${[finding("hash_label_missing"), expect.objectContaining({ checkId: "sandbox.browser_container.hash_epoch_stale", severity: "warn", detail: expect.stringContaining("openclaw-sbx-browser-old") })]}
-    ${"non-loopback published ports"}  | ${{ exposed: "hash123\t2026-02-21-novnc-auth-default\n" }}            | ${"6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n"} | ${[finding("non_loopback_publish", "critical")]}
-  `("warns about $name", async ({ labels, ports, expected }) => {
+  it.each([
+    {
+      name: "missing and stale hash labels",
+      labels: { old: "abc123\tepoch-v0\n", missing: "<no value>\t<no value>\n" },
+      ports: "",
+      expected: [
+        finding("hash_label_missing"),
+        expect.objectContaining({
+          checkId: "sandbox.browser_container.hash_epoch_stale",
+          severity: "warn",
+          detail: expect.stringContaining("openclaw-sbx-browser-old"),
+        }),
+      ],
+    },
+    {
+      name: "non-loopback published ports",
+      labels: { exposed: "hash123\t2026-02-21-novnc-auth-default\n" },
+      ports: "6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n",
+      expected: [finding("non_loopback_publish", "critical")],
+    },
+  ])("warns about $name", async ({ labels, ports, expected }) => {
     const containers = new Map(
       Object.entries(labels).map(([name, label]) => [`openclaw-sbx-browser-${name}`, label]),
     );

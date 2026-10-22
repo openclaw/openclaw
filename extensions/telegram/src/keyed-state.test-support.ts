@@ -1,3 +1,4 @@
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -16,18 +17,19 @@ export function useTelegramKeyedState<T>(options: OpenAsyncKeyedStoreOptions, ve
   const open = () => createPluginStateKeyedStoreForTests<T>("telegram", options);
   const install = (next: Store) => {
     store = next;
-    setTelegramRuntime({
-      state:
-        version === 1
-          ? { openKeyedStore: (() => store) as TelegramRuntime["state"]["openKeyedStore"] }
-          : {
-              openKeyedStoreV2: (() =>
-                store.withCurrent({
-                  assertCurrent() {},
-                })) as TelegramRuntime["state"]["openKeyedStoreV2"],
-            },
-      channel: {},
-    } as TelegramRuntime);
+    setTelegramRuntime(
+      createPluginRuntimeMock({
+        state:
+          version === 1
+            ? { openKeyedStore: (() => store) as TelegramRuntime["state"]["openKeyedStore"] }
+            : {
+                openKeyedStoreV2: (() =>
+                  store.withCurrent({
+                    assertCurrent() {},
+                  })) as TelegramRuntime["state"]["openKeyedStoreV2"],
+              },
+      }),
+    );
   };
   beforeEach(async () => {
     home = await createTempHomeEnv("telegram-keyed-state-");

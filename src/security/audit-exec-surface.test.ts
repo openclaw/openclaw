@@ -205,27 +205,27 @@ describe("security audit exec surface findings", () => {
     );
   });
 
-  it.each<{
-    name: string;
-    cfg: OpenClawConfig;
-    direct: boolean;
-    checkId: string;
-    expected?: Partial<SecurityAuditFinding>;
-  }>`
-    name                                         | cfg                                                                                                        | direct   | checkId                                            | expected
-    ${"agent filesystem policy path"}            | ${{ agents: { entries: { ops: { tools: fsToolsDisabled() } } } }}                                          | ${false} | ${"tools.exec.fs_tools_disabled_but_exec_enabled"} | ${{ detail: expect.stringContaining("agents.entries.ops.tools") }}
-    ${"read-only sandbox constrains exec"}       | ${{ agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } }, tools: fsToolsDisabled() }} | ${false} | ${"tools.exec.fs_tools_disabled_but_exec_enabled"} | ${undefined}
-    ${"agent profile overrides minimal default"} | ${{ tools: { profile: "minimal" }, agents: { entries: { owner: { tools: { profile: "full" } } } } }}       | ${true}  | ${"tools.profile_minimal_overridden"}              | ${{ severity: "warn", detail: expect.stringContaining("agents.entries.owner=full") }}
-    ${"elevated wildcard"}                       | ${{ agents: { entries: { main: {} } }, tools: { elevated: { allowFrom: { whatsapp: ["*"] } } } }}          | ${false} | ${"tools.elevated.allowFrom.whatsapp.wildcard"}    | ${{ severity: "critical" }}
-  `("audits $name", async ({ cfg, direct, checkId, expected }) => {
-    const findings = direct
-      ? collectMinimalProfileOverrideFindings(cfg)
-      : await collectSecurityAuditFindings(cfg);
-    if (expected) {
-      requireFinding(findings, checkId, expected);
-    } else {
-      expect(findings.some((f) => f.checkId === checkId && f.severity === "warn")).toBe(false);
-    }
+  it("reports canonical agent paths for filesystem policy drift", async () => {
+    const tools = fsToolsDisabled();
+    const findings = await collectSecurityAuditFindings({
+      agents: { entries: { ops: { tools } } },
+    });
+    requireFinding(findings, "tools.exec.fs_tools_disabled_but_exec_enabled", {
+      detail: expect.stringContaining("agents.entries.ops.tools"),
+    });
+  });
+
+  it("does not warn when sandbox filesystem policy constrains exec", async () => {
+    const findings = await collectSecurityAuditFindings({
+      agents: {
+        defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } },
+      },
+      tools: fsToolsDisabled(),
+    });
+
+    expect(hasFinding("tools.exec.fs_tools_disabled_but_exec_enabled", "warn", findings)).toBe(
+      false,
+    );
   });
 
   async function registryFixture() {
@@ -250,6 +250,29 @@ describe("security audit exec surface findings", () => {
       includeChannelSecurity: false,
     });
   }
+
+  it("flags agent profile overrides when global tools.profile is minimal", () => {
+    const findings = collectMinimalProfileOverrideFindings({
+      tools: { profile: "minimal" },
+      agents: { entries: { owner: { tools: { profile: "full" } } } },
+    });
+
+    requireFinding(findings, "tools.profile_minimal_overridden", {
+      severity: "warn",
+      detail: expect.stringContaining("agents.entries.owner=full"),
+    });
+  });
+
+  it("flags tools.elevated allowFrom wildcard as critical", async () => {
+    const findings = await collectSecurityAuditFindings({
+      agents: { entries: { main: {} } },
+      tools: { elevated: { allowFrom: { whatsapp: ["*"] } } },
+    });
+
+    requireFinding(findings, "tools.elevated.allowFrom.whatsapp.wildcard", {
+      severity: "critical",
+    });
+  });
 
   it("flags per-agent skill allowlists combined with host exec and a global mcporter registry", async () => {
     const { stateDir, registry } = await registryFixture();

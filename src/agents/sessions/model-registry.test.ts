@@ -37,7 +37,7 @@ function catalog(providers: Record<string, unknown>) {
   return { generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers };
 }
 
-const authResult = (apiKey?: string, headers?: Record<string, string>) => ({
+const authResult = (apiKey?: string, headers?: Record<string, string | null>) => ({
   ok: true,
   apiKey,
   headers,

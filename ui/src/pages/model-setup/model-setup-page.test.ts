@@ -334,7 +334,7 @@ describe("ModelSetupPage catalog icons", () => {
     const { context, client, request } = createFirstRunContext(refreshError);
     const modelActivation = {
       modelRef: "provider/verified",
-      gatewayRestartRequired: true,
+      gatewayRestartRequired: true as const,
     };
     mockRequests(request, {
       "openclaw.setup.auth.start": () => ({

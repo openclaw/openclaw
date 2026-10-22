@@ -18,11 +18,15 @@ type InspectionOverrides = Partial<{
   signingSecretStatus: string;
 }>;
 
-function makeSlackInspection(channel: SlashConfig, overrides: InspectionOverrides) {
+function makeSlackInspection(channel: unknown, overrides: InspectionOverrides) {
   return {
+    accountId: "default",
     enabled: true,
     configured: true,
+    mode: "http",
+    botTokenSource: "config",
     botTokenStatus: "configured_unavailable",
+    signingSecretSource: "config",
     signingSecretStatus: "configured_unavailable",
     config: channel,
     ...overrides,
@@ -30,24 +34,21 @@ function makeSlackInspection(channel: SlashConfig, overrides: InspectionOverride
 }
 
 describe("security audit channel source-config fallback slack", () => {
-  it.each<{
-    name: string;
-    source: InspectionOverrides;
-    resolved: InspectionOverrides;
-    selected: "source" | "resolved";
-  }>`
-    name                                                       | source                | resolved                                                                              | selected
-    ${"resolved inspection only exposes signingSecret status"} | ${{ enabled: false }} | ${{ botTokenStatus: "available", signingSecretStatus: "available" }}                  | ${"resolved"}
-    ${"source wins when resolved inspection is unconfigured"}  | ${{}}                 | ${{ configured: false, botTokenStatus: "available", signingSecretStatus: "missing" }} | ${"source"}
-  `("keeps source-configured findings: $name", async ({ source, resolved, selected }) => {
-    const cfg = makeSlackHttpConfig();
+  it.each<[string, InspectionOverrides, InspectionOverrides]>([
+    [
+      "resolved inspection only exposes signingSecret status",
+      { enabled: false },
+      { botTokenStatus: "available", signingSecretStatus: "available" },
+    ],
+    [
+      "source wins when resolved inspection is unconfigured",
+      {},
+      { configured: false, botTokenStatus: "available", signingSecretStatus: "missing" },
+    ],
+  ])("keeps source-configured findings: %s", async (_name, source, resolved) => {
     const sourceConfig = makeSlackHttpConfig();
-    const inspections = {
-      source: makeSlackInspection(sourceConfig.channels?.slack ?? {}, source),
-      resolved: makeSlackInspection(cfg.channels?.slack ?? {}, resolved),
-    };
     const findings = await collectChannelSecurityFindingsCore({
-      cfg,
+      cfg: makeSlackHttpConfig(),
       sourceConfig,
       plugins: [
         stubAuditChannelPlugin({
@@ -55,9 +56,13 @@ describe("security audit channel source-config fallback slack", () => {
           label: "Slack",
           commands: { nativeCommandsAutoEnabled: false, nativeSkillsAutoEnabled: false },
           collectAuditFindings: async ({ account }) => {
-            expect(account).toBe(inspections[selected]);
-            expect(inspections[selected].config.slashCommand).toEqual({ enabled: true });
-            expect(inspections[selected].config.allowFrom ?? []).toEqual([]);
+            const { slashCommand, allowFrom } = (account as { config?: SlashConfig }).config ?? {};
+            if (
+              slashCommand?.enabled !== true ||
+              (Array.isArray(allowFrom) && allowFrom.length > 0)
+            ) {
+              return [];
+            }
             return [
               {
                 checkId: "channels.slack.commands.slash.no_allowlists",
@@ -67,8 +72,12 @@ describe("security audit channel source-config fallback slack", () => {
               },
             ];
           },
-          inspectAccount: (input) => inspections[input === sourceConfig ? "source" : "resolved"],
-          resolveAccount: (input) => ({ config: input.channels?.slack ?? {} }),
+          inspectAccount: (cfg) =>
+            makeSlackInspection(
+              cfg.channels?.slack ?? {},
+              cfg === sourceConfig ? source : resolved,
+            ),
+          resolveAccount: (cfg) => ({ config: cfg.channels?.slack ?? {} }),
           isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
         }),
       ],

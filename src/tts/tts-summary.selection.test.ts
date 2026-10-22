@@ -15,7 +15,11 @@ import {
   acquireSimpleCompletionModelWithSelection,
   completeWithPreparedSimpleCompletionModel,
 } from "../agents/simple-completion-runtime.js";
-import { completionChunk, completionModel } from "../agents/simple-completion.test-support.js";
+import {
+  completionChunk,
+  completionModel,
+  completionModelDefinition,
+} from "../agents/simple-completion.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { summarizeText } from "../plugin-sdk/speech-core.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
@@ -154,7 +158,17 @@ module.exports = {
               baseUrl,
               apiKey: "synthetic-fixture",
               models: options.literalRow
-                ? models.filter(({ id }) => id === options.literalRow)
+                ? models
+                    .filter(({ id }) => id === options.literalRow)
+                    .map(({ id, name }) =>
+                      completionModelDefinition({
+                        id,
+                        name,
+                        api: "openai-completions",
+                        contextWindow: 16_000,
+                        maxTokens: 4_096,
+                      }),
+                    )
                 : [],
             },
           },

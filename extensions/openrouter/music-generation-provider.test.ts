@@ -23,13 +23,16 @@ function sseResponse(
   options?: { cancel?: () => void | Promise<void>; releaseLock?: () => void },
 ): Response {
   const encoder = new TextEncoder();
+  let index = 0;
   const response = new Response(
     new ReadableStream<Uint8Array>({
-      start(controller) {
-        for (const line of lines) {
-          controller.enqueue(typeof line === "string" ? encoder.encode(line) : line);
+      pull(controller) {
+        if (index === lines.length) {
+          controller.close();
+          return;
         }
-        controller.close();
+        const line = lines[index++];
+        controller.enqueue(typeof line === "string" ? encoder.encode(line) : line);
       },
     }),
     { headers: { "content-type": "text/event-stream" } },

@@ -70,14 +70,15 @@ async function createAuditFixture() {
   const fixture = await createApplyFixture(
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-audit-")),
   );
+  const env: NodeJS.ProcessEnv = {
+    ...fixture.env,
+    OPENAI_API_KEY: "env-openai-key", // pragma: allowlist secret
+    PATH: process.env.PATH?.trim() ? process.env.PATH : "/usr/bin:/bin",
+  };
   return {
     ...fixture,
     modelsPath: path.join(fixture.agentDir, "models.json"),
-    env: {
-      ...fixture.env,
-      OPENAI_API_KEY: "env-openai-key", // pragma: allowlist secret
-      PATH: process.env.PATH?.trim() ? process.env.PATH : "/usr/bin:/bin",
-    },
+    env,
   };
 }
 

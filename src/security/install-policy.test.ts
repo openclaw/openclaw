@@ -3,8 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as waitForReapTick } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openFixtureReceiptChannel } from "../../test/helpers/fixture-receipts.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
 import { requireNodeTool } from "../../test/helpers/node-toolchain.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -103,6 +106,14 @@ describe("runInstallPolicy", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let sourceDir: string;
   let scriptPath: string;
+  let receipts: FixtureReceiptChannel;
+
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts?.close();
+  });
 
   beforeEach(async () => {
     sourceDir = tempDirs.make("openclaw-install-policy-");
@@ -164,9 +175,7 @@ describe("runInstallPolicy", () => {
 
   it.runIf(process.platform !== "win32")(
     "kills forked policy command children on no-output timeout",
-    async ({ signal, onTestFinished }) => {
-      const receipts = await openFixtureReceiptChannel();
-      onTestFinished(() => receipts.close());
+    async ({ signal }) => {
       const forkScriptPath = await writeForkingNoOutputScript(sourceDir, receipts.endpoint);
       const pidPath = path.join(sourceDir, "forked.pid");
       let childPid: number | undefined;
@@ -271,39 +280,61 @@ describe("runInstallPolicy", () => {
   const criticalFinding = makeFinding("review", "Registry is not approved.", {
     severity: "critical",
   });
-  const malformedFindings = [
-    makeFinding("  review  ", "  Review.  ", { file: 42, line: "7", evidence: false }),
-    { ruleId: 42, severity: "warn", message: "invalid required field" },
-  ];
-  const reviewFindings = [makeFinding("manual-review", "Suspicious install script.")];
-  const lines = (values: number[]) =>
-    values.map((line, index) => makeFinding(`line-${index}`, "Review line", { line }));
-  const warning = (reason: string) => ({
-    reason,
-    fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+  it.each([
+    [
+      "UTF-16 block truncation",
+      "block",
+      { reason: `${reasonPrefix}🎉tail` },
+      blocked(`${reasonPrefix.slice(0, 997)}...`),
+    ],
+    [
+      "malformed fields and findings",
+      "allow",
+      {
+        findings: [
+          makeFinding("  review  ", "  Review.  ", { file: 42, line: "7", evidence: false }),
+          { ruleId: 42, severity: "warn", message: "invalid required field" },
+        ],
+      },
+      { findings: [makeFinding("review", "Review.")] },
+    ],
+    [
+      "block findings without file or line",
+      "block",
+      { reason: "unapproved registry", findings: [criticalFinding] },
+      { ...blocked("unapproved registry"), findings: [criticalFinding] },
+    ],
+  ] as const)("%s", async (_name, decision, fields, expected) => {
+    expect(await runDecision(decision, fields)).toStrictEqual(expected);
   });
-  it.each<{
-    name: string;
-    decision: "allow" | "warn" | "block";
-    fields: Record<string, unknown>;
-    expected: unknown;
-    warned: boolean;
-  }>`
-    name                         | decision   | fields                                                                         | expected                                                                                                | warned
-    ${"UTF-16 block truncation"} | ${"block"} | ${{ reason: `${reasonPrefix}🎉tail` }}                                         | ${blocked(`${reasonPrefix.slice(0, 997)}...`)}                                                          | ${false}
-    ${"malformed findings"}      | ${"allow"} | ${{ findings: malformedFindings }}                                             | ${{ findings: [makeFinding("review", "Review.")] }}                                                     | ${false}
-    ${"block findings"}          | ${"block"} | ${{ reason: "unapproved registry", findings: [criticalFinding] }}              | ${{ ...blocked("unapproved registry"), findings: [criticalFinding] }}                                   | ${false}
-    ${"warning receipt"}         | ${"warn"}  | ${{ reason: "review this source", findings: reviewFindings }}                  | ${{ warning: warning("review this source"), findings: reviewFindings }}                                 | ${true}
-    ${"warning line bounds"}     | ${"warn"}  | ${{ reason: "review line normalization", findings: lines([-2, 12.9, 1e100]) }} | ${{ warning: warning("review line normalization"), findings: lines([1, 12, Number.MAX_SAFE_INTEGER]) }} | ${false}
-  `("$name", async ({ decision, fields, expected, warned }) => {
+
+  it("returns warnings with their reason and findings", async () => {
     const debugLogs: string[] = [];
-    const result = await runDecision(decision, fields, {
-      logger: { debug: (message) => debugLogs.push(message) },
+    const findings = [makeFinding("manual-review", "Suspicious install script.")];
+    const result = await runDecision(
+      "warn",
+      { reason: "review this source", findings },
+      { logger: { debug: (message) => debugLogs.push(message) } },
+    );
+    expect(result).toEqual({
+      warning: {
+        reason: "review this source",
+        fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+      findings,
     });
-    expect(result).toStrictEqual(expected);
-    if (warned) {
-      expect(debugLogs.filter((message) => message.endsWith(": warned"))).toHaveLength(1);
-    }
+    expect(debugLogs.filter((message) => message.endsWith(": warned"))).toHaveLength(1);
+  });
+
+  it("normalizes warning finding lines to positive safe integers", async () => {
+    const result = await runDecision("warn", {
+      reason: "review line normalization",
+      findings: [-2, 12.9, 1e100].map((line, index) =>
+        makeFinding(`line-${index}`, "Review line", { line }),
+      ),
+    });
+    const lines = result?.findings?.map((finding) => finding.line);
+    expect(lines).toEqual([1, 12, Number.MAX_SAFE_INTEGER]);
   });
 
   it("bounds operator-facing warning text without splitting surrogate pairs", async () => {
@@ -350,32 +381,51 @@ describe("runInstallPolicy", () => {
     expect(result?.findings).toBeUndefined();
   });
 
-  it.each<{ name: string; response: unknown; expected: string }>`
-    name                | response                                      | expected
-    ${"missing reason"} | ${{ protocolVersion: 1, decision: "warn" }}   | ${'decision "warn" requires a non-empty reason'}
-    ${"non-object"}     | ${[]}                                         | ${"must be a JSON object"}
-    ${"version"}        | ${{ protocolVersion: 2, decision: "allow" }}  | ${"protocolVersion must be 1"}
-    ${"decision"}       | ${{ protocolVersion: 1, decision: "review" }} | ${'decision must be "allow", "warn", or "block"'}
-  `("fails closed for $name", async ({ response, expected }) => {
-    expectFailed(await runResponse(response), expected);
+  it.each([
+    [
+      "missing warning reason",
+      { protocolVersion: 1, decision: "warn" },
+      'decision "warn" requires a non-empty reason',
+    ],
+    ["non-object", [], "must be a JSON object"],
+    [
+      "unsupported protocol version",
+      { protocolVersion: 2, decision: "allow" },
+      "protocolVersion must be 1",
+    ],
+    [
+      "unknown decision",
+      { protocolVersion: 1, decision: "review" },
+      'decision must be "allow", "warn", or "block"',
+    ],
+  ])("fails closed for a %s response", async (_label, response, expected) => {
+    expectFailed(await runResponse(response), String(expected));
   });
 
-  it.each<{ name: string; env: Record<string, string>; expected: string; secret: string }>`
-    name                | env                                                       | expected                               | secret
-    ${"malformed JSON"} | ${{ POLICY_RESPONSE: "not json" }}                        | ${"invalid JSON"}                      | ${""}
-    ${"stderr privacy"} | ${{ EXIT_CODE: "7", STDERR_TEXT: "policy-secret-token" }} | ${"policy command exited with code 7"} | ${"policy-secret-token"}
-  `("fails closed with $name", async ({ env, expected, secret }) => {
+  async function runLoggedPolicy(env: Record<string, string>) {
     const logs: string[] = [];
     const result = await runPolicy(configWithPolicy(scriptPath, env), {
       logger: { debug: (message) => logs.push(message) },
     });
-    expectFailed(result, expected);
-    expect(result?.blocked?.reason).toContain("install policy failed closed");
-    expect(logs.join("\n")).toContain("install policy failed closed");
-    if (secret) {
-      expect(result?.blocked?.reason).not.toContain(secret);
-      expect(logs.join("\n")).not.toContain(secret);
-    }
+    expect(result?.blocked?.code).toBe("security_scan_failed");
+    return { reason: result?.blocked?.reason, logs: logs.join("\n") };
+  }
+
+  it("fails closed on malformed policy output", async () => {
+    const { reason, logs } = await runLoggedPolicy({ POLICY_RESPONSE: "not json" });
+    expect(reason).toContain("install policy failed closed");
+    expect(reason).toContain("invalid JSON");
+    expect(logs).toContain("install policy failed closed");
+  });
+
+  it("does not expose policy command stderr in fail-closed reasons", async () => {
+    const { reason, logs } = await runLoggedPolicy({
+      EXIT_CODE: "7",
+      STDERR_TEXT: "policy-secret-token",
+    });
+    expect(reason).toContain("policy command exited with code 7");
+    expect(reason).not.toContain("policy-secret-token");
+    expect(logs).not.toContain("policy-secret-token");
   });
 
   it("rejects relative policy command paths before resolving cwd", async () => {
@@ -391,15 +441,27 @@ describe("runInstallPolicy", () => {
     );
   });
 
-  it.each<{
+  it.each([
+    {
+      name: "policy commands under writable parent directories",
+      field: "command",
+      exec: (_safe, unsafe) => ({ command: unsafe }),
+    },
+    {
+      name: "later interpreter script args after path-taking options",
+      field: "args[2]",
+      exec: (safe, unsafe) => ({ command: process.execPath, args: ["--require", safe, unsafe] }),
+    },
+    {
+      name: "interpreter option values that embed script paths",
+      field: "args[0]",
+      exec: (safe, unsafe) => ({ command: process.execPath, args: [`--require=${unsafe}`, safe] }),
+    },
+  ] satisfies Array<{
+    name: string;
     field: string;
     exec: (safe: string, unsafe: string) => Omit<PolicyExec, "source">;
-  }>`
-    field        | exec
-    ${"command"} | ${(_safe: string, unsafe: string) => ({ command: unsafe })}
-    ${"args[2]"} | ${(safe: string, unsafe: string) => ({ command: process.execPath, args: ["--require", safe, unsafe] })}
-    ${"args[0]"} | ${(safe: string, unsafe: string) => ({ command: process.execPath, args: [`--require=${unsafe}`, safe] })}
-  `("rejects writable parents in $field", async ({ exec, field }) => {
+  }>)("rejects $name", async ({ exec, field }) => {
     if (process.platform === "win32") {
       return;
     }

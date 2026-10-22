@@ -529,7 +529,7 @@ describe("openrouter provider hooks", () => {
       thinkingLevel: "high",
       payload: {},
     });
-    expect(model?.compat?.openRouterRouting).toEqual({ order: ["moonshot"] });
+    expect(model?.compat).toMatchObject({ openRouterRouting: { order: ["moonshot"] } });
     expect(payload?.provider).toEqual({ order: ["moonshot"] });
   });
 

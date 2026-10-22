@@ -488,7 +488,16 @@ function registryFor(...models: (typeof testModel)[]) {
   registry.registerProvider(testModel.provider, {
     api: testModel.api,
     baseUrl: testModel.baseUrl,
-    models,
+    models: models.map(({ id, name, api, reasoning, input, cost, contextWindow, maxTokens }) => ({
+      id,
+      name,
+      api,
+      reasoning,
+      input,
+      cost,
+      contextWindow: contextWindow ?? 32_768,
+      maxTokens,
+    })),
   });
   return registry;
 }

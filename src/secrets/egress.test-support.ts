@@ -6,7 +6,8 @@ import type { startSecretEgressProxyWorker } from "./egress-proxy/proxy-worker.j
 export const publicCa = "synthetic-public-ca-bundle";
 export const hostProxy = "http://openclaw:synthetic-proxy-token@127.0.0.1:12345";
 
-export const startProxy = vi.hoisted(() => vi.fn<typeof startSecretEgressProxyWorker>());
+const startProxy = vi.hoisted(() => vi.fn<typeof startSecretEgressProxyWorker>());
+export { startProxy };
 vi.mock("./egress-proxy/proxy-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./egress-proxy/proxy-worker.js")>()),
   startSecretEgressProxyWorker: startProxy,

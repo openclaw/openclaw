@@ -11,6 +11,14 @@ function signalConfig(aliases: Record<string, string>): OpenClawConfig {
   return { channels: { signal: { aliases } } };
 }
 
+it("rejects recursive aliases before delivery", () => {
+  const cfg = signalConfig({ home: "signal:me", me: "home" });
+  expect(() => resolveSignalTarget({ cfg, input: "home" })).toThrow(
+    'Signal alias "home" resolves recursively through "home".',
+  );
+  expect(resolveSignalDeliveredConversationKey({ cfg, to: "signal:home" })).toBe("home");
+});
+
 it("resolves own prototype-shaped aliases without inheriting prototype keys", () => {
   const cfg = signalConfig({
     constructor: "+15551234567",

@@ -13,23 +13,29 @@ function config(
 }
 
 describe("security audit node command findings", () => {
-  it.each<{ deny: string[]; included: string[]; excluded: string[] }>`
-    deny                                                            | included                                                       | excluded
-    ${["system.*", "system.runx"]}                                  | ${["system.*", "system.runx", "did you mean", "system.run"]}   | ${[]}
-    ${["system.run.prep"]}                                          | ${["system.run.prep", "did you mean", "system.run.prepare"]}   | ${[]}
-    ${["zzzzzzzzzzzzzz"]}                                           | ${["zzzzzzzzzzzzzz"]}                                          | ${["did you mean"]}
-    ${["camera.snap", "screen.record", "camera.snapp", "system.*"]} | ${["camera.snapp", "system.*", "did you mean", "camera.snap"]} | ${["screen.record"]}
-  `("evaluates ineffective deny entries: $deny", ({ deny, included, excluded }) => {
-    const findings = collectNodeDenyCommandPatternFindings(config({ deny }));
-    const finding = findings.find(
-      (entry) => entry.checkId === "gateway.nodes.deny_commands_ineffective",
-    );
-    expect(finding).toMatchObject({ severity: "warn" });
-    for (const text of included) {
-      expect(finding?.detail).toContain(text);
-    }
-    for (const text of excluded) {
-      expect(finding?.detail).not.toContain(text);
+  it("evaluates ineffective gateway.nodes.commands.deny entries", () => {
+    const cases: [string[], string[], string[]][] = [
+      [["system.*", "system.runx"], ["system.*", "system.runx", "did you mean", "system.run"], []],
+      [["system.run.prep"], ["system.run.prep", "did you mean", "system.run.prepare"], []],
+      [["zzzzzzzzzzzzzz"], ["zzzzzzzzzzzzzz"], ["did you mean"]],
+      [
+        ["camera.snap", "screen.record", "camera.snapp", "system.*"],
+        ["camera.snapp", "system.*", "did you mean", "camera.snap"],
+        ["screen.record"],
+      ],
+    ];
+    for (const [deny, included, excluded] of cases) {
+      const findings = collectNodeDenyCommandPatternFindings(config({ deny }));
+      const finding = findings.find(
+        (entry) => entry.checkId === "gateway.nodes.deny_commands_ineffective",
+      );
+      expect(finding, deny.join(", ")).toMatchObject({ severity: "warn" });
+      for (const text of included) {
+        expect(finding?.detail).toContain(text);
+      }
+      for (const text of excluded) {
+        expect(finding?.detail).not.toContain(text);
+      }
     }
   });
 
