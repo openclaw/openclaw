@@ -64,6 +64,12 @@ export function useSkillLibraryFixture() {
           params: Parameters<typeof saveSkillLibrary>[1] = draft(),
           who: SkillLibraryAuthority = owner,
         ) => saveSkillLibrary(who, params, options),
+        revise: ({ skillId, revision }: { skillId: string; revision: string }, body: string) =>
+          saveSkillLibrary(
+            owner,
+            { ...draft(), skillId, expectedRevision: revision, content: body },
+            options,
+          ),
         read: (id: string, who: SkillLibraryAuthority = owner, revision?: string) =>
           readSkillLibrary(who, id, revision, options),
         list: (

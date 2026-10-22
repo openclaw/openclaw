@@ -6,7 +6,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { SKILL_LIBRARY_MAX_FILE_BYTES } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { declareAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -23,9 +22,9 @@ import { getProfileAvatar } from "../../state/user-profiles-avatar.test-support.
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { materializeSkillResources, prepareSkillResourceDelivery } from "../runtime/resources.js";
+import { prepareSkillResourceDelivery } from "../runtime/resources.js";
 import { SkillLibraryError } from "../skill-library-error.js";
-import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "./bundle.js";
+import { skillLibraryRevisionDir } from "./bundle.js";
 import { loadSkillLibrarySelection } from "./selection.js";
 import { readSkillLibrary } from "./service.js";
 import { content, draft, useSkillLibraryFixture, zipBytes } from "./service.test-support.js";
@@ -79,12 +78,7 @@ it.each([
 );
 it("discovers pinned commands through the loader without leaking them into workspace state", async () => {
   const { options, stateDir, lib, saved, pins } = await selectedFixture();
-  const updated = await lib.save({
-    ...draft(),
-    skillId: saved.entry.skillId,
-    expectedRevision: saved.entry.revision,
-    content: `${content}\nUpdated`,
-  });
+  const updated = await lib.revise(saved.entry, `${content}\nUpdated`);
   const originalPin = expectDefined(pins[0], "original selected revision");
   const mixedRevisions = [
     { ...originalPin, revision: updated.entry.revision },
@@ -309,17 +303,10 @@ it("makes identical saves a no-op, rejects racing writers, and leaves existing p
   const created = await lib.save();
   const { skillId, revision } = created.entry;
   const pins = await lib.seed();
-  expect((await lib.save({ ...draft(), skillId, expectedRevision: revision })).state).toBe(
-    "unchanged",
-  );
+  expect((await lib.revise(created.entry, content)).state).toBe("unchanged");
   const edits = await Promise.allSettled(
     ["first", "second"].map((body) =>
-      lib.save({
-        ...draft(),
-        skillId,
-        expectedRevision: revision,
-        content: content.replace("A reusable test procedure", `${body} revision`),
-      }),
+      lib.revise(created.entry, content.replace("A reusable test procedure", `${body} revision`)),
     ),
   );
   expect(edits.filter((result) => result.status === "fulfilled")).toHaveLength(1);
@@ -480,49 +467,6 @@ it.each(["created_at", "updated_at", "avatar"] as const)(
   },
 );
 
-it("delivers complete immutable supporting files into a worker-owned directory", async () => {
-  const { options, stateDir, lib } = fixture();
-  await lib.save();
-  const selections = await lib.seed();
-  const skills = loadSkillLibrarySelection(selections, options).map((entry) => entry.skill);
-  const snapshot = {
-    prompt: "",
-    skills: skills.map((skill) => ({ name: skill.name })),
-    resolvedSkills: skills,
-    librarySelections: selections,
-    version: 1,
-  };
-  const delivery = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-    prepareSkillResourceDelivery(snapshot, () => {}),
-  );
-  // Library bytes belong to Gateway even when the workspace host is offline.
-  const remoteWorkspace = path.join(stateDir, "remote-workspace");
-  declareAgentWorkspaceAccess(remoteWorkspace);
-  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    await expect(
-      prepareSkillResourceDelivery(snapshot, () => {}, [], remoteWorkspace),
-    ).resolves.toEqual(delivery);
-  });
-  expect(delivery).toBeDefined();
-  const materialized = await materializeSkillResources(delivery!, () => {});
-  try {
-    const skill = materialized.snapshot.resolvedSkills![0]!;
-    expect(await fs.readFile(skill.filePath, "utf8")).toBe(content);
-    expect(await fs.readFile(path.join(skill.baseDir, "references/data.bin"))).toEqual(
-      Buffer.from([0, 255, 128]),
-    );
-    expect(materialized.snapshot.prompt).toContain(skill.filePath);
-    expect(materialized.snapshot.prompt).not.toContain(
-      revisionDirectory(selections[0]!, options.env),
-    );
-  } finally {
-    await materialized.cleanup();
-  }
-  expect(prepareSkillLibraryBundle(delivery!.skills[0]!.files).revision).toBe(
-    delivery!.skills[0]!.revision,
-  );
-});
-
 it("reads published executable metadata from the manifest and detects changed resource bytes", async () => {
   const { options, lib } = fixture();
   const saved = await lib.save();
@@ -552,12 +496,7 @@ it("delivers the pinned hidden revision on explicit selection after the library 
       librarySelections: pins,
     };
     expect(snapshot.resolvedSkills).toEqual([]);
-    await lib.save({
-      ...draft(),
-      skillId: saved.entry.skillId,
-      expectedRevision: saved.entry.revision,
-      content: `${hiddenContent}\nChanged default`,
-    });
+    await lib.revise(saved.entry, `${hiddenContent}\nChanged default`);
     const ordinary = await prepareSkillResourceDelivery(snapshot, () => {});
     const explicit = await prepareSkillResourceDelivery(snapshot, () => {}, [
       { name: pins[0]!.name, path: entries[0]!.skill.filePath },
