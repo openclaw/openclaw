@@ -1699,8 +1699,6 @@
 ["src/agents/embedded-agent-runner/context-engine-maintenance.preparation.test.ts","./context-engine-capabilities.js","5fcfd2075d4d530d7d04549df9cc4d604066df6c18580cc5c2f26bf560985fc8",1]
 ["src/agents/embedded-agent-runner/context-engine-maintenance.preparation.test.ts","./logger.js","80fc5d58bd351830959aa04c635cff259d0e2391a879ed657290d44aedc36409",1]
 ["src/agents/embedded-agent-runner/context-engine-maintenance.test.ts","./context-engine-capabilities.js","d610126c92f68f3c83ac186dddd4ca708b10a70ea298855c6e0dae925e5bb094",1]
-["src/agents/embedded-agent-runner/extensions.test.ts","../../plugins/provider-hook-runtime.js","04beee0fed1670c8df730b755ae27fa94675861b167bc39b13d319cc805adea8",1]
-["src/agents/embedded-agent-runner/extensions.test.ts","../../plugins/provider-runtime.js","def2c18165e42c5dea813e334d35de14e2796bda1f4f162b6ca7fcf8cf0f4fbe",1]
 ["src/agents/embedded-agent-runner/extra-params.deepseek-v4-thinking-format.test.ts","../../llm/stream.js","d887a8353be4d45284f49b133fffbded45876035f5e2432c8e212c80724f5249",1]
 ["src/agents/embedded-agent-runner/extra-params.provider-runtime.test.ts","../../llm/stream.js","d887a8353be4d45284f49b133fffbded45876035f5e2432c8e212c80724f5249",1]
 ["src/agents/embedded-agent-runner/extra-params.sampling.test.ts","../../llm/stream.js","d887a8353be4d45284f49b133fffbded45876035f5e2432c8e212c80724f5249",1]

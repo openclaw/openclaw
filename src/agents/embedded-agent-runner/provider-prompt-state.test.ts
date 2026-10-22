@@ -47,10 +47,10 @@ function observe(
   });
 }
 
-function endResultStream(
-  stream: ReturnType<typeof createAssistantMessageEventStream>,
+function createResultStream(
   stopReason: "error" | "stop",
   errorMessage = "context length exceeded",
+  stream = createAssistantMessageEventStream(),
 ) {
   stream.end({
     role: "assistant",
@@ -63,11 +63,6 @@ function endResultStream(
     ...(stopReason === "error" ? { errorMessage } : {}),
     timestamp: 1,
   });
-}
-
-function createResultStream(stopReason: "error" | "stop", errorMessage?: string) {
-  const stream = createAssistantMessageEventStream();
-  endResultStream(stream, stopReason, errorMessage);
   return stream;
 }
 
@@ -285,7 +280,7 @@ describe("provider prompt state", () => {
     await observedPayloadHook;
     expect(state.lastAttempt).toBeDefined();
 
-    endResultStream(stream, "stop");
+    createResultStream("stop", undefined, stream);
     await result.result();
   });
 });

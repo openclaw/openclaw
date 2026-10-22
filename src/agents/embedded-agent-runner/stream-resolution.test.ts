@@ -10,12 +10,17 @@ import * as providerTransportStream from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  completedResponse,
+  createJwt,
+  emitWebSocket,
+} from "../../../packages/ai/src/providers/openai-chatgpt-responses.test-helpers.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { streamSimple } from "../../llm/stream.js";
-import type { Model } from "../../llm/types.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
 import { resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl } from "./stream-resolution.js";
 
@@ -147,13 +152,9 @@ describe("resolveEmbeddedAgentStream", () => {
 
   it("keeps real lifecycle-owned Codex sessions on authenticated WebSocket transport", async () => {
     const prompt = "PRIVATE-EMBEDDED-NATIVE-CODEX-PROMPT";
-    const tokenHeader = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString(
-      "base64url",
-    );
-    const tokenPayload = Buffer.from(
-      JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-session" } }),
-    ).toString("base64url");
-    const accessToken = `${tokenHeader}.${tokenPayload}.signature`;
+    const accessToken = createJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct-session" },
+    });
     const protectedAccessToken = mintSecretSentinel(accessToken, {
       label: "codex-session-websocket-auth",
     });
@@ -180,19 +181,7 @@ describe("resolveEmbeddedAgentStream", () => {
       send(payload: string): void {
         sentRequests.push(JSON.parse(payload) as Record<string, unknown>);
         queueMicrotask(() => {
-          this.dispatchEvent(
-            Object.assign(new Event("message"), {
-              data: JSON.stringify({
-                type: "response.completed",
-                response: {
-                  id: "resp_session_websocket",
-                  status: "completed",
-                  output: [],
-                  usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-                },
-              }),
-            }),
-          );
+          emitWebSocket(this, completedResponse("resp_session_websocket"));
           this.readyState = 3;
         });
       }
@@ -204,18 +193,16 @@ describe("resolveEmbeddedAgentStream", () => {
 
     vi.stubGlobal("WebSocket", SessionWebSocket);
     vi.stubGlobal("fetch", fetchSpy);
-    const model = {
+    const model = makeProviderModelFixture({
       id: "gpt-5.5",
       name: "GPT-5.5",
       api: "openai-chatgpt-responses",
       provider: "openai",
       baseUrl: "https://chatgpt.test/backend-api",
       reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 128_000,
       maxTokens: 16_000,
-    } satisfies Model<"openai-chatgpt-responses">;
+    });
     // Match createAgentSession's real auth-owning runtime wrapper without importing
     // the complete session/plugin graph into this focused stream-routing suite.
     const resolveSessionAuth = vi.fn(async () => protectedAccessToken);
@@ -242,15 +229,15 @@ describe("resolveEmbeddedAgentStream", () => {
         effectiveContextTokenBudget: 128_000,
         recordEvent,
       });
-      const stream = await observedEmbeddedStreamFn(
-        model,
-        {
-          systemPrompt: prompt,
-          messages: [{ role: "user", content: "hello", timestamp: 1 }],
-        },
-        { transport: "websocket" },
-      );
-      const result = await stream.result();
+      const request = async (content: string, timestamp: number, sessionId?: string) =>
+        (
+          await observedEmbeddedStreamFn(
+            model,
+            { systemPrompt: prompt, messages: [{ role: "user", content, timestamp }] },
+            { transport: "websocket", ...(sessionId && { sessionId }) },
+          )
+        ).result();
+      const result = await request("hello", 1);
 
       expect(result.stopReason).toBe("stop");
       expect(fetchSpy).not.toHaveBeenCalled();
@@ -280,15 +267,7 @@ describe("resolveEmbeddedAgentStream", () => {
       expect(JSON.stringify(recordEvent.mock.calls)).not.toContain(prompt);
 
       rejectNextConnection = true;
-      const rejectedStream = await observedEmbeddedStreamFn(
-        model,
-        {
-          systemPrompt: prompt,
-          messages: [{ role: "user", content: "retry", timestamp: 2 }],
-        },
-        { transport: "websocket", sessionId: "session-websocket-rejected" },
-      );
-      const rejectedResult = await rejectedStream.result();
+      const rejectedResult = await request("retry", 2, "session-websocket-rejected");
 
       expect(rejectedResult).toMatchObject({
         stopReason: "error",

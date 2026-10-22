@@ -3,7 +3,11 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { getCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
+import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { buildEmbeddedExtensionFactories } from "./extensions.js";
 
 const { requestPreparedCompactionMock } = vi.hoisted(() => ({
   requestPreparedCompactionMock: vi.fn(),
@@ -18,19 +22,21 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { testing } from "../openai-transport-stream.test-support.js";
 import { log } from "./logger.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
+import {
+  repairRejectedCompactionReplayInSessionManager,
+  repairRejectedThinkingReplayInSessionManager,
+} from "./thinking-replay-repair.js";
 
-const model = {
+const model = makeProviderModelFixture({
   id: "grok-4.5",
   name: "Grok 4.5",
   api: "openai-responses",
   provider: "xai",
   baseUrl: "https://api.x.ai/v1",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 256_000,
   maxTokens: 8_192,
-} satisfies Model;
+});
 
 const openAIModel = {
   ...model,
@@ -45,25 +51,29 @@ function createSession(
   sessionModel: Model = model,
   providerReplay?: AssistantMessage["providerReplay"],
   userText = sourceText,
+  assistantFields: Partial<AssistantMessage> = {},
 ) {
   const sessionManager = SessionManager.inMemory();
   sessionManager.appendMessage({ role: "user", content: userText, timestamp: 1 });
-  sessionManager.appendMessage({
-    role: "assistant",
-    content: [{ type: "text", text: "remembered" }],
-    api: sessionModel.api,
-    provider: sessionModel.provider,
-    model: sessionModel.id,
-    providerReplay,
-    usage: createZeroUsageFixture(),
-    stopReason: "stop",
-    timestamp: 2,
-  });
-  const messages = sessionManager
+  sessionManager.appendMessage(
+    makeAgentAssistantMessage({
+      content: [{ type: "text", text: "remembered" }],
+      api: sessionModel.api,
+      provider: sessionModel.provider,
+      model: sessionModel.id,
+      providerReplay,
+      timestamp: 2,
+      ...assistantFields,
+    }),
+  );
+  return { sessionManager, messages: branchMessages(sessionManager) };
+}
+
+function branchMessages(sessionManager: SessionManager): AgentMessage[] {
+  return sessionManager
     .getBranch()
     .filter((entry) => entry.type === "message")
     .map((entry) => structuredClone(entry.message) as AgentMessage);
-  return { sessionManager, messages };
 }
 
 function attempt(
@@ -86,16 +96,21 @@ function attempt(
   };
 }
 
-const compactionItem = { type: "compaction", id: "cmp_test", encrypted_content: "opaque" };
+const compactionItem = () => ({ type: "compaction", id: "cmp_test", encrypted_content: "opaque" });
+const compactionUsage = () => ({
+  input_tokens: 1_000,
+  output_tokens: 200,
+  dropped_message_count: 1,
+});
 function createCompactionResponse(responseModel: Model = model, userText = sourceText) {
   return {
-    item: compactionItem,
+    item: compactionItem(),
     output: [
       { type: "message", role: "user", content: [{ type: "input_text", text: userText }] },
-      compactionItem,
+      compactionItem(),
     ],
     historyMode: "retained-users",
-    usage: { input_tokens: 1_000, output_tokens: 200, dropped_message_count: 1 },
+    usage: compactionUsage(),
     model: responseModel,
     replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(responseModel, {
       sessionId: "session-1",
@@ -116,6 +131,97 @@ function checkpointOwner(session: ReturnType<typeof createSession>) {
 beforeEach(() => {
   requestPreparedCompactionMock.mockReset();
   requestPreparedCompactionMock.mockResolvedValue(createCompactionResponse());
+});
+
+describe("rejected provider replay repair", () => {
+  it("preserves downstream branch suffix entries after rewriting the first repaired assistant", async () => {
+    const { sessionManager } = createSession(model, undefined, "first", {
+      content: [
+        { type: "thinking", thinking: "private", thinkingSignature: "sig_bad" },
+        { type: "text", text: "first answer" },
+      ],
+    });
+    sessionManager.appendMessage(makeUserMessage("follow-up", 3));
+    sessionManager.appendMessage(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "follow-up answer" }],
+        timestamp: 4,
+      }),
+    );
+    expect(await repairRejectedThinkingReplayInSessionManager({ sessionManager })).toMatchObject({
+      repaired: true,
+    });
+    const messages = branchMessages(sessionManager);
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(
+      messages.filter((message) => message.role === "assistant").map((message) => message.content),
+    ).toEqual([
+      [{ type: "text", text: "first answer" }],
+      [{ type: "text", text: "follow-up answer" }],
+    ]);
+  });
+
+  it("rewrites from the checkpoint identity that supplied the rejected request", async () => {
+    const checkpoint = {
+      v: 1 as const,
+      type: "openai-responses-retained-compaction" as const,
+      data: "rejected-ciphertext",
+      id: "cmp_rejected",
+      replayIndex: 0,
+      provider: model.provider,
+      api: model.api,
+      model: model.id,
+    };
+    const { sessionManager } = createSession(model, checkpoint);
+    sessionManager.appendMessage(makeUserMessage("after cmp_rejected", 3));
+    sessionManager.appendMessage(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "cmp_newer" }],
+        timestamp: 4,
+        providerReplay: {
+          ...checkpoint,
+          type: "openai-responses-compaction",
+          data: "newer-ciphertext",
+          id: "cmp_newer",
+        },
+      }),
+    );
+    sessionManager.appendMessage(makeUserMessage("after cmp_newer", 5));
+    expect(
+      await repairRejectedCompactionReplayInSessionManager({ sessionManager, checkpoint }),
+    ).toMatchObject({ repaired: true });
+    expect(
+      branchMessages(sessionManager)
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.providerReplay),
+    ).toEqual([undefined, undefined]);
+  });
+});
+
+it.each([
+  ["default", undefined, true, undefined],
+  ["disabled", { enabled: false }, false, undefined],
+  ["explicit retries", { enabled: true, maxRetries: 2 }, true, 2],
+] as const)("wires %s quality-guard settings", (_name, qualityGuard, enabled, maxRetries) => {
+  const sessionManager = SessionManager.inMemory();
+  const workspaceDir = "/tmp/openclaw-workspace";
+  const factories = buildEmbeddedExtensionFactories({
+    cfg: { agents: { defaults: { compaction: { mode: "safeguard", qualityGuard } } } },
+    sessionManager,
+    workspaceDir,
+    model,
+  });
+  expect(factories).toContain(compactionSafeguardExtension);
+  expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
+    qualityGuardEnabled: enabled,
+    qualityGuardMaxRetries: maxRetries,
+    workspaceDir,
+  });
 });
 
 describe("attemptServerEndpointCompaction", () => {
@@ -146,8 +252,8 @@ describe("attemptServerEndpointCompaction", () => {
         await expect(result).rejects.toBe(observerError);
       } else {
         await expect(result).resolves.toMatchObject({
-          item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
-          usage: { input_tokens: 1_000, output_tokens: 200, dropped_message_count: 1 },
+          item: compactionItem(),
+          usage: compactionUsage(),
         });
       }
       const owner = checkpointOwner(session);
@@ -163,11 +269,7 @@ describe("attemptServerEndpointCompaction", () => {
       });
       expect(owner.message.providerReplay).not.toHaveProperty("replayIndex");
       expect(requestPreparedCompactionMock).toHaveBeenCalledOnce();
-      expect(onUsage).toHaveBeenCalledExactlyOnceWith({
-        input_tokens: 1_000,
-        output_tokens: 200,
-        dropped_message_count: 1,
-      });
+      expect(onUsage).toHaveBeenCalledExactlyOnceWith(compactionUsage());
       expect(warn).not.toHaveBeenCalled();
       expect(onCompactionCommitted).toHaveBeenCalledExactlyOnceWith(1_000);
       expect(committedOwner).toMatchObject({
@@ -182,7 +284,7 @@ describe("attemptServerEndpointCompaction", () => {
   it("marks a checkpoint-only response at the assistant content boundary", async () => {
     requestPreparedCompactionMock.mockResolvedValueOnce({
       ...createCompactionResponse(),
-      output: [compactionItem],
+      output: [compactionItem()],
       historyMode: "compacted-prefix",
       usage: { input_tokens: 1_000, output_tokens: 200 },
     });

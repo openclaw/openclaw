@@ -173,53 +173,6 @@ describe("openrouter-model-capabilities", () => {
     expect(stored()).toEqual([expect.objectContaining({ key: "acme/captured-model" })]);
   });
 
-  it("does not reuse retired JSON caches with precomputed OpenRouter context windows", async () => {
-    // Old JSON caches stored unnormalized provider context windows; force a live
-    // refresh so endpoint-specific caps are used instead.
-    const modelId = "nvidia/nemotron-3-super-120b-a12b:free";
-    const cacheDir = join(stateDir, "cache");
-    mkdirSync(cacheDir, { recursive: true });
-    writeFileSync(
-      join(cacheDir, "openrouter-models.json"),
-      JSON.stringify({
-        version: 2,
-        models: {
-          [modelId]: {
-            name: "Nemotron 3 Super 120B Free",
-            input: ["text"],
-            reasoning: false,
-            contextWindow: 1_000_000,
-            maxTokens: 262_144,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          },
-        },
-      }),
-    );
-
-    const fetchSpy = mockCatalog([
-      {
-        id: modelId,
-        name: "Nemotron 3 Super 120B Free",
-        architecture: { modality: "text->text" },
-        context_length: 1_000_000,
-        top_provider: {
-          context_length: 262_144,
-          max_completion_tokens: 262_144,
-        },
-        pricing: { prompt: "0", completion: "0" },
-      },
-    ]);
-
-    const module = await freshCapabilities("old-context-window-cache");
-    await module.load(modelId);
-
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(module.get(modelId)).toMatchObject({
-      contextWindow: 262_144,
-      maxTokens: 262_144,
-    });
-  });
-
   it("preserves chunked native pricing and reasoning capabilities in memory and across SQLite reads", async () => {
     const modelId = "acme/sqlite-cached-model";
     const baseCost = {
@@ -290,47 +243,71 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("retries an unavailable catalog before replacing cached rows without mandatory-reasoning metadata", async () => {
-    const modelId = "minimax/minimax-m2.7";
-    createCorePluginStateSyncKeyedStore({
-      ownerId: "core:openrouter-model-capabilities",
-      namespace: "models.v3",
-      maxEntries: 10_000,
-    }).register(modelId, {
-      name: modelId,
-      input: ["text"],
-      reasoning: true,
-      contextWindow: 32_000,
-      maxTokens: 4096,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    });
-    const failedResponse = new Response("temporarily unavailable", { status: 503 });
-    const cancel = vi.spyOn(failedResponse.body!, "cancel").mockResolvedValue(undefined);
-    const fetchSpy = mockResponses(
-      failedResponse,
-      Response.json({ data: [{ id: modelId, reasoning: { mandatory: true } }] }),
-    );
-    const cache = await freshCapabilities("mandatory-metadata-cache-upgrade");
-    await cache.load(modelId);
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(cache.get(modelId)).toBeUndefined();
-    expect(fetchSpy).toHaveBeenCalledOnce();
+  it.each(["JSON v2", "SQLite v3"] as const)(
+    "refreshes retired %s caches after an unavailable catalog without reusing stale metadata",
+    async (format) => {
+      const json = format === "JSON v2";
+      const modelId = json ? "nvidia/nemotron-3-super-120b-a12b:free" : "minimax/minimax-m2.7";
+      const name = json ? "Nemotron 3 Super 120B Free" : modelId;
+      const legacy = {
+        name,
+        input: ["text"],
+        reasoning: !json,
+        contextWindow: json ? 1_000_000 : 32_000,
+        maxTokens: json ? 262_144 : 4096,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      };
+      if (json) {
+        const cacheDir = join(stateDir, "cache");
+        mkdirSync(cacheDir, { recursive: true });
+        writeFileSync(
+          join(cacheDir, "openrouter-models.json"),
+          JSON.stringify({
+            version: 2,
+            models: { [modelId]: legacy },
+          }),
+        );
+      } else {
+        createCorePluginStateSyncKeyedStore({
+          ownerId: "core:openrouter-model-capabilities",
+          namespace: "models.v3",
+          maxEntries: 10_000,
+        }).register(modelId, legacy);
+      }
+      const refreshed = json
+        ? {
+            id: modelId,
+            name,
+            architecture: { modality: "text->text" },
+            context_length: 1_000_000,
+            top_provider: { context_length: 262_144, max_completion_tokens: 262_144 },
+            pricing: { prompt: "0", completion: "0" },
+          }
+        : { id: modelId, reasoning: { mandatory: true } };
+      const expected = json
+        ? { contextWindow: 262_144, maxTokens: 262_144 }
+        : {
+            compat: { supportsReasoningEffort: false },
+            thinkingLevelMap: { off: null },
+          };
+      const failedResponse = new Response("temporarily unavailable", { status: 503 });
+      const cancel = vi.spyOn(failedResponse.body!, "cancel").mockResolvedValue(undefined);
+      const fetchSpy = mockResponses(failedResponse, Response.json({ data: [refreshed] }));
+      const cache = await freshCapabilities("cache-upgrade-" + format);
+      await cache.load(modelId);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(cache.get(modelId)).toBeUndefined();
+      expect(fetchSpy).toHaveBeenCalledOnce();
 
-    await cache.load(modelId);
-    expect(cache.get(modelId)).toMatchObject({
-      compat: { supportsReasoningEffort: false },
-      thinkingLevelMap: { off: null },
-    });
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-
-    const reader = await freshCapabilities("mandatory-metadata-cache-recovered");
-    expect(reader.get(modelId)).toMatchObject({
-      compat: { supportsReasoningEffort: false },
-      thinkingLevelMap: { off: null },
-    });
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-  });
+      await cache.load(modelId);
+      expect(cache.get(modelId)).toMatchObject(expected);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      const reader = await freshCapabilities("cache-recovered-" + format);
+      expect(reader.get(modelId)).toMatchObject(expected);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it.each([
     ["missing data", {}],
