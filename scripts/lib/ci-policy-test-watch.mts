@@ -400,7 +400,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/agents/sandbox/registry-read.test.ts",
     watchGlobs: [
       "src/agents/sandbox/registry-write.worker.ts",
-      "src/state/openclaw-state-read-registry.ts",
+      "src/state/openclaw-state-read-handlers.ts",
       "src/state/openclaw-state-read.worker.ts",
     ],
   },
@@ -1235,7 +1235,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/sessions/session-state-events.worker.ts",
       "src/sessions/session-upstream-links.worker.ts",
-      "src/state/openclaw-state-read-registry.ts",
+      "src/state/openclaw-state-read-handlers.ts",
       "src/state/openclaw-state-read.worker.ts",
       "src/state/openclaw-state.worker.ts",
     ],
