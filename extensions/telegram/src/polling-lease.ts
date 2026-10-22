@@ -33,7 +33,6 @@ type AcquireTelegramPollingLeaseOpts = {
 type ReleaseStoppedTelegramPollingLeaseOpts = {
   token: string;
   accountId: string;
-  waitMs?: number;
 };
 
 type WaitForPreviousResult = "released" | "timeout" | "aborted";
@@ -148,7 +147,7 @@ export async function releaseStoppedTelegramPollingLease(
 
   const waitResult = await waitForPreviousRelease({
     done: existing.done,
-    waitMs: opts.waitMs ?? DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS,
+    waitMs: DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS,
   });
   if (waitResult === "released" || registry.get(fingerprint) !== existing) {
     return false;

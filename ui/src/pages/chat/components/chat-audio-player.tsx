@@ -599,34 +599,43 @@ function ChatAudioPlayerContent(
     );
   };
   return (
-    <Show
-      when={sourceState.read().readiness !== "unavailable"}
-      fallback={
-        <Show when={props.voiceNote} fallback={<CompactAttachmentCard {...card()} />}>
-          <div class="chat-assistant-attachment-card chat-assistant-attachment-card--voice-note">
-            <div class="chat-audio-player" role="group" aria-label={t("chat.messages.voiceNote")}>
-              <span class="chat-assistant-attachment-card__reason" role="status">
-                {t("chat.attachments.previewUnavailable")}
-              </span>
-              <Show when={downloadHref()}>
-                <a
-                  class="chat-assistant-attachment-card__action"
-                  href={downloadHref()}
-                  download={props.label}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label={t("chat.mediaPlayer.download", { filename: props.label })}
-                >
-                  <Icon name="download" />
-                </a>
-              </Show>
+    <>
+      <Show when={!props.voiceNote}>
+        <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {sourceState.read().readiness === "unavailable"
+            ? `${props.label}: ${t("chat.attachments.previewUnavailable")}`
+            : ""}
+        </span>
+      </Show>
+      <Show
+        when={sourceState.read().readiness !== "unavailable"}
+        fallback={
+          <Show when={props.voiceNote} fallback={<CompactAttachmentCard {...card()} />}>
+            <div class="chat-assistant-attachment-card chat-assistant-attachment-card--voice-note">
+              <div class="chat-audio-player" role="group" aria-label={t("chat.messages.voiceNote")}>
+                <span class="chat-assistant-attachment-card__reason" role="status">
+                  {t("chat.attachments.previewUnavailable")}
+                </span>
+                <Show when={downloadHref()}>
+                  <a
+                    class="chat-assistant-attachment-card__action"
+                    href={downloadHref()}
+                    download={props.label}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label={t("chat.mediaPlayer.download", { filename: props.label })}
+                  >
+                    <Icon name="download" />
+                  </a>
+                </Show>
+              </div>
             </div>
-          </div>
-        </Show>
-      }
-    >
-      <Player />
-    </Show>
+          </Show>
+        }
+      >
+        <Player />
+      </Show>
+    </>
   );
 }
 

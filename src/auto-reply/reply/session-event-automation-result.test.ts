@@ -21,6 +21,7 @@ import {
 import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "../../cron/session-run.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
@@ -194,6 +195,7 @@ it.for([
             );
           }
           scheduled = runCronSessionTurn({
+            occurrence: TEST_SCHEDULED_OCCURRENCE,
             ...scope,
             cfg,
             job,

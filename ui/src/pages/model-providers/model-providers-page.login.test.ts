@@ -23,6 +23,7 @@ import {
 } from "./model-providers-page.login.test-support.ts";
 import {
   appendPage,
+  expandProvider,
   unmountPage,
   type ModelProvidersPageTestElement,
   startSelectedLogin,
@@ -91,18 +92,16 @@ describe("Models provider login", () => {
     });
     const page = appendPage(context);
     if (entry === "readiness") {
+      // The setup prompt shows only until a model works; Provider access connects after that.
+      const connect = setup ? "[data-model-readiness] button" : "[data-models-connect]";
       await waitForSolid(() => {
-        expect(
-          page.querySelector("[data-model-readiness]")?.getAttribute("data-model-readiness"),
-        ).toBe(setup ? "model-required" : "ready");
-        expect(
-          page.querySelector<HTMLButtonElement>("[data-model-readiness] button")?.disabled,
-        ).toBe(false);
+        expect(page.querySelector("[data-model-readiness]") !== null).toBe(setup);
+        expect(page.querySelector<HTMLButtonElement>(connect)?.disabled).toBe(false);
       });
       if (setup) {
         expect(page.view.props.loading).toBe(true);
       }
-      page.querySelector<HTMLButtonElement>("[data-model-readiness] button")!.click();
+      page.querySelector<HTMLButtonElement>(connect)!.click();
       await page.updateComplete;
     } else {
       await openPicker(page);
@@ -759,10 +758,7 @@ describe("Models provider login", () => {
       ],
     });
     const page = appendPage(context);
-    await waitForSolid(() =>
-      expect(page.querySelector('[data-provider-id="example-owner"]')).not.toBeNull(),
-    );
-    const card = page.querySelector('[data-provider-id="example-owner"]')!;
+    const card = await expandProvider(page, "example-owner");
     const addAccount = [...card.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "Add account",
     );

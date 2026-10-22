@@ -107,12 +107,11 @@ test("publishes only projection-relevant run context changes", () => {
     sessionKey: "agent:main:projected",
   });
   changed.mockClear();
-  registerRun("run", { verboseLevel: "full", isHeartbeat: true, lastActiveAt: 12_345 });
+  registerRun("run", { verboseLevel: "full", lastActiveAt: 12_345 });
   expect(changed).not.toHaveBeenCalled();
   expect(getRun("run")).toMatchObject({
     sessionKey: "agent:main:projected",
     verboseLevel: "full",
-    isHeartbeat: true,
     lastActiveAt: 12_345,
   });
   for (const update of [{ isControlUiVisible: false }, { projectSessionLifecycle: false }]) {

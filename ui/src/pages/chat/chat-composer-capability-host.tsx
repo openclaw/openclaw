@@ -1,13 +1,13 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, lazy, Loading, Show } from "solid-js";
+import { createMemo, lazy, Show } from "solid-js";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import type { McpServerForm } from "../../components/mcp-server-form.ts";
-import "../../components/modal-dialog.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
+import "../../components/modal-dialog.tsx";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import { buildToolsEffectiveRequestKey } from "../../lib/agents/tools-effective.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
@@ -33,6 +33,7 @@ import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.types.ts";
+import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import {
   ComposerSkillCatalog,
   composerWebSearchBaseEnabled,
@@ -109,19 +110,20 @@ export class ChatComposerCapabilityHost {
     context: ApplicationContext,
     state: ChatPageHost,
     agentId: string,
-    retryError = false,
+    refresh = false,
   ): void {
     const client = state.client;
     const sessionKey = state.sessionKey;
     const cacheKey = this.effectiveToolsKeys(context, state, agentId);
+    // The key does not change when a run discovers MCP tools, so an explicit open refetches.
     if (
       !state.connected ||
       !client ||
       !agentId.trim() ||
       !sessionKey.trim() ||
-      this.effectiveTools?.key === cacheKey ||
       this.effectiveToolsRequest?.key === cacheKey ||
-      (!retryError && this.effectiveToolsErrorKey === cacheKey)
+      (!refresh &&
+        (this.effectiveTools?.key === cacheKey || this.effectiveToolsErrorKey === cacheKey))
     ) {
       return;
     }
@@ -318,7 +320,7 @@ export class ChatComposerCapabilityHost {
     try {
       await patchMcpServers(context.runtimeConfig, {
         buildPatch: (servers) => buildAddMcpServerPatch(servers, name, globalConfig),
-        note: `composer connectors: add MCP server ${name}`,
+        note: `composer plugins: add MCP server ${name}`,
       });
       if (scope === "session") {
         stage = "session";
@@ -564,15 +566,15 @@ export function ChatComposerCapabilityDialogs(props: ChatComposerCapabilityDialo
   return (
     <>
       <Show when={view().open}>
-        <Loading fallback={<LoadingState />}>
+        <ChatLazyBoundary fallback={<LoadingState />} onClose={() => view().onCancel()}>
           <ComposerAddServerDialog {...view()} />
-        </Loading>
+        </ChatLazyBoundary>
       </Show>
       <Show when={view().library}>
         {(library) => (
-          <Loading fallback={<LoadingState />}>
+          <ChatLazyBoundary fallback={<LoadingState />} onClose={() => library().onClose()}>
             <LibraryPinRead {...library()} />
-          </Loading>
+          </ChatLazyBoundary>
         )}
       </Show>
     </>

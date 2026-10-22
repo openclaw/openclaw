@@ -25,6 +25,7 @@ import {
   unmountPage,
   createAuthStatus,
   createHarness,
+  expandProvider,
   waitForProviders,
   requestCount,
   type ModelProvidersPageTestElement,
@@ -81,6 +82,7 @@ describe("ModelProvidersPage profile actions", () => {
       return originalRequest(method);
     });
     const page = appendPage(context);
+    await expandProvider(page, "openai");
     await waitForSolid(() =>
       expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2),
     );
@@ -96,6 +98,7 @@ describe("ModelProvidersPage profile actions", () => {
     await waitForSolid(() => expect(toast.textContent).toContain(warning));
     expect(page.view.props.profileOrders.openai).toBeUndefined();
     expect(page.view.props.authStatus?.providers).toEqual([]);
+    expect(page.querySelector('li.provider-row[data-provider-id="openai"]')).toBeNull();
     expect(page.querySelector(".model-providers__profile")).toBeNull();
   });
 
@@ -189,6 +192,7 @@ describe("ModelProvidersPage profile actions", () => {
     };
     const oldPage = appendPage(context);
     await waitForProviders(oldPage);
+    await expandProvider(oldPage, "openai");
     await waitForSolid(() => expect(rows(oldPage)).toHaveLength(3));
     moveFirstAccount(oldPage, "down");
     await oldPage.updateComplete;
@@ -200,6 +204,7 @@ describe("ModelProvidersPage profile actions", () => {
     unmountPage(oldPage);
     const replacementPage = appendPage(context);
     await waitForProviders(replacementPage);
+    await expandProvider(replacementPage, "openai");
     await waitForSolid(() =>
       expect(rows(replacementPage)).toEqual(["openai:two", "openai:one", "openai:three"]),
     );
@@ -282,6 +287,7 @@ describe("ModelProvidersPage profile actions", () => {
         // Separate user clicks so the previous confirmation can settle.
         await nextFrame();
         await waitForProviders(page);
+        await expandProvider(page, "anthropic");
         await waitForSolid(() =>
           expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2),
         );
@@ -446,7 +452,7 @@ describe("ModelProvidersPage profile actions", () => {
       settingsAgentSelection.state.scopeId = "writer";
       publishRouteData(page, { ...EMPTY_MODEL_PROVIDERS_DATA, updatedAt: 1 });
       await page.updateComplete;
-      expect(page.view.props.usageAgentId).toBe("writer");
+      expect(page.view.props.credentialAgentLabel).toBe("Writer");
       expect(page.view.props.busy).toEqual({});
       expect(page.view.props.messages).toEqual({});
       expect(page.view.props.probeResults).toEqual({});
@@ -620,6 +626,7 @@ describe("Models account recovery", () => {
     try {
       await waitForProviders(page);
       expect(page.querySelector("[data-models-account-recovery]")).toBeNull();
+      await expandProvider(page, "example");
       page
         .querySelector<HTMLButtonElement>('[aria-label="Log out original@example.invalid"]')!
         .click();

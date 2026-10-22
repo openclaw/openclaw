@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createOverlay, type Overlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -171,7 +172,7 @@ describe("sessions view", () => {
 
   it.each([false, true])(
     "shows the Agent column only in all-agent scope with category grouping %s",
-    (categoryGrouping) => {
+    async (categoryGrouping) => {
       const result = buildResult(
         createRow("agent:research:chat-two", { agentId: "research", category: "Work" }),
       );
@@ -205,13 +206,18 @@ describe("sessions view", () => {
         }
       }
 
+      const readiness = createDeferred<null>();
+      onTestFinished(() => readiness.resolve(null));
       renderView([], {
         ...sharedProps,
         allAgentsScope: false,
         result: null,
         loading: true,
+        roster: readiness.promise,
       });
-      expect(queryAll(".session-skeleton-row:first-child td")).toHaveLength(scopedHeaders.length);
+      await vi.waitFor(() =>
+        expect(queryAll(".session-skeleton-row:first-child td")).toHaveLength(scopedHeaders.length),
+      );
       renderView([], { ...sharedProps, allAgentsScope: false });
       expect(attr(".data-table-empty-cell", "colspan")).toBe(String(scopedHeaders.length));
     },
@@ -328,7 +334,8 @@ describe("sessions view", () => {
 
   it.each([
     ["profile-ada", "Ada Lovelace", "Ada Lovelace"],
-    ["gateway-owner", "Saved owner name", "Shared owner"],
+    ["gateway-owner", "Saved owner name", "Saved owner name · Shared owner"],
+    ["gateway-owner", undefined, "Shared owner"],
   ])("offers person grouping and labels the durable profile %s", async (id, name, expected) => {
     await renderSettled(
       [

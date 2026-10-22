@@ -178,6 +178,7 @@ export async function runCronSessionTurn(
       abortSignal: params.abortSignal,
       scheduledAutomation: {
         job,
+        occurrence: params.occurrence,
         operatorAuthority,
         controlUiAdmin,
         admissionSource: params.admissionSource,

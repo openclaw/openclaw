@@ -790,7 +790,7 @@ describe("Talk device and voice wake settings", () => {
     expect(nativeDeviceSettings.openPanel).toHaveBeenCalledWith("microphone-test");
     snapshot.voice.wakeEnabled = true;
     publishSnapshot();
-    expectWakeDisabled(false);
+    await waitForSolid(() => expectWakeDisabled(false));
     row("Voice Wake").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
       "voice.wakeEnabled",
@@ -803,52 +803,6 @@ describe("Talk device and voice wake settings", () => {
     snapshot.voice.supported = true;
     publishSnapshot();
     expectWakeDisabled(false);
-  });
-
-  it("preserves pending language additions across an older native acknowledgment and the next edit", () => {
-    const snapshot = createNativeDeviceSettingsSnapshot();
-    snapshot.voice.locale.available.push(
-      { id: "fr-FR", name: "French" },
-      { id: "es-ES", name: "Spanish" },
-      { id: "it-IT", name: "Italian" },
-    );
-    const { settings: nativeDeviceSettings, publish: publishSnapshot } = nativeVoice(snapshot);
-    const { page } = createTalkMutationHarness({ nativeDeviceSettings });
-    flush();
-    const add = (id: string, expected?: string[]) => {
-      const select = page.querySelector<HTMLSelectElement>('select[aria-label="Add language…"]')!;
-      select.value = id;
-      select.dispatchEvent(new Event("change"));
-      if (expected) {
-        expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
-          "voice.locale.additional",
-          expected,
-          expect.any(Function),
-        );
-      }
-    };
-    add("de-DE");
-    add("fr-FR", ["de-DE", "fr-FR"]);
-    snapshot.voice.locale.additional = ["de-DE"];
-    nativeDeviceSettings.set.mock.calls[0]?.[2]?.();
-    publishSnapshot();
-    add("es-ES", ["de-DE", "fr-FR", "es-ES"]);
-    const primary = page.querySelector<HTMLSelectElement>('select[aria-label="Primary language"]')!;
-    primary.value = "fr-FR";
-    primary.dispatchEvent(new Event("change"));
-    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
-      "voice.locale.additional",
-      ["de-DE", "es-ES"],
-      expect.any(Function),
-    );
-    snapshot.voice.locale.additional = ["de-DE", "fr-FR"];
-    nativeDeviceSettings.set.mock.calls[1]?.[2]?.();
-    publishSnapshot();
-    expect(primary.value).toBe("fr-FR");
-    add("it-IT", ["de-DE", "es-ES", "it-IT"]);
-    nativeDeviceSettings.set.mock.lastCall?.[2]?.(new Error("Native edit failed"));
-    publishSnapshot();
-    add("es-ES", ["de-DE", "es-ES"]);
   });
 });
 

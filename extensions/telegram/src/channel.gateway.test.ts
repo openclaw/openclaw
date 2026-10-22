@@ -14,7 +14,6 @@ import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { readCachedTelegramBotInfo, writeCachedTelegramBotInfo } from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import { telegramPlugin } from "./channel.js";
-import type { TelegramMonitorFn } from "./monitor.types.js";
 import { acquireTelegramPollingLease } from "./polling-lease.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
@@ -25,8 +24,18 @@ import type { TelegramRuntime } from "./runtime.types.js";
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 
-const probeTelegram = vi.fn();
-const monitorTelegramProvider = vi.fn();
+const { probeTelegram, monitorTelegramProvider } = vi.hoisted(() => ({
+  probeTelegram: vi.fn(),
+  monitorTelegramProvider: vi.fn(),
+}));
+vi.mock(import("./probe.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  probeTelegram,
+}));
+vi.mock(import("./monitor.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  monitorTelegramProvider,
+}));
 let testState: OpenClawTestState;
 
 const startupBotInfo: TelegramBotInfo = {
@@ -52,12 +61,6 @@ function installTelegramRuntime() {
         createPluginStateKeyedStoreForTests<T>("telegram", { ...options, env: testState.env }),
     },
   });
-  runtime.channel.telegram = {
-    probeTelegram: probeTelegram as NonNullable<
-      NonNullable<TelegramRuntime["channel"]["telegram"]>["probeTelegram"]
-    >,
-    monitorTelegramProvider: monitorTelegramProvider as TelegramMonitorFn,
-  };
   setTelegramRuntime(runtime);
   return runtime;
 }

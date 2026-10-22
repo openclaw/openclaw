@@ -343,7 +343,7 @@ describe("Models page catalog publication", () => {
     const warnings = page.querySelectorAll('.model-providers__catalog-progress[role="alert"]');
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.textContent).toContain("More models could not be discovered.");
-    expect(page.querySelector(".model-providers__provider-list .provider-usage-error")).toBeNull();
+    expect(page.querySelector(".model-providers__provider-list .provider-usage__error")).toBeNull();
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
     expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
     await openModelPicker(page);
@@ -643,7 +643,7 @@ describe("Models page catalog publication", () => {
       if (replacement === "page refresh") {
         expect(modelPicker(page, "primary")).toBe(retainedPicker);
       } else {
-        expect(page.view.props.usageAgentId).toBe("writer");
+        expect(page.view.props.credentialAgentLabel).toBe("Writer");
       }
       await openModelPicker(page);
       expect(
@@ -712,8 +712,8 @@ describe("Models page catalog publication", () => {
     await waitForProviders(second, savedModelConfig);
     await retryCatalog(first);
     await retryCatalog(second);
-    expect(first.view.props.usageAgentId).toBe("main");
-    expect(second.view.props.usageAgentId).toBe("writer");
+    expect(first.view.props.credentialAgentLabel).toBe("Main");
+    expect(second.view.props.credentialAgentLabel).toBe("Writer");
     publishCatalog(context, "main", preparedCatalog);
     first.routeData = {
       ...createEmptyModelProvidersRouteData(context),

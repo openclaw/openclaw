@@ -320,7 +320,9 @@ it("retains search and Retry controls through admitted core error feedback", asy
   await page.updateComplete;
   expect(page.view.props.coreReceipt).toBe(receipt);
   expect(
-    page.querySelectorAll(".model-providers__provider-list .provider-usage-error"),
+    page
+      .querySelector(".model-providers__provider-list")
+      ?.textContent?.match(/Core status unavailable/g),
   ).toHaveLength(1);
   const button = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
     (candidate) => candidate.textContent?.trim() === "Retry",

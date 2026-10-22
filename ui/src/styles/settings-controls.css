@@ -241,25 +241,6 @@ select.settings-select {
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 
-select.settings-select:not([multiple]) {
-  appearance: none;
-  padding-right: 36px;
-  background-image: var(--select-chevron);
-  background-repeat: no-repeat;
-  background-position:
-    right 18px center,
-    right 14px center;
-  background-size: 5px 5px;
-}
-
-@media (forced-colors: active) {
-  select.settings-select:not([multiple]) {
-    appearance: auto;
-    padding-inline-end: 10px;
-    background-image: none;
-  }
-}
-
 .settings-input::placeholder {
   color: var(--muted);
 }
@@ -290,16 +271,7 @@ select.settings-select:focus-visible {
 .settings-secret__toggle {
   position: absolute;
   right: 5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted);
   cursor: var(--cursor-action);
   transition: color var(--duration-fast) var(--ease-out);
 }
@@ -321,11 +293,7 @@ select.settings-select:focus-visible {
 .settings-secret__toggle svg {
   width: 16px;
   height: 16px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* Quiet count badge used by settings pages and the Skill Workshop. */

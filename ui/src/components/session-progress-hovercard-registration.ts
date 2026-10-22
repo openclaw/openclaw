@@ -23,12 +23,15 @@ installSessionTitleRegistrar((target, label) => {
   // The registrar promise lets producers finish mounting before this lookup.
   const provider = bootstrap.providerFor(target);
   if (provider) {
-    void bootstrap.define().then(async () => {
-      await provider.updateComplete;
-      if (active && target.isConnected && bootstrap.providerFor(target) === provider) {
-        release = provider.registerSessionTitleTarget(target, label);
-      }
-    });
+    void bootstrap
+      .define()
+      .then(async () => {
+        await provider.updateComplete;
+        if (active && target.isConnected && bootstrap.providerFor(target) === provider) {
+          release = provider.registerSessionTitleTarget(target, label);
+        }
+      })
+      .catch(() => undefined);
   }
   return () => {
     active = false;
@@ -65,4 +68,5 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   );
 }
 
-bootstrap.install(activateHovercard);
+// The native link/title remains usable when optional hovercard code cannot load.
+bootstrap.install((event, trigger) => activateHovercard(event, trigger).catch(() => undefined));

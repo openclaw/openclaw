@@ -14,6 +14,7 @@ import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/in
 import { Icon } from "../../components/solid/icon.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -351,8 +352,14 @@ export function ProjectChip(props: {
                   event.target instanceof HTMLInputElement ? event.target.value : "",
                 )
               }
+              onCompositionEnd={recordCompositionEnd}
               ref={nativeListener("keydown", (event: KeyboardEvent) => {
-                if (event.key === "Enter" && view().cloneInput && view().projectAddAvailable) {
+                if (
+                  event.key === "Enter" &&
+                  !isComposingKeyboardEvent(event) &&
+                  view().cloneInput &&
+                  view().projectAddAvailable
+                ) {
                   event.preventDefault();
                   selectClone(view().cloneInput!);
                 }

@@ -1,5 +1,15 @@
 import type { ClawDraftReviewItem } from "@openclaw/gateway-protocol";
-import { action, createMemo, createOptimistic, For, onSettled, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  Loading,
+  onSettled,
+  Show,
+  type Accessor,
+} from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -73,7 +83,12 @@ function OptionalSection(props: {
   );
 }
 
-function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
+function ClawReviewDialog(props: {
+  flow: ClawCreatorFlow;
+  view: CreatorView;
+  reviewRead: Accessor<null>;
+  reviewReceipt: ClawCreatorFlow["reviewRead"];
+}) {
   const state = () => props.view.read();
   const review = () => state().review!;
   const choices = () => state().choices;
@@ -185,9 +200,27 @@ function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
           )}
         </Show>
         <Show when={!state().reviewCurrent}>
-          <p role="status" class="claw-creator__status">
-            {t(state().busy === "reviewing" ? "clawsDraft.updating" : "clawsDraft.reviewNeeded")}
-          </p>
+          <Loading
+            on={props.reviewReceipt}
+            fallback={
+              <p role="status" class="claw-creator__status">
+                {t("clawsDraft.updating")}
+              </p>
+            }
+          >
+            <Errored
+              fallback={
+                <p role="status" class="claw-creator__status">
+                  {t("clawsDraft.reviewNeeded")}
+                </p>
+              }
+            >
+              {props.reviewRead()}
+              <p role="status" class="claw-creator__status">
+                {t("clawsDraft.reviewNeeded")}
+              </p>
+            </Errored>
+          </Loading>
         </Show>
         <openclaw-modal-actions>
           <button type="button" class="btn" onClick={() => props.flow.close()}>
@@ -223,6 +256,11 @@ export function ClawCreatorReview(props: { context: ApplicationContext }) {
   });
   const flow = () => current().flow;
   const view = () => current().view;
+  const reviewReceipt = createMemo(() => view().read().reviewRead);
+  const reviewRead = createMemo(async () => {
+    await reviewReceipt()?.result;
+    return null;
+  });
   onSettled(() => {
     const context = props.context;
     const owner = clawCreatorFlow(context);
@@ -236,7 +274,12 @@ export function ClawCreatorReview(props: { context: ApplicationContext }) {
   return (
     <>
       <Show when={view().read().modalOpen && view().read().review}>
-        <ClawReviewDialog flow={flow()} view={view()} />
+        <ClawReviewDialog
+          flow={flow()}
+          view={view()}
+          reviewRead={reviewRead}
+          reviewReceipt={reviewReceipt()}
+        />
       </Show>
       <Show
         when={

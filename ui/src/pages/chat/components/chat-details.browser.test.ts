@@ -9,6 +9,7 @@ import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
+import "../../../styles/components.css";
 import baseStyles from "../../../styles/base.css?inline";
 import detailsStyles from "../../../styles/chat/details.css?inline";
 import layoutStyles from "../../../styles/chat/layout.css?inline";

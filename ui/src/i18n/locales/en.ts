@@ -171,6 +171,7 @@ export const en: TranslationMap & {
   commandPalette: TranslationMap;
   palette: TranslationMap & {
     placeholder: string;
+    attachmentPrompt: string;
     categories: TranslationMap & { navigation: string };
   };
   sessionsView: TranslationMap &
@@ -1067,11 +1068,6 @@ export const en: TranslationMap & {
     root: "<root>",
     itemCount: "[{count} item]",
     itemCountPlural: "[{count} items]",
-    form: "Form",
-    raw: "Raw",
-    formUnsafeTitle: "Form view can't safely edit some fields",
-    rawTitle: "Edit raw JSON/JSON5 config",
-    rawUnavailableTitle: "Raw mode unavailable for this snapshot",
     open: "Open",
     fileOpenedOnGateway: "Configuration file opened on Gateway host.",
     applying: "Applying…",
@@ -1098,11 +1094,8 @@ export const en: TranslationMap & {
     autoSaveConflict: "Settings changed elsewhere",
     retry: "Retry",
     applyChanges: "Apply changes",
-    rawDiscard: "Discard",
     reloadBlocked: "Finish saving or discard pending config changes before reloading.",
     rawDraftBlocksApply: "Save or discard edits in the Raw editor before applying changes.",
-    rawDraftPendingFormTitle:
-      "Unsaved raw config edits — save or discard them before switching to Form.",
     rawDraftBlocksFormEdit:
       "Unsaved raw config edits could not be parsed; resolve them in the Raw editor before changing settings.",
     rawDraftUnverified:
@@ -1110,7 +1103,6 @@ export const en: TranslationMap & {
     invalidConfig: "Your configuration is invalid. Some settings may not work as expected.",
     dismissWarning: "Don't remind again",
     viewPendingChangesRaw: "View pending changes",
-    rawDiffUnavailable: "Changes detected (JSON diff not available)",
     hideEnvValues: "Hide env values",
     revealEnvValues: "Reveal env values",
     peek: "Peek",
@@ -1119,7 +1111,6 @@ export const en: TranslationMap & {
     formUnsafeCountPlural: "{count} settings in this config can only be edited as text: {paths}",
     formUnsafeMore: "+{count} more",
     openRawEditor: "Open Raw editor",
-    rawConfig: "Raw config (JSON/JSON5)",
     secretCount: "{count} secret",
     secretCountPlural: "{count} secrets",
     redacted: "redacted",
@@ -1657,6 +1648,7 @@ export const en: TranslationMap & {
   presence: {
     sharedOwner: {
       name: "Shared owner",
+      named: "{name} · Shared owner",
       hint: "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
     },
     rosterTitle: "Online",
@@ -1915,6 +1907,7 @@ export const en: TranslationMap & {
   commandPalette: {},
   palette: {
     placeholder: "Search or start a task…",
+    attachmentPrompt: "What would you like to do with these files?",
     categories: { navigation: "Navigation" },
   },
   dreaming: {},
@@ -1925,6 +1918,7 @@ export const en: TranslationMap & {
       emptyValue: "—",
       unknown: "unknown",
       atLeast: "≥ {value}",
+      approx: "≈ {value}",
     },
     loading: {
       title: "Usage Overview",
@@ -1963,6 +1957,9 @@ export const en: TranslationMap & {
       costCategories: "Cost categories",
       remaining: "{percent}% left",
       resets: "Resets {date}",
+      exhausted: "{label} is used up.",
+      checkFailed: "Check failed",
+      exhaustedUntil: "{label} is used up until {date}.",
     },
     presets: {},
     scope: {},
@@ -2109,6 +2106,7 @@ export const en: TranslationMap & {
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
       namingWorktree: "Naming worktree…",
+      updatingRepository: "Updating repository…",
       creatingWorktree: "Creating worktree…",
       runningSetup: "Running setup…",
       provisioningEnvironment: "Provisioning environment…",
@@ -2227,6 +2225,8 @@ export const en: TranslationMap & {
     usageRemaining: "Usage Remaining",
     view: {},
     sendShortcut: "Send shortcut",
+    sendShortcutHint:
+      "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     followUpMode: "Follow-ups while the agent is working",
@@ -2429,6 +2429,7 @@ export const en: TranslationMap & {
       serverUpdatedTitle: "Server updated",
       serverUpdatedRefresh: "Refresh for full capabilities",
       threads: "Sessions",
+      pinned: "Pinned",
       otherSessions: "Other",
       groups: "Groups",
       coding: "Coding",

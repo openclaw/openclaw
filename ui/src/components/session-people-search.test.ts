@@ -63,6 +63,9 @@ describe("searchable session people", () => {
     await waitForSolid(() =>
       expect(root.querySelector(".chat-pane__sharing-panel")?.matches(":popover-open")).toBe(true),
     );
+    await waitForSolid(() =>
+      expect(root.querySelector('[aria-label="Search people…"]')).not.toBeNull(),
+    );
     root.querySelector<HTMLButtonElement>('[aria-label="Search people…"]')!.click();
     flush();
     const search = root.querySelector<HTMLInputElement>("input[data-search]");

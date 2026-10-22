@@ -23,6 +23,7 @@ export type WizardViewProps = {
   doneDescription?: string;
   doneAction?: { label: string; disabled?: boolean; onClick: () => void };
   cancellationNotice?: string | null;
+  cancellationFeedback?: JSX.Element;
   value: unknown;
   onValueChange: (value: unknown) => void;
   onAnswer: (value: unknown, includeValue?: boolean) => void;
@@ -105,6 +106,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                 </Show>
               )}
             </For>
+            {props.cancellationFeedback}
             <Switch>
               <Match when={displayPhase() === "starting"}>
                 <div class="wizard-step__progress" role="status" aria-busy="true">

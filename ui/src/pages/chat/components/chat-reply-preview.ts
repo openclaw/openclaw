@@ -2,8 +2,7 @@
 // already-loaded transcript rows first, then page-carried quoted originals.
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
-import { userTurnRunId } from "../chat-thread-items.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
+import { persistedMessageEntryId, userTurnRunId } from "../chat-thread-items.ts";
 import {
   prepareChatMessageRender,
   resolveMessageReplyText,

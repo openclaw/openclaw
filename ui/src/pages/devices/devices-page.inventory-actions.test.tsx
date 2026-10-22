@@ -26,7 +26,10 @@ describe("Devices inventory actions", () => {
       const approved = createDeferred<unknown>();
       const inventory = {
         paired: [{ deviceId: "paired-1", displayName: "Paired browser", roles: ["operator"] }],
-        pending: [{ requestId: "request-1", deviceId: "device-1", displayName: "Browser" }],
+        pending: [
+          { requestId: "request-1", deviceId: "device-1", displayName: "Browser" },
+          { requestId: "request-2", deviceId: "device-2", displayName: "Tablet" },
+        ],
       };
       const request = vi.fn(async (method: string) => {
         if (method === "device.pair.approve") {
@@ -57,6 +60,10 @@ describe("Devices inventory actions", () => {
       approve().click();
       try {
         await waitForSolid(() => expect(approve().disabled).toBe(true));
+        expect(
+          page.container.querySelector<HTMLButtonElement>('button[aria-label="Approve Tablet"]')
+            ?.disabled,
+        ).toBe(false);
         expect(details.isConnected).toBe(true);
         expect(details.open).toBe(true);
         expect(

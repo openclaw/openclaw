@@ -27,7 +27,7 @@ import {
 } from "./chat-queue.ts";
 import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import type { ChatQueueAdmissionResult } from "./composer-persistence.ts";
+import type { ChatQueueAdmissionResult } from "./composer-queue-persistence.ts";
 import {
   admitChatSubmission,
   retireChatSubmissionDisplay,

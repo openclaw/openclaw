@@ -20,7 +20,13 @@ import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
-import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
+import {
+  AdminRequired,
+  ErrorBanner,
+  EnabledSwitch,
+  JobMenu,
+  NoticeBanner,
+} from "./view-controls.tsx";
 import {
   describeJobSchedule,
   JobStateIndicator,
@@ -91,7 +97,9 @@ export function ListView(props: CronProps) {
               <Loading on={latest(scope)}>
                 <SchedulerStatus {...props} />
               </Loading>
-              <ErrorBanner error={props.listError} /> <ErrorBanner error={props.error} />
+              <ErrorBanner error={props.listError} />{" "}
+              <ErrorBanner error={props.error} reads={props.reads} />
+              <NoticeBanner notice={props.notice} />
               <Toolbar {...props} hasAdvancedJobsFilters={hasAdvancedJobsFilters()} />
             </div>
             <div

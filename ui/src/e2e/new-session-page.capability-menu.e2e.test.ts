@@ -75,7 +75,7 @@ suite.define(() => {
       await expect.poll(() => release.isEnabled()).toBe(true);
       await release.click();
       await menu.getByRole("menuitem", { name: "Back" }).click();
-      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
       await menu.getByRole("menuitemcheckbox", { name: /^github/ }).click();
       await menu.getByRole("menuitem", { name: "Back" }).click();

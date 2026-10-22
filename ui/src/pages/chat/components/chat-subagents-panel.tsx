@@ -281,6 +281,11 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
         stop:
           active && row.session.activeRunIds?.length === 1
             ? {
+                target: JSON.stringify([
+                  row.session.key,
+                  row.session.sessionId,
+                  row.session.activeRunIds,
+                ]),
                 label: t(row.stopping ? "chat.subagentsPanel.stopping" : "chat.runControls.stop"),
                 accessibleLabel: row.stopping
                   ? t("chat.subagentsPanel.stopping")

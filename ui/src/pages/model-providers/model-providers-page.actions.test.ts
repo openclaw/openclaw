@@ -129,7 +129,7 @@ describe("ModelProvidersPage mutation presentation", () => {
         publishPhase("connected");
       } else {
         await context.router.navigate("chat", context);
-        page.view.props.onProviderQueryChange("openai");
+        page.view.props.onKeyDraftChange("synthetic-draft-after-navigation");
       }
       await waitForSolid(() => {
         if (retirement === "agent") {
@@ -141,8 +141,8 @@ describe("ModelProvidersPage mutation presentation", () => {
           ).toBe(false);
         } else {
           expect(
-            page.querySelector<HTMLInputElement>(".model-providers__search input")?.value,
-          ).toBe("openai");
+            page.querySelector<HTMLInputElement>(".model-providers__inline-form input")?.value,
+          ).toBe("synthetic-draft-after-navigation");
         }
       });
 

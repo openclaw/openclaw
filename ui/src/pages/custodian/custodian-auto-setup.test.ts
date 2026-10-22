@@ -6,7 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { SetupAutoResult } from "./custodian-auto-setup.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
@@ -320,6 +320,68 @@ it("shows RPC failures and retries without a premature greeting", async () => {
   expect(request).toHaveBeenCalledTimes(1);
   await click(page, "Retry");
   expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("retires a user retry on same-client ownership replacement", async () => {
+  const retry = createDeferred<SetupAutoResult>();
+  let calls = 0;
+  const request = setupRequest(() => {
+    calls += 1;
+    if (calls === 1) {
+      throw new Error("Try again");
+    }
+    return calls === 2 ? retry.promise : { ...result(), selected: alternative };
+  });
+  const { page, setGatewayToken, setGatewaySnapshot } = await mountSetup(request);
+  [...page.querySelectorAll("button")]
+    .find((entry) => entry.textContent?.trim() === "Retry")!
+    .click();
+  await waitForSolid(() => expect(page.querySelector(".custodian-setup__progress")).not.toBeNull());
+  setGatewayToken("synthetic-replacement-owner");
+  setGatewaySnapshot({});
+  await waitForSolid(() => text(page).toContain("Using Local model"));
+  expect(page.querySelector(".custodian-setup__progress")).toBeNull();
+  retry.reject(new Error("Retired retry failed"));
+  await retry.promise.catch(() => {});
+  await waitForSolid(() => text(page).not.toContain("Retired retry failed"));
+});
+
+it("keeps cancellation available during an answer and resumes after protected cancellation", async () => {
+  const answer = createDeferred<unknown>();
+  const cancellation = createDeferred<unknown>();
+  const request = setupRequest(
+    () => ({
+      ...unavailable(),
+      status: "needs-sign-in",
+      signIn: { authOptionId: "codex-sign-in", label: "ChatGPT" },
+    }),
+    {
+      "openclaw.setup.auth.start": () => ({ done: false }),
+      "wizard.next": (params) =>
+        params?.answer
+          ? answer.promise
+          : { done: false, step: { id: "confirm", type: "confirm", message: "Continue?" } },
+      "wizard.cancel": () => cancellation.promise,
+    },
+  );
+  const { page } = await mountSetup(request);
+  await click(page, "Sign in with ChatGPT");
+  const getButton = (label: string) =>
+    [...page.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === label)!;
+  getButton("Yes").click();
+  await waitForSolid(() => expect(getButton("Yes").disabled).toBe(true));
+  expect(getButton("Cancel").disabled).toBe(false);
+  getButton("Cancel").click();
+  await waitForSolid(() => expect(getButton("Cancel").disabled).toBe(true));
+  cancellation.resolve({ status: "running" });
+  await waitForSolid(() => expect(getButton("Cancel").disabled).toBe(false));
+  answer.resolve({
+    done: false,
+    step: { id: "confirm-again", type: "confirm", message: "Ready now?" },
+  });
+  await settled(page);
+  text(page).toContain("Ready now?");
+  expect(getButton("Yes").disabled).toBe(false);
 });
 
 it("persists dismissal across a new custodian store", async () => {

@@ -203,7 +203,7 @@ it.each([false, true])(
         hasRows ? "Some models could not be refreshed" : "Models unavailable",
       ),
     );
-    expect(page.cronModelSuggestions).toEqual([]);
+    await expectModels(page, []);
   },
 );
 
@@ -926,7 +926,7 @@ it("finishes an accepted create-and-run chain while hidden without background re
       id: "created-job",
       mode: "force",
     });
-    expect(page.cron.cronError).toContain("Run queued. Run ID: synthetic-run");
+    expect(page.cron.cronNotice).toContain("Run queued. Run ID: synthetic-run");
     expect(page.cron.cronCreateOpen).toBe(false);
     visibility("visible");
     await settle();

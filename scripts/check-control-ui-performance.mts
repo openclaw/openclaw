@@ -56,10 +56,10 @@ const controlUiPerformanceBudgets = {
   startupJsRequests: 9,
   chatBootJsRequests: 27,
   newBootJsRequests: 22,
-  // Page-owned English copy measures 1,435,673 B for Chat and 1,000,561 B
-  // for New Session. Retain at least 32 KiB of headroom for each route.
-  chatBootJsGzipBytes: 1_500_000,
-  newBootJsGzipBytes: 1_035_000,
+  // Deferred header menus measure 1,421,721 B for Chat and 1,016,231 B
+  // for New Session; preserve each route's prior relative headroom.
+  chatBootJsGzipBytes: 1_477_812,
+  newBootJsGzipBytes: 1_032_791,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   startupJsGzipBytes: 325_081,
@@ -644,7 +644,7 @@ function validateExplicitStartupJsBytes(
   }
 }
 
-export function runControlUiPerformanceCheck(
+function runControlUiPerformanceCheck(
   distDir: string,
   budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS> = CONTROL_UI_PERFORMANCE_BUDGETS,
   baselinePath = DEFAULT_STARTUP_BUDGET_BASELINE_PATH,

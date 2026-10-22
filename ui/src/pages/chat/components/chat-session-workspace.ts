@@ -2,7 +2,6 @@ import { BROWSER_IMAGE_MIME_TYPES } from "../../../../../src/shared/browser-imag
 import { downloadArtifact } from "../../../api/artifact-download.ts";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import { downloadSessionFile } from "../../../api/session-file-download.ts";
-import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { t } from "../../../i18n/index.ts";
@@ -20,6 +19,8 @@ import {
   hasUniformLineEndings,
   loadArtifactSidebarContent,
   readWorkspaceFileText,
+  readSessionFileReference,
+  workspaceBrowserFilePath,
   unsupportedFileSidebarContent,
 } from "./chat-session-workspace-file-content.ts";
 import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
@@ -51,16 +52,6 @@ registerFilePreviewEnglish();
 
 export { retireSessionWorkspaceCheckout } from "./chat-session-workspace-state.ts";
 export type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
-
-function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
-  if (!root || /^(?:\/|[a-z]:[\\/]|\\\\)/i.test(filePath)) {
-    return filePath;
-  }
-  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  const base = root.replace(/[\\/]+$/, "");
-  const relative = filePath.replace(/^[\\/]+/, "").replaceAll(/[\\/]/g, separator);
-  return base ? `${base}${separator}${relative}` : `${separator}${relative}`;
-}
 
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
@@ -99,47 +90,20 @@ function openFile(
     viewingSession && !opts.messageEntryId
       ? `file:${requestPath}`
       : JSON.stringify(["file", sessionKey, requestPath, opts.messageEntryId]),
-    async () => {
-      try {
-        return await state.sessions.getFile(sessionKey, requestPath, { agentId, ...messageFile });
-      } catch (error) {
-        const details = error instanceof GatewayRequestError ? error.details : null;
-        if (
-          details &&
-          typeof details === "object" &&
-          "type" in details &&
-          details.type === "session_file_too_large" &&
-          "size" in details &&
-          typeof details.size === "number"
-        ) {
-          // The authorized read supplies metadata even when its preview bytes are unavailable.
-          const metadata: SessionWorkspaceGetResult = {
-            sessionKey,
-            file: {
-              path: requestPath,
-              name: pathDisplayName(path),
-              size: details.size,
-              kind: "read",
-              missing: false,
-              previewKind: "unsupported",
-            },
-          };
-          return metadata;
-        }
-        throw error;
-      }
-    },
-    (result) => {
+    async () =>
+      await readSessionFileReference(state, sessionKey, agentId, requestPath, opts.messageEntryId),
+    (reference) => {
+      const { result, actionPath } = reference;
       const file = result.file;
       if (!file) {
         return null;
       }
-      const name = file.name || pathDisplayName(path);
-      const filePath = file.workspacePath || file.path || path;
+      const name = file.name || pathDisplayName(file.path || actionPath);
+      const filePath = file.workspacePath || file.path || actionPath;
       const download = (signal: AbortSignal) =>
         downloadSessionFile(
           state,
-          { sessionKey: result.sessionKey, agentId, path: requestPath, ...messageFile },
+          { sessionKey: result.sessionKey, agentId, path: actionPath, ...messageFile },
           signal,
         );
       if (file.previewKind === "image") {
@@ -167,7 +131,7 @@ function openFile(
       }
       if (file.previewKind === "unsupported") {
         return {
-          ...unsupportedFileSidebarContent(file, path, download),
+          ...unsupportedFileSidebarContent(file, actionPath, download),
           fileLinkSessionKey: result.sessionKey,
           file: {
             path: filePath,
@@ -191,16 +155,11 @@ function openFile(
             hash: file.hash!,
             save: async ({ content, expectedHash }: { content: string; expectedHash: string }) => {
               try {
-                const saved = await state.sessions.setFile(
-                  result.sessionKey,
-                  requestPath,
-                  content,
-                  {
-                    agentId,
-                    expectedHash,
-                    ...(result.source ? { expectedSource: result.source } : {}),
-                  },
-                );
+                const saved = await state.sessions.setFile(result.sessionKey, actionPath, content, {
+                  agentId,
+                  expectedHash,
+                  ...(result.source ? { expectedSource: result.source } : {}),
+                });
                 const hash = saved?.file.hash;
                 if (
                   typeof hash === "string" &&
@@ -244,7 +203,7 @@ function openFile(
               }
             },
             fetchLatest: async () => {
-              const latest = await state.sessions.getFile(result.sessionKey, requestPath, {
+              const latest = await state.sessions.getFile(result.sessionKey, actionPath, {
                 agentId,
                 ...messageFile,
               });
@@ -285,7 +244,7 @@ function openFile(
         sessionFileSource: {
           sessionKey: result.sessionKey,
           agentId,
-          path: filePath,
+          path: actionPath,
           ...messageFile,
         },
         draftKey: [
@@ -320,8 +279,8 @@ function openFile(
       intent: opts.intent,
       label: pathDisplayName(path),
       revalidate: true,
-      resolveLabel: (result) => result.file?.name,
-      resolveKey: (result) => {
+      resolveLabel: ({ result }) => result.file?.name,
+      resolveKey: ({ result }) => {
         const canonicalPath = result.file?.workspacePath || result.file?.path;
         return canonicalPath
           ? sessionWorkspaceFileKey(result.sessionKey, result.root, canonicalPath)

@@ -165,6 +165,11 @@ updates or park card-local popovers. New selections consume ordinary readiness a
 show the existing loading fallback. Keep selection identity in the plain owner;
 do not synchronize a second accepted-selection snapshot in the renderer.
 
+A provider row's failure badge does not replace the catalog error boundary's
+Retry action. Keep that actionable error slot unless the row exposes the same
+owner retry. Do not suppress a completion error just because a row also reports
+failure.
+
 ## Mutate with an optimistic presentation
 
 Use a generator action to retain the transition context across async work.
@@ -247,6 +252,12 @@ action. A microtask between owner publication and action invocation also does
 not solve that lifecycle. Do not cancel an authoritative write or force a
 production `flush()` to release presentation.
 
+Native or foreign bridge roots without an existing synchronous retirement signal
+may retain their local busy publication instead: a pending action read can hold
+the root through detach/remount or removal. Native Chrome and Board removal
+exercise this exception; route settled rejected receipts through a narrow
+`Errored` slot without inventing a retirement handshake just to use an action.
+
 Each action captures its presentation before starting asynchronous work.
 `isCurrentPresentation(view)` compares the captured plain state and epoch with
 the owner's current state and Gateway epoch. Recheck before optimistic writes,
@@ -280,6 +291,13 @@ optimistic slot is readable and not pending. There is no matching
 `finally { setSaving(false) }`; the transition retires the optimistic flag on
 success or failure.
 
+**`INDEPENDENT_OPTION_SETTLEMENT`:** same-tick actions share a transition even
+with independent optimistic signals. CI automation retains its plain `writes`
+admission owner and `state.pending[option]` projection so each option re-enables
+or rolls back on its own completion. Rejected receipts still go through narrow
+`Errored` slots. Prove each intermediate success and rejection while a sibling
+request is pending; a correct final combined outcome is not enough.
+
 Keep that optimistic dependency live in mixed owner/presentation affordances:
 cron uses `saving() || owner.cronBusy`. Reading the plain busy fact first can
 short-circuit the optimistic read just when the mutation begins.
@@ -287,6 +305,8 @@ Keep the flag out of aggregate props memos. Cron passes it as a separate JSX
 prop: `<CronView {...viewProps()} busy={page.saving() || viewProps().busy} />`.
 Only consumers of `busy` should join its optimistic presentation lane;
 unrelated form and route props follow the ordinary owner snapshot.
+The same applies to object-valued JSX props: pass busy flags and completion
+readers separately so a busy update cannot hold the feedback slot behind its own work.
 
 `refresh` takes the actual Solid accessor or derived-store root. A wrapper
 such as `refresh(() => jobsRead())` is not refreshable. A bare refresh asks
@@ -308,6 +328,123 @@ route unexpected rejections into that same error operation or a split effect's
 that memo under `Errored`. Do not silently discard rejections. Boundary reset
 retries a read, not a mutation; an explicit retry-save button must invoke the
 save action. Keep the user's draft on failure.
+
+### Local action errors beside retained controls
+
+When a component owns only a local operation's feedback, keep its rejected
+promise as the outcome instead of copying the error into a signal. A narrow
+`Errored` slot can show the failure without replacing the usable control:
+
+```tsx
+const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
+const outcome = createMemo(() => attempt()?.result.then(() => null), { loadingValue: undefined });
+// The event handler records the action promise and consumes its rejection even
+// if this component retires before the error slot observes it.
+
+<Show when={!saving()}>
+  <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>{outcome()}</Errored>
+</Show>;
+```
+
+Here the co-written optimistic flag already presents progress. `loadingValue`
+provides the initial value until the first real answer; a synchronous `null`
+consumes that initial state too. It does not prevent later reads from holding a
+pending transition. The saving condition keeps the error observer unmounted
+during each attempt and clears the old failure on retry. Keep controls outside
+the slot, preserve the owner's admission and
+retirement checks, and consume the action promise in the handler; the memo is
+not a substitute for handling an event action's rejection. Chat speech and
+skill-review Undo use this pattern. Clear the recorded attempt when its target
+changes so a successor cannot inherit the previous operation's failure.
+
+A retained status-only slot may also need `latest(outcome)` under `Errored` to
+avoid joining later receipt or target transitions. PR-detail copy alerts use
+this alongside the saving gate: the gate resets the rejected boundary on retry,
+while `latest` prevents the status observer from holding the live URL and control
+publication. The actionable controls stay outside the status slot.
+
+Native validation attributes can derive from that same completion receipt without
+moving the input inside the error boundary. Input dialogs retain the owner's
+`Promise<string | null>` contract: `null` succeeds, a returned string is expected
+validation feedback, and a rejected promise reaches `Errored`. Do not turn those
+returned strings into thrown errors merely to use a boundary.
+
+```ts
+const [completion, setCompletion] = createSignal<Promise<string | null>>();
+const message = createMemo(() => completion() ?? null, { loadingValue: null });
+const invalid = createMemo(
+  () =>
+    completion()?.then(
+      (value) => Boolean(value),
+      () => true,
+    ) ?? false,
+  { loadingValue: false },
+);
+```
+
+Bind `aria-invalid` from `!saving() && invalid()` on the retained input. Inside
+the narrow `Errored` slot, show a returned `message()` as ordinary validation
+feedback. The initial loading values cover first readiness; the saving checks
+avoid reading either derivation while an attempt is pending. Hide only the alert
+slot while saving to clear a previous rejected attempt on retry. Keep synchronous
+admission separate and consume the action's rejection even after disposal.
+
+When an attempt keys a conditional error observer, use an object receipt such as
+`{ result: promise }` as the `Show` condition, then read its promise inside the
+initially empty memo under `Errored`. A bare promise used as a `Show`
+condition waits for settlement and can retain the previous error through retry.
+`Loading on` has a different reset-tracking contract. Keep actionable controls
+outside the error observer.
+
+When a boolean owner outcome also drives rendering or admission, let the error
+memo observe each promise receipt directly. Deriving its rejection from a
+memoized boolean can lose repeated failures to equality (`false` then `false`).
+A nonthrowing boolean projection may still drive the result-dependent controls.
+
+If a native attribute needs the rejected-outcome fact itself, an attempt-keyed
+`createErrorBoundary` from `@solidjs/signals` can derive just that boolean. Keep
+saving, pinned state, and labels outside its computation: a retained error must
+not freeze those live values or leave the title behind `aria-label` and disabled.
+
+### Command errors without optimistic state
+
+Some commands already expose their busy state through a shared owner.
+They need no presentation action merely to show an error. The browser dashboard
+keeps request admission synchronous and projects its existing pending fact for
+button state; no predicted value needs an optimistic action. WhatsApp Settings
+stores the admitted command's completion promise and reads it under `Errored`:
+
+```tsx
+const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
+const completed = createMemo(() => attempt()?.result.then(() => null) ?? null);
+
+<Loading on={attempt()}>
+  <Errored fallback={(error) => <CommandError error={error()} />}>{completed()}</Errored>
+</Loading>;
+```
+
+Start the owner command in the event handler, publish its receipt, and attach
+a rejection consumer for work whose view is replaced or disposed. Preserve the
+owner's cancellation and error-precedence contract. Each new attempt replaces
+the previous read, so an older failed refresh cannot overwrite a newer success.
+Re-arm this narrow error slot on retry to clear the previous error immediately;
+keep the controls outside it. Always consume the completion inside that boundary,
+even while an optimistic saving flag is true. Guarding its only read with
+`!saving()` prevents `Loading` from observing the new pending completion and can
+leave the previous `Errored` fallback visible throughout retry. Search test and
+Workboard delete feedback keep the read live; their held-retry tests verify that
+the old alert clears before the replacement operation settles. A local error string written by each completion
+would lose that ordering and require a second request-generation guard.
+
+For dismissible command feedback, key each outcome by its admitted completion
+promise. Message text or a shared draft identity can suppress an identical failure
+on a later attempt.
+
+The user-action outcome also owns lazy dialog import, registration, and preparation.
+A catch that starts after `await showConfirmDialog(...)` or `showInputDialog(...)`
+leaves preparation failures unobserved by a void event caller. Keep those awaits
+inside the existing outcome owner's error path, and retain its current-scope checks
+after they settle; generic confirmation behavior does not need to change.
 
 ## Key a projection over an owner snapshot
 
@@ -357,6 +494,13 @@ initialization errored. The table also retains its DOM identity through an
 optimistic transition; a readiness `Show` around it can recreate the rows.
 
 ## Load code at its existing boundary
+
+Native custom-element bridges create independent Solid roots, so their lazy
+reads do not inherit the shell's `Errored` boundary. Protect each lazy region
+within the same root with a local `Errored` boundary, or use an explicit
+optional fallback when losing that decoration is acceptable. `Loading` handles
+pending reads; it does not handle a rejected import. Keep usable controls and
+drafts outside the error slot so retry can recover the region in place.
 
 Use `lazy` for the component code, and retain the route's existing component
 loader. The loader still controls when import begins and when the router

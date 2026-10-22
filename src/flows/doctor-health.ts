@@ -265,7 +265,7 @@ async function runDoctorHealthFlowWithResult(
           confirm: (p) => prompter.confirm(p),
           outro: startup.showDoctorOutro,
         });
-        if (offeredUpdate.handled) {
+        if (offeredUpdate) {
           return undefined;
         }
       }

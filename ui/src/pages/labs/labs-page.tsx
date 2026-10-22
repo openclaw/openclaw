@@ -26,7 +26,7 @@ import {
 } from "../../lib/config/config-state-model.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
@@ -236,12 +236,9 @@ export function LabsPage() {
         class="btn btn--sm oc-action oc-action-ghost"
         href={`${location().pathname}${location().search}`}
         aria-label={t("labsPage.configureFeature", { name: props.featureTitle })}
-        onClick={(event: MouseEvent) => {
-          if (shouldHandleNavigationClick(event)) {
-            event.preventDefault();
-            context.navigate("plugin-settings", location());
-          }
-        }}
+        onClick={(event: MouseEvent) =>
+          handleNavigationClick(event, () => context.navigate("plugin-settings", location()))
+        }
       >
         {t("labsPage.configure")}
       </a>

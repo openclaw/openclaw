@@ -839,7 +839,8 @@ describe("successful update finalization ordering", () => {
       await fs.mkdir(path.join(root, "dist"));
       await fs.writeFile(
         path.join(root, "dist", "index.js"),
-        `require("node:fs").writeFileSync(${JSON.stringify(lintLog)}, JSON.stringify({ argv: process.argv.slice(2), inProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS ?? null }));
+        `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(lintLog)}, JSON.stringify({ argv: process.argv.slice(2), inProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS ?? null }));
 process.stdout.write(${JSON.stringify(JSON.stringify({ ok: false, checksRun: 3, findings }))});
 process.exitCode = 1;
 `,
