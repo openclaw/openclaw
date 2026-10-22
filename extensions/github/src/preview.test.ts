@@ -19,6 +19,7 @@ import {
   previewFetch,
   previewTarget,
   publicRepository,
+  queuedFetch as responses,
   requestUrl,
 } from "./preview.test-support.js";
 
@@ -27,13 +28,6 @@ const optionalIdentity = (): ControlUiGitHubPreviewIdentity => ({
   token: "github-test-token",
   optionalAuth: true,
 });
-function responses(...items: Response[]) {
-  const fetchMock = vi.fn<typeof fetch>();
-  for (const response of items) {
-    fetchMock.mockResolvedValueOnce(response);
-  }
-  return fetchMock;
-}
 function deferredFirstResponse(next: (url: string) => Response) {
   const started = createDeferred<void>();
   const response = createDeferred<Response>();
