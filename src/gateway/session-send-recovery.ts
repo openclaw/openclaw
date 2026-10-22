@@ -20,6 +20,7 @@ import { isTransientRestartRecoveryError } from "../infra/restart-recovery-error
 import { getRetryAttemptErrors } from "../infra/retry-attempt-errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   captureSessionTarget,
@@ -199,6 +200,20 @@ async function recoverSessionSendDeliveriesForAgents(
                 (input) => input.state === "interrupted" && readSessionSendDelivery(input.message),
               )
             ) {
+              // Keep saved-input custody while the boot owner pauses the predecessor.
+              // Drain cancels this idle wait before shutdown joins startup work.
+              const preparationSignal = AbortSignal.any([signal, getGatewayRestartDrainSignal()]);
+              for (;;) {
+                const pausedUntilMs = await runtime.prepareRestartRecovery(preparationSignal);
+                preparationSignal.throwIfAborted();
+                assertCurrent();
+                if (pausedUntilMs === undefined) {
+                  break;
+                }
+                await sleepWithAbort(Math.max(1, pausedUntilMs - Date.now()), preparationSignal, {
+                  ref: false,
+                });
+              }
               const { retryRestartAbortedMainSessionRecovery } =
                 await import("../agents/main-session-recovery/main-session-restart-recovery.js");
               const recovery = await retryRestartAbortedMainSessionRecovery({
