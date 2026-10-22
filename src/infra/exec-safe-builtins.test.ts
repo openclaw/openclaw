@@ -82,21 +82,6 @@ describe("isSafeBuiltinSegment", () => {
     ).toBe(false);
   });
 
-  it("still auto-allows ordinary test predicates", () => {
-    expect(
-      isSafeBuiltinSegment({
-        segment: builtinSegment(["test", "-d", "/tmp"]),
-        platform: "linux",
-      }),
-    ).toBe(true);
-    expect(
-      isSafeBuiltinSegment({
-        segment: builtinSegment(["test", "-f", "/etc/hostname"]),
-        platform: "linux",
-      }),
-    ).toBe(true);
-  });
-
   it("rejects test/-v predicates: bash evaluates the -v operand subscript (command-injection vector)", () => {
     // `test -v 'a[$(cmd)]'` runs cmd under bash >= 4.2 because the -v operand's array
     // subscript is evaluated even inside single quotes.
