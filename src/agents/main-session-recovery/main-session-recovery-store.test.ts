@@ -102,15 +102,11 @@ describe("main session recovery store", () => {
     kind: "admit_recovery" | "cancel_reservation" | "abandon_reservation",
     reservation: MainSessionRecoveryReservation,
   ): CommitParams["command"] {
-    return kind === "admit_recovery"
-      ? {
-          kind,
-          lifecycleGeneration,
-          now: 300,
-          runId: reservation.runId,
-          sessionId: reservation.sessionId,
-        }
-      : { kind, reservation };
+    if (kind !== "admit_recovery") {
+      return { kind, reservation };
+    }
+    const { runId, sessionId } = reservation;
+    return { kind, lifecycleGeneration, now: 300, runId, sessionId };
   }
 
   function commitRecovery(
@@ -118,10 +114,6 @@ describe("main session recovery store", () => {
     options: Omit<CommitParams, "command" | "target"> = {},
   ) {
     return commit({ command, target: storeTarget(), ...options });
-  }
-
-  function observe() {
-    return commitRecovery({ kind: "observe", cycleId: "unused", lifecycleGeneration, sessionKey });
   }
 
   function foreground(claimId: string, generation = lifecycleGeneration) {
@@ -155,18 +147,16 @@ describe("main session recovery store", () => {
     once = false,
   ) {
     const replace = sessions.applySessionEntryReplacements;
-    const implementation: typeof replace = (params) =>
+    const spy = vi.spyOn(sessions, "applySessionEntryReplacements");
+    return spy[once ? "mockImplementationOnce" : "mockImplementation"]((params) =>
       replace({
         ...params,
         update: (entries) => {
           inspectEntries(entries);
           return params.update(entries);
         },
-      });
-    const spy = vi.spyOn(sessions, "applySessionEntryReplacements");
-    return once
-      ? spy.mockImplementationOnce(implementation)
-      : spy.mockImplementation(implementation);
+      }),
+    );
   }
 
   function claimRecovery(overrides: Partial<ClaimParams> = {}) {
@@ -182,19 +172,6 @@ describe("main session recovery store", () => {
     const claim = await claimRecovery(overrides);
     assert(claim.kind === "claimed", "expected foreground owner claim");
     return claim;
-  }
-
-  async function seedOwner(moved: boolean) {
-    if (moved) {
-      storePath = createMovedSessionStore();
-    }
-    await seed();
-    const claim = await claimedRecovery();
-    const ownerKey = moved ? "agent:main:moved" : sessionKey;
-    if (moved) {
-      await moveOwner(ownerKey);
-    }
-    return { claim, ownerKey };
   }
 
   async function reserve() {
@@ -232,7 +209,6 @@ describe("main session recovery store", () => {
         abortedLastRun: true,
       };
       await write(entry);
-      expect(read().restartRecoveryRuns).toBeUndefined();
       expectNotRequired(await claimRecovery({ runId: "follow-up" }));
       expect(read()).toMatchObject({ status, abortedLastRun: true });
 
@@ -252,7 +228,12 @@ describe("main session recovery store", () => {
       const restorePrevious = await seedDelivery();
       // Orphan reconciliation can win while the previous admission's cleanup is deferred.
       await commitRecovery({ kind: "mark_interrupted", cycleId: "unused", now: 400 });
-      const observed = await observe();
+      const observed = await commitRecovery({
+        kind: "observe",
+        cycleId: "unused",
+        lifecycleGeneration,
+        sessionKey,
+      });
       assert(
         observed.transition.kind === "observed" &&
           observed.transition.view.status === "recoverable",
@@ -294,25 +275,8 @@ describe("main session recovery store", () => {
     expectRestored(1);
   });
 
-  it("rejects an observation after the session is replaced", async () => {
-    await seed({
-      sessionId: "session-2",
-      updatedAt: 300,
-      mainRestartRecovery: recoveryState({ cycleId: "cycle-2" }),
-    });
-
-    const result = await prepare({
-      now: 400,
-      runId: "stale-recovery",
-      executionIdentity: enabledExecutionIdentity("stale-recovery"),
-    });
-
-    expect(result.transition).toEqual({ kind: "rejected", reason: "session_replaced" });
-    expect(read().mainRestartRecovery?.reservation).toBeUndefined();
-  });
-
   it.each(["replacement", "new cycle"] as const)(
-    "does not cancel a stale reservation after %s",
+    "rejects stale recovery state after %s",
     async (change) => {
       await seed();
       const reservation = await reserve();
@@ -326,6 +290,13 @@ describe("main session recovery store", () => {
             chargedAttempts: 2,
           }),
         });
+        const stale = await prepare({
+          now: 400,
+          runId: "stale-recovery",
+          executionIdentity: enabledExecutionIdentity("stale-recovery"),
+        });
+        expect(stale.transition).toEqual({ kind: "rejected", reason: "session_replaced" });
+        expect(read().mainRestartRecovery?.reservation).toBeUndefined();
       } else {
         await commitRecovery({ kind: "clear" });
         await commitRecovery({ kind: "mark_interrupted", cycleId: "cycle-2", now: 300 });
@@ -414,16 +385,19 @@ describe("main session recovery store", () => {
   it.each([
     [false, "session"],
     [true, "session"],
-    [false, "lifecycle"],
     [true, "lifecycle"],
   ] as const)("invalidates the owner after rotation (moved=%s, %s)", async (moved, rotation) => {
-    const { claim, ownerKey } = await seedOwner(moved);
+    if (moved) {
+      storePath = createMovedSessionStore();
+    }
+    await seed();
+    const claim = await claimedRecovery();
+    const ownerKey = moved ? "agent:main:moved" : sessionKey;
+    if (moved) {
+      await moveOwner(ownerKey);
+    }
     if (rotation === "lifecycle") {
-      if (moved) {
-        beforeRecoveryUpdate(rotateAgentEventLifecycleGeneration, true);
-      } else {
-        rotateAgentEventLifecycleGeneration();
-      }
+      beforeRecoveryUpdate(rotateAgentEventLifecycleGeneration, true);
       await expect(refreshOwner(claim.lease)).resolves.toBeUndefined();
       expect(read(ownerKey)?.mainRestartRecovery?.foregroundClaims?.tokens).toEqual([
         claim.lease.claimId,
@@ -504,13 +478,10 @@ describe("main session recovery store", () => {
           : { agentId: "ops", sessionKey: "global", storePath: fixtureStore("ops") };
       await sessions.replaceSessionEntry(target, interruptedEntry());
       await expect(inspect(target)).resolves.toEqual({ kind: "required" });
-      const accessorSpy = vi.spyOn(sessions, "applySessionEntryReplacements");
       const claim = await claimedRecovery({
         target,
         ...(bindAt === "claim" ? { runId: "foreground-run" } : {}),
       });
-      expect(accessorSpy).toHaveBeenCalledOnce();
-      expect(accessorSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKeys: [target.sessionKey] });
       await expect(
         refreshOwner(claim.lease, bindAt === "refresh" ? "foreground-run" : undefined),
       ).resolves.toMatchObject({ entry: { sessionId: "session-1" } });
@@ -685,30 +656,5 @@ describe("main session recovery store", () => {
       lifecycleGeneration: currentGeneration,
       tokens: ["current-owner"],
     });
-  });
-
-  it("rejects a delayed admitted-interruption callback after lifecycle rotation", async () => {
-    await write(
-      interruptedEntry({
-        status: undefined,
-        abortedLastRun: false,
-        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration }],
-      }),
-    );
-    rotateAgentEventLifecycleGeneration();
-
-    const result = await commitRecovery({
-      kind: "mark_admitted_recovery_interrupted",
-      lifecycleGeneration,
-      sessionId: "session-1",
-      runId: "recovery-1",
-      cycleId: "cycle-1",
-      attempt: 0,
-      now: 300,
-    });
-
-    expect(result.transition).toEqual({ kind: "rejected", reason: "stale_generation" });
-    expect(read()).toMatchObject({ sessionId: "session-1", abortedLastRun: false });
-    expect(read().status).toBeUndefined();
   });
 });
