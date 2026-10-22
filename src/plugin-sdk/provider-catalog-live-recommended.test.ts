@@ -8,8 +8,12 @@ const { refresh, recommendations } = vi.hoisted(() => ({
   refresh: vi.fn(),
   recommendations: vi.fn<() => Promise<readonly string[] | undefined>>(),
 }));
-vi.mock("../model-catalog/remote-refresh.js", () => ({ refreshRemoteModelCatalog: refresh }));
-vi.mock("../model-catalog/remote-overlay.js", () => ({
+vi.mock("../model-catalog/remote-refresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../model-catalog/remote-refresh.js")>()),
+  refreshRemoteModelCatalog: refresh,
+}));
+vi.mock("../model-catalog/remote-overlay.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../model-catalog/remote-overlay.js")>()),
   readRemoteModelCatalogProviderRecommendations: recommendations,
 }));
 
