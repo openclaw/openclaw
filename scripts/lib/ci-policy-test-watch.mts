@@ -10,6 +10,7 @@ import {
 import { UI_E2E_OWNER_WATCHES } from "./ci-ui-e2e-owner-inventory.mts";
 
 type PolicyTestWatch = {
+  includeDotPaths?: boolean;
   ownerGlobs?: readonly string[];
   sourceOnly?: boolean;
   testFile: string;
@@ -58,14 +59,10 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["{src,extensions,packages,scripts,ui/src}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
   })),
   {
+    includeDotPaths: true,
     testFile: "test/scripts/lint-suppressions.test.ts",
-    // The inventory includes JavaScript test suffixes and dot-prefixed paths that
-    // sourceOnly and default globstar matching would exclude.
-    watchGlobs: [
-      "{src,extensions,scripts,ui}/**/*.{ts,tsx,js,jsx,mjs,cjs}",
-      "{src,extensions,scripts,ui}/**/.*.{ts,tsx,js,jsx,mjs,cjs}",
-      "{src,extensions,scripts,ui}/**/.*/**/{*,.*}.{ts,tsx,js,jsx,mjs,cjs}",
-    ],
+    // The inventory includes JavaScript test suffixes that sourceOnly would exclude.
+    watchGlobs: ["{src,extensions,scripts,ui}/**/*.{ts,tsx,js,jsx,mjs,cjs}"],
   },
   {
     testFile: "test/vitest-pr-exempt-retention.test.ts",
@@ -2098,10 +2095,22 @@ const literalPolicyPatterns = new Set(
     .filter(isPlainRepoRelativePath),
 );
 
-function matchesPolicyPattern(changedPath: string, pattern: string, literalPath: boolean) {
-  return literalPath && literalPolicyPatterns.has(pattern)
-    ? changedPath === pattern
-    : matchesGlob(changedPath, pattern);
+function matchesPolicyPattern(
+  changedPath: string,
+  pattern: string,
+  literalPath: boolean,
+  includeDotPaths = false,
+) {
+  if (literalPath && literalPolicyPatterns.has(pattern)) {
+    return changedPath === pattern;
+  }
+  const candidate = includeDotPaths
+    ? changedPath
+        .split("/")
+        .map((segment) => (segment.startsWith(".") ? `_${segment.slice(1)}` : segment))
+        .join("/")
+    : changedPath;
+  return matchesGlob(candidate, pattern);
 }
 
 /** Resolve watched tests, optionally restricting to complete owners of the changed input. */
@@ -2114,13 +2123,17 @@ export function resolvePolicyTestTargets(
     literal: isPlainRepoRelativePath(changedPath),
   }));
   return policyTestWatches
-    .filter(({ watchGlobs, ownerGlobs, sourceOnly }) =>
+    .filter(({ watchGlobs, ownerGlobs, sourceOnly, includeDotPaths }) =>
       paths.some(
         ({ changedPath, literal }) =>
           (!sourceOnly || !isTestFileTarget(changedPath)) &&
-          watchGlobs.some((watchGlob) => matchesPolicyPattern(changedPath, watchGlob, literal)) &&
+          watchGlobs.some((watchGlob) =>
+            matchesPolicyPattern(changedPath, watchGlob, literal, includeDotPaths),
+          ) &&
           (!options.completeOwnersOnly ||
-            ownerGlobs?.some((ownerGlob) => matchesPolicyPattern(changedPath, ownerGlob, literal))),
+            ownerGlobs?.some((ownerGlob) =>
+              matchesPolicyPattern(changedPath, ownerGlob, literal, includeDotPaths),
+            )),
       ),
     )
     .map(({ testFile }) => testFile);
@@ -2129,7 +2142,9 @@ export function resolvePolicyTestTargets(
 /** True when the policy tests are the complete bounded owner for this path. */
 export function isPolicyTestOwnedPath(changedPath: string): boolean {
   const literal = isPlainRepoRelativePath(changedPath);
-  return policyTestWatches.some(({ ownerGlobs }) =>
-    ownerGlobs?.some((ownerGlob) => matchesPolicyPattern(changedPath, ownerGlob, literal)),
+  return policyTestWatches.some(({ ownerGlobs, includeDotPaths }) =>
+    ownerGlobs?.some((ownerGlob) =>
+      matchesPolicyPattern(changedPath, ownerGlob, literal, includeDotPaths),
+    ),
   );
 }

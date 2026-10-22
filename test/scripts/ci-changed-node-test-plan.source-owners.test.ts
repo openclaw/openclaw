@@ -572,6 +572,7 @@ describe("CI changed Node test plan", () => {
     "src/example.test.js",
     "src/.hidden.ts",
     "extensions/xai/.boundary-stubs/example.d.ts",
+    "extensions/example/.one/.two/file.ts",
   ])("retains the lint inventory through the actual PR-exempt planner for %s", (changedPath) => {
     const shards = createChangedNodeTestShards([changedPath], {
       includePrExemptRuntimeTests: false,
