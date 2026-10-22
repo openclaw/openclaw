@@ -3,10 +3,25 @@ import {
   deriveContextPromptTokens,
   derivePromptTokens,
   deriveSessionTotalTokens,
+  makeZeroUsageSnapshot,
   normalizeUsage,
   toOpenAiChatCompletionsUsage,
   type NormalizedUsage,
 } from "./usage.js";
+
+it("starts independent usage snapshots with zero counts and costs", () => {
+  const first = makeZeroUsageSnapshot();
+  first.input = 12;
+  first.cost.total = 0.5;
+  expect(makeZeroUsageSnapshot()).toEqual({
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
+});
 
 function expectNormalized(input: Parameters<typeof normalizeUsage>[0], expected: NormalizedUsage) {
   expect(normalizeUsage(input)).toEqual({

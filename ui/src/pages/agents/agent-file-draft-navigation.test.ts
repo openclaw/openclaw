@@ -94,7 +94,7 @@ it.each([
   const agents = {
     ...agentsCapability(async () => fileList("main")),
     state: { ...agentsCapability(async () => fileList("main")).state, agentsList: roster },
-    files: () => ({ list: null, loading: false, error: null }),
+    files: () => ({ list: null, loading: false, error: null, read: null }),
     ensureFiles: vi.fn(async (agentId: string) => fileList(agentId)),
     recordFile: vi.fn(),
   };
