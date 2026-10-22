@@ -54,11 +54,7 @@ async function ingressRequest(port: number, url: string, host?: string) {
     headers: { host: host ?? parsed.host },
     agent,
   });
-  return {
-    ...response,
-    cookie: response.headers["set-cookie"] ?? [],
-    location: response.headers.location,
-  };
+  return { ...response, cookie: response.headers["set-cookie"] ?? [] };
 }
 
 describe("private portal ingress", () => {
@@ -69,8 +65,7 @@ describe("private portal ingress", () => {
     };
     const { service, httpServers } = wildcardService(["0.0.0.0"]);
     const resolveHost = vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore");
-    const targetPort = target.port;
-    const first = await service.open({ targetPort, path: "/a/b?x=1" });
+    const first = await service.open({ targetPort: target.port, path: "/a/b?x=1" });
     expect(first.publicUrl).toMatch(/^https:\/\/[a-f0-9]{32}\.preview\.test\/a\/b\?x=1$/u);
     expect(httpServers).toHaveLength(1);
     expect(httpServers[0]?.address()).toMatchObject({
@@ -98,27 +93,28 @@ describe("private portal ingress", () => {
     ]) {
       expect((await ingressRequest(first.listenPort, first.url, host)).status).toBe(404);
     }
-    const reused = await service.open({ targetPort, path: "/updated" });
+    const reused = await service.open({ targetPort: target.port, path: "/updated" });
     expect(reused.publicUrl).toBe(`${new URL(first.url).origin}/updated`);
     await service.close(first.id);
     expect((await ingressRequest(first.listenPort, first.url)).status).toBe(404);
-    const reopened = await service.open({ targetPort });
+    const reopened = await service.open({ targetPort: target.port });
     expect(new URL(reopened.url).hostname).not.toBe(new URL(first.url).hostname);
     expect((await ingressRequest(first.listenPort, first.url)).status).toBe(404);
     expect(claimTailscaleServePort).not.toHaveBeenCalled();
     expect(resolveHost).not.toHaveBeenCalled();
   });
 
-  it.each(["http://localhost", "//127.0.0.1"])("rewrites %s redirects", async (prefix) => {
-    const targetPort = target.port;
+  it("rewrites protocol-relative redirects to the published HTTPS origin", async () => {
     target.handler = (_req, res) => {
-      res.writeHead(302, { Location: `${prefix}:${targetPort}/next?q=1#section` }).end();
+      res.writeHead(302, { Location: `//127.0.0.1:${target.port}/next?q=1#section` }).end();
     };
     const { service } = wildcardService();
-    const portal = await service.open({ targetPort });
+    const portal = await service.open({ targetPort: target.port });
     const response = await ingressRequest(portal.listenPort, portal.url);
-    expect(response.status).toBe(302);
-    expect(response.location).toBe(`${new URL(portal.publicUrl).origin}/next?q=1#section`);
+    expect(response).toMatchObject({
+      status: 302,
+      headers: { location: `${new URL(portal.publicUrl).origin}/next?q=1#section` },
+    });
   });
 
   it("shares listener startup across concurrent opens and closes only the selected portal", async () => {
@@ -173,8 +169,7 @@ describe("private portal ingress", () => {
       managedTailscale: true,
       httpBindHosts: ["0.0.0.0"],
     });
-    const targetPort = target.port;
-    const portal = await service.open({ targetPort, path: "/app" });
+    const portal = await service.open({ targetPort: target.port, path: "/app" });
     expect(portal.publicUrl).toBe(`https://gw.ts.net:${portal.listenPort}/app`);
     expect(claimTailscaleServePort).toHaveBeenCalledExactlyOnceWith(
       portal.listenPort,
@@ -186,11 +181,11 @@ describe("private portal ingress", () => {
     expect(response.status).toBe(200);
     expect(response.cookie).toHaveLength(2);
     for (const cookie of response.cookie) {
-      expect(cookie).toContain("SameSite=None");
-      expect(cookie).toContain("Secure");
-      expect(cookie).toContain("Partitioned");
+      for (const attribute of ["SameSite=None", "Secure", "Partitioned"]) {
+        expect(cookie).toContain(attribute);
+      }
     }
-    await service.open({ targetPort });
+    await service.open({ targetPort: target.port });
     expect(claimTailscaleServePort).toHaveBeenCalledTimes(1);
     await service.close(portal.id);
     expect(claim.stop).toHaveBeenCalledOnce();

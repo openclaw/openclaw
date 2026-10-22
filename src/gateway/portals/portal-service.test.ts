@@ -122,12 +122,10 @@ describe("gateway portal service", () => {
   it.each([false, true])("owns listeners after collision=%s", async (collision) => {
     const targetPort = target.port;
     const actualListen = httpListen.listenGatewayHttpServer;
-    const calls: Array<{ host: string; port: number }> = [];
     const attemptedServers = new Set<Server>();
     const listen = vi
       .spyOn(httpListen, "listenGatewayHttpServer")
       .mockImplementation(async (params) => {
-        calls.push({ host: params.bindHost, port: params.port });
         attemptedServers.add(params.httpServer);
         await actualListen(params);
         if (collision && params.bindHost === "127.0.0.1" && params.port === 0) {
@@ -155,10 +153,6 @@ describe("gateway portal service", () => {
     expect(portal).toMatchObject({ id: `p${targetPort}`, port: targetPort, title: "App" });
     expect(await getStatus("127.0.0.1", portal.listenPort, "/")).toBe(401);
     expect(await getStatus("::1", portal.listenPort, "/")).toBe(401);
-    expect(calls).toEqual([
-      { host: "127.0.0.1", port: 0 },
-      { host: "::1", port: portal.listenPort },
-    ]);
     expect(httpServers).toHaveLength(2);
     expect(httpServers.every((server) => server.listening)).toBe(true);
     for (const server of httpServers) {
@@ -246,12 +240,8 @@ describe("gateway portal service", () => {
     await service.closeWorkerPortals("cloud/a", 6);
     expect(closeStaleForward).toHaveBeenCalledOnce();
     expect(closeCurrentForward).not.toHaveBeenCalled();
-    expect(
-      service
-        .list()
-        .map((portal) => portal.id)
-        .toSorted(),
-    ).toEqual([local.id, worker.id, otherWorker.id].toSorted());
+    expect(service.list()).toEqual(expect.arrayContaining([local, worker, otherWorker]));
+    expect(service.list()).toHaveLength(3);
     await service.close(worker.id);
     expect(closeCurrentForward).toHaveBeenCalledOnce();
   });

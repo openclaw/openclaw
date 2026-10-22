@@ -10,7 +10,7 @@ import {
 import net from "node:net";
 import { duplexPair, type Duplex } from "node:stream";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { mockIpv4OnlyLocalhostLookup } from "../../../test/helpers/loopback-dns.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -26,19 +26,17 @@ let upgradeRequest: IncomingMessage | undefined;
 let targetWebSocketSetCookie: string | undefined;
 const targetWss = new WebSocketServer({ server: target.server });
 
-beforeAll(async () => {
-  targetWss.on("connection", (socket, req) => {
-    upgradeRequest = req;
-    socket.on("message", (data) => socket.send(data));
-  });
-  targetWss.on("headers", (headers) => {
-    if (targetWebSocketSetCookie) {
-      headers.push(`Set-Cookie: ${targetWebSocketSetCookie}`);
-    }
-  });
+targetWss.on("connection", (socket, req) => {
+  upgradeRequest = req;
+  socket.on("message", (data) => socket.send(data));
+});
+targetWss.on("headers", (headers) => {
+  if (targetWebSocketSetCookie) {
+    headers.push(`Set-Cookie: ${targetWebSocketSetCookie}`);
+  }
 });
 
-afterEach(async () => {
+afterEach(() => {
   upgradeRequest = undefined;
   targetWebSocketSetCookie = undefined;
 });
@@ -58,11 +56,9 @@ function authenticatedCall(portal: { listenPort: number; tokenQuery: string }, p
 }
 
 async function expectEcho(socket: WebSocket, message: string) {
-  const echoed = new Promise<string>((resolve) => {
-    socket.once("message", (data) => resolve(rawDataToString(data)));
-  });
+  const echoed = once(socket, "message");
   socket.send(message);
-  expect(await echoed).toBe(message);
+  expect(rawDataToString((await echoed)[0])).toBe(message);
 }
 
 function expectWaiting(result: HttpResult, port: number) {
@@ -119,33 +115,6 @@ function httpCall(params: {
     { method: params.method, headers: params.headers },
     params.body,
   );
-}
-
-async function readUpgradeRejection(port: number, host = `127.0.0.1:${port}`) {
-  const started = Date.now();
-  const socket = net.connect({ host: "127.0.0.1", port });
-  await once(socket, "connect");
-  socket.write(
-    [
-      "GET / HTTP/1.1",
-      `Host: ${host}`,
-      "Connection: Upgrade",
-      "Upgrade: websocket",
-      "Sec-WebSocket-Version: 13",
-      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-      "",
-      "",
-    ].join("\r\n"),
-  );
-  const chunks: Buffer[] = [];
-  socket.on("data", (chunk: Buffer) => chunks.push(chunk));
-  await Promise.race([once(socket, "close"), once(socket, "end")]);
-  socket.destroy();
-  const raw = Buffer.concat(chunks).toString("utf8");
-  const separator = raw.indexOf("\r\n\r\n");
-  const head = separator >= 0 ? raw.slice(0, separator) : raw;
-  const body = (separator >= 0 ? raw.slice(separator + 4) : "").replace(/\r\n$/u, "");
-  return { status: Number(head.split(" ")[1]), body, elapsedMs: Date.now() - started };
 }
 
 function storeCookies(jar: Map<string, string>, cookies: readonly string[] | undefined): void {
@@ -239,10 +208,6 @@ describe("portal HTTP proxy", () => {
     expect(unauthorized.body).not.toContain(portal.tokenQuery);
     expect(unauthorized.headers["referrer-policy"]).toBe("no-referrer");
 
-    const unauthorizedUpgrade = await readUpgradeRejection(portal.listenPort);
-    expect(unauthorizedUpgrade).toMatchObject({ status: 401, body: "Unauthorized" });
-    expect(unauthorizedUpgrade.elapsedMs).toBeLessThan(2000);
-
     const authorized = await httpCall({
       port: portal.listenPort,
       path: `/preview?x=1&${portal.tokenQuery}`,
@@ -258,19 +223,14 @@ describe("portal HTTP proxy", () => {
     expect(targetPaths).toEqual(["/preview?x=1", "/cookie?y=2"]);
   });
 
-  it("flushes HTTP 404 on an unknown portal ingress upgrade instead of hanging", async () => {
-    const { service } = makeService({ ingress: { domain: "previews.example.net", port: 0 } });
-    const portal = await service.open({ targetPort: target.port, title: "App" });
-    const rejected = await readUpgradeRejection(portal.listenPort, "missing.previews.example.net");
-    expect(rejected).toMatchObject({ status: 404, body: "Unknown portal" });
-    expect(rejected.elapsedMs).toBeLessThan(2000);
-  });
-
-  it.for(["unauthorized", "unavailable"] as const)(
+  it.for(["unauthorized", "unavailable", "unknown"] as const)(
     "flushes %s upgrades before closing",
     async (failure, { signal }) => {
       const httpServers: Server[] = [];
-      const service = portalService(httpServers);
+      const { service } = makeService({
+        httpServers,
+        ingress: failure === "unknown" ? { domain: "previews.example.net", port: 0 } : undefined,
+      });
       const portal = await service.open({
         targetPort: target.port,
         target: workerTarget(async () => {
@@ -279,6 +239,7 @@ describe("portal HTTP proxy", () => {
       });
       const upgraded = createDeferredCore<Duplex>();
       httpServers[0]!.once("upgrade", (_req, socket) => upgraded.resolve(socket));
+      const started = Date.now();
       const client = net.connect({
         host: "127.0.0.1",
         port: portal.listenPort,
@@ -290,15 +251,25 @@ describe("portal HTTP proxy", () => {
         await once(client, "connect", { signal });
         const ended = once(client, "end", { signal });
         const query = failure === "unavailable" ? `?${portal.tokenQuery}` : "";
+        const host = failure === "unknown" ? "missing.previews.example.net" : "localhost";
         client.write(
-          `GET /${query} HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`,
+          `GET /${query} HTTP/1.1\r\nHost: ${host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n`,
         );
         const serverSocket = await upgraded.promise;
         await ended;
         const response = Buffer.concat(chunks).toString("utf8");
-        expect(response).toContain(
-          failure === "unauthorized" ? "HTTP/1.1 401 Unauthorized" : "HTTP/1.1 502 Bad Gateway",
-        );
+        const statusLine = {
+          unauthorized: "401 Unauthorized",
+          unavailable: "502 Bad Gateway",
+          unknown: "404 Not Found",
+        }[failure];
+        expect(response).toContain(`HTTP/1.1 ${statusLine}`);
+        if (failure !== "unavailable") {
+          expect(response.split("\r\n\r\n")[1]?.replace(/\r\n$/u, "")).toBe(
+            failure === "unknown" ? "Unknown portal" : "Unauthorized",
+          );
+          expect(Date.now() - started).toBeLessThan(2000);
+        }
         expect(serverSocket.destroyed).toBe(true);
         expect(client.writableEnded).toBe(false);
       } finally {
@@ -380,22 +351,19 @@ describe("portal HTTP proxy", () => {
     await closeWebSocket(socket);
     expect(initialA).toMatchObject({ status: 200, body: "target-a" });
     expect(initialB).toMatchObject({ status: 200, body: "target-b" });
-    const targetCookieA = initialA.headers["set-cookie"]?.find((cookie) =>
-      cookie.startsWith("oc_portal_"),
+    const targetCookies = [initialA, initialB].map((result) =>
+      result.headers["set-cookie"]?.find((cookie) => cookie.startsWith("oc_portal_")),
     );
-    const targetCookieB = initialB.headers["set-cookie"]?.find((cookie) =>
-      cookie.startsWith("oc_portal_"),
+    expect(targetCookies).toEqual([
+      expect.stringMatching(/^oc_portal_[a-f0-9]{32}_session=a; Path=\/; HttpOnly$/u),
+      expect.stringMatching(/^oc_portal_[a-f0-9]{32}_session=b; Path=\/; HttpOnly$/u),
+    ]);
+    expect(targetCookies[0]?.split("_session=", 1)[0]).not.toBe(
+      targetCookies[1]?.split("_session=", 1)[0],
     );
-    expect(targetCookieA).toMatch(/^oc_portal_[a-f0-9]{32}_session=a; Path=\/; HttpOnly$/u);
-    expect(targetCookieB).toMatch(/^oc_portal_[a-f0-9]{32}_session=b; Path=\/; HttpOnly$/u);
-    expect(targetCookieA?.split("_session=", 1)[0]).not.toBe(
-      targetCookieB?.split("_session=", 1)[0],
-    );
-    expect(
-      [...(initialA.headers["set-cookie"] ?? []), ...(initialB.headers["set-cookie"] ?? [])].join(
-        "; ",
-      ),
-    ).not.toContain("Domain=");
+    for (const result of [initialA, initialB]) {
+      expect(result.headers["set-cookie"]?.join("; ")).not.toContain("Domain=");
+    }
     expect([...jar.keys()].filter((name) => name.startsWith("openclaw_portal"))).toEqual([
       `openclaw_portal_${portalA.listenPort}`,
       `openclaw_portal_${portalB.listenPort}`,
