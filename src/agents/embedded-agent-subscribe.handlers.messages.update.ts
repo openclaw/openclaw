@@ -171,6 +171,16 @@ export function handleMessageUpdate(
   const priorBlockFinal = ctx.state.streamBlockFinal;
   const priorBlockIndex = ctx.state.lastAssistantStreamContentIndex;
   const streamContentIndex = resolveAssistantStreamContentIndex(assistantRecord?.contentIndex);
+  if (
+    isResponsesTextEvent &&
+    priorBlockIndex !== undefined &&
+    streamContentIndex !== undefined &&
+    streamContentIndex < priorBlockIndex
+  ) {
+    // Terminal annotations can correct an already delivered item. Keep the active reply
+    // scope: message_end publishes the corrected snapshot without replaying old prose.
+    return undefined;
+  }
   const streamItemId = resolveAssistantStreamItemId({
     contentIndex: streamContentIndex,
     message: partialAssistant,

@@ -34,6 +34,7 @@ import {
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
 import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
+import { memoryOrigin } from "./memory-forget.suite.test-support.js";
 import { withMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { executeSessionBackfillBatch } from "./session-backfill.js";
 import { appendSessionCorpusLines, appendSessionCorpusText } from "./session-ingestion.js";
@@ -63,14 +64,7 @@ function revocableOwner() {
     },
   };
 }
-const origin = (entryKey: string) => ({
-  entryKey,
-  agentId: "main",
-  sessionId: "synthetic-session",
-  sessionKey: "agent:main:synthetic-session",
-  originClass: "owner" as const,
-  observedAt: 1_000,
-});
+const origin = (entryKey: string) => memoryOrigin(entryKey, "synthetic-session");
 
 beforeAll(async () => {
   stateDir = await fs.realpath(roots.make("openclaw-memory-mutation-authority-"));

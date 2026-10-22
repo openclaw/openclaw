@@ -115,7 +115,6 @@ async function prepareSessionStatusDetails(
     resolveSessionRuntime,
     readSessionRuntimeMetadata,
     resolveSessionModelRef,
-    resolveStatusModelComparisonLabel,
     resolveStatusModelLookupRef,
     createStatusModelContextResolver,
   } = await loadStatusSummaryRuntimeModule();
@@ -163,25 +162,26 @@ async function prepareSessionStatusDetails(
       const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
       const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
       const model = resolvedModel.model ?? configuredSessionModel;
-      const lookupModel =
-        resolveStatusModelLookupRef({
-          provider: resolvedModel.provider,
-          model,
-          defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-        }) ?? resolvedModel;
-      const lookupModelId = lookupModel.model ?? model;
-      const selectedModelLabel =
-        resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
-      const configuredSessionModelComparisonLabel = resolveStatusModelComparisonLabel({
-        provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-        model: configuredSessionModel,
-        defaultProvider: DEFAULT_PROVIDER,
-      });
-      const selectedModelComparisonLabel = resolveStatusModelComparisonLabel({
+      const selectedLookupModel = resolveStatusModelLookupRef({
         provider: resolvedModel.provider,
         model,
         defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
       });
+      const lookupModel = selectedLookupModel ?? resolvedModel;
+      const lookupModelId = lookupModel.model ?? model;
+      const selectedModelLabel =
+        resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
+      const configuredLookupModel = resolveStatusModelLookupRef({
+        provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+        model: configuredSessionModel,
+        defaultProvider: DEFAULT_PROVIDER,
+      });
+      const configuredSessionModelComparisonLabel = configuredLookupModel
+        ? `${configuredLookupModel.provider}/${configuredLookupModel.model}`
+        : null;
+      const selectedModelComparisonLabel = selectedLookupModel
+        ? `${selectedLookupModel.provider}/${selectedLookupModel.model}`
+        : null;
       const runtimeMatchesConfiguredModel =
         selectedModelComparisonLabel != null &&
         configuredSessionModelComparisonLabel != null &&

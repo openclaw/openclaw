@@ -20,6 +20,7 @@ import { pluginCacheExistsSync } from "../plugins/plugin-cache-files.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { VERSION } from "../version.js";
+import { createCurrentIndex } from "./doctor-plugin-registry.test-support.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
 
 vi.mock("../version.js", async (importOriginal) => ({
@@ -50,23 +51,6 @@ afterEach(async () => {
   );
 });
 
-function createIndex(
-  plugins: InstalledPluginIndex["plugins"],
-  installRecords: InstalledPluginIndex["installRecords"] = {},
-): InstalledPluginIndex {
-  return {
-    version: 1,
-    hostContractVersion: "test-host",
-    compatRegistryVersion: "test-compat",
-    migrationVersion: 1,
-    policyHash: "test-policy",
-    generatedAtMs: 1,
-    installRecords,
-    plugins,
-    diagnostics: [],
-  };
-}
-
 async function writePluginFixture(params: {
   id: string;
   location?: string;
@@ -84,27 +68,25 @@ async function writePluginFixture(params: {
 }) {
   const pluginDir = path.join(root, params.location ?? "user-plugins", params.id);
   await fs.mkdir(pluginDir, { recursive: true });
-  for (const [relativePath, contents] of Object.entries(params.files ?? {})) {
+  const files = { ...params.files };
+  const hasPackageJson =
+    Object.hasOwn(params, "packageJson") || params.packageJsonRaw !== undefined;
+  if (hasPackageJson) {
+    files["package.json"] = params.packageJsonRaw ?? JSON.stringify(params.packageJson);
+  }
+  const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+  if (params.manifest !== false) {
+    files["openclaw.plugin.json"] = JSON.stringify(params.manifest ?? { id: params.id });
+  }
+  for (const [relativePath, contents] of Object.entries(files)) {
     const pathname = path.join(pluginDir, relativePath);
     await fs.mkdir(path.dirname(pathname), { recursive: true });
     await fs.writeFile(pathname, contents, "utf-8");
   }
-  const hasPackageJson =
-    Object.hasOwn(params, "packageJson") || params.packageJsonRaw !== undefined;
-  if (hasPackageJson) {
-    await fs.writeFile(
-      path.join(pluginDir, "package.json"),
-      params.packageJsonRaw ?? JSON.stringify(params.packageJson),
-      "utf-8",
-    );
-  }
-  const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-  if (params.manifest !== false) {
-    await fs.writeFile(manifestPath, JSON.stringify(params.manifest ?? { id: params.id }), "utf-8");
-  }
   await writePersistedInstalledPluginIndex(
-    createIndex(
-      [
+    {
+      ...createCurrentIndex(),
+      plugins: [
         {
           pluginId: params.id,
           rootDir: pluginDir,
@@ -122,8 +104,8 @@ async function writePluginFixture(params: {
           ...params.record,
         },
       ],
-      params.installRecord ? { [params.id]: params.installRecord } : {},
-    ),
+      installRecords: params.installRecord ? { [params.id]: params.installRecord } : {},
+    },
     { stateDir: root },
   );
   return { manifestPath };
@@ -148,9 +130,7 @@ it("returns a structured finding when the installed plugin index is missing", as
 });
 
 it("reports unreadable plugin packages as structured errors without losing JSON console diagnostics", async () => {
-  const stderrSpy = vi
-    .spyOn(process.stderr, "write")
-    .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+  const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   await writePluginFixture({
     id: "broken",
     manifest: false,

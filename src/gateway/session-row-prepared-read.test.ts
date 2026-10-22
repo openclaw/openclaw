@@ -140,6 +140,24 @@ async function withPendingStartupInspection(
   });
 }
 
+function useSharedStore(context: ReturnType<typeof requestContext>, databasePath: string) {
+  const sharedConfig: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      entries: { main: {}, ops: {} },
+      defaults: { sessionStore: { agentId: "ops" } },
+    },
+    session: { scope: "global", store: databasePath },
+  };
+  context.getRuntimeConfig = () => sharedConfig;
+  // Native routing and host-SQL isolation are covered by session-sqlite-target.worker.test.ts.
+  vi.spyOn(sqliteTarget, "prepareSqliteTargetFromSessionStorePath").mockResolvedValue({
+    agentId: "main",
+    path: databasePath,
+    shared: true,
+  });
+}
+
 it("refuses a new session's initial message without retaining a startup write", async () => {
   await withPendingStartupInspection(async ({ context, client, complete, admission }) => {
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
@@ -225,20 +243,7 @@ it("admits an unrelated agent's write while startup preparation continues", asyn
 it("refuses a write while its logical agent's physical shared-store owner is pending", async () => {
   await withPendingStartupInspection(
     async ({ request, context, databasePath, complete, admission }) => {
-      const sharedConfig: OpenClawConfig = {
-        agents: {
-          ownership: "explicit",
-          entries: { main: {}, ops: {} },
-          defaults: { sessionStore: { agentId: "ops" } },
-        },
-        session: { scope: "global", store: databasePath },
-      };
-      context.getRuntimeConfig = () => sharedConfig;
-      vi.spyOn(sqliteTarget, "prepareSqliteTargetFromSessionStorePath").mockResolvedValue({
-        agentId: "main",
-        path: databasePath,
-        shared: true,
-      });
+      useSharedStore(context, databasePath);
       const authorize = () =>
         authorizeGatewayRequestPreDispatch({
           ...request,
@@ -312,21 +317,7 @@ it("dispatches broad lists while an agent remains in startup preparation", async
 
 it("holds a logical agent's read for the physical shared-store owner", async () => {
   await withPendingStartupInspection(async ({ request, context, databasePath, complete }) => {
-    const sharedConfig: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, ops: {} },
-        defaults: { sessionStore: { agentId: "ops" } },
-      },
-      session: { scope: "global", store: databasePath },
-    };
-    context.getRuntimeConfig = () => sharedConfig;
-    // Native shared-store routing and host-SQL isolation belong to session-sqlite-target.worker.test.ts.
-    vi.spyOn(sqliteTarget, "prepareSqliteTargetFromSessionStorePath").mockResolvedValue({
-      agentId: "main",
-      path: databasePath,
-      shared: true,
-    });
+    useSharedStore(context, databasePath);
     let settled = false;
     const reading = authorizeGatewayRequestPreDispatch({
       ...request,

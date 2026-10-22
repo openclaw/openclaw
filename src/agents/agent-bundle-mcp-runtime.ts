@@ -42,7 +42,7 @@ import {
 import { applyMcpConnectionOverride } from "./mcp-connection-resolver.js";
 import { isMcpMethodNotFoundError, redactMcpDiagnosticError } from "./mcp-error.js";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
-import { prepareMcpCaps, summarizeServerCapabilities } from "./mcp-metadata.js";
+import { buildMcpClientCapabilities, summarizeServerCapabilities } from "./mcp-metadata.js";
 import {
   mcpCallToolResultSchema,
   mcpGetPromptResultSchema,
@@ -368,7 +368,7 @@ function createServerMcpRuntime(
             version: "0.0.0",
           },
           {
-            capabilities: prepareMcpCaps(transport, nativeContext?.capabilities, mcpAppsEnabled),
+            capabilities: nativeContext?.capabilities ?? buildMcpClientCapabilities(mcpAppsEnabled),
             versionNegotiation: { mode: nativeContext && !legacy ? "auto" : "legacy" },
             ...(nativeContext ? { inputRequired: { autoFulfill: false } } : {}),
             jsonSchemaValidator: schemaValidator,

@@ -10,6 +10,7 @@ import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescrip
 import { parseRatchetCounts } from "../../scripts/lib/shrink-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -43,11 +44,7 @@ it("counts references and imported aliases without counting import specifiers or
 
 it("blocks added sites, reads the index, ignores the owner, and demands shrinking removed sites", () => {
   const root = tempDirs.make("openclaw-test-timeout-race-");
-  const write = (file: string, content: string) => {
-    const target = path.join(root, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, content);
-  };
+  const { write } = fixtureFiles(root);
   const baselinePath = path.join(root, "config/test-timeout-race-baseline.txt");
   const sourcePath = path.join(root, "test/example.test.ts");
   const original = "withTestTimeout(work, 100);\n";

@@ -41,6 +41,7 @@ import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.
 import {
   abortContext,
   expectAbortFailure,
+  expectCancelledSession,
   expectStopResult,
   registerYieldedChild,
   seedYieldedSession,
@@ -221,11 +222,7 @@ it.each([
       expect(acknowledgment.entry).toEqual(replacement);
       return;
     }
-    expect(acknowledgment.entry, JSON.stringify(respond.mock.calls[0])).toMatchObject({
-      status: "killed",
-      abortedLastRun: true,
-      lastRunId: parentRunId,
-    });
+    expectCancelledSession(acknowledgment.entry, parentRunId);
     await fixture.settle();
     expect(
       publications.entries.some(
@@ -291,11 +288,7 @@ it.each([false, true])(
       expectStopResult(respond);
       expect(getFollowupQueueDepth(parentKey)).toBe(0);
       if (pendingWake) {
-        expect(loadSessionEntry(target)).toMatchObject({
-          status: "killed",
-          abortedLastRun: true,
-          lastRunId: parentRunId,
-        });
+        expectCancelledSession(loadSessionEntry(target), parentRunId);
         await fixture.settle();
         expect(await markStartupRecovery()).toMatchObject({ marked: 0 });
       } else {

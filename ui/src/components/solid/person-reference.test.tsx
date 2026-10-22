@@ -4,6 +4,14 @@ import { flush } from "solid-js";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { createSidebarTestRouter } from "../../test-helpers/app-sidebar-router.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  createSessionOwnerMenuHarness,
+  sessionOwnerProfiles,
+} from "../../test-helpers/session-owner-menu.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "./person-reference.tsx";
 
 type PersonReferenceElement = HTMLElementTagNameMap["openclaw-person-reference"];
@@ -31,12 +39,16 @@ afterEach(async () => {
   flush();
 });
 
-async function createReference(profileId: string, label: string) {
+async function createReference(
+  profileId: string,
+  label: string,
+  parent: HTMLElement = document.body,
+) {
   const host = document.createElement("openclaw-person-reference");
   hosts.push(host);
   host.profileId = profileId;
   host.label = label;
-  document.body.append(host);
+  parent.append(host);
   await settle(host);
   return host;
 }
@@ -47,6 +59,40 @@ function openReference(host: PersonReferenceElement) {
   flush();
   return { trigger, card: queries().getByRole("dialog") };
 }
+
+it("shares the admitted directory read and only resolves the currently open card", async () => {
+  const pending = Promise.withResolvers<ReturnType<typeof sessionOwnerProfiles>>();
+  const { context: ownerContext, request } = createSessionOwnerMenuHarness(() => pending.promise);
+  const context = { ...ownerContext, router: createSidebarTestRouter() };
+  const provider = document.createElement("div");
+  const view = mountSolid(() => <ApplicationProvider host={provider} value={context} />, {
+    container: provider,
+  });
+  document.body.append(provider);
+  try {
+    const alice = await createReference("profile-alice", "Alice", provider);
+    const bob = await createReference("profile-bob", "Bob", provider);
+    const first = openReference(alice);
+    const second = openReference(bob);
+    expect(first.card.isConnected).toBe(false);
+    expect(second.card.getAttribute("aria-label")).toBe("Activity for Bob");
+    expect(queries(second.card).getByRole("status").textContent).toBe("Loading…");
+    expect(request.mock.calls.filter(([method]) => method === "users.list")).toHaveLength(1);
+
+    pending.resolve(sessionOwnerProfiles("Alice", "Bob"));
+    await waitForSolid(() =>
+      expect(queries(second.card).getByRole("heading", { name: "Bob" })).toBeTruthy(),
+    );
+    expect(dialog()).toBe(second.card);
+    expect(first.card.isConnected).toBe(false);
+    expect(second.card.getAttribute("aria-label")).toBe("Activity for Bob");
+    expect(second.trigger.getAttribute("aria-expanded")).toBe("true");
+  } finally {
+    provider.remove();
+    view.unmount();
+    await settle();
+  }
+});
 
 it("routes label and profile changes to their active mention only", async () => {
   const alice = await createReference("alice", "Alice");

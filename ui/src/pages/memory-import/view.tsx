@@ -375,6 +375,9 @@ function Confirmation(props: { view: MemoryImportViewProps; backfill?: boolean }
             )}
           </div>
           <openclaw-modal-actions class="exec-approval-actions">
+            <button class="btn" disabled={busy()} onClick={cancel}>
+              {t("common.cancel")}
+            </button>
             <button
               class={["btn", { danger: props.backfill, primary: !props.backfill }]}
               data-test-id={
@@ -388,9 +391,6 @@ function Confirmation(props: { view: MemoryImportViewProps; backfill?: boolean }
               }
             >
               {t(props.backfill ? "memoryImport.backfill.rollback" : "memoryImport.confirmImport")}
-            </button>
-            <button class="btn" disabled={busy()} onClick={cancel}>
-              {t("common.cancel")}
             </button>
           </openclaw-modal-actions>
         </div>

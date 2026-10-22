@@ -19,16 +19,9 @@ function register(entry: ReturnType<typeof defineToolPlugin>, config?: Record<st
   if (config) {
     captured.api.pluginConfig = config;
   }
+  const registerTool = vi.spyOn(captured.api, "registerTool");
   entry.register(captured.api);
-  return captured;
-}
-function captureRegistration(entry: ReturnType<typeof defineToolPlugin>, pluginConfig = {}) {
-  const captured = createCapturedPluginRegistration({ id: entry.id });
-  captured.api.pluginConfig = pluginConfig;
-  const registerTool = vi.fn<typeof captured.api.registerTool>();
-  captured.api.registerTool = registerTool;
-  entry.register(captured.api);
-  return registerTool;
+  return { ...captured, registerTool };
 }
 function firstTool(captured: ReturnType<typeof register>) {
   return expectDefined(captured.tools[0], "captured.tools[0] test invariant");
@@ -101,7 +94,7 @@ describe("defineToolPlugin", () => {
         }),
       ],
     });
-    const registerTool = captureRegistration(entry);
+    const { registerTool } = register(entry);
 
     expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "optional_echo" }), {
       optional: true,
@@ -137,7 +130,7 @@ describe("defineToolPlugin", () => {
         }),
       ],
     });
-    const registerTool = captureRegistration(entry, { prefix: "ctx" });
+    const { registerTool } = register(entry, { prefix: "ctx" });
 
     expect(registerTool).toHaveBeenCalledWith(expect.any(Function), {
       name: "factory_echo",

@@ -82,8 +82,6 @@ function preparedOwner(
   );
   return {
     isCurrent: vi.fn(() => true),
-    modelCatalog: { entries, routeVariants: entries },
-    configuredRuntimeModels,
     configuredModelAliases,
     findConfiguredRuntimeModel: unexpectedRuntimeWork,
     createStores: vi.fn(unexpectedRuntimeWork),
@@ -272,11 +270,6 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         expect(prompt).not.toContain(text);
       }
       expect(owner.configuredModelAliases).toEqual([{ provider, model, alias }]);
-      expect(owner.configuredRuntimeModels.map(({ modelId }) => modelId)).toEqual(modelIds);
-      if (modelIds.length === 0) {
-        expect(owner.configuredRuntimeModels).toEqual([]);
-        expect(owner.modelCatalog.entries).toEqual([]);
-      }
     },
   );
 

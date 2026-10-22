@@ -15,6 +15,7 @@ import {
 } from "./config.js";
 import { disableCodexPluginThreadConfig } from "./dynamic-tool-build.js";
 import {
+  createCodexAppInventoryRequest,
   resolveRecoverableCodexPluginConfigKeys,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
@@ -22,6 +23,7 @@ import {
   defaultCodexPluginMetadataCache,
   type CodexPluginMetadataCache,
 } from "./plugin-metadata-cache.js";
+import { resolveCodexPluginThreadAppCacheKey } from "./plugin-thread-app-admission.js";
 import {
   buildCodexPluginThreadConfig,
   buildCodexPluginThreadConfigTimeoutFallback,
@@ -229,6 +231,17 @@ export function prepareCodexPluginThreadConfigStartupProvider(prepared: {
                     request,
                     configCwd: params.configCwd,
                     threadId: buildOptions?.threadId,
+                    appInventory: (appCache ?? defaultCodexAppInventoryCache).read({
+                      key: resolveCodexPluginThreadAppCacheKey({
+                        appCacheKey,
+                        threadId: buildOptions?.threadId,
+                      }),
+                      request: createCodexAppInventoryRequest({
+                        request,
+                        threadId: buildOptions?.threadId,
+                      }),
+                      suppressRefresh: true,
+                    }).snapshot?.apps,
                   }),
                 )
             : undefined,
