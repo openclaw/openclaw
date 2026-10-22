@@ -500,7 +500,14 @@ describe("stageSandboxMedia scp remote paths", () => {
       );
       const remotePath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
       const { ctx, sessionCtx } = createRemoteContexts(remotePath);
-      ctx.media = [forceCache ? { path: remotePath } : { path: remotePath, url: remotePath }];
+      ctx.media = [
+        forceCache
+          ? { path: remotePath }
+          : {
+              path: remotePath,
+              url: process.platform === "win32" ? remotePath : pathToFileURL(remotePath).href,
+            },
+      ];
       sessionCtx.media = ctx.media;
       mockDownload();
       const result = await stageRemote(
