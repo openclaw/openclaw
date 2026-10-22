@@ -3,6 +3,7 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
+import { showToast } from "../lib/toast.ts";
 import { activateMenuShortcut } from "./menu-shortcut-activation.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
@@ -140,7 +141,9 @@ export function mountNativeLinkMenu(options: {
   menu.onClose = () => options.close(menu);
   menu.onAction = (action) => {
     if (action === "copy") {
-      void copyToClipboard(options.url.href);
+      void copyToClipboard(options.url.href).then((copied) => {
+        showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+      });
     } else if (action === "inline") {
       options.openInline();
     } else {
