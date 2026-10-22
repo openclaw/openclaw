@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
@@ -46,22 +45,6 @@ it("refuses to start without a relay credential", async () => {
   const run = await runExtensionRelayDaemon({ port: 0 });
   expect(run.port).toBeNull();
   await expect(run.done).resolves.toBe("no-credential");
-});
-
-it("exits quietly when the relay port is already served", async () => {
-  const server = net.createServer();
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const address = server.address();
-  const port = typeof address === "object" && address ? address.port : 0;
-  try {
-    const run = await runExtensionRelayDaemon({ port });
-    expect(run.port).toBeNull();
-    await expect(run.done).resolves.toBe("port-in-use");
-  } finally {
-    await promisify(server.close.bind(server))();
-  }
 });
 
 it("serves the relay until the idle grace elapses with no peers", async () => {

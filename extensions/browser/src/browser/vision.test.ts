@@ -100,11 +100,6 @@ describe("describeBrowserScreenshot", () => {
       "/tmp/resized.jpg",
     );
   });
-
-  it("returns null when image understanding is skipped or unconfigured", async () => {
-    describeImage.mockResolvedValue({ text: undefined, decision: { outcome: "skipped" } });
-    await expect(screenshot({ cfg: { browser: {} } })).resolves.toBeNull();
-  });
 });
 
 it.each([

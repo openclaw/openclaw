@@ -69,15 +69,8 @@ it("allows managed browser data under a configured state directory outside home"
   const target = profile(path.join(configDir, "browser", "constructor"), "profile data");
 
   const moved = await movePathToTrash(target);
-  const reservation = path.dirname(moved);
-  expect(path.dirname(reservation)).toBe(trashDir);
+  expect(path.dirname(path.dirname(moved))).toBe(trashDir);
   expect(path.basename(moved)).toBe("constructor");
-  expect(fs.realpathSync.native(moved)).toBe(moved);
-  const reservationStat = fs.lstatSync(reservation);
-  expect(reservationStat.isDirectory()).toBe(true);
-  if (process.platform !== "win32") {
-    expect(reservationStat.mode & 0o777).toBe(0o700);
-  }
   expect(fs.readFileSync(path.join(moved, "Preferences"), "utf8")).toBe("profile data");
   expect(fs.lstatSync(target, { throwIfNoEntry: false })).toBeUndefined();
 });

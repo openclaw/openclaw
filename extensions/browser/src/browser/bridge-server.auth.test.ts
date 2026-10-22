@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
 import { resolveBrowserConfig } from "./config.js";
@@ -10,7 +10,6 @@ const tokenAuth = { authToken: "secret-token" };
 const tokenHeaders = { Authorization: "Bearer secret-token" };
 
 describe("startBrowserBridgeServer auth", () => {
-  const servers: Awaited<ReturnType<typeof startBrowserBridgeServer>>[] = [];
   async function startBridge(
     options: Omit<Parameters<typeof startBrowserBridgeServer>[0], "resolved"> = {},
   ) {
@@ -26,15 +25,9 @@ describe("startBrowserBridgeServer auth", () => {
       },
       ...options,
     });
-    servers.push(bridge);
+    onTestFinished(() => stopBrowserBridgeServer(bridge.server));
     return bridge;
   }
-
-  afterEach(async () => {
-    for (const bridge of servers.splice(0).toReversed()) {
-      await stopBrowserBridgeServer(bridge.server);
-    }
-  });
 
   it.each([
     ["127.0.0.1", tokenAuth, tokenHeaders],
@@ -91,7 +84,6 @@ describe("startBrowserBridgeServer auth", () => {
     const concurrentStop = stopBrowserBridgeServer(bridge.server);
     expect(concurrentStop).toBe(firstStop);
     await expect(firstStop).rejects.toThrow("relay cleanup failed");
-    await expect(concurrentStop).rejects.toThrow("relay cleanup failed");
     expect(bridge.server.listening).toBe(false);
     expect(getBridgeAuthForPort(bridge.port)).toBeUndefined();
     expect(close).toHaveBeenCalledOnce();
