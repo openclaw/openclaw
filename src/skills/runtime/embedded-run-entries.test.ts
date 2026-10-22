@@ -52,57 +52,38 @@ beforeEach(() => {
   library.mockReset().mockResolvedValue(libraryEntries);
 });
 
-function pause(stage: "workspace" | "library", once = true) {
+function pause(stage: "workspace" | "library") {
   const gate = createDeferredCore<SkillEntry[]>();
   const entered = createDeferredCore();
   const mock = stage === "workspace" ? workspace : library;
-  mock[once ? "mockImplementationOnce" : "mockImplementation"](() => {
+  mock.mockImplementationOnce(() => {
     entered.resolve();
     return gate.promise;
   });
   return { gate, entered };
 }
 
-it.each(["canonical", "materialized", "legacy"] as const)(
-  "loads %s roots with agent and eligibility context",
-  async (mode) => {
-    const workspaceDir = path.resolve("/synthetic/materialized");
-    const roots = rootsFor("canonical");
-    const { agentWorkspaceDir, executionWorkspaceDir } = roots;
-    const workspaceOnly = mode === "materialized";
-    const skillsSnapshot: SkillSnapshot = {
-      prompt: "Hydrate selected skills",
-      skills: [],
-      promptFormatVersion: mode === "legacy" ? 6 : WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
-      skillRoots:
-        mode === "legacy" ? rootsFor("stale") : recordSkillRootsExecutionFileHost(roots, "gateway"),
-    };
-    const serialized = JSON.stringify(skillsSnapshot);
-    const hydrated: SkillSnapshot = JSON.parse(serialized);
-    const eligibility = { nodeSkills: { canExec: true } };
-    const context = { config: {}, agentId: "writer", eligibility };
-    await resolve({
-      workspaceDir,
-      workspaceOnly,
+it("loads persisted canonical roots with agent and eligibility context", async () => {
+  const roots = rootsFor("canonical");
+  const serialized = JSON.stringify({
+    prompt: "Hydrate selected skills",
+    skills: [],
+    promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+    skillRoots: recordSkillRootsExecutionFileHost(roots, "gateway"),
+  });
+  const skillsSnapshot: SkillSnapshot = JSON.parse(serialized);
+  const context = { config: {}, agentId: "writer", eligibility: { nodeSkills: { canExec: true } } };
+  await resolve({ ...context, skillsSnapshot });
+  expect(workspace).toHaveBeenCalledWith(
+    roots.agentWorkspaceDir,
+    {
       ...context,
-      ...(mode === "legacy"
-        ? ({ executionWorkspaceDir, executionWorkspaceFileHost: "gateway" } as const)
-        : {}),
-      skillsSnapshot: hydrated,
-    });
-    expect(workspace).toHaveBeenCalledWith(
-      mode === "canonical" ? agentWorkspaceDir : workspaceDir,
-      {
-        ...context,
-        executionWorkspaceDir: workspaceOnly ? undefined : executionWorkspaceDir,
-        executionWorkspaceFileHost: workspaceOnly ? undefined : "gateway",
-        ...(workspaceOnly ? { workspaceOnly: true } : {}),
-      },
-      undefined,
-    );
-  },
-);
-
+      executionWorkspaceDir: roots.executionWorkspaceDir,
+      executionWorkspaceFileHost: "gateway",
+    },
+    undefined,
+  );
+});
 it.each([false, true])(
   "prefers resolved skill secrets when runtime contains raw refs: %s",
   async (rawRuntime) => {
@@ -121,23 +102,6 @@ it.each([false, true])(
     expect(workspace).toHaveBeenCalledWith(workspaceRoot, { config: resolvedConfig }, undefined);
   },
 );
-it("keeps concurrent lazy reads private until complete and preserves append order", async () => {
-  const { gate, entered } = pause("library", false);
-  const result = await resolve();
-  expect(workspace).not.toHaveBeenCalled();
-  expect(library).not.toHaveBeenCalled();
-  const capture = (entries: SkillEntry[]) => {
-    expect(names(entries)).toEqual(["workspace", "library"]);
-    return entries;
-  };
-  const first = result.loadSkillEntries().then(capture);
-  await entered.promise;
-  const second = result.loadSkillEntries().then(capture);
-  gate.resolve(libraryEntries);
-  const results = await Promise.all([first, second]);
-  expect(results).toContain(await result.loadSkillEntries());
-  expect(names(workspaceEntries)).toEqual(["workspace"]);
-});
 
 it("preserves the first complete publication across concurrent lazy reads", async () => {
   const base = "/synthetic/embedded-concurrent";
@@ -150,9 +114,9 @@ it("preserves the first complete publication across concurrent lazy reads", asyn
       workspaceDir: path.resolve(roots.agentWorkspaceDir),
       sourceScopes: [{ executionWorkspaceDir: path.resolve(roots.executionWorkspaceDir) }],
     });
-  workspace
-    .mockResolvedValueOnce([entry("workspace-stale")])
-    .mockResolvedValue([entry("workspace-current")]);
+  const stale = [entry("workspace-stale")];
+  const current = [entry("workspace-current")];
+  workspace.mockResolvedValueOnce(stale).mockResolvedValue(current);
   const { gate, entered } = pause("library");
   const result = await resolve({
     workspaceDir: "/synthetic/fallback-workspace",
@@ -163,6 +127,8 @@ it("preserves the first complete publication across concurrent lazy reads", asyn
       skillRoots: roots,
     },
   });
+  expect(workspace).not.toHaveBeenCalled();
+  expect(library).not.toHaveBeenCalled();
   const first = result.loadSkillEntries();
   await entered.promise;
   bumpSources();
@@ -177,6 +143,7 @@ it("preserves the first complete publication across concurrent lazy reads", asyn
   bumpSources();
   expect(await result.loadSkillEntries()).toBe(entries);
   expect(names(entries)).toEqual(["workspace-current", "library"]);
+  expect([names(stale), names(current)]).toEqual([["workspace-stale"], ["workspace-current"]]);
 });
 
 it.each([

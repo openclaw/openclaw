@@ -1,13 +1,26 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { NodeRegistry } from "../../gateway/node-registry.js";
 import { GatewayConnectionWork } from "../../gateway/server-connection-work.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { loggingState } from "../../logging/state.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
+import { buildWorkspaceSkillStatus } from "../discovery/status.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
+import { createFixtureSkillEntry as localEntry } from "../test-support/test-helpers.js";
 import { getSkillsSnapshotVersion } from "./refresh-state.js";
 import { closeSkillsWatchers } from "./refresh.js";
-import { mergeRemoteNodeSkillEntries, replaceRemoteNodeSkills } from "./remote-skills.js";
+import {
+  mergeRemoteNodeSkillEntries,
+  recordRemoteSkillNodeInfo,
+  removeRemoteNodeSkills,
+  replaceRemoteNodeSkills,
+} from "./remote-skills.js";
+import { resetRemoteNodeSkillsForTests } from "./remote-skills.test-support.js";
 import {
   createRemoteSkillWorkspace,
   recordRemoteMacWithSystemWhich,
@@ -58,6 +71,27 @@ function connect(nodeId: string, registry: Partial<NodeRegistry> = {}) {
   setTestSkillsRemoteRegistry(nodeId, { get: () => testRemoteSession(nodeId), ...registry });
   recordRemoteMacWithSystemWhich(nodeId);
 }
+function connectSession(
+  get: () => NonNullable<ReturnType<NodeRegistry["get"]>>,
+  registry: Partial<NodeRegistry>,
+) {
+  const session = get();
+  setTestSkillsRemoteRegistry(session.nodeId, { get, ...registry });
+  recordRemoteNodeInfo(session);
+}
+function pendingProbe(bin: string) {
+  const result = createDeferred<Awaited<ReturnType<NodeRegistry["invoke"]>>>();
+  const started = createDeferred();
+  const invoke = vi.fn<NodeRegistry["invoke"]>().mockImplementationOnce(async () => {
+    started.resolve();
+    return await result.promise;
+  });
+  invoke.mockResolvedValueOnce(binResult(bin));
+  return { invoke, result, started: started.promise };
+}
+function expectProbe(invoke: unknown, fields: Partial<Parameters<NodeRegistry["invoke"]>[0]>) {
+  expect(invoke).toHaveBeenCalledWith(expect.objectContaining(fields));
+}
 const hasBin = (bin: string) => getRemoteSkillEligibility()?.hasBin(bin) ?? false;
 const binResult = (bin: string) => ({ ok: true as const, payload: { bins: [bin] } });
 const probeTimeout = () => ({
@@ -77,16 +111,20 @@ const probe = (
     ...options,
   });
 
-describe("skills-remote", () => {
-  afterEach(() => {
-    for (const cleanup of cleanups.splice(0)) {
-      cleanup();
-    }
-    setSkillsRemoteRegistry(null);
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+beforeEach(resetRemoteNodeSkillsForTests);
+afterEach(() => {
+  for (const cleanup of cleanups.splice(0)) {
+    cleanup();
+  }
+  setSkillsRemoteRegistry(null);
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  setLoggerOverride(null);
+  loggingState.rawConsole = null;
+  resetLogger();
+});
 
+describe("skills-remote", () => {
   it("preserves bins across reconnects only within one pairing generation", () => {
     const nodeId = newNode();
     const retiredBin = `bin-${randomUUID()}`;
@@ -108,13 +146,7 @@ describe("skills-remote", () => {
     replaceRemoteNodeSkills({
       nodeId,
       displayName: "Remote Mac",
-      skills: [
-        {
-          name: skillName,
-          description: "Remote test skill",
-          content: `---\nname: ${skillName}\ndescription: Remote test skill\n---\n`,
-        },
-      ],
+      skills: [nodeSkill(skillName, "Remote test skill")],
     });
     const listRemoteSkillNames = () =>
       mergeRemoteNodeSkillEntries([], { canExec: true }).map((entry) => entry.skill.name);
@@ -201,6 +233,7 @@ describe("skills-remote", () => {
   it.each([
     { command: "system.which", failure: "result" },
     { command: "system.run", failure: "throw" },
+    { command: "system.which", failure: "preflight" },
   ])(
     "clears stale bins after a probe failure ($command/$failure)",
     async ({ command, failure }) => {
@@ -214,6 +247,7 @@ describe("skills-remote", () => {
       });
       connect(nodeId, {
         get: () => testRemoteSession(nodeId, { commands: [command] }),
+        checkConnectivity: failure === "preflight" ? async () => probeTimeout() : undefined,
         invoke,
       });
       recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
@@ -221,33 +255,16 @@ describe("skills-remote", () => {
 
       await probe(nodeId, cfg, { timeoutMs: 10 });
 
-      expect(invoke.mock.calls).toHaveLength(1);
-      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ command }));
+      if (failure === "preflight") {
+        expect(invoke).not.toHaveBeenCalled();
+      } else {
+        expect(invoke).toHaveBeenCalledOnce();
+        expectProbe(invoke, { command });
+      }
       expect(hasBin(bin)).toBe(false);
       expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
     },
   );
-
-  it("skips remote bin probes when the node connectivity preflight fails", async () => {
-    await closeSkillsWatchers(true);
-    const { nodeId, bin, cfg, workspaceDir } = remoteFixture();
-    const invoke = vi.fn(async () => binResult(bin));
-    connect(nodeId, {
-      checkConnectivity: async () => ({
-        ok: false,
-        error: { code: "TIMEOUT", message: "node connectivity check timed out" },
-      }),
-      invoke,
-    });
-    recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
-    const before = getSkillsSnapshotVersion(workspaceDir);
-
-    await probe(nodeId, cfg, { timeoutMs: 10 });
-
-    expect(invoke).not.toHaveBeenCalled();
-    expect(hasBin(bin)).toBe(false);
-    expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
-  });
 
   it("retries the bin probe when the node reconnects during preflight", async () => {
     await closeSkillsWatchers(true);
@@ -255,13 +272,13 @@ describe("skills-remote", () => {
     let connId = "conn-old";
     const connectivityCalls: string[] = [];
     const invokeCalls: string[] = [];
-    setTestSkillsRemoteRegistry(nodeId, {
-      get: () => testRemoteSession(nodeId, { connId }),
+    const session = () => testRemoteSession(nodeId, { connId, displayName: "Remote Mac" });
+    connectSession(session, {
       checkConnectivity: async () => {
         connectivityCalls.push(connId);
         if (connectivityCalls.length === 1) {
           connId = "conn-new";
-          recordRemoteNodeInfo(testRemoteSession(nodeId, { connId, displayName: "Remote Mac" }));
+          recordRemoteNodeInfo(session());
           return {
             ok: false,
             error: { code: "TIMEOUT", message: "node connectivity check timed out" },
@@ -273,8 +290,7 @@ describe("skills-remote", () => {
         invokeCalls.push(params.command);
         return { ok: true, payloadJSON: JSON.stringify({ bins: [bin] }) };
       },
-    } as unknown as NodeRegistry);
-    recordRemoteNodeInfo(testRemoteSession(nodeId, { connId, displayName: "Remote Mac" }));
+    });
 
     await probe(nodeId, cfg, { timeoutMs: 10 });
 
@@ -395,12 +411,10 @@ describe("skills-remote", () => {
 
         if (change === "replacement") {
           expect(invoke).toHaveBeenCalledOnce();
-          expect(invoke).toHaveBeenCalledWith(
-            expect.objectContaining({
-              command: "system.which",
-              expectedPairingGeneration: "generation-current",
-            }),
-          );
+          expectProbe(invoke, {
+            command: "system.which",
+            expectedPairingGeneration: "generation-current",
+          });
         } else {
           expect(invoke).not.toHaveBeenCalled();
           expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
@@ -477,30 +491,19 @@ describe("skills-remote", () => {
     const { nodeId, bin, cfg } = remoteFixture();
     vi.spyOn(Date, "now").mockReturnValue(2_000_000);
     let connId = "conn-old";
-    const firstInvoke = createDeferred<Awaited<ReturnType<NodeRegistry["invoke"]>>>();
-    const firstInvokeStarted = createDeferred();
-    const invoke = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        firstInvokeStarted.resolve();
-        return await firstInvoke.promise;
-      })
-      .mockResolvedValueOnce({ ok: true as const, payload: { bins: [bin] } });
-    setTestSkillsRemoteRegistry(nodeId, {
-      get: () => testRemoteSession(nodeId, { connId }),
-      invoke,
-    } as unknown as NodeRegistry);
-    recordRemoteNodeInfo(testRemoteSession(nodeId, { connId }));
+    const { invoke, result, started } = pendingProbe(bin);
+    const session = () => testRemoteSession(nodeId, { connId });
+    connectSession(session, { invoke });
     const refresh = () => probe(nodeId, cfg);
 
     const failedRefresh = refresh();
-    await firstInvokeStarted.promise;
+    await started;
     removeRemoteNodeInfo(nodeId);
     connId = "conn-new";
-    recordRemoteNodeInfo(testRemoteSession(nodeId, { connId }));
+    recordRemoteNodeInfo(session());
     const reconnectRefresh = refresh();
     const overlappingReconnectRefresh = refresh();
-    firstInvoke.resolve(probeTimeout());
+    result.resolve(probeTimeout());
     await Promise.all([failedRefresh, reconnectRefresh, overlappingReconnectRefresh]);
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
@@ -517,22 +520,10 @@ describe("skills-remote", () => {
         connId: "conn-a",
         pairingGeneration: "generation-a",
       });
-      const retiredProbe = createDeferred<Awaited<ReturnType<NodeRegistry["invoke"]>>>();
-      const retiredProbeStarted = createDeferred();
-      const invoke = vi
-        .fn()
-        .mockImplementationOnce(async () => {
-          retiredProbeStarted.resolve();
-          return await retiredProbe.promise;
-        })
-        .mockResolvedValueOnce({ ok: true as const, payload: { bins: [currentBin] } });
-      setTestSkillsRemoteRegistry(nodeId, {
-        get: () => session,
-        invoke,
-      } as unknown as NodeRegistry);
-      recordRemoteNodeInfo(session);
+      const { invoke, result, started } = pendingProbe(currentBin);
+      connectSession(() => session, { invoke });
       const firstRefresh = probe(nodeId, cfg);
-      await retiredProbeStarted.promise;
+      await started;
 
       session = { ...session, connId: "conn-b", pairingGeneration: "generation-b" };
       recordRemoteNodeInfo(session);
@@ -540,9 +531,9 @@ describe("skills-remote", () => {
       const replacementRefresh = probe(nodeId, cfg);
       const beforeCompletion = getSkillsSnapshotVersion(workspaceDir);
       if (completion === "throw") {
-        retiredProbe.reject(new Error("retired probe failed"));
+        result.reject(new Error("retired probe failed"));
       } else {
-        retiredProbe.resolve({
+        result.resolve({
           ok: completion === "success",
           payload: { bins: [retiredBin] },
           error: { message: "retired probe failed" },
@@ -572,12 +563,10 @@ describe("skills-remote", () => {
     const session = () =>
       testRemoteSession(nodeId, { connId: "conn-current", pairingGeneration, commands });
     const invoke = vi.fn(async () => ({ ok: true as const, payload: { bins: [bin] } }));
-    setTestSkillsRemoteRegistry(nodeId, {
-      get: session,
+    connectSession(session, {
       checkConnectivity: async () => ({ ok: true }),
       invoke,
-    } as unknown as NodeRegistry);
-    recordRemoteNodeInfo(session());
+    });
 
     const connectRefresh = probe(nodeId, cfg, {
       commands: [],
@@ -593,13 +582,11 @@ describe("skills-remote", () => {
     await vi.advanceTimersByTimeAsync(1);
     await Promise.all([connectRefresh, approvalRefresh]);
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nodeId,
-        command: "system.which",
-        expectedPairingGeneration: TEST_PAIRING_GENERATION,
-      }),
-    );
+    expectProbe(invoke, {
+      nodeId,
+      command: "system.which",
+      expectedPairingGeneration: TEST_PAIRING_GENERATION,
+    });
   });
 
   it("records bins from system.which object-map responses", async () => {
@@ -683,6 +670,193 @@ describe("skills-remote", () => {
 
     expect(listCurrentConnected).toHaveBeenCalled();
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: currentNodeId }));
+    expectProbe(invoke, { nodeId: currentNodeId });
+  });
+});
+
+function content(name: string, description: string, body = "# Instructions"): string {
+  return `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`;
+}
+
+function connectSkill(
+  nodeId = "node-1",
+  info: Omit<Parameters<typeof recordRemoteSkillNodeInfo>[0], "nodeId"> = {},
+) {
+  recordRemoteSkillNodeInfo({ nodeId, connId: "conn-1", commands: ["system.run"], ...info });
+}
+function publish(name: string, description: string, body?: string) {
+  replaceRemoteNodeSkills({ nodeId: "node-1", skills: [nodeSkill(name, description, body)] });
+}
+function nodeSkill(name: string, description: string, body?: string) {
+  return { name, description, content: content(name, description, body) };
+}
+const remoteEntries = () => mergeRemoteNodeSkillEntries([], { canExec: true });
+
+function captureWarningLogger() {
+  setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+  const warn = vi.fn();
+  loggingState.rawConsole = {
+    log: vi.fn(),
+    info: vi.fn(),
+    warn,
+    error: vi.fn(),
+  };
+  return warn;
+}
+
+describe("node-hosted skill snapshots", () => {
+  it("appears while connected, includes the locator note, and disappears on disconnect", async () => {
+    const before = getSkillsSnapshotVersion();
+    connectSkill("node-1", { displayName: "Build Mac" });
+    publish("release-helper", "Prepare a release");
+
+    const entries = loadWorkspaceSkills("/workspace", {
+      workspaceOnly: true,
+      eligibility: { nodeSkills: { canExec: true } },
+    });
+    const snapshot = await buildSkillSnapshot("/workspace", { entries });
+    const report = buildWorkspaceSkillStatus("/workspace", {
+      eligibility: { nodeSkills: { canExec: true } },
+    });
+    expect(snapshot.skills.map((skill) => skill.name)).toEqual(["release-helper"]);
+    expect(report.skills.map((skill) => skill.name)).toContain("release-helper");
+    expect(snapshot.prompt).toContain("Build Mac (node-1)");
+    expect(snapshot.prompt).toContain(
+      "Read this SKILL.md with the normal read tool at its exact node:// location",
+    );
+    expect(snapshot.prompt).toContain("do not use file_fetch");
+    expect(snapshot.prompt).toContain("to run cat SKILL.md");
+    expect(snapshot.prompt).toContain("exec host=node node=node-1");
+    expect(snapshot.prompt).toContain("workdir=node://node-1/skills/release-helper");
+    expect(snapshot.prompt).toContain("node host resolves that locator");
+    expect(snapshot.prompt).toContain("node://node-1/skills/release-helper/SKILL.md");
+    expect(snapshot.resolvedSkills?.[0]?.readContent).toBe(
+      content("release-helper", "Prepare a release"),
+    );
+    expect(getSkillsSnapshotVersion()).toBeGreaterThan(before);
+
+    const connectedVersion = getSkillsSnapshotVersion();
+    removeRemoteNodeSkills("node-1");
+    expect(mergeRemoteNodeSkillEntries([])).toEqual([]);
+    expect(getSkillsSnapshotVersion()).toBeGreaterThan(connectedVersion);
+  });
+
+  it("prefixes node skills on local and cross-node collisions", () => {
+    for (const nodeId of ["node-a", "node-b"]) {
+      connectSkill(nodeId, { connId: nodeId.slice(-1) });
+      replaceRemoteNodeSkills({
+        nodeId,
+        skills: [nodeSkill("deploy", "Deploy"), nodeSkill("local-only", "Remote collision")],
+      });
+    }
+
+    const names = mergeRemoteNodeSkillEntries([localEntry("local-only")], {
+      canExec: true,
+    }).map((entry) => entry.skill.name);
+    expect(names).toEqual([
+      "local-only",
+      "node-a-deploy",
+      "node-a-local-only",
+      "node-b-deploy",
+      "node-b-local-only",
+    ]);
+  });
+
+  it("limits node skills to the effective exec node binding", () => {
+    for (const [nodeId, displayName] of [
+      ["node-a-123456", "Build A"],
+      ["node-b-123456", "Build B"],
+    ] as const) {
+      connectSkill(nodeId, { displayName, connId: nodeId });
+      replaceRemoteNodeSkills({
+        nodeId,
+        displayName,
+        skills: [nodeSkill(`${nodeId.slice(0, 6)}-skill`, `Skill from ${displayName}`)],
+      });
+    }
+
+    expect(
+      mergeRemoteNodeSkillEntries([], { canExec: true, node: "Build A" }).map(
+        (entry) => entry.skill.name,
+      ),
+    ).toEqual(["node-a-skill"]);
+    expect(mergeRemoteNodeSkillEntries([], { canExec: true, node: "missing" })).toEqual([]);
+  });
+
+  it("suppresses direct tool dispatch from node skill frontmatter", () => {
+    connectSkill();
+    replaceRemoteNodeSkills({
+      nodeId: "node-1",
+      skills: [
+        {
+          name: "dispatch-skill",
+          description: "Must run on its node",
+          content:
+            "---\nname: dispatch-skill\ndescription: Must run on its node\ncommand-dispatch: tool\ncommand-tool: exec\n---\n",
+        },
+      ],
+    });
+    const entries = remoteEntries();
+
+    const [command] = buildWorkspaceSkillCommandSpecs("/workspace", { entries });
+    expect([command?.skillName, command?.dispatch]).toEqual(["dispatch-skill", undefined]);
+  });
+
+  it("drops content that fails existing frontmatter parsing", () => {
+    const warn = captureWarningLogger();
+    connectSkill();
+    replaceRemoteNodeSkills({
+      nodeId: "node-1",
+      skills: [
+        {
+          name: "broken-skill",
+          description: "Broken",
+          content: "---\nname: [broken\ndescription: Broken\n---\n",
+        },
+      ],
+    });
+
+    expect(remoteEntries()).toEqual([]);
+    const warningText = warn.mock.calls.flat().map(String).join("\n");
+    expect(warningText).toContain("node://node-1/skills/broken-skill/SKILL.md");
+    expect(warningText).toContain("BAD_INDENT");
+  });
+
+  it("replaces a changed node catalog without invalidating an identical catalog", () => {
+    connectSkill("node-1", { displayName: "Build Mac" });
+    publish("first", "First");
+    const firstVersion = getSkillsSnapshotVersion();
+    const firstSkill = remoteEntries()[0]!.skill;
+    expect(firstSkill.contentHash).toEqual(expect.any(String));
+    expect(firstSkill.locationNote).toContain("Build Mac (node-1)");
+
+    publish("first", "First");
+    expect(getSkillsSnapshotVersion()).toBe(firstVersion);
+    expect(remoteEntries()[0]!.skill.contentHash).toBe(firstSkill.contentHash);
+
+    publish("first", "First", "# Changed instructions");
+    const changedSkill = remoteEntries()[0]!.skill;
+    expect(changedSkill).toMatchObject({
+      name: firstSkill.name,
+      description: firstSkill.description,
+      filePath: firstSkill.filePath,
+    });
+    expect(changedSkill.contentHash).not.toBe(firstSkill.contentHash);
+    expect(getSkillsSnapshotVersion()).toBeGreaterThan(firstVersion);
+
+    publish("second", "Second");
+
+    expect(remoteEntries().map((entry) => entry.skill.name)).toEqual(["second"]);
+    expect(getSkillsSnapshotVersion()).toBeGreaterThan(firstVersion);
+  });
+
+  it("hides skills when the session or publishing node cannot execute on the node", () => {
+    connectSkill("node-1", { commands: [] });
+    publish("remote", "Remote");
+
+    expect(remoteEntries()).toEqual([]);
+    connectSkill();
+    expect(mergeRemoteNodeSkillEntries([], { canExec: false })).toEqual([]);
+    expect(remoteEntries()).toHaveLength(1);
   });
 });

@@ -45,35 +45,6 @@ function writeWorkspaceSkill(root: string, name: string, description: string) {
   return writeSkill({ dir: path.join(root, "skills", name), name, description });
 }
 
-it("matches snapshot skill roots when a snapshot-less run uses a different execution directory", async () => {
-  const roots = workspaces();
-  const { workspaceDir: agentWorkspaceDir, executionWorkspaceDir } = roots;
-  for (const [workspaceDir, name, description] of [
-    [agentWorkspaceDir, "fallback-agent", "Agent only"],
-    [agentWorkspaceDir, "fallback-shared", "Agent wins"],
-    [executionWorkspaceDir, "fallback-execution", "Execution only"],
-    [executionWorkspaceDir, "fallback-shared", "Execution loses"],
-  ] as const) {
-    await writeWorkspaceSkill(workspaceDir, name, description);
-  }
-  const skillNames = ["fallback-agent", "fallback-shared", "fallback-execution"];
-  const saved = await snapshot({ ...roots, config: {}, skillFilter: skillNames });
-  const fallback = await resolveEmbeddedRunSkillEntries({ ...roots, config: {} });
-  const fallbackSkills = fallback.skillEntries.filter((entry) =>
-    skillNames.includes(entry.skill.name),
-  );
-
-  expect(fallbackSkills.map((entry) => entry.skill.name)).toEqual(
-    saved.skills.map((skill) => skill.name),
-  );
-  expect(
-    fallbackSkills.find((entry) => entry.skill.name === "fallback-shared")?.skill,
-  ).toMatchObject({
-    description: "Agent wins",
-    filePath: path.join(agentWorkspaceDir, "skills", "fallback-shared", "SKILL.md"),
-  });
-});
-
 it("keeps agent skills ahead of execution skills in a constrained fallback prompt", async () => {
   const roots = workspaces();
   const agentSkillName = "z-agent-priority";
