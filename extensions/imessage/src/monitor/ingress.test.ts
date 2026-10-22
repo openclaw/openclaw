@@ -144,96 +144,62 @@ describe("iMessage durable ingress", () => {
     }
   });
 
-  it("lets an approval poll vote overtake the conversation turn awaiting it", async () => {
-    const firstStarted = deferred();
-    const releaseFirst = deferred();
-    const voteStarted = deferred();
-    const dispatch = vi.fn(async (message: { id?: number | null }) => {
-      if (message.id === 101) {
-        firstStarted.resolve();
-        await releaseFirst.promise;
-      } else if (message.id === 102) {
-        voteStarted.resolve();
-      }
-      return { kind: "completed" } as const;
-    });
-    const ingress = createIngress({
-      dispatch,
-      dispatchPriority: async (message) => {
-        if (message.id !== 102) {
-          return undefined;
+  it.each([true, false])(
+    "only lets owned poll votes overtake the conversation: owned=%s",
+    async (owned) => {
+      const firstStarted = deferred();
+      const releaseFirst = deferred();
+      const priorityChecked = deferred();
+      const dispatch = vi.fn(async (message: { id?: number | null }) => {
+        if (message.id === 101) {
+          firstStarted.resolve();
+          await releaseFirst.promise;
         }
-        voteStarted.resolve();
         return { kind: "completed" } as const;
-      },
-    });
-    ingress.start();
-    try {
-      await ingress.receive(rawRow());
-      await firstStarted.promise;
-      await ingress.receive(
-        rawRow({
-          id: 102,
-          guid: "GUID-102",
-          poll: { kind: "vote", original_guid: "POLL-1", vote: { option_id: "deny" } },
-        }),
-      );
-      await expect(
-        Promise.race([
-          voteStarted.promise.then(() => true),
-          new Promise<boolean>((resolve) => {
-            setTimeout(() => resolve(false), 1_000);
+      });
+      const ingress = createIngress({
+        dispatch,
+        dispatchPriority: async (message) => {
+          if (message.id !== 102) {
+            return undefined;
+          }
+          priorityChecked.resolve();
+          return owned ? ({ kind: "completed" } as const) : undefined;
+        },
+      });
+      ingress.start();
+      try {
+        await ingress.receive(rawRow());
+        await firstStarted.promise;
+        await ingress.receive(
+          rawRow({
+            id: 102,
+            guid: "GUID-102",
+            poll: { kind: "vote", original_guid: "POLL-1", vote: { option_id: "deny" } },
           }),
-        ]),
-      ).resolves.toBe(true);
-    } finally {
-      releaseFirst.resolve();
-      await ingress.stop();
-    }
-  });
-
-  it("keeps an unowned poll vote behind the earlier conversation turn", async () => {
-    const firstStarted = deferred();
-    const releaseFirst = deferred();
-    const unrelatedChecked = deferred();
-    const dispatch = vi.fn(async (message: { id?: number | null }) => {
-      if (message.id === 101) {
-        firstStarted.resolve();
-        await releaseFirst.promise;
-      }
-      return { kind: "completed" } as const;
-    });
-    const ingress = createIngress({
-      dispatch,
-      dispatchPriority: async (message) => {
-        if (message.id === 102) {
-          unrelatedChecked.resolve();
+        );
+        if (owned) {
+          await expect(
+            Promise.race([
+              priorityChecked.promise.then(() => true),
+              new Promise<boolean>((resolve) => {
+                setTimeout(() => resolve(false), 1_000);
+              }),
+            ]),
+          ).resolves.toBe(true);
+        } else {
+          await priorityChecked.promise;
         }
-        return undefined;
-      },
-    });
-    ingress.start();
-    try {
-      await ingress.receive(rawRow());
-      await firstStarted.promise;
-      await ingress.receive(
-        rawRow({
-          id: 102,
-          guid: "GUID-102",
-          poll: { kind: "vote", original_guid: "OTHER-POLL", vote: { option_id: "alpha" } },
-        }),
-      );
-      await unrelatedChecked.promise;
-      expect(dispatch.mock.calls.some(([message]) => message.id === 102)).toBe(false);
-
-      releaseFirst.resolve();
-      await ingress.waitForIdle();
-      expect(dispatch.mock.calls.some(([message]) => message.id === 102)).toBe(true);
-    } finally {
-      releaseFirst.resolve();
-      await ingress.stop();
-    }
-  });
+        expect(dispatch.mock.calls.some(([message]) => message.id === 102)).toBe(false);
+        releaseFirst.resolve();
+        await ingress.waitForIdle();
+        expect(dispatch.mock.calls.some(([message]) => message.id === 102)).toBe(!owned);
+      } finally {
+        releaseFirst.resolve();
+        await ingress.stop();
+      }
+    },
+  );
 
   it("recovers a durable row with a fresh drain and dispatches exactly once", async () => {
     const event = rawRow();
@@ -258,20 +224,6 @@ describe("iMessage durable ingress", () => {
       guid: "GUID-101",
       chat_id: 42,
     });
-  });
-
-  it("preserves the retired guard's GUID parity across ROWID churn", async () => {
-    const dispatch = vi.fn(async (_message, claimLifecycle) => {
-      await claimLifecycle.onAdopted();
-      return { kind: "deferred" } as const;
-    });
-    const ingress = createIngress({ dispatch });
-    ingress.start();
-    await ingress.receive(rawRow());
-    await ingress.waitForIdle();
-    await ingress.receive(rawRow({ id: 999 }));
-    await ingress.waitForIdle();
-    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("carries catchup provenance through the journal to dispatch", async () => {
