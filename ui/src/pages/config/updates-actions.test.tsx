@@ -56,7 +56,7 @@ it.each(["confirmation", "report"] as const)(
       onReportFailure,
       update: { updateRun: run, reportableUpdateFailureId: run.runId },
     });
-    const label = operation === "confirmation" ? "Update now" : "Report update failure";
+    const label = operation === "confirmation" ? "Update Gateway…" : "Report update failure";
     const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (candidate) => candidate.textContent?.trim() === label,
     )!;
@@ -79,7 +79,7 @@ it("shows a failed confirmation load and retries the command", async () => {
     .mockRejectedValueOnce(new Error("Confirmation unavailable"))
     .mockResolvedValue(undefined);
   renderUpdates({ onUpdateNow });
-  row("Update now").querySelector<HTMLButtonElement>("button")!.click();
+  row("Update Gateway…").querySelector<HTMLButtonElement>("button")!.click();
   await waitForSolid(() =>
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
       "Confirmation unavailable",

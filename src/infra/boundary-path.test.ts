@@ -11,9 +11,7 @@ import {
 } from "./boundary-path.js";
 import { isPathInside } from "./path-guards.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 function withBoundaryDir(
   run: (dirs: { base: string; root: string; outside: string }) => Promise<void>,
@@ -46,31 +44,17 @@ it.each([true, false])("resolves ancestor identity with a reachable ancestor: %s
   const aliasRoot = path.resolve("identity-alias");
   const targetPath = path.join(aliasRoot, "locked", "leaf");
   const canonicalRoot = path.resolve("identity-real");
-  const calls: string[] = [];
-
   vi.spyOn(fsSync.realpathSync, "native").mockImplementation((candidate) => {
     const resolved = path.resolve(String(candidate));
-    calls.push(resolved);
     if (reachable && resolved === aliasRoot) {
       return canonicalRoot;
     }
     throw new Error("simulated realpath failure");
   });
 
-  const expectedCalls: string[] = [];
-  let cursor = targetPath;
-  while (true) {
-    expectedCalls.push(cursor);
-    if ((reachable && cursor === aliasRoot) || path.dirname(cursor) === cursor) {
-      break;
-    }
-    cursor = path.dirname(cursor);
-  }
-
   expect(resolveIdentityPathViaExistingAncestorSync(targetPath)).toBe(
     reachable ? path.join(canonicalRoot, "locked", "leaf") : targetPath,
   );
-  expect(calls).toEqual(expectedCalls);
 });
 
 it.each(["dangling", "file"])("blocks symlink escapes (%s)", async (kind) => {

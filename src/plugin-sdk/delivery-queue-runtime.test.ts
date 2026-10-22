@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -78,25 +79,21 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
   });
 
   it("counts a reconnect drain independently from its admitted parent", async () => {
-    let finishDrain = () => {};
-    const drainStarted = new Promise<void>((resolveStarted) => {
-      mocks.coreDrainPendingDeliveries.mockImplementationOnce(
-        () =>
-          new Promise<void>((resolveDrain) => {
-            finishDrain = resolveDrain;
-            resolveStarted();
-          }),
-      );
+    const started = createDeferred();
+    const finished = createDeferred();
+    mocks.coreDrainPendingDeliveries.mockImplementationOnce(() => {
+      started.resolve();
+      return finished.promise;
     });
     const deliver = vi.fn(async () => []);
 
     await runWithGatewayRootWorkAdmissionForTest(async () => {
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       const pending = drain(deliver);
-      await drainStarted;
+      await started.promise;
 
       expect(getActiveGatewayRootWorkCount()).toBe(2);
-      finishDrain();
+      finished.resolve();
       await pending;
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledOnce();

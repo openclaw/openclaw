@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 
@@ -69,38 +69,36 @@ afterEach(() => {
   vi.resetModules();
 });
 
-describe("lazy SDK execution facades", () => {
-  it.each(cases)(
-    "defers $name to its execution owner and preserves arguments and outcomes",
-    async (testCase) => {
-      const loaded: string[] = [];
-      const resolvedError = { error: "Owner unavailable" };
-      const failure = new Error("Owner request failed");
-      const execute = vi.fn<(...args: unknown[]) => Promise<unknown>>();
-      execute.mockResolvedValueOnce(resolvedError).mockRejectedValueOnce(failure);
-      for (const entry of cases) {
-        vi.doMock(entry.owner, () => {
-          loaded.push(entry.owner);
-          return { [entry.ownerExport ?? entry.name]: execute };
-        });
+it.each(cases)(
+  "defers $name to its execution owner and preserves arguments and outcomes",
+  async (testCase) => {
+    const loaded: string[] = [];
+    const resolvedError = { error: "Owner unavailable" };
+    const failure = new Error("Owner request failed");
+    const execute = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+    execute.mockResolvedValueOnce(resolvedError).mockRejectedValueOnce(failure);
+    for (const entry of cases) {
+      vi.doMock(entry.owner, () => {
+        loaded.push(entry.owner);
+        return { [entry.ownerExport]: execute };
+      });
+    }
+
+    const invoke = await testCase.load();
+    expect(loaded).toEqual([]);
+    expect(execute).not.toHaveBeenCalled();
+
+    await expect(invoke()).resolves.toBe(resolvedError);
+    await expect(invoke()).rejects.toBe(failure);
+
+    expect(loaded).toEqual([testCase.owner]);
+    expect(execute).toHaveBeenCalledTimes(2);
+    for (const call of execute.mock.calls) {
+      expect(call).toHaveLength(testCase.args.length);
+      for (const [index, argument] of testCase.args.entries()) {
+        expect(call[index]).toBe(argument);
       }
-
-      const invoke = await testCase.load();
-      expect(loaded).toEqual([]);
-      expect(execute).not.toHaveBeenCalled();
-
-      await expect(invoke()).resolves.toBe(resolvedError);
-      await expect(invoke()).rejects.toBe(failure);
-
-      expect(loaded).toEqual([testCase.owner]);
-      expect(execute).toHaveBeenCalledTimes(2);
-      for (const call of execute.mock.calls) {
-        expect(call).toHaveLength(testCase.args.length);
-        for (const [index, argument] of testCase.args.entries()) {
-          expect(call[index]).toBe(argument);
-        }
-      }
-      expect(fetchFn).not.toHaveBeenCalled();
-    },
-  );
-});
+    }
+    expect(fetchFn).not.toHaveBeenCalled();
+  },
+);

@@ -58,7 +58,7 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}settings/updates`);
         await gateway.waitForRequest("config.get");
-        await button(page, "Update now").click();
+        await button(page, "Update Gateway…").click();
         const dialog = page.locator("openclaw-modal-dialog");
         await button(dialog, "Update and restart").click();
         await gateway.waitForRequest("update.run");

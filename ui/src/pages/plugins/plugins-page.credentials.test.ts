@@ -39,7 +39,6 @@ it("reads the latest config error from a retained credential context after disca
   page.setState({
     detail: {
       pluginId: "workboard",
-      error: null,
       inspection: createInspectResult({
         credentials: [{ path, label: "API key", envVars: ["SERVICE_KEY"], status: "missing" }],
       }),

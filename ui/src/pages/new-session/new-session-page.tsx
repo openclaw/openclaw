@@ -188,6 +188,7 @@ function DraftBlock(props: {
             props.page().data?.group && props.page().context?.sessions.groupsStatus() === "loading",
           )
         }
+        retryRead={props.page().gateway.catalogRetryRead}
         onRetry={() => props.page().gateway.handleCatalogRetry()}
         agentSelect={
           <Show when={Boolean(props.page().submission.completedSubmission)}>

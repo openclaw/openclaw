@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MascotAnimator } from "./mascot-animator.ts";
 import { MASCOT_MOODS, staticMascotPose, type MascotPose } from "./mascot-pose.ts";
 
@@ -32,7 +32,8 @@ function expectPoseInBounds(pose: MascotPose): void {
 describe("MascotAnimator", () => {
   it("keeps every mood inside drawable channel bounds for 30 seconds", () => {
     for (const [index, mood] of MASCOT_MOODS.entries()) {
-      const animator = new MascotAnimator(1_000 + index);
+      using _ = vi.spyOn(Date, "now").mockReturnValue(1_000 + index);
+      const animator = new MascotAnimator();
       animator.setMood(mood, 0);
       for (let frame = 0; frame <= 30 * 30; frame += 1) {
         expectPoseInBounds(animator.poseAt(frame / 30));
@@ -42,7 +43,8 @@ describe("MascotAnimator", () => {
 
   it("cancels stale gestures when the mood changes", () => {
     // Change mood before idle's queued hello wave at +0.9s.
-    const animator = new MascotAnimator(9);
+    using _ = vi.spyOn(Date, "now").mockReturnValue(9);
+    const animator = new MascotAnimator();
     animator.poseAt(0);
     animator.setMood("thinking", 0.1);
 
@@ -54,7 +56,8 @@ describe("MascotAnimator", () => {
   });
 
   it("overlays and clears the composer tease expression", () => {
-    const animator = new MascotAnimator(17);
+    using _ = vi.spyOn(Date, "now").mockReturnValue(17);
+    const animator = new MascotAnimator();
     animator.setMood("idle", 0);
     animator.setTease(true, 0);
 
