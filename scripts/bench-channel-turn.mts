@@ -268,7 +268,9 @@ try {
         await controlGatewayProfile(gateway, "cpu", "start", profilePath, { includeWorkers: true });
       }
     }
-    const cpuBefore = observe ? await readGatewayCpuUsage(gateway) : undefined;
+    const cpuBefore = observe
+      ? await readGatewayCpuUsage(gateway, { includeWorkers: values.resources })
+      : undefined;
     setPhase(i === 0 ? "02.first-turn" : `03.turn-${String(i).padStart(2, "0")}`);
     const turnId = createHash("sha256").update(phase).digest("hex").slice(0, 32);
     const messageId = `sqlmeasure-${i}`;
@@ -321,7 +323,10 @@ try {
     }
     const settledMs = Date.now() - start;
     const cpu = cpuBefore
-      ? measureGatewayCpuUsage(cpuBefore, await readGatewayCpuUsage(gateway))
+      ? measureGatewayCpuUsage(
+          cpuBefore,
+          await readGatewayCpuUsage(gateway, { includeWorkers: values.resources }),
+        )
       : undefined;
     const result = state
       .getSnapshot()
