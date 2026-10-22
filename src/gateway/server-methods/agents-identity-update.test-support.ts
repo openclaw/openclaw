@@ -10,9 +10,18 @@ import {
   expectUncalled,
   mockCallArg,
 } from "./agents-mutate.test-support.js";
-import type { AgentMutationMocks } from "./agents-mutate.test.js";
 type IdentityUpdateHarness = {
-  mocks: AgentMutationMocks;
+  mocks: {
+    loadConfigReturn: Record<string, unknown>;
+    applyAgentConfig: Mock<(cfg: unknown, opts: unknown) => unknown>;
+    ensureAgentWorkspace: Mock<
+      (params?: { dir?: string }) => Promise<{ dir: string; identityPathCreated: boolean }>
+    >;
+    rootRead: Mock<(params: { rootDir: string; relativePath: string }) => Promise<ReadResult>>;
+    rootWrite: Mock<(params?: unknown) => Promise<void>>;
+    writeConfigFile: Mock<(nextConfig?: unknown, writeOptions?: unknown) => Promise<void>>;
+    fsMkdir: unknown;
+  };
   makeCall: (
     method: "agents.update",
     params: Record<string, unknown>,

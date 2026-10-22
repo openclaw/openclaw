@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { expect, it, onTestFailed, type TestContext } from "vitest";
 import type { ModelChoice } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { readProcessRssMb } from "../../scripts/lib/gateway-bench-probes.ts";
+import {
+  createFixtureRequest,
+  verifyBuiltGatewayHead,
+} from "../../test/helpers/gateway-built-fixture.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import {
@@ -11,10 +15,6 @@ import {
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  createFixtureRequest,
-  verifyBuiltGatewayHead,
-} from "./gateway-built-fixture.test-support.js";
 import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 

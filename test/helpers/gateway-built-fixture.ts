@@ -7,7 +7,7 @@ import {
   resolveGitHead,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata.mts";
-import type { GatewayClientRequestOptions } from "./client.js";
+import type { GatewayClientRequestOptions } from "../../src/gateway/client.js";
 
 // Fail before a process fixture can rebuild shared dist or fall back to source.
 export async function verifyBuiltGatewayHead(repoRoot: string, signal: AbortSignal) {

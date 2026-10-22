@@ -5,6 +5,10 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { isGatewayProtocolResponseError } from "../../packages/gateway-client/src/protocol-request.js";
+import {
+  createFixtureRequest,
+  verifyBuiltGatewayHead,
+} from "../../test/helpers/gateway-built-fixture.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import {
@@ -14,10 +18,6 @@ import {
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  createFixtureRequest,
-  verifyBuiltGatewayHead,
-} from "./gateway-built-fixture.test-support.js";
 
 const PROVIDERS = ["route-proof-stable", "route-proof-dynamic"] as const;
 const PLUGIN_ID = "route-model-proof";

@@ -4,10 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
+import { createFixtureRequest } from "../../test/helpers/gateway-built-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import "../commands/agent.js";
+import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import { agentCliCommand } from "../commands/agent-via-gateway.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -23,7 +24,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
-import { createFixtureRequest } from "./gateway-built-fixture.test-support.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { createTrackedProvider } from "./test-helpers.tracked-provider.js";

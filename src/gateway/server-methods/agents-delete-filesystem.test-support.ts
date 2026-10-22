@@ -1,14 +1,32 @@
-import type { Stats } from "node:fs";
+import type { BigIntStats, Stats } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi, type Mock } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { expectPendingDeletion, expectRespondOk } from "./agents-mutate.test-support.js";
-import type { AgentMutationMocks } from "./agents-mutate.test.js";
 
 const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 
 type AgentDeleteFilesystemHarness = {
-  mocks: AgentMutationMocks;
+  mocks: {
+    resolveAgentWorkspaceDir: Mock<(cfg?: unknown, agentId?: string) => string>;
+    fsRealpath: Mock<(pathname: string) => Promise<string>>;
+    fsLstat: Mock<(...args: unknown[]) => Promise<Stats | BigIntStats | null>>;
+    fsReadlink: Mock<(pathname: string) => Promise<string>>;
+    movePathToTrash: Mock<(pathname?: string) => Promise<string>>;
+    fsRm: unknown;
+    deleteWorkspaceState: unknown;
+    rootStat: Mock<
+      (params: { rootDir: string; relativePath: string }) => Promise<{
+        isFile: boolean;
+        isSymbolicLink: boolean;
+        mtimeMs: number;
+        nlink: number;
+        size: number;
+      }>
+    >;
+    assertAgentDeletionCurrentFinal: Mock<() => void>;
+    beginAgentDeletionFinish: Mock;
+  };
   makeCall: (
     method: "agents.delete",
     params: Record<string, unknown>,

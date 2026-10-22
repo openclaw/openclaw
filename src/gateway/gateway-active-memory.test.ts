@@ -6,6 +6,10 @@ import { describe, expect, it, onTestFailed } from "vitest";
 import { GatewayClient } from "../../packages/gateway-client/src/index.js";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
+  createFixtureRequest,
+  verifyBuiltGatewayHead,
+} from "../../test/helpers/gateway-built-fixture.js";
+import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
@@ -20,10 +24,6 @@ import {
   signEd25519Payload,
 } from "../infra/ed25519-signature.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import {
-  createFixtureRequest,
-  verifyBuiltGatewayHead,
-} from "./gateway-built-fixture.test-support.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 function completeResponse(response: ServerResponse, item?: Record<string, unknown>): void {

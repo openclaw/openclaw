@@ -165,8 +165,6 @@ const mocks = vi.hoisted(() => ({
   >(async () => false),
 }));
 
-export type AgentMutationMocks = typeof mocks;
-
 vi.mock("../../config/config.js", async (importOriginal) => {
   return {
     ...(await importOriginal<typeof import("../../config/config.js")>()),
