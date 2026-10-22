@@ -503,7 +503,7 @@ describe("stageSandboxMedia scp remote paths", () => {
       ctx.media = [
         forceCache
           ? { path: remotePath }
-          : { path: remotePath, url: pathToFileURL(remotePath).href },
+          : { path: remotePath, url: pathToFileURL(remotePath, { windows: false }).href },
       ];
       sessionCtx.media = ctx.media;
       mockDownload();
