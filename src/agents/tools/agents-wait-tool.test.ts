@@ -2,8 +2,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { typeCheckSources } from "../../../test/helpers/typescript.js";
+import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
+import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import {
+  captureSessionControllerStop,
+  stopSession,
+} from "../../sessions/session-controller.stop.js";
+import { testing as sessionTesting } from "../../sessions/session-controller.test-support.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "../code-mode.js";
 import {
   createCodeModeHarness,
@@ -17,6 +26,10 @@ import {
   saveSubagentRegistryToSqlite,
 } from "../subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 
 const MAIN = "agent:main:main";
 type RegistryState = typeof import("../subagents/registry/subagent-registry-state.js");
@@ -28,6 +41,7 @@ const registryEvents = vi.hoisted(() => ({
   subscribe: vi.fn<(listener: () => void) => () => void>(),
 }));
 
+// mock-isolation: Collector persistence is external I/O; the real controller owns recovery.
 vi.mock("../subagents/registry/subagent-registry.js", () => ({
   prepareSubagentRunsByRunIds: registryEvents.read,
 }));
@@ -864,4 +878,171 @@ describe("agents_wait", () => {
       tool.execute("ambiguous-wait", { ids: [entry.runId], awaitResults: true, timeoutSeconds: 1 }),
     ).rejects.toThrow("cannot also specify");
   });
+
+  async function startParentWait(codeMode = false) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const h = createCodeModeHarness({ agentId: "main" });
+    const { sessionId, sessionKey, runId } = h.ctx;
+    const admission = prepareSystemAgentRunAdmission({}, runId, "main", "wait-test");
+    const admitted = await admission.admit("embedded");
+    const caller = createAdmittedGatewayToolCallerIdentity({
+      admittedRunContext: admitted,
+      agentId: "main",
+      sessionKey,
+    });
+    const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+    operation.setPhase("running");
+    const signal = new AbortController();
+    const abort = vi.fn(() => {
+      signal.abort();
+      operation.complete();
+    });
+    operation.attachBackend({ kind: "embedded", runId, cancel: abort });
+    const attempt = operation.watchdog.attachAttempt({
+      assertCurrent: () => operation.abortSignal.throwIfAborted(),
+    });
+    const endTool = attempt.beginTool({
+      toolName: codeMode ? "exec" : "agents_wait",
+      toolCallId: "join",
+    });
+    const startedAt = Date.now();
+    const entry = collectorRun("long-collector", sessionKey);
+    records.set(entry.runId, entry);
+    const read = createDeferred();
+    registryEvents.read.mockImplementation(async (ids) =>
+      preparedRuns(() => {
+        read.resolve();
+        return selectRuns(records, ids);
+      }),
+    );
+    const tool = createMainSessionWaitTool();
+    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
+    const result = withGatewayToolCallerIdentity(
+      { ...expectDefined(caller, "admitted caller"), watchdogAttempt: attempt },
+      () =>
+        (codeMode ? expectDefined(h.tools[0], "exec") : tool).execute(
+          "join",
+          codeMode
+            ? {
+                title: "Join required child",
+                awaitResults: true,
+                code: 'return await agents_wait({ids:["long-collector"], awaitResults:true});',
+              }
+            : { ids: [entry.runId], awaitResults: true },
+          signal.signal,
+        ),
+    );
+    // Observe pre-fix cancellation without changing the caller-visible result.
+    const observed = result.then(
+      () => {},
+      () => {},
+    );
+    onTestFinished(async () => {
+      signal.abort();
+      await observed;
+      endTool();
+      operation.complete();
+      admission.close();
+      await resetCodeModeTestState();
+      sessionTesting.resetSessionControllerForTest();
+      resetDiagnosticEventsForTest();
+      vi.useRealTimers();
+    });
+    return {
+      admission,
+      operation,
+      attempt,
+      abort,
+      entry,
+      result,
+      read: read.promise,
+      advancePastQuietToolDeadline() {
+        vi.setSystemTime(startedAt + 16 * 60_000);
+      },
+    };
+  }
+
+  it.each([
+    { outcome: "done", codeMode: true },
+    { outcome: "failed", codeMode: false },
+    { outcome: "stopped", codeMode: false },
+  ] as const)(
+    "keeps a long collector wait alive until $outcome (Code Mode: $codeMode)",
+    async ({ outcome, codeMode }) => {
+      const parent = await startParentWait(codeMode);
+      await parent.read;
+      parent.advancePastQuietToolDeadline();
+      await expect(
+        recoverStuckDiagnosticSession({
+          operation: parent.operation,
+          sessionId: parent.operation.sessionId,
+          sessionKey: parent.operation.key,
+          ageMs: 16 * 60_000,
+          queueDepth: 0,
+          allowActiveAbort: true,
+        }),
+      ).resolves.toMatchObject({ status: "skipped", reason: "active_reply_work" });
+      expect(parent.abort).not.toHaveBeenCalled();
+      expect(registryEvents.read).toHaveBeenCalledOnce();
+
+      if (outcome === "stopped") {
+        const stopped = stopSession({
+          capture: captureSessionControllerStop({ operations: [parent.operation] }),
+          source: "client-run",
+        });
+        expect(stopped.aborted).toBe(true);
+        await expect(parent.result).rejects.toThrow("agents_wait aborted");
+        expect(parent.abort).toHaveBeenCalledOnce();
+      } else {
+        parent.entry.collectorCompletion = { status: outcome };
+        parent.entry.completion = { required: false, resultText: "collected result" };
+        publishChanges();
+        const completed = {
+          completed: [{ runId: parent.entry.runId, status: outcome, result: "collected result" }],
+          pending: [],
+        };
+        await expect(parent.result).resolves.toMatchObject({
+          details: codeMode ? { status: "completed", value: completed } : completed,
+        });
+      }
+      expect(parent.operation.watchdog.snapshot().waits).toEqual([]);
+      expect(registryEvents.listeners.size).toBe(0);
+    },
+  );
+
+  it.each(["execution deadline", "revoked authority", "stalled reread"] as const)(
+    "does not protect a collector after %s",
+    async (cause) => {
+      const parent = await startParentWait();
+      await parent.read;
+      parent.advancePastQuietToolDeadline();
+      expect(await parent.operation.watchdog.tick()).toEqual({
+        action: "observe",
+        reason: "runtime_owned",
+      });
+      const reread = createDeferred<PreparedSubagentRunsRead>();
+      try {
+        if (cause === "execution deadline") {
+          parent.attempt.setExecutionDeadline(Date.now());
+        } else if (cause === "revoked authority") {
+          parent.admission.close();
+        } else {
+          registryEvents.read.mockImplementation(() => reread.promise);
+          publishChanges();
+        }
+        expect(parent.operation.watchdog.decide()).toMatchObject({
+          action: "stop",
+          reason: cause === "execution deadline" ? "execution_deadline" : "semantic_stall",
+        });
+        await parent.operation.watchdog.tick();
+        expect(parent.abort).toHaveBeenCalledOnce();
+        expect(parent.operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+      } finally {
+        reread.resolve(preparedRuns(() => selectRuns(records, [parent.entry.runId])));
+      }
+      await expect(parent.result).rejects.toThrow("agents_wait aborted");
+      expect(parent.operation.watchdog.snapshot().waits).toEqual([]);
+      expect(registryEvents.listeners.size).toBe(0);
+    },
+  );
 });
