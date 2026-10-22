@@ -84,21 +84,29 @@ export function observeArchiveReads(
       record.maxRowBytes = Math.max(record.maxRowBytes, bytes);
     };
     type Row = Record<string, unknown>;
-    const observeCall = <T extends (...args: never[]) => Row | Row[] | undefined>(call: T): T =>
-      new Proxy(call, {
-        apply(invoke, receiver, args) {
-          record.executions++;
-          try {
-            const result: Row | Row[] | undefined = Reflect.apply(invoke, receiver, args);
-            (Array.isArray(result) ? result : result ? [result] : []).forEach(observeRow);
-            return result;
-          } finally {
-            record.closed = true;
-          }
+    function observeCall<T extends Row | Row[] | undefined>(call: () => T): T {
+      record.executions++;
+      try {
+        const result = call();
+        const rows: Row[] = Array.isArray(result) ? result : result ? [result] : [];
+        rows.forEach(observeRow);
+        return result;
+      } finally {
+        record.closed = true;
+      }
+    }
+    const nativeAll = statement.all.bind(statement);
+    vi.spyOn(statement, "all").mockImplementation((...parameters) =>
+      observeCall(() => nativeAll(...parameters)),
+    );
+    const nativeGet = statement.get.bind(statement);
+    vi.spyOn(statement, "get").mockImplementation(
+      new Proxy(nativeGet, {
+        apply(get, _receiver, parameters) {
+          return observeCall(() => get(...parameters));
         },
-      });
-    vi.spyOn(statement, "all").mockImplementation(observeCall(statement.all.bind(statement)));
-    vi.spyOn(statement, "get").mockImplementation(observeCall(statement.get.bind(statement)));
+      }),
+    );
     const iterate = statement.iterate.bind(statement);
     vi.spyOn(statement, "iterate").mockImplementation((...parameters) => {
       record.executions++;

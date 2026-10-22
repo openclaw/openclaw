@@ -194,11 +194,8 @@ describe("configured transcript source provenance", () => {
       await service.start().settled;
       expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe("retrying");
       expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
-      current = {
-        transcripts: {
-          autoStart: [{ ...source, providerOptions: { mode: "other" }, title: "Ineligible" }],
-        },
-      };
+      const changedSource = { ...source, providerOptions: { mode: "other" }, title: "Ineligible" };
+      current = { transcripts: { autoStart: [changedSource] } };
       f.setProviders([f.provider]);
       await vi.advanceTimersByTimeAsync(5_000);
       await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
