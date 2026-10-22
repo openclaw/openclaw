@@ -4,6 +4,34 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../test-utils/env.js";
+
+export async function withBackupStateEnv<T>(
+  values: Parameters<typeof withEnvAsync>[0],
+  run: () => Promise<T>,
+): Promise<T> {
+  return withEnvAsync(values, async () => {
+    await using state = { run, [Symbol.asyncDispose]: closeOpenClawStateDatabaseAsync };
+    return await state.run();
+  });
+}
+
+export function createStateDatabaseFixture(root: string) {
+  const stateDir = path.join(root, "state");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  openOpenClawStateDatabase({ env });
+  closeOpenClawStateDatabaseForTest();
+  return {
+    stateDir,
+    database: { path: resolveOpenClawStateSqlitePath(env), identity: { role: "global" as const } },
+  };
+}
 
 const schemaMeta = `CREATE TABLE schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL, schema_version INTEGER NOT NULL,

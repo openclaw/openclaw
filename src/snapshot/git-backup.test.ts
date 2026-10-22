@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatCliOperatorError } from "../cli/failure-output.js";
 import { backupGitCreateCommand, backupGitLogCommand } from "../commands/backup-git.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
@@ -20,14 +21,17 @@ import {
 import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
+import { createPathResolutionEnv } from "../test-utils/env.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 import { gitBackupCommandRuntimeEntrypoint } from "./git-backup-command-runtime.test-support.js";
 import { createGitBackup, initializeGitBackupRepository, readGitBackupLog } from "./git-backup.js";
-import { createCatalogFixture, createFormatFixture } from "./git-backup.test-support.js";
+import {
+  createCatalogFixture,
+  createFormatFixture,
+  createStateDatabaseFixture,
+  withBackupStateEnv,
+} from "./git-backup.test-support.js";
 import { withDatabase } from "./local-repository.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -79,23 +83,8 @@ vi.mock("./local-repository.js", async (importOriginal) => {
   };
 });
 
-const roots: string[] = [];
-
-async function withBackupStateEnv<T>(
-  values: Parameters<typeof withEnvAsync>[0],
-  run: () => Promise<T>,
-): Promise<T> {
-  return await withEnvAsync(values, async () => {
-    await using state = { run, [Symbol.asyncDispose]: closeOpenClawStateDatabaseAsync };
-    return await state.run();
-  });
-}
-
-async function tempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-backup-test-"));
-  roots.push(root);
-  return root;
-}
+const roots = createTempDirTracker();
+const tempRoot = () => roots.make("openclaw-git-backup-test-");
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
@@ -107,21 +96,8 @@ afterEach(async () => {
   mocks.snapshotRepositoryError = undefined;
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
-  await Promise.all(
-    roots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
-  );
+  roots.cleanup();
 });
-
-function createStateDatabaseFixture(root: string) {
-  const stateDir = path.join(root, "state");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  openOpenClawStateDatabase({ env });
-  closeOpenClawStateDatabaseForTest();
-  return {
-    stateDir,
-    database: { path: resolveOpenClawStateSqlitePath(env), identity: { role: "global" as const } },
-  };
-}
 
 async function backupFixture(name = "repository") {
   const root = await tempRoot();
