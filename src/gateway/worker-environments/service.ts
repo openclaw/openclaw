@@ -253,10 +253,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return;
     }
     const entered = createDeferredCore();
-    const step = createWorkerReconcileTrace({
-      environmentId,
-      providerId: store.get(environmentId)?.providerId,
-    });
+    const traceContext: { environmentId: string; providerId?: string } = { environmentId };
+    const step = createWorkerReconcileTrace(traceContext);
     const operation = step("owner", () =>
       withLock(environmentId, async () => {
         entered.resolve();
@@ -266,6 +264,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         await step("inventory", () => racePromiseWithAbortSignal(store.ready(), signal));
         signal?.throwIfAborted();
         const current = store.get(environmentId);
+        // Inventory readiness may recover a retired database admission before this read.
+        traceContext.providerId = current?.providerId;
         if (!current || ["destroyed", "failed", "orphaned"].includes(current.state)) {
           return;
         }
