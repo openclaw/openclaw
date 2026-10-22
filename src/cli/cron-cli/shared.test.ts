@@ -304,43 +304,13 @@ it.each<[CronJob["schedule"], string, Partial<CronJob>?, string?]>([
   }
 });
 
-it.each([false, true])("shows disabled stream sources with running=%s", (running) => {
-  const job = makeJob({
-    schedule: { kind: "stream", command: ["node", "events.mjs"] },
-    state: {
-      streamStatus: "disabled",
-      streamError: "stream sources require cron.triggers.enabled=true",
-      lastRunStatus: "ok",
-      lastDeliveryStatus: "not-delivered",
-      deliverySuppressionReason: "silent",
-      ...(running ? { runningAtMs: Date.now() } : {}),
-    },
-  });
-
-  const { list, show } = renderJob(job);
-  const row = list.find((line) => line.includes(job.id)) ?? "";
-  expect(row).toContain(running ? "running" : "disabled");
-  expect(row).not.toContain("idle");
-  expect(row).not.toContain("ok (suppressed)");
-
-  expect(show).toContain(`status: ${running ? "running" : "disabled"}`);
-  expectText(
-    show,
-    "stream status: disabled",
-    "stream error: stream sources require cron.triggers.enabled=true",
-  );
-  expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: running ? "running" : "ok" });
-});
-
 it.each([
   [12, "error (12x)", undefined],
   [1, "error", "(1x)"],
   [1440, "error (99+x)", "1440"],
 ] as const)("bounds the failure-count decoration for %i failures", (count, status, forbidden) => {
   const logs = renderList(
-    makeJob({
-      state: { lastRunStatus: "error", consecutiveErrors: count, lastError: "boom" },
-    }),
+    makeJob({ state: { lastRunStatus: "error", consecutiveErrors: count, lastError: "boom" } }),
   );
   expectText(logs, status);
   if (forbidden) {
@@ -388,9 +358,7 @@ it("shows why the scheduler auto-disabled a job without changing JSON status", (
   const disabledJob = (reason: "consecutive-failures" | "schedule-errors", count: number) =>
     makeJob({
       enabled: false,
-      state: {
-        autoDisabled: { reason, atMs: Date.now(), consecutiveErrors: count },
-      },
+      state: { autoDisabled: { reason, atMs: Date.now(), consecutiveErrors: count } },
     });
   const runFailures = disabledJob("consecutive-failures", 10);
   const scheduleErrors = disabledJob("schedule-errors", 3);
@@ -400,17 +368,8 @@ it("shows why the scheduler auto-disabled a job without changing JSON status", (
 
   expect(enrichCronJsonWithStatus(runFailures)).toMatchObject({
     status: "disabled",
-    state: {
-      autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 },
-    },
+    state: { autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 } },
   });
-});
-
-it("shows dash for unset agentId instead of default", () => {
-  const logs = renderList(makeJob({ agentId: undefined, sessionTarget: "isolated" }));
-  expect(logs[0]).toContain("Agent ID");
-  const dataLine = logs[1] ?? "";
-  expect(dataLine).not.toContain("default");
 });
 
 it.each([
@@ -515,10 +474,7 @@ describe("handleCronCliError", () => {
       "Could not start the CLI.",
     );
     expect(thrown).toBeInstanceOf(ExpectedCliError);
-    expect(json).toEqual({
-      ok: false,
-      error: { type: "cli_error", message: recovery },
-    });
+    expect(json).toEqual({ ok: false, error: { type: "cli_error", message: recovery } });
     expect(stderr).toContain(recovery);
     expect(stderr).not.toContain("Could not start the CLI.");
     expect(stderr).not.toContain("openclaw doctor");

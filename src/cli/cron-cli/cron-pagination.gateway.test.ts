@@ -1,15 +1,16 @@
 // Cron CLI pagination exercises real Gateway handlers and canonical cron snapshots.
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createMockCronStateForJobs } from "../../cron/service.test-harness.js";
 import { listPage } from "../../cron/service/ops-read.js";
 import type { CronJob } from "../../cron/types.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
-import { formatCliJsonFailure } from "../failure-output.js";
+import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
+import { isCommandJsonOutputMode } from "../program/json-mode.js";
 
 const mocks = vi.hoisted(() => {
   const runtime = {
@@ -26,11 +27,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("../gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("../gateway-rpc.js")>("../gateway-rpc.js");
-  return {
-    ...actual,
-    callGatewayFromCli: (...args: Parameters<typeof actual.callGatewayFromCli>) =>
-      mocks.callGatewayFromCli(...args),
-  };
+  return { ...actual, callGatewayFromCli: mocks.callGatewayFromCli };
 });
 
 vi.mock("../../runtime.js", async (importOriginal) => ({
@@ -44,6 +41,7 @@ const listRequests = () =>
   callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list");
 const listOffsets = () => listRequests().map((call) => (call[2] as { offset: number }).offset);
 const output = (stream: "log" | "error") => runtime[stream].mock.calls.flat().join("\n");
+const readJson = <T = unknown>() => runtime.writeJson.mock.calls.at(-1)?.[0] as T;
 function expectIncludes(text: string, ...parts: string[]) {
   for (const part of parts) {
     expect(text).toContain(part);
@@ -148,16 +146,22 @@ function unversionedPage(page: unknown) {
 }
 
 function disableCronGetForProtocolV4Gateway(): void {
+  failCronGet(
+    Object.assign(new Error("unknown method: cron.get"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+    }),
+  );
+}
+
+function failCronGet(error: Error): void {
   const invokeGateway = expectDefined(
     mocks.callGatewayFromCli.getMockImplementation(),
     "expected installed real cron Gateway",
   );
   mocks.callGatewayFromCli.mockImplementation(async (...args: unknown[]) => {
     if (args[0] === "cron.get") {
-      throw Object.assign(new Error("unknown method: cron.get"), {
-        name: "GatewayClientRequestError",
-        gatewayCode: "INVALID_REQUEST",
-      });
+      throw error;
     }
     return await invokeGateway(...args);
   });
@@ -185,14 +189,22 @@ afterEach(() => {
 });
 
 describe("cron CLI with the real Gateway pagination contract", () => {
-  it.each(["list", "show"])(
-    "preserves active run status in %s with a disabled stream source",
-    async (surface) => {
+  it.each([
+    ["list", true],
+    ["show", true],
+    ["list", false],
+    ["show", false],
+  ] as const)(
+    "renders %s with a disabled stream source and running=%s",
+    async (surface, running) => {
       const job = createJob(400, {
         agentId: "main",
         schedule: { kind: "stream", command: ["node", "events.mjs"] },
         state: {
-          runningAtMs: Date.now(),
+          ...(running ? { runningAtMs: Date.now() } : {}),
+          lastRunStatus: "ok",
+          lastDeliveryStatus: "not-delivered",
+          deliverySuppressionReason: "silent",
           streamStatus: "disabled",
           streamError: "cron is disabled",
         },
@@ -205,22 +217,26 @@ describe("cron CLI with the real Gateway pagination contract", () => {
       const lines = mocks.runtime.log.mock.calls.flatMap(([line]) => String(line).split("\n"));
       if (surface === "list") {
         const row = lines.find((line) => line.includes(job.id));
-        expect(row).toContain("running");
-        expect(row).not.toContain("disabled");
+        expect(row).toContain(running ? "running" : "disabled");
+        expect(row).not.toContain(running ? "disabled" : "running");
+        expect(row).not.toContain("idle");
+        expect(row).not.toContain("ok (suppressed)");
       } else {
-        expect(lines).toContain("status: running");
+        expect(lines).toContain(`status: ${running ? "running" : "disabled"}`);
         expect(lines).toContain("stream status: disabled");
         expect(lines).toContain("stream error: cron is disabled");
       }
 
       await runCron([...args, "--json"]);
-      const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0];
       const expected = {
         id: job.id,
-        status: "running",
-        state: { runningAtMs: job.state.runningAtMs, streamStatus: "disabled" },
+        status: running ? "running" : "ok",
+        state: {
+          streamStatus: "disabled",
+          ...(running ? { runningAtMs: job.state.runningAtMs } : {}),
+        },
       };
-      expect(result).toMatchObject(surface === "list" ? { jobs: [expected] } : expected);
+      expect(readJson()).toMatchObject(surface === "list" ? { jobs: [expected] } : expected);
     },
   );
 
@@ -250,10 +266,10 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     await runCron(["list", "--all", ...args]);
 
     if (args.includes("--json")) {
-      const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as {
+      const result = readJson<{
         jobs: Array<CronJob & { effectiveAgentId: string | null }>;
         deliveryPreviews: Record<string, { detail: string }>;
-      };
+      }>();
       expect(result.jobs.map((job) => job.id)).toEqual(ids);
       expect(result.jobs.find((job) => job.id === "job-002")).toMatchObject({
         effectiveAgentId: "ops",
@@ -269,6 +285,8 @@ describe("cron CLI with the real Gateway pagination contract", () => {
       }
     } else {
       const rendered = mocks.runtime.log.mock.calls.map(([line]) => line).join("\n");
+      expect(rendered).toContain("Agent ID");
+      expect(rendered).not.toContain("default");
       for (const id of ids) {
         expect(rendered).toContain(id);
       }
@@ -311,10 +329,10 @@ describe("cron CLI with the real Gateway pagination contract", () => {
       );
 
       if (json) {
-        const result = runtime.writeJson.mock.calls.at(-1)?.[0] as {
+        const result = readJson<{
           jobs: CronJob[];
           deliveryPreviews?: Record<string, unknown>;
-        };
+        }>();
         expect(result.jobs.map((job) => job.id).toSorted()).toEqual(
           matching.map((job) => job.id).toSorted(),
         );
@@ -372,7 +390,7 @@ describe("cron CLI with the real Gateway pagination contract", () => {
       },
     });
     await runCron(["list", "--json"]);
-    const result = runtime.writeJson.mock.calls.at(-1)?.[0] as { jobs: CronJob[] };
+    const result = readJson<{ jobs: CronJob[] }>();
     expect(result.jobs).toHaveLength(count);
     expect(result.jobs.some((job) => job.id === "job-000")).toBe(false);
     if (change === "replacement") {
@@ -387,11 +405,9 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     installRealCronGateway(createJobs(count), { transformListPage: unversionedPage });
     disableCronGetForProtocolV4Gateway();
     await runCron(["list", "--json"]);
-    const result = runtime.writeJson.mock.calls.at(-1)?.[0] as { jobs: CronJob[] };
+    const result = readJson<{ jobs: CronJob[] }>();
     expect(result.jobs).toHaveLength(count);
-    expectRpc("cron.get", {
-      id: count ? "job-000" : expect.any(String),
-    });
+    expectRpc("cron.get", { id: count ? "job-000" : expect.any(String) });
     if (count) {
       expect(result.jobs.some((job) => job.id === "job-200")).toBe(true);
       expect(listRequests()).toHaveLength(2);
@@ -433,13 +449,7 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     ["a missing terminal cursor", { nextOffset: undefined }],
     [
       "a terminal page exceeding its declared job limit",
-      {
-        jobs: createJobs(10_001),
-        total: 10_001,
-        limit: 200,
-        hasMore: false,
-        nextOffset: null,
-      },
+      { jobs: createJobs(10_001), total: 10_001, limit: 200, hasMore: false, nextOffset: null },
     ],
     ["a truncated terminal page", { total: 2 }, "inconsistent terminal inventory page"],
   ] satisfies Array<[string, Record<string, unknown>, string?]>)(
@@ -461,9 +471,7 @@ describe("cron CLI with the real Gateway pagination contract", () => {
       installRealCronGateway(createJobs(count), { transformListPage: unversionedPage });
       await expectListFailure("invalid inventory page");
       expect(listRequests()).toHaveLength(1);
-      expectRpc("cron.get", {
-        id: count ? "job-000" : expect.any(String),
-      });
+      expectRpc("cron.get", { id: count ? "job-000" : expect.any(String) });
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
     },
   );
@@ -501,10 +509,7 @@ describe("cron CLI with the real Gateway pagination contract", () => {
 
     await runCron(["show", id, "--json"]);
 
-    expect(runtime.writeJson.mock.calls.at(-1)?.[0]).toMatchObject({
-      id: "job-200",
-      name: "Actual ID owner",
-    });
+    expect(readJson()).toMatchObject({ id: "job-200", name: "Actual ID owner" });
     expectRpc("cron.get", { id });
     expect(listRequests().length > 0).toBe(id !== actualId.id);
   });
@@ -525,14 +530,7 @@ describe("cron CLI with the real Gateway pagination contract", () => {
       const jobs = createJobs();
       jobs[0] = createJob(0, { name: first });
       jobs[200] = createJob(200, { name: last, enabled: false });
-      installRealCronGateway(
-        jobs,
-        legacy
-          ? {
-              transformListPage: unversionedPage,
-            }
-          : {},
-      );
+      installRealCronGateway(jobs, legacy ? { transformListPage: unversionedPage } : {});
       if (legacy) {
         disableCronGetForProtocolV4Gateway();
       }
@@ -543,11 +541,7 @@ describe("cron CLI with the real Gateway pagination contract", () => {
         const error = await runCronWithJsonOwner(["show", query, "--json"]).catch(
           (caught: unknown) => caught,
         );
-        expect(error).toMatchObject({
-          name: "ExpectedCliError",
-          message,
-          machineOutput: message,
-        });
+        expect(error).toMatchObject({ name: "ExpectedCliError", message, machineOutput: message });
         expect(formatCliJsonFailure(error)).toEqual({
           ok: false,
           error: {
@@ -659,7 +653,7 @@ describe("cron CLI with the real Gateway pagination contract", () => {
 
     await runCron(["show", job.id, "--json"]);
 
-    const result = runtime.writeJson.mock.calls.at(-1)?.[0] as CronJob;
+    const result = readJson<CronJob>();
     expect(result).toMatchObject({ id: job.id, name, payload: { model }, state: { lastError } });
   });
 
@@ -678,16 +672,7 @@ describe("cron CLI with the real Gateway pagination contract", () => {
 
   it("never hides Gateway transport errors behind a name-based cron scan", async () => {
     installRealCronGateway([createJob(0)]);
-    const invokeGateway = expectDefined(
-      mocks.callGatewayFromCli.getMockImplementation(),
-      "expected installed real cron Gateway",
-    );
-    mocks.callGatewayFromCli.mockImplementation(async (...args: unknown[]) => {
-      if (args[0] === "cron.get") {
-        throw new Error("Gateway transport is unavailable");
-      }
-      return await invokeGateway(...args);
-    });
+    failCronGet(new Error("Gateway transport is unavailable"));
 
     await expect(runCron(["show", "job-000", "--json"])).rejects.toThrow("exit 1");
 
@@ -695,5 +680,179 @@ describe("cron CLI with the real Gateway pagination contract", () => {
       expect.stringContaining("Gateway transport is unavailable"),
     );
     expect(listRequests()).toHaveLength(0);
+  });
+});
+
+describe("cron simple commands", () => {
+  const stderrIsTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+  function mockPages(readPage: (params: { offset?: number }) => unknown, legacy = false) {
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: { id?: string; offset?: number }) => {
+        if (method === "cron.get") {
+          const message = legacy
+            ? "unknown method: cron.get"
+            : `cron job not found: ${params?.id ?? ""}`;
+          throw Object.assign(new Error(message), {
+            name: "GatewayClientRequestError",
+            gatewayCode: "INVALID_REQUEST",
+          });
+        }
+        if (method === "cron.list") {
+          return readPage(params ?? {});
+        }
+        throw new Error(`unexpected cron method: ${method}`);
+      },
+    );
+  }
+  function expectRequest(method: string, params: unknown) {
+    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith(method, expect.anything(), params);
+  }
+  const page = {
+    snapshotRevision: "stable",
+    offset: 0,
+    limit: 200,
+    hasMore: false,
+    nextOffset: null,
+  };
+  beforeEach(() => {
+    callGatewayFromCli
+      .mockReset()
+      .mockImplementation(async (method: string) =>
+        method === "cron.status" ? { enabled: true } : { ok: true },
+      );
+  });
+  afterEach(() => {
+    if (stderrIsTTY) {
+      Object.defineProperty(process.stderr, "isTTY", stderrIsTTY);
+    } else {
+      Reflect.deleteProperty(process.stderr, "isTTY");
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("inherits parent Gateway options without losing JSON mode", async () => {
+    const program = new Command().name("openclaw");
+    registerCronCli(program);
+    const argv = ["node", "openclaw", "automations", "--port", "18789", "status"];
+    program.hook("preAction", (_parent, command) => {
+      expect(isCommandJsonOutputMode(command, argv)).toBe(true);
+    });
+    await program.parseAsync(argv);
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.status",
+      expect.objectContaining({ port: "18789" }),
+      {},
+    );
+    expect(runtime.writeJson).toHaveBeenCalledWith({ enabled: true });
+  });
+
+  it.each([
+    {
+      label: "non-advancing cursor",
+      read: () => ({ ...page, jobs: [], total: 1, hasMore: true, nextOffset: 0 }),
+      error: "pagination did not advance",
+      calls: 1,
+    },
+    {
+      label: "missing job",
+      read: () => ({ ...page, jobs: [], total: 0 }),
+      error:
+        "Automation not found: missing. Run `openclaw cron list` to see recent automation ids.",
+      calls: 1,
+    },
+  ])("cron show rejects $label (#83856)", async ({ read, error, calls }) => {
+    mockPages(read);
+    await expect(runCron(["show", "missing", "--json"])).rejects.toThrow("exit 1");
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
+    expect(listRequests()).toHaveLength(calls);
+  });
+
+  it("renders a legacy job without state instead of crashing (#173631)", async () => {
+    // Protocol-v4 rows can omit state, formerly crashing printCronShow.
+    mockPages(() => ({ jobs: [{ id: "legacy-job", name: "Legacy job", enabled: true }] }), true);
+    const log = vi.spyOn(runtime, "log").mockImplementation(() => {});
+    await runCron(["show", "legacy-job"]);
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+      id: "legacy-job",
+    });
+    const rendered = log.mock.calls.flat().map(String).join("\n");
+    expect(rendered).toContain("id: legacy-job");
+    expect(rendered).toContain("name: Legacy job");
+  });
+
+  it("emits the hidden-job hint when disabling from a terminal", async () => {
+    Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await runCron(["disable", "job-1"]);
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { enabled: false },
+    });
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("openclaw cron list --all"));
+  });
+
+  it("warns for a known disabled scheduler", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) =>
+      method === "cron.status" ? { enabled: false } : { ok: true },
+    );
+    await runCron(["enable", "job-1"]);
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ ok: true });
+    for (const text of ["scheduler is disabled", "cron.enabled", "OPENCLAW_SKIP_CRON=1"]) {
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(text));
+    }
+  });
+
+  it.each([
+    { args: ["--all"], selector: { scope: "all" } },
+    { args: ["--id", "job-1"], selector: { id: "job-1" } },
+  ])("cron runs preserves default paging for $args", async ({ args, selector }) => {
+    const response = { entries: [], total: 0 };
+    callGatewayFromCli.mockResolvedValueOnce(response);
+    await runCron(["runs", ...args]);
+    expectRequest("cron.runs", { ...selector, limit: 50 });
+    expect(runtime.writeJson).toHaveBeenCalledWith(response);
+  });
+
+  it("retains filters and pagination in the all-jobs request", async () => {
+    await runCron(
+      (
+        "runs --all --status error --delivery-status not-delivered --query timeout " +
+        "--sort asc --offset 1 --limit 2 --run-id run-1"
+      ).split(" "),
+    );
+    expectRequest("cron.runs", {
+      scope: "all",
+      status: "error",
+      deliveryStatus: "not-delivered",
+      query: "timeout",
+      sortDir: "asc",
+      offset: 1,
+      limit: 2,
+      runId: "run-1",
+    });
+  });
+
+  it("rejects --all combined with a supplied selector before RPC", async () => {
+    await expect(runCron(["runs", "--all", "job-1"])).rejects.toThrow("exit 1");
+    expect(runtime.error).toHaveBeenCalledWith("--all cannot be combined with a job id");
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
+  it("reports an invalid offset as an expected JSON failure before RPC", async () => {
+    const program = new Command().name("openclaw").exitOverride();
+    registerCronCli(program);
+    const argv = process.argv;
+    process.argv = [...argv.slice(0, 2), "cron", "runs", "job-1", "--offset", "-1", "--json"];
+    try {
+      const thrown = await program.parseAsync(process.argv).catch((error: unknown) => error);
+      expect(thrown).toBeInstanceOf(ExpectedCliError);
+      expect(formatCliJsonFailure(thrown)).toEqual({
+        ok: false,
+        error: { type: "cli_error", message: "Invalid --offset (must be a non-negative integer)." },
+      });
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      process.argv = argv;
+    }
   });
 });
