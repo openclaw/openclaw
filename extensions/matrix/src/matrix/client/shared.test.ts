@@ -251,26 +251,6 @@ describe("shared Matrix client generations", () => {
     expect(client.stopAndPersist).toHaveBeenCalledOnce();
   });
 
-  it("runs registered monitor cleanup during forced account retirement", async () => {
-    const { auth, client } = clients([], "main", false);
-    const waitForTasks = createDeferred<void>();
-    const monitor = await acquireStoppedClient(auth, "monitor");
-    const retirement = createMonitorRetirement([]);
-    retirement.waitForTasks.mockReturnValue(waitForTasks.promise);
-    monitor.registerMonitorRetirement(retirement);
-
-    const forcedRetirement = stopSharedClientForAccount(auth);
-    await calledOnce(retirement.waitForTasks);
-    const lateRelease = monitor.release({ mode: "persist" });
-    expect(monitor.release({ mode: "discard" })).toBe(lateRelease);
-    await expectPending(lateRelease);
-
-    waitForTasks.resolve();
-    await Promise.all([forcedRetirement, lateRelease]);
-
-    expectCalls(1, ...Object.values(retirement), client.quiesceSync, client.stopAndPersist);
-  });
-
   it("signals cooperative transient work and persists after it drains", async () => {
     const callOrder: string[] = [];
     const { auth, client } = clients(callOrder, "main", false);
@@ -533,10 +513,16 @@ describe("shared Matrix client generations", () => {
           ? stopSharedClientForAccount(auth)
           : monitor.release({ mode: "persist" });
       await taskAdmissionClosed.promise;
+      const lateRelease =
+        retirementOwner === "account stop" ? monitor.release({ mode: "persist" }) : undefined;
+      if (lateRelease) {
+        expect(monitor.release({ mode: "discard" })).toBe(lateRelease);
+        await expectPending(lateRelease);
+      }
       sendFinished.resolve();
       try {
         await calledOnce(taskFinished);
-        await retirement;
+        await Promise.all([retirement, lateRelease]);
         if (operation === "late acquisition") {
           expect(acquisitionError).toMatchObject({ name: "AbortError" });
           expect(lateLease).toBeUndefined();
@@ -690,19 +676,13 @@ describe("shared Matrix client runtime ownership", () => {
   type SharedLease = Awaited<ReturnType<typeof acquireSharedMatrixClient>>;
   type Auth = NonNullable<Parameters<typeof acquireSharedMatrixClient>[0]>["auth"];
   type Disposer = () => void | Promise<void>;
-  type LifecycleOwner = {
-    runtime: PluginRuntime;
-    acquire: (auth: Auth, abortSignal?: AbortSignal) => Promise<SharedLease>;
-    snapshotDisposers: () => Disposer[];
-    dispose: () => Promise<void>;
-  };
 
   const { clearRuntime: clearMatrixRuntime } = createPluginRuntimeStore<PluginRuntime>({
     pluginId: "matrix",
     errorMessage: "Matrix runtime not initialized",
   });
 
-  const owners: LifecycleOwner[] = [];
+  const owners: Disposer[] = [];
   const acquisitions: Promise<SharedLease>[] = [];
   const releaseBlockedIo: Array<() => void> = [];
   let previousRuntime: PluginRuntime | null;
@@ -723,7 +703,7 @@ describe("shared Matrix client runtime ownership", () => {
     expect(createMatrixClientMock).toHaveBeenCalledOnce();
   }
 
-  function registerOwner(onDisposeRegistered?: () => void): LifecycleOwner {
+  function registerOwner(onDisposeRegistered?: () => void) {
     const controller = new AbortController();
     const disposers = new Set<Disposer>();
     const api = createTestPluginApi({ id: "matrix", name: "Matrix" });
@@ -759,7 +739,7 @@ describe("shared Matrix client runtime ownership", () => {
         return disposal;
       },
     };
-    owners.push(owner);
+    owners.push(owner.dispose);
     return owner;
   }
 
@@ -772,7 +752,7 @@ describe("shared Matrix client runtime ownership", () => {
     for (const release of releaseBlockedIo.splice(0)) {
       release();
     }
-    const disposals = owners.splice(0).map((owner) => owner.dispose());
+    const disposals = owners.splice(0).map((dispose) => dispose());
     const acquired = await Promise.allSettled(acquisitions.splice(0));
     await Promise.allSettled(
       acquired.flatMap((result) =>
