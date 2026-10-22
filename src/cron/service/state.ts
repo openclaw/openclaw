@@ -13,6 +13,7 @@ import type { CronAgentAvailability } from "../agent-availability.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
+import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { CronJobScratchState } from "../scratch-contract.js";
 import type { CronStreamExecApproval, CronStreamExecPolicy } from "../stream-exec-authority.js";
@@ -116,7 +117,13 @@ export type CronServiceDeps = {
   ) => boolean;
   /** List enabled, configured channel ids without exposing channel machinery to cron core. */
   listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
+  /**
+   * Admits one occurrence before any trigger or payload work. When unset (local
+   * harnesses), every run's context is a `fail` result.
+   */
+  admitScheduledOccurrence?: (params: { job: CronStoredJob }) => Promise<ScheduledOccurrence>;
   evaluateCronTrigger?: (params: {
+    occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronStoredJob;
     script: string;
@@ -207,6 +214,7 @@ export type CronServiceDeps = {
     sessionKey?: string;
   };
   runIsolatedAgentJob: (params: {
+    occurrence: ScheduledOccurrence;
     waitForIdle?: CronIdleAdmissionWait;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronJob;
@@ -228,6 +236,7 @@ export type CronServiceDeps = {
   >;
   /** Shared-conversation work settles through the session controller's ordinary turn owner. */
   runSessionEvent?: (params: {
+    occurrence: ScheduledOccurrence;
     waitForIdle?: CronIdleAdmissionWait;
     sessionPreparation?: CronSessionRunPreparation;
     deliveryContext?: DeliveryContext;
@@ -248,11 +257,14 @@ export type CronServiceDeps = {
       CronRunDeliveryResult & { nextCheck?: CronNextCheckProposal }
   >;
   runCommandJob?: (params: {
+    /** Consumed by the occurrence; command runs are not agent runs and mint no context. */
+    occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronJob;
     abortSignal?: AbortSignal;
   }) => Promise<CronRunOutcome & CronRunDeliveryResult>;
   runScriptJob?: (params: {
+    occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronStoredJob;
     streamBatch?: string;
@@ -514,6 +526,8 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  /** Validated host invocation facts; immutable after fresh command-job creation. */
+  pluginCommand?: CronStoredJob["pluginCommand"];
   operatorSource?: NonNullable<CronStoredJob["operatorSource"]>["source"];
   inferenceBinding?: CronStoredJob["inferenceBinding"];
   sourceConversation?: CronStoredJob["sourceConversation"];

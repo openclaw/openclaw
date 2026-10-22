@@ -1,7 +1,7 @@
 /** @jsxImportSource @solidjs/web */
 import { render } from "@solidjs/web";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
-import { createSignal } from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, Errored, Loading } from "solid-js";
 import { t } from "./i18n/index.ts";
 import { formatUiError } from "./lib/format-error.ts";
 import { workboardBoardName } from "./lib/workboard/board-presentation.ts";
@@ -20,10 +20,7 @@ export function deleteWorkboardBoard(
     const content = document.createElement("div");
     const title = t("workboard.deleteBoardTitle", { name: workboardBoardName(board) });
     let busy = false;
-    let error = "";
     let closed = false;
-    const [view, setView] = createSignal({ busy, error });
-    const update = () => setView({ busy, error });
     const finish = () => {
       if (closed) {
         return;
@@ -35,32 +32,44 @@ export function deleteWorkboardBoard(
       container.remove();
       resolve();
     };
-    const remove = async () => {
-      if (busy || closed) {
-        return;
-      }
-      busy = true;
-      error = "";
-      update();
-      try {
-        if (!host.connection.connected || !host.connection.canWrite) {
-          throw new Error(t("workboard.deleteBoardUnavailable"));
-        }
-        await host.request("workboard.boards.delete", { id: board.id });
-        if (!closed) {
-          onDeleted();
-          finish();
-        }
-      } catch (cause) {
-        if (!closed) {
+    const disposeRoot = render(() => {
+      const [saving, setSaving] = createOptimistic(false);
+      const [completion, setCompletion] = createSignal<Promise<void>>();
+      const completed = createMemo(() => completion()?.then(() => null) ?? null);
+      const presentSaving = action(function* (pending: Promise<void>) {
+        setSaving(true);
+        yield pending;
+      });
+      const remove = async () => {
+        busy = true;
+        try {
+          if (!host.connection.connected || !host.connection.canWrite) {
+            throw new Error(t("workboard.deleteBoardUnavailable"));
+          }
+          await host.request("workboard.boards.delete", { id: board.id });
+          if (!closed) {
+            onDeleted();
+            finish();
+          }
+        } finally {
           busy = false;
-          error = formatUiError(cause);
-          update();
         }
-      }
-    };
-    const disposeRoot = render(
-      () => (
+      };
+      const submit = async () => {
+        if (busy || closed) {
+          return;
+        }
+        const pending = remove();
+        // The host can close the dialog before the admitted write settles.
+        void pending.catch(() => undefined);
+        void setCompletion(pending);
+        // Clear the previous error before saving holds its own presentation.
+        await Promise.resolve();
+        if (!closed) {
+          await presentSaving(pending).catch(() => undefined);
+        }
+      };
+      return (
         <div class="exec-approval-card">
           <div class="exec-approval-header">
             <div>
@@ -68,28 +77,28 @@ export function deleteWorkboardBoard(
               <div class="exec-approval-sub">{t("workboard.deleteBoardHelp")}</div>
             </div>
           </div>
-          {view().error ? <div role="alert">{view().error}</div> : null}
+          <Loading on={completion()}>
+            <Errored fallback={(error) => <div role="alert">{formatUiError(error())}</div>}>
+              {completed()}
+            </Errored>
+          </Loading>
           <openclaw-modal-actions class="exec-approval-actions">
             <button
               class="btn danger"
               type="button"
-              disabled={view().busy}
-              onClick={() => {
-                void remove();
-              }}
+              disabled={saving()}
+              onClick={() => void submit()}
             >
               {t("workboard.deleteBoardConfirm")}
             </button>
-            <button class="btn" type="button" autofocus disabled={view().busy} onClick={finish}>
+            <button class="btn" type="button" autofocus disabled={saving()} onClick={finish}>
               {t("common.cancel")}
             </button>
           </openclaw-modal-actions>
         </div>
-      ),
-      content,
-    );
+      );
+    }, content);
     document.body.append(container);
-    update();
     const dialog = host.components.mountDialog(container, {
       label: title,
       description: t("workboard.deleteBoardHelp"),

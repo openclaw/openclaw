@@ -141,6 +141,43 @@ it("requires the operator's confirmation before invoking the captured account lo
   await vi.waitFor(() => expect(f.logout).toHaveBeenCalledOnce());
 });
 
+it("ignores a superseded refresh failure and keeps command errors retryable", async () => {
+  const f = fixture();
+  const older = createDeferred<void>();
+  const newer = createDeferred<void>();
+  f.refresh.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+  const refresh = f.button("Refresh");
+  refresh.click();
+  refresh.click();
+  newer.resolve();
+  await newer.promise;
+  older.reject(new Error("Superseded refresh failed"));
+  await older.promise.catch(() => undefined);
+  flush();
+  expect(f.container.textContent).not.toContain("Superseded refresh failed");
+
+  f.refresh.mockRejectedValueOnce(new Error("Current refresh failed"));
+  refresh.click();
+  await vi.waitFor(() => {
+    flush();
+    expect(f.container.textContent).toContain("Current refresh failed");
+  });
+  const retry = createDeferred<void>();
+  f.refresh.mockReturnValueOnce(retry.promise);
+  refresh.click();
+  flush();
+  expect(f.container.textContent).not.toContain("Current refresh failed");
+  expect(f.button("Refresh")).toBe(refresh);
+  retry.resolve();
+  await retry.promise;
+  flush();
+  expect(f.container.textContent).not.toContain("Current refresh failed");
+  f.update({ status: { lastError: "Gateway is disconnected" } });
+  expect(f.container.querySelector(".settings-row__desc")?.textContent).toBe(
+    "Gateway is disconnected",
+  );
+});
+
 it("updates translated labels and disposes the host configuration slot without resetting login", () => {
   const f = fixture();
   expect(f.mountConfig).toHaveBeenCalledOnce();

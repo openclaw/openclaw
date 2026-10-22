@@ -51,7 +51,7 @@ async function createAcpProcessEnv(): Promise<NodeJS.ProcessEnv> {
 
 function withoutSqliteTransactionWarnings(stderr: string): string {
   // Slow-hold logger output is load-dependent performance diagnostics, not ACP clean-exit
-  // signal; see logSlowTransactionHold in sqlite-transaction.ts.
+  // signal; see the settlement diagnostics in sqlite-transaction.ts.
   return stderr
     .split("\n")
     .filter(

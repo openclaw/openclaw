@@ -11,7 +11,7 @@ import { SessionsCard } from "./view-sessions-card.tsx";
 import {
   buildAggregatesFromSessions,
   createUsageOverview,
-  createUsageProps,
+  usageFixture,
 } from "./view.test-support.ts";
 
 const aggregates = buildAggregatesFromSessions([]);
@@ -129,12 +129,14 @@ it("preserves filter-chip order, session-only title, labels, and clear callbacks
   const onClearDays = vi.fn();
   const onClearHours = vi.fn();
   const onClearSessions = vi.fn();
-  const props = createUsageProps();
-  Object.assign(props.filters, {
-    selectedDays: ["2026-08-01"],
-    selectedHours: [8],
-    selectedSessions: ["agent:main:usage"],
-  });
+  const props = usageFixture(
+    {},
+    {
+      selectedDays: ["2026-08-01"],
+      selectedHours: [8],
+      selectedSessions: ["agent:main:usage"],
+    },
+  );
   Object.assign(props.callbacks.filters, { onClearDays, onClearHours, onClearSessions });
   const { container } = mountView(() =>
     renderFilterChips(
@@ -323,21 +325,19 @@ describe("SessionsCard", () => {
   });
 
   it("renders the server recent roster without changing its all-roster average", () => {
-    const base = createUsageProps();
     const overview = createUsageOverview({
       total: 2,
       tableSessionCount: 100,
       tableTotals: { tokens: 50000, cost: 100, errors: 7 },
     });
-    const usage = {
-      ...base,
-      data: { ...base.data, overview },
-      display: {
-        ...base.display,
-        sessionsTab: "recent" as const,
+    const usage = usageFixture(
+      { overview },
+      {},
+      {
+        sessionsTab: "recent",
         recentSessions: ["A", "missing"],
       },
-    };
+    );
     const { container } = mountView(() =>
       SessionsCard({ sessions: [session("B"), session("A")], usage, overview, totalSessions: 2 }),
     );

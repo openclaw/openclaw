@@ -19,6 +19,7 @@ import { UsageMosaic } from "./metrics-view.tsx";
 import { buildPeakErrorHours, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageEmptyState, renderUsageLoadingStatus } from "./page-shell.tsx";
 import { applySuggestionToQuery, buildQuerySuggestions, removeQueryToken } from "./query.ts";
+import { createUsageRead, UsagePending, UsageReadStatus, type UsageRead } from "./read-status.tsx";
 import type { UsageProps } from "./types.ts";
 import { DailyChartCompact, CostBreakdownCompact } from "./view-chart.tsx";
 import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
@@ -94,7 +95,22 @@ function renderProviderUsage(
 }
 
 export function renderUsage(props: UsageProps) {
-  const overview = createMemo(() => resolveUsageOverviewState(props.data));
+  const read = createUsageRead(
+    () => props.data.read,
+    () => props.data.error,
+  );
+  return (
+    <UsagePending read={read}>
+      {(loading) => <UsageView {...props} loading={loading()} read={read} />}
+    </UsagePending>
+  );
+}
+
+function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
+  const loading = () => props.loading;
+  const overview = createMemo(() =>
+    resolveUsageOverviewState({ ...props.data, loading: loading() }),
+  );
   const displayTotals = createMemo(() => (overview().hasOverviewData ? props.data.totals : null));
   const filterOptions = createMemo(
     () =>
@@ -181,7 +197,7 @@ export function renderUsage(props: UsageProps) {
   const isEmpty = () =>
     props.data.cacheRefresh === "complete" &&
     props.data.totals !== null &&
-    !props.data.loading &&
+    !loading() &&
     !props.data.error &&
     props.data.sessions.length === 0 &&
     (props.data.overview?.unfilteredSessionCount ?? 0) === 0 &&
@@ -336,7 +352,7 @@ export function renderUsage(props: UsageProps) {
                 <button
                   class="btn btn--sm primary"
                   onClick={() => void props.callbacks.filters.onRefresh()}
-                  disabled={props.data.loading}
+                  disabled={loading()}
                 >
                   {t("common.refresh")}
                 </button>
@@ -389,7 +405,7 @@ export function renderUsage(props: UsageProps) {
                         label: t("usage.export.json"),
                         disabled:
                           props.data.exporting ||
-                          props.data.loading ||
+                          loading() ||
                           (exportSessionCount() === 0 && props.data.costDaily.length === 0),
                       },
                     ]}
@@ -431,7 +447,7 @@ export function renderUsage(props: UsageProps) {
                   <button
                     class="btn btn--sm"
                     onClick={() => props.callbacks.filters.onApplyQuery()}
-                    disabled={props.data.loading || (!hasDraftQuery() && !hasQuery())}
+                    disabled={loading() || (!hasDraftQuery() && !hasQuery())}
                   >
                     {t("usage.query.apply")}
                   </button>
@@ -526,9 +542,13 @@ export function renderUsage(props: UsageProps) {
               ) : undefined}
             </div>
 
-            {props.data.error ? (
-              <div class="callout danger usage-callout">{props.data.error}</div>
-            ) : undefined}
+            <UsageReadStatus read={props.read}>
+              {() =>
+                props.data.error ? (
+                  <div class="callout danger usage-callout">{props.data.error}</div>
+                ) : undefined
+              }
+            </UsageReadStatus>
             {props.data.cacheRefresh !== "complete" ? (
               <div
                 class={[
@@ -648,7 +668,7 @@ export function renderUsage(props: UsageProps) {
                   usage={props}
                   totalSessions={props.data.overview?.total ?? totalSessions()}
                   overview={props.data.sessionPage ?? props.data.overview}
-                  loading={props.data.loading}
+                  loading={loading()}
                 />
               </div>
               <Show when={primarySelectedEntry()}>

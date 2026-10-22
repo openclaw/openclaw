@@ -17,7 +17,6 @@ import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { runCronCommandJob } from "../cron/command-runner.js";
 import { isCronExecutionIdle } from "../cron/execution-idle.js";
-import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
@@ -61,6 +60,7 @@ import {
   createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
 } from "./scheduled-run-gateway-context.js";
+import { createGatewayCronAgentJobRunner } from "./server-cron-agent-run.js";
 import { finalizeCronCompletionAnnouncement, pickDefined } from "./server-cron-completion.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import {
@@ -70,6 +70,7 @@ import {
   withObservedCronStreamState,
 } from "./server-cron-drain.js";
 import {
+  admitGatewayCronOccurrence,
   enqueueCronSystemEvent,
   fireOnExitJob,
   fireStreamJob,
@@ -394,6 +395,7 @@ export function buildGatewayCronService(params: {
     describeJobLoadWarning: (job) => describeCronInferenceMigration(getRuntimeConfig(), job),
     hostExecutionDisabled,
     listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
+    admitScheduledOccurrence: ({ job }) => admitGatewayCronOccurrence(job, resolveCronAgent),
     ...(scriptRuntime ? { evaluateCronTrigger: scriptRuntime.evaluateTrigger } : {}),
     ...(defaultAgentId ? { defaultAgentId } : {}),
     resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
@@ -432,20 +434,12 @@ export function buildGatewayCronService(params: {
     runSchedulerOwned,
     enqueueSessionEvent,
     deferSessionEvent,
-    runIsolatedAgentJob: async (request) => {
-      const { job } = request;
-      const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
-      const sessionKey = `cron:${job.id}`;
-      return await runCronIsolatedAgentTurn({
-        ...request,
-        cfg: runtimeConfig,
-        deps: params.deps,
-        agentId,
-        sessionKey,
-        trigger: "cron",
-        lane: "cron",
-      });
-    },
+    runIsolatedAgentJob: createGatewayCronAgentJobRunner({
+      deps: params.deps,
+      resolveCronAgent,
+      resolveGatewayContext: scheduledGatewayContextResolver,
+      resolvePluginRegistry: params.resolvePluginRegistry,
+    }),
     runCommandJob: async ({ job, abortSignal, deliveryAttemptFence }) => {
       const result = await runCronCommandJob({
         job,
@@ -479,13 +473,8 @@ export function buildGatewayCronService(params: {
         ssrfPolicy: webhookSsrfPolicy,
       });
     },
-    runScriptJob: async ({
-      job,
-      streamBatch,
-      abortSignal,
-      executionIdentity,
-      deliveryAttemptFence,
-    }) => {
+    runScriptJob: async (request) => {
+      const { job, abortSignal, deliveryAttemptFence } = request;
       if (!scriptRuntime || job.payload.kind !== "script") {
         return {
           status: "error",
@@ -493,13 +482,7 @@ export function buildGatewayCronService(params: {
           ...cronScriptFailureMetadata("payload", "runtime_unavailable"),
         };
       }
-      const execution = await scriptRuntime.executePayload({
-        job,
-        streamBatch,
-        abortSignal,
-        executionIdentity,
-        deliveryAttemptFence,
-      });
+      const execution = await scriptRuntime.executePayload(request);
       if (execution.kind === "error") {
         return {
           status: "error",

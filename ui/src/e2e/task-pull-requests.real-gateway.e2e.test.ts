@@ -14,6 +14,7 @@ import { repositoryGitHubPublicationDigest } from "../../../src/gateway/github-r
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { racePromiseWithAbortSignal } from "../../../src/infra/abort-signal.ts";
 import { loadOrCreateDeviceIdentity } from "../../../src/infra/device-identity.ts";
+import { getWorkerComputeCapacity } from "../../../src/infra/worker-task-capacity.ts";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { publicationRowDefaults } from "../../../src/state/github-publication-fixtures.test-support.ts";
 import type { RepositoryGitHubPublicationRow } from "../../../src/state/github-publication-read.types.ts";
@@ -400,7 +401,14 @@ suite.define(() => {
                 }
                 await row.locator(".sidebar-recent-session__link").focus();
                 await card.waitFor();
-                await expect.poll(() => snapshots.at(-1)?.status).toBeTruthy();
+                // The earlier passive receipt snapshot is already ready.
+                await expect
+                  .poll(() => latestSubscription)
+                  .toMatchObject({
+                    foreground: true,
+                    passive: false,
+                    acknowledged: true,
+                  });
                 activated = true;
               };
               try {
@@ -457,7 +465,13 @@ suite.define(() => {
                       ).length
                     : 0;
                 const latestSnapshot = snapshots.at(-1);
+                const workerCompute = getWorkerComputeCapacity().getSnapshot();
                 recordControlUiE2eFailureFacts(page, {
+                  taskPrWorkerComputeLimit: workerCompute.limit,
+                  taskPrWorkerComputeActive: workerCompute.active,
+                  taskPrWorkerComputeWaitingPools: workerCompute.waitingPools,
+                  taskPrWorkerComputePendingTasks: workerCompute.pendingTasks,
+                  taskPrWorkerComputePendingBytes: workerCompute.pendingBytes,
                   taskPrSnapshotCount: snapshots.length,
                   taskPrLatestReceiptCount: Array.isArray(latestSnapshot?.taskPullRequests)
                     ? latestSnapshot.taskPullRequests.length

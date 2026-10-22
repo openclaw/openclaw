@@ -50,6 +50,32 @@ it("generates on open, holds failures without retry loops, and retries explicitl
   expect(page.textContent).not.toContain("Summary provider unavailable");
 });
 
+it("finishes replacement notes while a cancelled summary request remains unresolved", async () => {
+  const retired = deferred<typeof meetingPage>();
+  const replacement = deferred<typeof meetingPage>();
+  summarize.mockReturnValueOnce(retired.promise).mockReturnValueOnce(replacement.promise);
+  const { page, setSearch } = mount(request, "?selector=old");
+  await waitForText(page, "Generating meeting summary");
+
+  setSearch("?selector=new");
+  await waitForSolid(() => expect(summarize).toHaveBeenCalledTimes(2));
+  replacement.resolve({
+    ...meetingPage,
+    summary: { ...meetingPage.summary, markdown: "Current meeting notes" },
+  });
+  await waitForText(page, "Current meeting notes");
+  expect(page.textContent).not.toContain("Generating meeting summary");
+
+  retired.resolve({
+    ...meetingPage,
+    summary: { ...meetingPage.summary, markdown: "Retired meeting notes" },
+  });
+  await retired.promise;
+  flush();
+  expect(page.textContent).toContain("Current meeting notes");
+  expect(page.textContent).not.toContain("Retired meeting notes");
+});
+
 it.each([
   ["read-only", "No summary is available yet."],
   ["silent", "No speech captured"],
@@ -88,4 +114,28 @@ it.each(["selection", "client", "authorization"])("fences replaced %s", async (r
   flush();
   expect(page.textContent).not.toContain("Late private notes");
   expect(page.textContent).toContain("Reader layout discussed.");
+});
+
+it("keeps same-meeting tab navigation responsive while generating a summary", async () => {
+  const pending = deferred<typeof meetingPage>();
+  summarize.mockReturnValue(pending.promise);
+  const { page, unmount } = mount(request, "?selector=meeting");
+  try {
+    await waitForText(page, "Generating meeting summary");
+    button(page, "Transcript").click();
+    await waitForSolid(() =>
+      expect(page.querySelector("#transcript-reader-tab-text")?.getAttribute("aria-selected")).toBe(
+        "true",
+      ),
+    );
+    expect(page.textContent).toContain("Keep the reader quiet and readable.");
+    button(page, "Summary").click();
+    await waitForText(page, "Generating meeting summary");
+    expect(summarize).toHaveBeenCalledTimes(1);
+    pending.resolve(meetingPage);
+    await waitForText(page, "Reader layout discussed.");
+  } finally {
+    unmount();
+    pending.resolve(meetingPage);
+  }
 });

@@ -5,10 +5,7 @@ import {
 } from "openclaw/plugin-sdk/outbound-media";
 import type { XMediaUploadParams } from "./media-api.js";
 
-export type XMedia = Pick<
-  XMediaUploadParams,
-  "buffer" | "contentType" | "fileName" | "mediaCategory"
->;
+type XMedia = Pick<XMediaUploadParams, "buffer" | "contentType" | "fileName" | "mediaCategory">;
 
 // Keep buffered uploads bounded on the Gateway, independently of X's larger account limits.
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;

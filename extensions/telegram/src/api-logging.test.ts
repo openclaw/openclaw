@@ -10,12 +10,12 @@ const rejecting = (error: unknown) => async () => {
 const safeFailure = 'network request failed transport={"code":"ECONNRESET","syscall":"read"}';
 
 async function expectLogged(error: HttpError, suffix = "", useRuntime = false) {
-  const logger = vi.fn();
+  const logger = useRuntime ? vi.fn() : logs.apiError;
   await expect(
     withTelegramApiErrorLogging({
       operation: "sendMessage",
       fn: rejecting(error),
-      ...(useRuntime ? { runtime: { error: logger } } : { logger }),
+      ...(useRuntime ? { runtime: { error: logger } } : {}),
     }),
   ).rejects.toBe(error);
   expect(logger).toHaveBeenCalledExactlyOnceWith(

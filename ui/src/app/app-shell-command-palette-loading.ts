@@ -8,7 +8,7 @@ import {
   type CommandPaletteInputHandoff,
   type CommandPaletteOpenInput,
 } from "../components/command-palette-contract.ts";
-import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
+import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
 import { formatUiError } from "../lib/format-error.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -251,7 +251,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       if (!defined) {
         void ensureCustomElementDefined(
           "openclaw-modal-dialog",
-          () => import("../components/modal-dialog.ts"),
+          () => import("../components/modal-dialog.tsx"),
         ).then(
           () => {
             if (active()) {

@@ -116,6 +116,8 @@ describe("Search settings", () => {
     expect(fixture.button("Refresh search status").disabled).toBe(true);
     expect(fixture.button("Test search").disabled).toBe(true);
     expect(fixture.input("Search query")).toBe(query);
+    expect(fixture.element.textContent).toContain(i18n.t("searchPage.loading"));
+    expect(fixture.element.querySelector(".settings-loading-skeleton")).toBeNull();
 
     refresh.reject(new Error("Search status unavailable"));
     await fixture.settle();
@@ -206,6 +208,9 @@ describe("Search settings", () => {
       const catalog = createDeferred<ModelCatalogResult>();
       const fixture = await mount({ modelsResponse: catalog.promise, waitReady: false });
       expect(fixture.calls("webSearch.status")).toHaveLength(0);
+      await waitForSolid(() =>
+        expect(fixture.element.querySelector(".settings-loading-skeleton")).not.toBeNull(),
+      );
       if (outcome === "success") {
         fixture.setResult({ ...ready, agentId: "scout" });
         fixture.setAgent("scout");
@@ -219,6 +224,7 @@ describe("Search settings", () => {
       expect(statuses).toHaveLength(1);
       expect(statuses[0]?.[1]).toEqual({ agentId: outcome === "success" ? "scout" : "main" });
       expect(fixture.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
+      expect(fixture.element.querySelector(".settings-loading-skeleton")).toBeNull();
       expect(fixture.element.textContent).toContain("Configured");
     },
   );
@@ -410,6 +416,30 @@ describe("Search settings", () => {
       expect(fixture.element.querySelector('a[href="https://example.com/previous"]')).toBeNull();
     },
   );
+
+  it("runs a test search on Enter but not on the Enter that confirms IME input", async () => {
+    const fixture = await mount();
+    const query = fixture.input("Search query");
+    editInput(query, "東京", false);
+    query.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await fixture.settle();
+    expect(fixture.calls("webSearch.test")).toHaveLength(1);
+    expect(fixture.calls("webSearch.test")[0]?.[1]).toMatchObject({ query: "東京" });
+
+    editInput(query, "おおさか", false);
+    query.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
+    );
+    flush();
+    expect(fixture.calls("webSearch.test")).toHaveLength(1);
+
+    // WebKit can deliver the committing Enter just after compositionend with both flags cleared.
+    editInput(query, "大阪", false);
+    query.dispatchEvent(new CompositionEvent("compositionend", { data: "大阪", bubbles: true }));
+    query.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    flush();
+    expect(fixture.calls("webSearch.test")).toHaveLength(1);
+  });
 
   it.each(["native", "external"] as const)(
     "routes %s search to chat and tests only managed credentials",

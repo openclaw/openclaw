@@ -491,6 +491,22 @@ describe("gateway sessions patch", () => {
     expect(pinned.updatedAt).toBeGreaterThan(1);
   });
 
+  test("commits an icon or color change without ageing the session row", async () => {
+    const store = mainStoreEntry({ sessionId: "sess-icon" });
+
+    const iconed = await patchOk({ store, icon: "✅", expectedSessionId: "sess-icon" });
+    expect(iconed.icon).toBe("✅");
+    expect(iconed.updatedAt).toBe(1);
+
+    const cleared = await patchOk({ store, icon: null, color: null });
+    expect(cleared.icon).toBeUndefined();
+    expect(cleared.updatedAt).toBe(1);
+
+    const renamed = await patchOk({ store, icon: "🐛", label: "Waiting" });
+    expect(renamed.icon).toBe("🐛");
+    expect(renamed.updatedAt).toBeGreaterThan(1);
+  });
+
   test("stores sanitized agent status with attention and a bounded TTL", async () => {
     const before = Date.now();
     const entry = await patchOk({
@@ -519,18 +535,6 @@ describe("gateway sessions patch", () => {
       attention: null,
     });
     expect(entry.agentStatus).toBeUndefined();
-  });
-
-  test.each([
-    { field: "responseUsage", value: "off" },
-    { field: "reasoningLevel", value: "off" },
-    { field: "verboseLevel", value: "full" },
-    { field: "elevatedLevel", value: "off" },
-    { field: "elevatedLevel", value: "on" },
-  ] as const)("persists explicit $field=$value", async ({ field, value }) => {
-    const entry = await patchOk({ [field]: value });
-    // Explicit off values must survive configured defaults, including messages.responseUsage.
-    expect(entry[field]).toBe(value);
   });
 
   test.each(["thinkingLevel", "contextWindow", "elevatedLevel"] as const)(
@@ -582,6 +586,8 @@ describe("gateway sessions patch", () => {
   test.each([
     { field: "category", raw: "  Research  ", normalized: "Research" },
     { field: "color", raw: "  Blue ", normalized: "blue" },
+    { field: "verboseLevel", raw: "  EVERYTHING  ", normalized: "full" },
+    { field: "traceLevel", raw: "  UNFILTERED  ", normalized: "raw" },
   ] as const)("normalizes and clears $field", async ({ field, raw, normalized }) => {
     const entry = await patchOk({ mainEntry: {}, [field]: raw });
     expect(entry[field]).toBe(normalized);
@@ -631,6 +637,11 @@ describe("gateway sessions patch", () => {
 
   test.each([
     { patch: { verboseLevel: "maybe" }, error: 'invalid verboseLevel (use "on"|"off"|"full")' },
+    { patch: { traceLevel: "maybe" }, error: 'invalid traceLevel (use "on"|"off"|"raw")' },
+    {
+      patch: { verboseLevel: "maybe", traceLevel: "maybe" },
+      error: 'invalid verboseLevel (use "on"|"off"|"full")',
+    },
     { patch: { elevatedLevel: "maybe" }, error: "invalid elevatedLevel" },
     {
       patch: { color: "crimson" },

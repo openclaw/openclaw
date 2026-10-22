@@ -72,7 +72,8 @@ it("clears consumed context immediately", () => {
 });
 it("releases a failed removal for retry and clears an idempotent response", async () => {
   const removal = createDeferred<{ state: null }>();
-  const request = vi.fn().mockReturnValueOnce(removal.promise).mockResolvedValue({ state: null });
+  const retry = createDeferred<{ state: null }>();
+  const request = vi.fn().mockReturnValueOnce(removal.promise).mockReturnValueOnce(retry.promise);
   const { client, strip } = mountContext(request);
   const remove = strip.querySelector<HTMLButtonElement>("button")!;
   remove.click();
@@ -84,6 +85,13 @@ it("releases a failed removal for retry and clears an idempotent response", asyn
   expect(remove.disabled).toBe(false);
   expect(strip.textContent).toContain("Hex bolt");
   remove.click();
+  await waitForSolid(() => {
+    expect(remove.disabled).toBe(true);
+    expect(strip.querySelector('[role="alert"]')).toBeNull();
+  });
+  expect(strip.querySelector("button")).toBe(remove);
+  expect(strip.textContent).toContain("Hex bolt");
+  retry.resolve({ state: null });
   await waitForSolid(() => expect(strip.textContent?.trim()).toBe(""));
   expect(request).toHaveBeenCalledWith("mcp.app.removeModelContext", {
     ...binding,
@@ -92,6 +100,30 @@ it("releases a failed removal for retry and clears an idempotent response", asyn
   });
   expect(readMcpAppContexts(client, "agent:main:one", "main")).toEqual([]);
   expect(strip.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("leaves a failed removal behind when the visible session changes", async () => {
+  const { client, strip, selectSession } = mountContext(
+    vi.fn(async () => {
+      throw new Error("Removal unavailable");
+    }),
+  );
+  strip.querySelector<HTMLButtonElement>("button")!.click();
+  await waitForSolid(() => expect(strip.querySelector('[role="alert"]')).not.toBeNull());
+  publishMcpAppContext(client, {
+    ...binding,
+    sessionKey: "agent:main:two",
+    title: "Successor",
+    state: {
+      ...state,
+      content: [{ type: "text", text: "socket", _meta: { "openai/title": "Socket" } }],
+    },
+  });
+  selectSession("agent:main:two");
+  await waitForSolid(() => {
+    expect(strip.textContent).toContain("Socket");
+    expect(strip.querySelector('[role="alert"]')).toBeNull();
+  });
 });
 
 it.each(["client", "session"] as const)(

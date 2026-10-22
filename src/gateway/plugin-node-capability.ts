@@ -362,7 +362,6 @@ export function setClientPluginNodeCapability(params: {
 export function refreshClientPluginNodeCapability(params: {
   client: PluginNodeCapabilityClient;
   surface: PluginNodeCapabilitySurface;
-  nowMs?: number;
 }):
   | {
       surface: string;
@@ -381,7 +380,7 @@ export function refreshClientPluginNodeCapability(params: {
   }
   const capabilitySurface = params.client.pluginNodeCapabilitySurfaces?.[surface] ?? params.surface;
   const capability = mintPluginNodeCapabilityToken();
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(capabilitySurface, nowMs);
   if (expiresAtMs === undefined) {
     return undefined;

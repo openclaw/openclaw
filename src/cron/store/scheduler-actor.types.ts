@@ -21,6 +21,8 @@ export type CronSchedulerConfig = {
   maxMissedJobsPerRestart?: number;
   missedJobStaggerMs?: number;
   startupDeferredMissedAgentJobDelayMs?: number;
+  /** The Gateway process that owns this scheduler; see `cron.drainQueue`. */
+  hostProcessId?: string;
 };
 
 export type CronSchedulerSnapshot = { config: CronSchedulerConfig };

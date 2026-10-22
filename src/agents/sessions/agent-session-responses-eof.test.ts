@@ -182,26 +182,25 @@ it.each([
               const erased =
                 beforeConflict === "erased-text" || beforeConflict === "erased-refusal";
               const item =
-                beforeConflict === "text" || beforeConflict === "empty-text" || erased
-                  ? responseMessage(
-                      "msg_partial",
-                      erased
-                        ? []
-                        : [
-                            {
-                              type: "output_text",
-                              text: beforeConflict === "text" ? "Partial answer" : "",
-                            },
-                          ],
-                    )
-                  : beforeConflict === "function"
-                    ? responseCall("completed", "{}", "completed")
-                    : { type: "mcp_call", id: "mcp_completed", status: "completed" };
-              if (beforeConflict === "function") {
+                beforeConflict === "function"
+                  ? responseCall("completed", "{}", "completed")
+                  : beforeConflict === "provider"
+                    ? { type: "mcp_call", id: "mcp_completed", status: "completed" }
+                    : responseMessage(
+                        "msg_partial",
+                        erased
+                          ? []
+                          : [
+                              {
+                                type: "output_text",
+                                text: beforeConflict === "text" ? "Partial answer" : "",
+                              },
+                            ],
+                      );
+              if (beforeConflict === "function" || erased) {
                 yield outputItem("added", item, 1);
               }
               if (erased) {
-                yield outputItem("added", item, 1);
                 yield {
                   type:
                     beforeConflict === "erased-refusal"

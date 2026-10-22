@@ -667,7 +667,9 @@
   scrollbar-width: thin;
 }
 
-.sr-only {
+.sr-only,
+.settings-control__sr-label,
+.cron-required-sr {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -675,9 +677,13 @@
   padding: 0;
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
-  clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* Preserve the additional clipping only for the existing generic utility. */
+.sr-only {
+  clip-path: inset(50%);
 }
 
 html,

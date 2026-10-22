@@ -83,7 +83,7 @@ export function renderSessionSection(params: {
       ? personIdentityValue?.type === "profile"
         ? presenceViewerLabel({
             id: personIdentityValue.id,
-            name: personOwnerValue.label || personOwnerValue.id,
+            name: personOwnerValue.label?.trim() || undefined,
           })
         : personOwnerValue.label || personOwnerValue.id
       : sectionValue.project

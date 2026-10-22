@@ -7,6 +7,7 @@ import "./native-link-menu.runtime.ts";
 import { settleTooltip, tooltipSurface } from "./tooltip.test-support.ts";
 
 const containers: HTMLElement[] = [];
+const text = (element: Element, selector: string) => element.querySelector(selector)?.textContent;
 function append<K extends keyof HTMLElementTagNameMap>(tag: K) {
   const element = document.createElement(tag);
   document.body.append(element);
@@ -26,30 +27,22 @@ afterEach(async () => {
   await i18n.setLocale("en");
 });
 async function mountMenu(withTrigger = false) {
-  const trigger = withTrigger ? append("a") : null;
-  if (trigger) {
-    trigger.href = "https://example.com";
-  }
+  const trigger = withTrigger ? Object.assign(append("a"), { href: "https://example.com" }) : null;
   const container = append("div"),
     menu = document.createElement("openclaw-native-link-menu");
   const calls: string[] = [];
-  const onClose = vi.fn(() => {
-    calls.push("close");
-  });
+  const onClose = vi.fn(() => calls.push("close"));
   Object.assign(menu, {
     x: 100,
     y: 100,
     trigger,
     onClose,
-    onAction: (action: string) => {
-      calls.push(action);
-    },
+    onAction: (action: string) => calls.push(action),
   });
   container.append(menu);
   await menu.updateComplete;
   const items = () => [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
-  const labels = () =>
-    items().map((item) => item.querySelector(".session-menu__text")?.textContent?.trim());
+  const labels = () => items().map((item) => text(item, ".session-menu__text")?.trim());
   return { menu, trigger, onClose, calls, items, labels, item: items()[0]! };
 }
 
@@ -67,11 +60,9 @@ it("rerenders open actions when the locale changes", async () => {
   const { menu, labels } = await mountMenu();
   const surface = menu.querySelector('[role="menu"]');
   expect(surface).not.toBeNull();
-  const englishLabel = surface?.getAttribute("aria-label");
   await i18n.setLocale("de");
   await menu.updateComplete;
   const german = flattenTranslations(de);
-  expect(surface?.getAttribute("aria-label")).not.toBe(englishLabel);
   await vi.waitFor(() =>
     expect(surface?.getAttribute("aria-label")).toBe(german.get("nativeLinkMenu.label")),
   );
@@ -89,9 +80,7 @@ it.each([
   ["с", "KeyC", "copy"],
 ])("dispatches shortcut %s (%s) as %s", async (key, code, action) => {
   const { item, items, calls } = await mountMenu();
-  expect(
-    items().map((entry) => entry.querySelector(".session-menu__shortcut")?.textContent),
-  ).toEqual(["S", "B", "C"]);
+  expect(items().map((entry) => text(entry, ".session-menu__shortcut"))).toEqual(["S", "B", "C"]);
   keydown(item, key, code);
   await Promise.resolve();
   expect(calls).toEqual(["close", action]);

@@ -336,6 +336,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     this.gatewayAvailable = false;
     this.agentSelectionSource = undefined;
     this.agentSelectionIntentRevision = undefined;
+    this.sessionsLoading = false;
     retireSessionCatalogData(this);
     this.lineage.disconnect();
   }

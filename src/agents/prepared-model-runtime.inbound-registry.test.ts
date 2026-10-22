@@ -606,10 +606,10 @@ describe("prepared reply dispatch runtime", () => {
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
     const finishAuthRefreshGate = createDeferred();
     let finishAuthRefresh: (() => void) | undefined;
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
       finishAuthRefresh = () => finishAuthRefreshGate.resolve();
       await finishAuthRefreshGate.promise;
-      return { agentDir: String(agentDir), wrote: false };
+      return {};
     });
 
     let admission: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;

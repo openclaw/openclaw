@@ -1,8 +1,9 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureGit } from "./release-publish.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const sha = "a".repeat(40);
@@ -19,18 +20,10 @@ function writeFixture(file: string, value: string | Record<string, unknown>) {
 beforeAll(() => {
   directory = tempDirs.make("npm-proof-gh-read-");
   writeFixture(join(directory, "package.json"), { name: "openclaw", version: "2026.10.4" });
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", directory, ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
+  const git = fixtureGit(directory, "Fixture", "fixture@example.invalid");
   git("init", "--quiet");
   git("add", "package.json");
-  git(
-    ..."-c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit --quiet -m fixture".split(
-      " ",
-    ),
-  );
+  git("commit", "--quiet", "-m", "fixture");
   sourceSha = git("rev-parse", "HEAD");
   evidenceDir = join(directory, "evidence");
   writeFixture(join(evidenceDir, "evidence.json"), "{}\n");

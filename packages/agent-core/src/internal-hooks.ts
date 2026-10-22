@@ -123,6 +123,14 @@ const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultA
 const toolResultProvenanceByValue = new WeakMap<object, object>();
 const toolResultContentSourceByValue = new WeakMap<object, ToolResultContentSource>();
 
+/** Copy present private state without clearing a target's existing slot. */
+function copyInternalSlot<T>(slots: WeakMap<object, T>, source: object, target: object): void {
+  const value = slots.get(source);
+  if (value) {
+    slots.set(target, value);
+  }
+}
+
 /** Install OpenClaw-owned loop control without adding a plugin-facing Agent option. */
 export function setInternalBeforeToolBatch(
   agent: object,
@@ -223,10 +231,7 @@ export function getInternalToolExecutionPreparer(
 
 /** Preserve private execution ownership when an adapter replaces a tool object. */
 export function copyInternalToolExecutionPreparer<T extends object>(source: object, target: T): T {
-  const preparer = toolExecutionPreparerByTool.get(source);
-  if (preparer) {
-    toolExecutionPreparerByTool.set(target, preparer);
-  }
+  copyInternalSlot(toolExecutionPreparerByTool, source, target);
   return target;
 }
 
@@ -277,18 +282,9 @@ export function getInternalToolResultContentSource(
 
 /** Carry private commit ownership through result transforms and message construction. */
 export function copyInternalToolResultState<T extends object>(source: object, target: T): T {
-  const acknowledge = toolResultAcknowledgementByValue.get(source);
-  if (acknowledge) {
-    toolResultAcknowledgementByValue.set(target, acknowledge);
-  }
-  const provenance = toolResultProvenanceByValue.get(source);
-  if (provenance) {
-    toolResultProvenanceByValue.set(target, provenance);
-  }
-  const contentSource = toolResultContentSourceByValue.get(source);
-  if (contentSource) {
-    toolResultContentSourceByValue.set(target, contentSource);
-  }
+  copyInternalSlot(toolResultAcknowledgementByValue, source, target);
+  copyInternalSlot(toolResultProvenanceByValue, source, target);
+  copyInternalSlot(toolResultContentSourceByValue, source, target);
   return target;
 }
 

@@ -601,7 +601,7 @@
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-icon--busy {
-  animation: chat-pane-connection-spin 900ms linear infinite;
+  animation: btn-spinner-spin 900ms linear infinite;
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-retry {
@@ -625,12 +625,6 @@
   width: 1px;
   height: 12px;
   background: color-mix(in srgb, var(--muted) 35%, transparent);
-}
-
-@keyframes chat-pane-connection-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

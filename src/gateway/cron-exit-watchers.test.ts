@@ -210,13 +210,10 @@ describe("createCronExitWatchers", () => {
 
     await finish(runs[0]);
     expect(fireOnExit).toHaveBeenCalledTimes(1);
-    expect(fireOnExit.mock.calls[0]?.[0]).toMatchObject({ id: "job-a", agentId: "ops" });
-    expect(fireOnExit.mock.calls[0]?.[1]).toMatchObject({
-      exitCode: 0,
-      reason: "exit",
-      stdout: "",
-      stderr: "",
-    });
+    expect(fireOnExit).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "job-a", agentId: "ops" }),
+      expect.objectContaining({ exitCode: 0, reason: "exit", stdout: "", stderr: "" }),
+    );
 
     expect(reserveExit).toHaveBeenCalledWith(expect.objectContaining({ id: "job-a" }));
     expect(order).toEqual(["persist", "fire"]);
@@ -369,7 +366,7 @@ describe("createCronExitWatchers", () => {
   it("retains a pending retry across handler handoff and uses the replacement owner", async () => {
     const oldUpdateWatcherState = vi.fn(async () => {});
     const newUpdateWatcherState = vi.fn(async () => {});
-    const { supervisor, runs, watchers } = setup({
+    const { supervisor, runs, watchers, reserveExit, fireOnExit } = setup({
       updateWatcherState: oldUpdateWatcherState,
       retryBackoffMs: [1_000],
     });
@@ -378,6 +375,13 @@ describe("createCronExitWatchers", () => {
     expectDefined(runs[0], "first watcher").deferred.reject(new Error("wait failed"));
     await flush();
     expect(oldUpdateWatcherState).toHaveBeenCalledOnce();
+    expect(oldUpdateWatcherState).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "job-a" }),
+      expect.objectContaining({ consecutiveErrors: 1 }),
+    );
+    expect(reserveExit).not.toHaveBeenCalled();
+    expect(fireOnExit).not.toHaveBeenCalled();
+    expect(watchers.activeJobIds()).toEqual(["job-a"]);
     expect(scheduler.nextWakeAtMs).toBe(1_000);
     await watchers.updateHandlers({
       getProcessSupervisor: () => supervisor as never,
@@ -388,6 +392,7 @@ describe("createCronExitWatchers", () => {
     });
     await clock.advanceBy(1_000);
     expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+    expect(watchers.activeJobIds()).toEqual(["job-a"]);
     expectDefined(runs[1], "replacement watcher").deferred.reject(new Error("replacement failed"));
     await flush();
     expect(newUpdateWatcherState).toHaveBeenCalledOnce();
@@ -517,38 +522,6 @@ describe("createCronExitWatchers", () => {
     expect(fireOnExit).not.toHaveBeenCalled();
     expect(w.activeJobIds()).toEqual([]);
     await reconcile(w);
-    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
-    expect(w.activeJobIds()).toEqual(["job-a"]);
-  });
-
-  it("retries with backoff without firing when run.wait() rejects (fail closed on unknown outcome)", async () => {
-    const updateWatcherState = vi.fn(async () => {});
-    const {
-      supervisor,
-      runs,
-      reserveExit,
-      fireOnExit,
-      watchers: w,
-    } = setup({ updateWatcherState, retryBackoffMs: [0] });
-
-    await reconcile(w);
-    expect(supervisor.spawn).toHaveBeenCalledTimes(1);
-    expect(w.activeJobIds()).toEqual(["job-a"]);
-
-    expectDefined(runs[0], "runs[0] test invariant").deferred.reject(
-      new Error("supervisor wait blew up"),
-    );
-    await flush();
-
-    expect(fireOnExit).not.toHaveBeenCalled();
-    expect(reserveExit).not.toHaveBeenCalled();
-
-    expect(updateWatcherState).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "job-a" }),
-      expect.objectContaining({ consecutiveErrors: 1 }),
-    );
-    expect(w.activeJobIds()).toEqual(["job-a"]);
-    await clock.advanceBy(0);
     expect(supervisor.spawn).toHaveBeenCalledTimes(2);
     expect(w.activeJobIds()).toEqual(["job-a"]);
   });

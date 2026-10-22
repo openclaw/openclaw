@@ -256,14 +256,14 @@ async function resolveReachableGateway(
         ? { preauthHandshakeTimeoutMs: target.preauthHandshakeTimeoutMs }
         : {}),
     });
-    if (probe.kind === "configured") {
+    if (probe === "configured") {
       return { kind: "configured", gateway };
     }
-    if (probe.kind === "missing-configured-model") {
+    if (probe === "missing-configured-model") {
       missingModelGateway ??= gateway;
       continue;
     }
-    if (probe.kind === "reachable-unverified" && !reachableUnverifiedGateway) {
+    if (probe === "reachable-unverified" && !reachableUnverifiedGateway) {
       reachableUnverifiedGateway = gateway;
     }
   }

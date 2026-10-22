@@ -164,10 +164,8 @@ export function createCodexSteeringQueue(params: {
   };
 
   const clearBatchTimer = () => {
-    if (batchTimer) {
-      clearTimeout(batchTimer);
-      batchTimer = undefined;
-    }
+    clearTimeout(batchTimer);
+    batchTimer = undefined;
   };
 
   const reportItemAcceptance = (item: PendingSteerMessage, accepted: boolean) => {

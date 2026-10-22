@@ -162,7 +162,7 @@ export function createTelegramSendChatActionHandler({
               `Retrying with exponential backoff.`,
           );
         }
-      } else if (isRetryableTelegramApiError(error, { context: "action" })) {
+      } else if (isRetryableTelegramApiError(error)) {
         consecutiveTransientFailures++;
         const retryAfterMs = readTelegramRetryAfterMs(error);
         const cooldownMs =

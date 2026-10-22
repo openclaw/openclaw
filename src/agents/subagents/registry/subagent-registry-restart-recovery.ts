@@ -1,13 +1,18 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
 import type { SessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { AgentRunRequest } from "../../../gateway/server-methods/agent-request-types.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-authority.js";
 import { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
 import { resolveWorkerPlacementSessionRuntimeAsync } from "../../../gateway/worker-environments/placement-session-runtime.js";
 import * as agentEvents from "../../../infra/agent-events.js";
 import { listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
-import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  getGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { isSessionControllerWorkActive } from "../../../sessions/session-controller.lifecycle.js";
 import { formatSystemTurnPrompt } from "../../../sessions/system-turn-prompt.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
@@ -426,7 +431,6 @@ export async function recoverInterruptedSubagentRow(
       !replayTerminal &&
       !receipt &&
       isRestartInterruptedSubagent(entry) &&
-      entry.operatorRecoverySource &&
       sessionEntry?.status === "interrupted" &&
       sessionEntry.lastRunId === runId &&
       params.gatewayRuntime &&
@@ -435,16 +439,21 @@ export async function recoverInterruptedSubagentRow(
       // Keep the task and its parent delivery with the registry. Ordinary admission
       // transfers that custody to the continuation before executing any model work.
       const continuationRunId = `subagent-restart:${runId}`;
-      const continuation = await subagentRuns.runWithCompletionAuthority(entry, () =>
-        captureOperatorToolGatewayContinuationContext(),
+      const { continuation, agentToolCaller } = await subagentRuns.runWithCompletionAuthority(
+        entry,
+        async () => ({
+          continuation: await captureOperatorToolGatewayContinuationContext(),
+          agentToolCaller: getPluginRuntimeGatewayRequestScope()?.client?.internal?.agentToolCaller,
+        }),
       );
       try {
         const operatorAuthority = continuation?.operatorAuthority;
-        if (!operatorAuthority) {
+        if (!continuation) {
           return { status: "deferred" };
         }
         const assertAdmissionCurrent = () => {
-          operatorAuthority.assertCurrent();
+          continuation.assertCurrent();
+          agentToolCaller?.assertCurrent?.();
           const successor = subagentRuns.get(continuationRunId);
           const ownsSuccessor =
             successor?.taskRunId === (entry.taskRunId ?? runId) &&
@@ -512,31 +521,39 @@ export async function recoverInterruptedSubagentRow(
         }
         assertAdmissionCurrent();
         await params.gatewayRuntime.dispatchAgent(
-          {
-            agentId: authority.childAgentId,
-            sessionKey: childSessionKey,
-            expectedExistingSessionId: sessionEntry.sessionId,
-            expectedExistingSessionLifecycleRevision: lifecycleRevision ?? null,
-            idempotencyKey: continuationRunId,
-            message: formatSystemTurnPrompt(
-              "A Gateway restart interrupted this task. Continue from the retained transcript " +
-                "and finish the original request. Check recorded state before repeating any " +
-                "tool action with an uncertain outcome. The original parent still receives your result.",
-            ),
-            deliver: false,
-            forceRestartSafeTools,
-            ...(policy.action === "resume" && policy.forceCodeModeTools
-              ? { forceCodeModeTools: true }
-              : {}),
-            inputProvenance: {
-              kind: "internal_system",
-              sourceSessionKey: childSessionKey,
-              sourceTool: "subagent_restart_recovery",
+          bindInProcessSessionRun(
+            {
+              agentId: authority.childAgentId,
+              sessionKey: childSessionKey,
+              idempotencyKey: continuationRunId,
+              message: formatSystemTurnPrompt(
+                "A Gateway restart interrupted this task. Continue from the retained transcript " +
+                  "and finish the original request. Check recorded state before repeating any " +
+                  "tool action with an uncertain outcome. The original parent still receives your result.",
+              ),
+              deliver: false,
+              forceRestartSafeTools,
+              ...(policy.action === "resume" && policy.forceCodeModeTools
+                ? { forceCodeModeTools: true }
+                : {}),
+              inputProvenance: {
+                kind: "internal_system",
+                sourceSessionKey: childSessionKey,
+                sourceTool: "subagent_restart_recovery",
+              },
+            } satisfies AgentRunRequest,
+            {
+              sessionKey: childSessionKey,
+              sessionId: sessionEntry.sessionId,
+              lifecycleRevision: lifecycleRevision ?? null,
+              runId: continuationRunId,
             },
-          },
+          ),
           undefined,
           {
             operatorRunAuthority: operatorAuthority,
+            agentToolCaller,
+            scopes: continuation.scopes,
             assertAdmissionCurrent,
             prepareDispatchCurrent: async () => {
               assertAdmissionCurrent();

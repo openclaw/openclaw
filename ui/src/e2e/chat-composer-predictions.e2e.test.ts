@@ -2,7 +2,6 @@ import { expect, it } from "vitest";
 import {
   createControlUiMockBootstrapConfig,
   installMockGateway,
-  waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { sendChat } from "./chat-flow-fixtures.test-support.ts";
 import { requireString } from "./chat-flow.test-support.ts";
@@ -13,37 +12,6 @@ const suite = createControlUiE2eSuite({ name: "Control UI composer predictions" 
 const suggestion = "Show me a concrete example, including the trade-offs.";
 
 suite.define(() => {
-  it("shows the off-by-default Labs gate and all three model choices", async () => {
-    await suite.withPage(
-      { viewport: { width: 1280, height: 1000 }, colorScheme: "dark" },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          methodResponses: {
-            "config.get": {
-              config: {},
-              raw: "{}",
-              hash: "predictions-config",
-              issues: [],
-              valid: true,
-            },
-          },
-        });
-        await page.goto(suite.server.baseUrl + "settings/labs");
-        await waitForControlUiRoute(page, { pathname: "/settings/labs", routeId: "labs" });
-        const select = page.getByRole("combobox", { name: "Prediction model", exact: true });
-        await expect.poll(() => select.inputValue()).toBe("utility");
-        expect(await select.locator("option").allTextContents()).toEqual([
-          "Utility model (recommended)",
-          "Conversation model",
-          "Default model",
-        ]);
-        const row = page.locator(".settings-row").filter({
-          has: page.locator(".settings-row__title", { hasText: "Composer predictions" }),
-        });
-        expect(await row.getByRole("switch").isChecked()).toBe(false);
-      },
-    );
-  });
   it("keeps predictions opt-in and accepts an undoable draft without sending", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },

@@ -128,12 +128,12 @@ export async function runGlobalPackageUpdateSteps(params: {
       stage: stagedInstall,
       committed,
     });
-    if (cleanup.status === "failed") {
-      uncertainLifecycleStage = stagedInstall;
-      return cleanup.step;
-    }
-    if (cleanup.status === "advisory") {
-      steps.push(cleanup.step);
+    if (cleanup) {
+      if (!cleanup.advisory) {
+        uncertainLifecycleStage = stagedInstall;
+        return cleanup;
+      }
+      steps.push(cleanup);
     }
     stagedInstall = null;
     return null;

@@ -1,3 +1,4 @@
+import { createDeferred } from "@solidjs/signals";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import {
   createMemo,
@@ -52,7 +53,7 @@ import {
   DESKTOP_PANEL_TOGGLE_EVENT,
 } from "./panel-toggle-contract.ts";
 import { Icon } from "./solid/icon.tsx";
-import "./modal-dialog.ts";
+import "./modal-dialog.tsx";
 import "./tooltip.ts";
 import { Kbd, KeyboardShortcut, ShortcutText } from "./solid/kbd.tsx";
 
@@ -231,12 +232,23 @@ function PaletteHint(props: { shortcut: SolidJSX.Element; label: string }) {
 function PaletteSearch(props: {
   readProps: () => CommandPaletteProps;
   sessionRead: Accessor<void | undefined>;
+  catalogRead: Accessor<void | undefined>;
+  modelRead: Accessor<unknown>;
   optionElements: Map<string, HTMLDivElement>;
 }) {
   const current = () => props.readProps();
   const sessionSearchPending = () => isPending(props.sessionRead);
   const readSessionSearch = () => {
     latest(props.sessionRead);
+    return null;
+  };
+  const catalogSearchPending = () =>
+    Boolean(current().searchQuery.trim()) &&
+    !current().promptMode &&
+    (isPending(props.catalogRead) || isPending(props.modelRead));
+  const readCatalog = () => {
+    latest(props.catalogRead);
+    latest(props.modelRead);
     return null;
   };
   const results = createMemo(() => resolvePaletteResults(current()));
@@ -259,7 +271,7 @@ function PaletteSearch(props: {
   const searchSettled = () =>
     Boolean(current().searchQuery.trim()) &&
     !sessionSearchPending() &&
-    !current().catalogSearchPending &&
+    !catalogSearchPending() &&
     !current().remoteSearchOffline &&
     !current().modelSearchError &&
     !current().sessionSearchFailed &&
@@ -269,6 +281,8 @@ function PaletteSearch(props: {
   return (
     <>
       {readSessionSearch()}
+      {/* A cold catalog read must not hide already available commands. */}
+      <Loading>{readCatalog()}</Loading>
       <Show when={current().searchQuery.trim() && current().onSelectSession}>
         <div class="cmd-palette__filters" role="group" aria-label={t("palette.filterLabel")}>
           <For each={["all", "sessions", "messages"] as const}>
@@ -288,7 +302,7 @@ function PaletteSearch(props: {
           </For>
         </div>
       </Show>
-      <Show when={sessionSearchPending() || current().catalogSearchPending}>
+      <Show when={sessionSearchPending() || catalogSearchPending()}>
         <div class="cmd-palette__empty" role="status">
           {t(sessionSearchPending() ? "palette.searchingSessions" : "palette.searchingCommands")}
         </div>
@@ -300,7 +314,7 @@ function PaletteSearch(props: {
         role="listbox"
         aria-label={t("palette.placeholder")}
         aria-busy={
-          current().searchDebouncing || sessionSearchPending() || current().catalogSearchPending
+          current().searchDebouncing || sessionSearchPending() || catalogSearchPending()
             ? "true"
             : "false"
         }
@@ -421,6 +435,11 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   const search = createParkedProjection(current, () => !hideSearch());
   const sessionRequest = createMemo(() => search().sessionSearchRead);
   const sessionRead = createMemo(() => sessionRequest()?.promise);
+  const catalogRequest = createMemo(() => search().catalogSearchRead);
+  // Readiness may lag; it must never hold synchronous catalog invalidation.
+  const catalogRead = createDeferred(() => catalogRequest()?.promise);
+  const modelRequest = createMemo(() => search().modelSearchRead);
+  const modelRead = createDeferred(() => modelRequest()?.promise);
   const optionElements = new Map<string, HTMLDivElement>();
   const activeElement = () => {
     const item = results().items[results().activeIndex];
@@ -573,6 +592,8 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                   <PaletteSearch
                     readProps={search}
                     sessionRead={sessionRead}
+                    catalogRead={catalogRead}
+                    modelRead={modelRead}
                     optionElements={optionElements}
                   />
                 </Loading>

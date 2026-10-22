@@ -2,6 +2,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import { loadBrowserMeetingPlugins } from "./browser-plugin.test-support.js";
+import { createMeetingBrowserNodeInvokePolicy } from "./node-invoke-policy.js";
 
 const { zoomMeetingsPlugin: plugin } = await loadBrowserMeetingPlugins();
 const command = "zoommeetings.chrome";
@@ -10,7 +11,11 @@ const commands = {
   audioOutputCommand: ["custom-output", "--write"],
   bargeInInputCommand: ["custom-barge-in"],
 };
-const audio = { audioBackend: "auto", audioBufferBytes: 4_096, audioFormat: "pcm16-24khz" };
+const audio = {
+  audioBackend: "auto",
+  audioBufferBytes: 4_096,
+  audioFormat: "pcm16-24khz",
+} as const;
 const node = {
   caps: ["browser"],
   commands: ["browser.proxy", command],
@@ -146,6 +151,55 @@ describe("shared browser meeting configuration and setup", () => {
     });
     expect(invokeNode).toHaveBeenCalledWith({
       params: { action: "setup", ...audio, ...commands },
+    });
+  });
+
+  it("forwards configured start audio without local generated commands", async () => {
+    const startAudio = { ...audio, bargeInInputCommand: ["trusted-barge-in"] };
+    const route = { url: "https://meeting.test/call", mode: "bidi" };
+    const policy = createMeetingBrowserNodeInvokePolicy({
+      commandName: "testmeeting.chrome",
+      deniedCode: "TEST_MEETING_DENIED",
+      displayName: "Test meeting",
+      normalizeUrl: (value) => String(value),
+      start: {
+        ...startAudio,
+        launch: true,
+        joinTimeoutMs: 30_000,
+        // Local generated commands must never become remote overrides.
+        audioInputCommand: ["gateway-generated-capture"],
+        audioOutputCommand: ["gateway-generated-playback"],
+        audioInputCommandOverride: undefined,
+        audioOutputCommandOverride: undefined,
+      },
+      supportedModes: new Set(["agent", "bidi", "transcribe"]),
+      useConfiguredSetupCommands: true,
+    });
+    const invokeNode = vi.fn(async () => ({ ok: true as const }));
+    await policy.handle({
+      command: "testmeeting.chrome",
+      config: {},
+      invokeNode,
+      nodeId: "node-1",
+      params: {
+        action: "start",
+        ...route,
+        audioBackend: "blackhole-2ch",
+        audioBufferBytes: 1,
+        audioFormat: "g711-ulaw-8khz",
+        audioInputCommand: ["caller-capture"],
+        audioOutputCommand: ["caller-playback"],
+      },
+    });
+    expect(invokeNode).toHaveBeenCalledWith({
+      params: {
+        action: "start",
+        ...startAudio,
+        ...route,
+        launch: true,
+        browserProfile: undefined,
+        joinTimeoutMs: 30_000,
+      },
     });
   });
 });

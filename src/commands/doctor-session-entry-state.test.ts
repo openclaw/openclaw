@@ -639,6 +639,39 @@ it("stops cold admission when the repair owner retires before native open return
   expect(fs.readFileSync(legacy.databasePath)).toEqual(originalBytes);
 });
 
+it("reports only raw targets inspected before deferred schema repair", async () => {
+  const currentPath = createLegacyDatabaseFixture({
+    agentId: "current",
+    env: state.env,
+    schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+    eventsBySession: { current: [] },
+  });
+  const deferredPath = createLegacyDatabaseFixture({
+    agentId: "deferred",
+    env: state.env,
+    schemaVersion: 16,
+    eventsBySession: { deferred: [] },
+  });
+  const inspectedPaths: string[] = [];
+  const result = await withMaintenance(() =>
+    repairLegacySessionEntryStates({
+      apply: false,
+      cfg: {},
+      env: state.env,
+      deferSchemaRepair: true,
+      targets: [
+        { agentId: "current", storePath: currentPath, sqlitePath: currentPath },
+        { agentId: "deferred", storePath: deferredPath, sqlitePath: deferredPath },
+      ],
+      onInspectedTargets: (targets) => {
+        inspectedPaths.push(...targets.map((target) => target.sqlitePath));
+      },
+    }),
+  );
+  expect(result).toEqual({ found: 0, repaired: 0, scannedStores: 2 });
+  expect(inspectedPaths).toEqual([currentPath]);
+});
+
 it("repairs published schema-v16 scalar rows after the Doctor schema owner upgrades them", async () => {
   const databasePath = createLegacyDatabaseFixture({
     env: state.env,
@@ -677,9 +710,19 @@ it("repairs published schema-v16 scalar rows after the Doctor schema owner upgra
       legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     }),
   );
-  expect(result.stepReceipts.find((receipt) => receipt.id === "session-entry-state")).toMatchObject(
-    { outcome: "completed" },
-  );
+  expect(
+    result.stepReceipts
+      .filter((receipt) =>
+        ["session-entry-state-preparation", "media-persistence", "session-entry-state"].includes(
+          receipt.id,
+        ),
+      )
+      .map((receipt) => [receipt.id, receipt.outcome]),
+  ).toEqual([
+    ["session-entry-state-preparation", "skipped"],
+    ["media-persistence", "completed"],
+    ["session-entry-state", "completed"],
+  ]);
   using repaired = new DatabaseSync(databasePath, { readOnly: true });
   expect(repaired.prepare("PRAGMA user_version").get()?.user_version).toBe(
     OPENCLAW_AGENT_SCHEMA_VERSION,

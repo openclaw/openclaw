@@ -24,7 +24,6 @@ import { readTranscriptStatsAsync } from "./session-transcript-stats.js";
 import { resolveSessionWorkStartError } from "./session-work-start.js";
 import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";
 import { SessionWorkStartChangedError } from "./work-start-error.js";
-export { persistCompactionBoundaryWithSessionEntrySync } from "./session-accessor.sqlite-compaction.js";
 export { persistCompactionBoundaryWithSessionEntryAsync } from "./session-accessor.sqlite-compaction-runtime.js";
 export { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 export { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-exact-read.js";

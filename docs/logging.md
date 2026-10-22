@@ -717,8 +717,11 @@ unknown at capacity or after enablement. `omittedObservations` on a later record
 reports suppressed observations; missing records never prove no wait.
 
 Controller transition records use `session controller phase` on the `diagnostic`
-logger at `info` level, with the same process diagnostics gate. Session, source
-and priority-source identities are salted digests, and reasons are fixed labels.
+logger at `info` level in the structured file log only, with the same process
+diagnostics gate. They omit console output because the message alone does not
+identify the phase or status. Slow lifecycle warnings remain on the console.
+Session, source and priority-source identities are salted digests, and reasons
+are fixed labels.
 These records have a separate 60-record-per-minute budget so transition traffic
 cannot suppress the slow warnings above. Their `omittedObservations` count applies
 to phase records independently.

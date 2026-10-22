@@ -7,7 +7,12 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "./agent-select-registration.ts";
 import "./solid/agent-avatar.tsx";
 
-const option = { value: "alpha", label: "Alpha", agent: { id: "alpha" } };
+const option = {
+  value: "alpha",
+  label: "Alpha",
+  icon: "settings" as const,
+  agent: { id: "alpha" },
+};
 const fixtures = [
   {
     name: "agent select",
@@ -93,5 +98,11 @@ it.each(fixtures)(
 
     retiredImage.dispatchEvent(new Event("error"));
     await waitForSolid(() => expect(image()?.getAttribute("src")).toBe("blob:second"));
+
+    image()!.dispatchEvent(new Event("error"));
+    await waitForSolid(() => {
+      expect(image()).toBeNull();
+      expect(element.querySelector(".agent-select__avatar--icon svg")).not.toBeNull();
+    });
   },
 );

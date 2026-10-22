@@ -30,6 +30,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   return {
     ...page.actions,
     gateway: page.context().gateway,
+    getActionRetired: page.getActionRetired,
     onRunMount: page.registerRun,
     loading: page.cron().cronLoading,
     /** True once a cron.list response has completed (initial load finished). */
@@ -60,6 +61,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
       page.cron().cronRunsError ??
       page.deliveryDirectory.error ??
       page.modelSuggestionsError(),
+    notice: page.cron().cronNotice,
     busy: page.cron().cronBusy,
     form: page.cron().cronForm,
     channels: channels.channelsSnapshot?.channelMeta?.length

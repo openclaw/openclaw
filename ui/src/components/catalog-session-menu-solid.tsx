@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, onCleanup, Show } from "solid-js";
+import { createMemo, createUniqueId, onSettled, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon, type IconName } from "./solid/icon.tsx";
@@ -29,7 +29,7 @@ export const CatalogSessionMenu = defineSolidBridge<Props>(
   "openclaw-catalog-session-menu",
   (props, host) => {
     const id = createUniqueId();
-    onCleanup(() => menus.delete(host));
+    onSettled(() => () => menus.delete(host));
     const label = () => t("chat.catalog.sessionMenu");
     // Queued menu selections must reuse JSX descriptors created under this owner.
     const items = createMemo<MenuItem[]>(() =>

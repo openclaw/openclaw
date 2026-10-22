@@ -365,9 +365,14 @@ local-path sources, updates, and advanced plugin configuration.
 ## Updates
 
 Open **Settings → Updates** (`/settings/updates`) to check the installed version,
-update policy, and active or most recent update. **Update now** opens a
+update policy, and active or most recent update. **Update Gateway…** opens a
 confirmation showing the target and restart impact. Choose **Update and restart**
 to start; canceling leaves the Gateway untouched.
+
+In the Mac app, **This Mac → Check for Updates…** checks for app updates.
+The separate Gateway action updates the connected Gateway. When no update target
+is known, its description and confirmation warn that it may reinstall the current
+version and restart the Gateway.
 
 New-update notifications in the Inbox and account menu appear only for the
 `stable` and `beta` channels. The `dev` channel can still check and start updates

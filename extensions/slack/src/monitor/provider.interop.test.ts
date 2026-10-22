@@ -223,6 +223,11 @@ describe("createSlackBoltApp", () => {
     try {
       const { app, receiver } = await createSocketApp();
       const client = receiver.client;
+      const stop = app.stop.bind(app);
+      vi.spyOn(app, "stop").mockImplementation(async () => {
+        expect(Reflect.get(client, "shuttingDown")).toBe(true);
+        await stop();
+      });
       const start = vi.fn(async () => {
         Reflect.set(client, "shuttingDown", false);
       });
@@ -364,16 +369,12 @@ describe("slack socket reconnect helpers", () => {
 
     publishSlackDisconnectedStatus(setStatus);
 
-    expect(setStatus.mock.calls).toEqual([
-      [
-        {
-          connected: false,
-          lifecycle: "recovering",
-          lastDisconnect: { at: 1_711_406_402_000 },
-          lastError: null,
-        },
-      ],
-    ]);
+    expect(setStatus).toHaveBeenCalledExactlyOnceWith({
+      connected: false,
+      lifecycle: "recovering",
+      lastDisconnect: { at: 1_711_406_402_000 },
+      lastError: null,
+    });
   });
 
   it("warns once when Slack reports a shared Socket Mode app token", () => {
@@ -454,20 +455,6 @@ describe("slack socket reconnect helpers", () => {
       }),
     ).rejects.toThrow(message);
     expectNoSocketListeners(client);
-  });
-
-  it("marks the socket client as shutting down before stop runs", async () => {
-    const app = {
-      receiver: { client: { shuttingDown: false } },
-      stop: vi.fn().mockImplementation(async () => {
-        expect(app.receiver.client.shuttingDown).toBe(true);
-      }),
-    };
-
-    await gracefulStopSlackApp(app, app.receiver.client);
-
-    expect(app.stop).toHaveBeenCalledTimes(1);
-    expect(app.receiver.client.shuttingDown).toBe(true);
   });
 });
 

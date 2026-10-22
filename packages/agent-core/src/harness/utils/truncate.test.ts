@@ -21,6 +21,22 @@ describe("truncate utilities", () => {
     });
   });
 
+  it.each([0, -1])("keeps oversized head lines byte-limited with maxLines=%s", (maxLines) => {
+    expect(truncateHead("long\nx", { maxLines, maxBytes: 2 })).toEqual({
+      content: "",
+      truncated: true,
+      truncatedBy: "bytes",
+      totalLines: 2,
+      totalBytes: 6,
+      outputLines: 0,
+      outputBytes: 0,
+      lastLinePartial: false,
+      firstLineExceedsLimit: true,
+      maxLines,
+      maxBytes: 2,
+    });
+  });
+
   it.each([
     { tail: "\uDC00\uD800\uDC00", maxBytes: 7, expected: "\uFFFD\uD800\uDC00" },
     { tail: "🙂\uD800", maxBytes: 7, expected: "🙂\uFFFD" },
