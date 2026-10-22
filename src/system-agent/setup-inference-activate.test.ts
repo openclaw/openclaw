@@ -681,41 +681,47 @@ describe("setup activation credentials and configuration", () => {
     expect(setup.readProfile()?.[1]).toMatchObject(credential);
   });
 
-  it("preserves the current agent model when activating saved auth", async () => {
-    const setup = await fixture({ authMethod: "api_key" });
-    const starterModelRef = "openai/starter-model";
-    const configured = structuredClone(setup.config);
-    assert(configured.agents?.defaults);
-    assert(configured.models?.providers?.openai?.models);
-    configured.agents.defaults.model = { primary: modelRef };
-    configured.models.providers.openai.models.push(
-      buildCatalogModel("starter-model", { name: "Starter model" }),
-    );
-    await writeConfig(setup, configured);
-    const saved = await saveSetupCredential({
-      profile: { profileId: "openai:saved", credential },
-      config: configured,
-      baseConfig: configured,
-      agentDir: setup.agentDir,
-      modelRef: starterModelRef,
-      authChoice: "fixture-login",
-      pluginId: "openai",
-    });
-    const profileId = saved.profile.profileId;
+  it.each([modelRef, "openai/Fast"])(
+    "preserves the current agent model when activating saved auth (%s)",
+    async (primaryRef) => {
+      const setup = await fixture({ authMethod: "api_key" });
+      const starterModelRef = "openai/starter-model";
+      const configured = structuredClone(setup.config);
+      assert(configured.agents?.defaults);
+      assert(configured.models?.providers?.openai?.models);
+      configured.agents.defaults.model = { primary: primaryRef };
+      if (primaryRef !== modelRef) {
+        configured.agents.defaults.models = { [modelRef]: { alias: "Fast" } };
+      }
+      configured.models.providers.openai.models.push(
+        buildCatalogModel("starter-model", { name: "Starter model" }),
+      );
+      await writeConfig(setup, configured);
+      const saved = await saveSetupCredential({
+        profile: { profileId: "openai:saved", credential },
+        config: configured,
+        baseConfig: configured,
+        agentDir: setup.agentDir,
+        modelRef: starterModelRef,
+        authChoice: "fixture-login",
+        pluginId: "openai",
+      });
+      const profileId = saved.profile.profileId;
 
-    const result = await setup.activate(`saved-auth:${encodeURIComponent(profileId)}`, true, {
-      modelRef: undefined,
-    });
+      const result = await setup.activate(`saved-auth:${encodeURIComponent(profileId)}`, true, {
+        modelRef: undefined,
+      });
 
-    expect(result).toMatchObject({ ok: true, modelRef });
-    expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
-      authProfileId: profileId,
-      model: "gpt-5.4-mini",
-    });
-    const persisted = (await readSnapshot()).sourceConfig;
-    expect(primaryModel(persisted.agents?.defaults?.model)).toBe(`${modelRef}@${profileId}`);
-    expect(persisted.agents?.entries?.main?.model).toBeUndefined();
-  });
+      expect(result).toMatchObject({ ok: true, modelRef });
+      expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
+        authProfileId: profileId,
+        model: "gpt-5.4-mini",
+      });
+      const persisted = (await readSnapshot()).sourceConfig;
+      expect(primaryModel(persisted.agents?.defaults?.model)).toBe(`${modelRef}@${profileId}`);
+      expect(persisted.agents?.entries?.main?.model).toBeUndefined();
+    },
+  );
 
   it("replaces a removed account without changing agent models", async () => {
     const setup = await fixture({ authMethod: "api_key", primaryModel: "stable/global-model" });

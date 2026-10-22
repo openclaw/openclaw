@@ -25,6 +25,7 @@ import { runProviderPluginAuthMethodUnpersisted } from "../plugins/provider-auth
 import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { resolveProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
 import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
+import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
   findSetupCredentialChoice,
@@ -338,9 +339,15 @@ export async function stageSavedAuthCandidate(
           "Choose this provider's endpoint and model again. Your saved sign-in is still available.",
       };
     }
-    const currentModelRef = splitTrailingAuthProfile(
-      resolveAgentEffectiveModelPrimary(ctx.cfg, ctx.routeAgentId) ?? "",
-    ).model;
+    const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+      ctx.cfg,
+      ctx.routeAgentId,
+      {},
+      ctx.snapshot,
+    );
+    const currentModelRef = currentRoute
+      ? splitTrailingAuthProfile(currentRoute.modelLabel).model
+      : "";
     const savedModelRef = saved?.modelRef ?? loaded?.method.starterModel;
     const savedProvider = resolveProviderIdForAuth(credential.provider, {
       config: ctx.cfg,
