@@ -60,10 +60,15 @@ export function createCopilotAgentHarness(
   options?: Parameters<typeof createCopilotAgentHarnessImpl>[0],
 ) {
   const harness = createCopilotAgentHarnessImpl(options);
-  const compact = harness.compact?.bind(harness);
-  if (!compact) {
+  if (typeof harness.compact !== "function") {
     return harness;
   }
+  const compact = (params: AgentHarnessCompactParams<2>) => {
+    if (typeof harness.compact !== "function") {
+      throw new Error("Copilot harness does not support compaction");
+    }
+    return harness.compact(params);
+  };
   return {
     ...harness,
     compact: (
