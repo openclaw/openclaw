@@ -10,10 +10,6 @@ import {
 } from "./on-message.test-mocks.js";
 
 const events: string[] = [];
-const baseConfig = vi.hoisted(() => ({
-  channels: { whatsapp: { ackReaction: { enabled: true } } },
-}));
-const statusConfig = { ...baseConfig, messages: { statusReactions: { enabled: true } } };
 const statusReactionController = {
   setQueued: vi.fn(async () => {
     events.push("status-queued");
