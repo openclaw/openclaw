@@ -8,6 +8,7 @@ import { createFixtureDiagnostics } from "../../../test/helpers/fixture-diagnost
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
+import { interceptUploadFile } from "./node-workspace-transfer-fixtures.test-support.js";
 import {
   nodeWorkspaceTransferInvalidReason,
   readNodeWorkspaceUpload,
@@ -82,22 +83,17 @@ function fixture(
 }
 
 function observeUploadFile(onOpen: (handle: FileHandle) => void) {
-  const open = fs.open.bind(fs);
   let closedBytes: Buffer | undefined;
-  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-    const handle = await open(...args);
-    if (args[1] === "wx" && path.basename(String(args[0])) === "result.bin") {
-      const close = handle.close.bind(handle);
-      vi.spyOn(handle, "close").mockImplementationOnce(async () => {
-        try {
-          closedBytes = await fs.readFile(args[0]);
-        } finally {
-          await close();
-        }
-      });
-      onOpen(handle);
-    }
-    return handle;
+  interceptUploadFile("result.bin", (handle, uploadPath) => {
+    const close = handle.close.bind(handle);
+    vi.spyOn(handle, "close").mockImplementationOnce(async () => {
+      try {
+        closedBytes = await fs.readFile(uploadPath);
+      } finally {
+        await close();
+      }
+    });
+    onOpen(handle);
   });
   return { bytesBeforeClose: () => closedBytes };
 }

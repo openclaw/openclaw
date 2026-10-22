@@ -27,7 +27,11 @@ import type {
 } from "../types.js";
 import { abortErrorMessage, cronAbortErrorClassification } from "./execution-errors.js";
 import { waitForCronExecutionIdle } from "./execution-idle.js";
-import type { CronServiceState, CronSessionRunPreparation } from "./state.js";
+import {
+  describeCronHostExecutionRestriction,
+  type CronServiceState,
+  type CronSessionRunPreparation,
+} from "./state.js";
 import {
   type ExecuteJobCoreOptions,
   resolveMainSessionCronDeliveryContext,
@@ -49,6 +53,13 @@ export async function executeJobCore(
   });
   if (abortSignal?.aborted) {
     return resolveAbortError();
+  }
+  const executionBlockReason = describeCronHostExecutionRestriction(
+    job,
+    state.deps.hostExecutionDisabled,
+  );
+  if (executionBlockReason) {
+    return { status: "skipped", error: executionBlockReason };
   }
   const assertCurrent = () => {
     abortSignal?.throwIfAborted();

@@ -34,10 +34,7 @@ type BackgroundSnapshot = Extract<UsersBackgroundResult, { status: "ok" }>;
 type BackgroundScope = { client: GatewayBrowserClient; profileId: string };
 
 async function readFileBase64(file: File): Promise<string> {
-  const dataUrl = await readBlobAsDataUrl(file, {
-    readError: "Image could not be read",
-    invalidResultError: "Image could not be read",
-  });
+  const dataUrl = await readBlobAsDataUrl(file, "Image could not be read");
   return dataUrl.slice(dataUrl.indexOf(",") + 1);
 }
 

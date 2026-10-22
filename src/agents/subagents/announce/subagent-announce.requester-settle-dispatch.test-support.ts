@@ -1,15 +1,21 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.js";
 import { createChatRunState } from "../../../gateway/server-chat-state.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { createContext as createGatewayTestContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
   clearSessionControllerMailbox,
   sessionControllerMailboxes,
 } from "../../../sessions/session-controller.mailbox.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import { completionReader, visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
 import * as announceOutput from "./subagent-announce-output.js";
 import {
@@ -23,9 +29,11 @@ import {
   readDescendantFacts,
   loadRequester,
 } from "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
-import { makeSettledChild } from "./subagent-announce.requester-settle-wake.test-support.js";
-
-export { publishWakeTransition } from "./subagent-announce.requester-settle-wake.test-support.js";
+import type { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
+import {
+  makeSettledChild,
+  publishWakeTransition,
+} from "./subagent-announce.requester-settle-wake.test-support.js";
 
 export { deliver, registryRead, startTurn, readDescendantFacts, loadRequester };
 
@@ -86,6 +94,69 @@ export function useRequesterSettleDispatchFixture() {
 }
 
 export const REQUESTER_KEY = "agent:main:main";
+export const REQUESTER_TARGET = captureSessionTarget({
+  storeScope: "/synthetic/requester-settle-dispatch/sessions.db",
+  sessionKey: REQUESTER_KEY,
+  incarnation: "requester-session",
+  agentId: "main",
+});
+export const REQUESTER_TURN = {
+  target: REQUESTER_TARGET,
+  sessionKey: REQUESTER_KEY,
+  sessionId: "requester-session",
+  agentId: "main",
+};
+
+type WakeParams = Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0];
+export function wakeParams(
+  settledEntry: SubagentRunRecord,
+  completeBatch: WakeParams["completeBatch"],
+  overrides: Partial<WakeParams> = {},
+): WakeParams {
+  return {
+    requesterSessionKey: settledEntry.requesterSessionKey,
+    requesterOrigin: settledEntry.requesterOrigin,
+    isSourceCurrent: () => true,
+    settledEntry,
+    transitionBatch: publishWakeTransition,
+    completeBatch,
+    ...overrides,
+  };
+}
+
+export function withGateway(context: GatewayRequestContext, run: () => Promise<boolean>) {
+  return withPluginRuntimeGatewayRequestScope(
+    { context, client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
+    run,
+  );
+}
+
+export function requesterSnapshot(
+  cfg: OpenClawConfig = {},
+  entry: InternalSessionEntry = { sessionId: "requester-session", updatedAt: 1 },
+  { sessionKey = REQUESTER_KEY, storePath = REQUESTER_TARGET.storeScope } = {},
+) {
+  return { cfg, canonicalKey: sessionKey, agentId: "main", storePath, entry };
+}
+
+export function useDirectDelivery(requester = requesterSnapshot()) {
+  setSubagentAnnounceDeliveryDepsForTest({
+    getRuntimeConfig: () => requester.cfg,
+    loadRequesterSessionEntry: () => requester,
+    getRequesterSessionActivity: () => ({
+      sessionId: requester.entry.sessionId,
+      target: captureSessionTarget({
+        storeScope: requester.storePath,
+        sessionKey: requester.canonicalKey,
+        incarnation: requester.entry.sessionId,
+        agentId: requester.agentId,
+      }),
+      isActive: false,
+    }),
+  });
+  deliver.mockImplementation(sendSubagentAnnounceDirectly);
+  return requester;
+}
 
 export function settledChild(): SubagentRunRecord {
   return makeSettledChild({

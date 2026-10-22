@@ -129,6 +129,7 @@ const webkitTestFiles = [
   "src/components/overlay-shadow.browser.test.ts",
   "src/components/solid/*.browser.test.tsx",
   "src/components/image-lightbox.browser.test.ts",
+  "src/components/markdown-mermaid-expansion.browser.test.ts",
   "src/components/modal-dialog.browser.test.ts",
   "src/components/sessions-hub-header.browser.test.ts",
   "src/components/transient-container.browser.test.ts",

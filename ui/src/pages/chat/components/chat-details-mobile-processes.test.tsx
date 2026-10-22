@@ -29,6 +29,7 @@ it("shows two prioritized processes and opens the full collection without mutati
   const [data, setData] = createSignal<ChatDetailsMobileProcessesProps["data"]>({
     rows: source,
     error: null,
+    errorKind: null,
     loading: false,
     refresh,
   });
@@ -58,7 +59,10 @@ it("shows two prioritized processes and opens the full collection without mutati
   running.click();
   view.getByRole("button", { name: "Show all" }).click();
   expect(onOpen).toHaveBeenCalledTimes(2);
-  setData({ rows: [], error: "Unavailable", loading: false, refresh });
+  setData({ rows: [], error: "Unavailable", errorKind: "read", loading: false, refresh });
+  flush();
+  expect(view.queryByRole("button", { name: "Retry" })).toBeNull();
+  setData({ rows: [], error: "Access denied", errorKind: "access", loading: false, refresh });
   setPresented(true);
   flush();
   view.getByRole("button", { name: "Retry" }).click();

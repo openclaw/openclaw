@@ -292,7 +292,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the shared message-tool source-reply finality resolver.
       // +1: awaited web_search policy preparation for harnesses; the sync resolver stays.
       // +3: shared Decisions support/evaluation functions and the canonical capability schema.
-      3813,
+      // +2: openRecord and ToolArgumentValidationError on the existing tool-plugin facade.
+      3815,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -336,7 +337,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the shared message-tool source-reply finality resolver, so harnesses apply a run's default.
       // +1: the same awaited web_search policy preparation.
       // +2: the same shared Decisions support predicate and evaluator.
-      2210,
+      // +1: the same openRecord helper; ToolArgumentValidationError is construct-only.
+      2211,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

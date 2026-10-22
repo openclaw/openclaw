@@ -170,47 +170,34 @@ describe("Doctor canonical completion receipt repair", () => {
     });
   });
 
-  it("rolls back conflicting receipt identities without deleting either store's evidence", async () => {
-    await withStateDirEnv("doctor-private-conflict-", async ({ stateDir }) => {
-      const f = fixture(stateDir);
-      f.create(false, 20);
-      f.create(true, 10);
-      await (
-        await f.stage()
-      ).completeAsync!(completed);
-      await (
-        await f.stage(true, "different private result")
-      ).completeAsync!(stopped);
-      const source = f.rows();
-      const destination = f.rows(true);
-      await f.restart();
-      await expect(f.repair()).rejects.toThrow("conflicting input completions");
-      expect(f.rows()).toEqual(source);
-      expect(f.rows(true)).toEqual(destination);
-    });
-  });
-
-  it("rejects a receipt collision owned by another logical key", async () => {
-    await withStateDirEnv("doctor-private-key-conflict-", async ({ stateDir }) => {
-      const f = fixture(stateDir);
-      f.create();
-      await (
-        await f.stage()
-      ).completeAsync!(completed);
-      const otherKey = "agent:main:another-parent";
-      replaceSessionEntrySync(
-        { ...f.scope(true), sessionKey: otherKey },
-        { sessionId: f.scope(true).sessionId, updatedAt: 10 },
-      );
-      await (
-        await f.stage(true, "private child result", otherKey)
-      ).completeAsync!(stopped);
-      const source = f.rows();
-      const destination = f.rows(true);
-      await f.restart();
-      await expect(f.repair()).rejects.toThrow("conflicting input completions");
-      expect(f.rows()).toEqual(source);
-      expect(f.rows(true)).toEqual(destination);
-    });
-  });
+  it.each([false, true])(
+    "rolls back conflicting receipt identities (other key: %s)",
+    async (otherKey) => {
+      await withStateDirEnv("doctor-private-conflict-", async ({ stateDir }) => {
+        const f = fixture(stateDir);
+        f.create(false, 20);
+        const destinationKey = otherKey ? "agent:main:another-parent" : f.scope(true).sessionKey;
+        replaceSessionEntrySync(
+          { ...f.scope(true), sessionKey: destinationKey },
+          { sessionId: f.scope(true).sessionId, updatedAt: 10 },
+        );
+        await (
+          await f.stage()
+        ).completeAsync!(completed);
+        await (
+          await f.stage(
+            true,
+            otherKey ? "private child result" : "different private result",
+            destinationKey,
+          )
+        ).completeAsync!(stopped);
+        const source = f.rows();
+        const destination = f.rows(true);
+        await f.restart();
+        await expect(f.repair()).rejects.toThrow("conflicting input completions");
+        expect(f.rows()).toEqual(source);
+        expect(f.rows(true)).toEqual(destination);
+      });
+    },
+  );
 });

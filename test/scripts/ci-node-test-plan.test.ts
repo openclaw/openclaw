@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createChangedNodeTestShards as changedTests,
+  createNodeWorkerE2eTestShards,
   hasControlUiPerformanceAffectingChange,
   hasPromptSnapshotAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
@@ -545,22 +546,23 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         );
       }
       try {
-        const jobs = bundleTests({
+        const workerRows = createNodeWorkerE2eTestShards();
+        const compactRows = bundleTests({
           includeProofTests: true,
           includeReleaseOnlyPluginShards: false,
           includeReleaseOnlyToolingShards: true,
           includeReleaseOnlyRuntimeTests: false,
           includePrExemptRuntimeTests: true,
           compactMode: "pull-request",
-          compactNodeJobCap: 76,
+          compactNodeJobCap: 77 - workerRows.length,
           mainValidation: true,
           runnerBackend: "hybrid",
         });
-        // Main's 77 Node rows reserve one for the separate worker-E2E owner.
-        expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(76);
-        expect(jobs.length).toBeLessThanOrEqual(78);
+        const jobs = [...compactRows, ...workerRows];
+        expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
+        expect(jobs.length).toBeLessThanOrEqual(79);
         expect(
-          jobs
+          compactRows
             .flatMap(jobGroups)
             .filter((group) => group.shard_name === "synthetic-capacity-growth"),
         ).toHaveLength(extraGroup ? 1 : 0);

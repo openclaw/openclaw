@@ -95,7 +95,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       }
       return;
     }
-    const discoveredTargets = new Map<string, Promise<SessionStoreTarget[]>>();
+    const discoveredTargets = new Map<string, Promise<readonly SessionStoreTarget[]>>();
     const prepareSearch = async () => {
       sessionMutationAuthorization?.assertCurrent();
       const cfg = context.getRuntimeConfig();
