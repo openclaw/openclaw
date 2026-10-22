@@ -25,6 +25,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
 import type { CronInferenceBinding } from "./inference-binding.js";
 import {
   acquireCronInferenceAuthorization,
@@ -117,16 +118,13 @@ async function capture(cfg: OpenClawConfig, profileId: string) {
 async function persistJob(stateDir: string, binding: CronInferenceBinding) {
   const storePath = path.join(stateDir, "cron", "jobs.json");
   const job: CronStoredJob = {
+    ...makeCronJob({}),
     id: "durable-inference",
     name: "Durable inference",
-    enabled: true,
     createdAtMs: 1,
     updatedAtMs: 1,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "synthetic scheduled prompt" },
-    state: {},
     inferenceBinding: binding,
   };
   await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
@@ -149,25 +147,21 @@ async function reloadJob(storePath: string) {
 }
 
 /** Real scheduler/auth owners, stopping at the provider I/O boundary (no session or runner mocks). */
-async function resolveFreshRun(params: {
-  storePath: string;
-  cfg: OpenClawConfig;
-  agentDir: string;
-  modelId: "gpt-4.1" | "gpt-4o";
-}) {
-  const job = await reloadJob(params.storePath);
+async function resolveFreshRun(
+  storePath: string,
+  cfg: OpenClawConfig,
+  agentDir: string,
+  modelId: "gpt-4.1" | "gpt-4o" = "gpt-4o",
+) {
+  const job = await reloadJob(storePath);
   const binding = job.inferenceBinding!;
-  const authority = await acquireCronInferenceAuthorization({
-    binding,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-  });
+  const authority = await acquireCronInferenceAuthorization({ binding, cfg, agentDir });
   try {
-    const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir);
+    const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
     const prepared = prepareAgentRuntimeAuth({
       metadataSnapshot: createPluginMetadataSnapshotFixture(),
       provider: binding.provider,
-      modelId: params.modelId,
+      modelId,
       modelApi:
         binding.authRequirement === "subscription"
           ? "openai-chatgpt-responses"
@@ -176,9 +170,9 @@ async function resolveFreshRun(params: {
         binding.authRequirement === "subscription"
           ? "https://chatgpt.com/backend-api/codex"
           : "https://api.openai.com/v1",
-      config: params.cfg,
+      config: cfg,
       agentId: "main",
-      agentDir: params.agentDir,
+      agentDir,
       env: {},
       authProfileStore: store,
       requiredAuthProfileId: binding.profileId,
@@ -192,8 +186,8 @@ async function resolveFreshRun(params: {
       throw new Error("Expected a concrete provider route");
     }
     const model: Model = {
-      id: params.modelId,
-      name: params.modelId,
+      id: modelId,
+      name: modelId,
       provider: route.provider,
       api: route.api,
       baseUrl: route.baseUrl,
@@ -206,9 +200,9 @@ async function resolveFreshRun(params: {
     const resolved = await resolvePreparedRuntimeModelAuth({
       plan: prepared.plan,
       model,
-      cfg: params.cfg,
+      cfg,
       store,
-      agentDir: params.agentDir,
+      agentDir,
     });
     await authority.revalidate();
     authority.assertCurrent();
@@ -275,9 +269,7 @@ describe("durable cron inference authorization", () => {
           },
         });
         for (const modelId of ["gpt-4.1", "gpt-4o"] as const) {
-          expect(
-            await resolveFreshRun({ storePath, cfg: changed, agentDir: root.agentDir, modelId }),
-          ).toEqual({
+          expect(await resolveFreshRun(storePath, changed, root.agentDir, modelId)).toEqual({
             profileId,
             mode,
             apiKey: secret,
@@ -309,9 +301,7 @@ describe("durable cron inference authorization", () => {
         expires: Date.now() + 3_600_000,
         accountId: "synthetic-account",
       }));
-      mockOAuthProviderOperations({
-        refreshCredential,
-      });
+      mockOAuthProviderOperations({ refreshCredential });
       const manager = createOAuthManager();
       const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(root.agentDir);
       const credential = store.profiles[subscriptionId];
@@ -326,9 +316,7 @@ describe("durable cron inference authorization", () => {
         forceRefresh: true,
       });
       expect(refreshCredential).toHaveBeenCalledOnce();
-      expect(
-        await resolveFreshRun({ storePath, cfg, agentDir: root.agentDir, modelId: "gpt-4.1" }),
-      ).toMatchObject({
+      expect(await resolveFreshRun(storePath, cfg, root.agentDir, "gpt-4.1")).toMatchObject({
         profileId: subscriptionId,
         mode: "oauth",
         apiKey: "synthetic-refreshed-access",
@@ -353,9 +341,7 @@ describe("durable cron inference authorization", () => {
             true,
           );
         }
-        await expect(
-          resolveFreshRun({ storePath, cfg, agentDir: root.agentDir, modelId: "gpt-4o" }),
-        ).rejects.toThrow(
+        await expect(resolveFreshRun(storePath, cfg, root.agentDir)).rejects.toThrow(
           change === "replacement"
             ? /inference account was replaced/i
             : /inference account openai:platform was removed or signed out/i,
@@ -387,9 +373,7 @@ describe("durable cron inference authorization", () => {
       });
       expect(adopted.authorizationId).not.toBe(old.authorizationId);
       const storePath = await persistJob(root.stateDir, adopted);
-      expect(
-        await resolveFreshRun({ storePath, cfg, agentDir: root.agentDir, modelId: "gpt-4o" }),
-      ).toMatchObject({
+      expect(await resolveFreshRun(storePath, cfg, root.agentDir)).toMatchObject({
         profileId: platformId,
         mode: "api-key",
         apiKey: "synthetic-replacement-key",
@@ -415,14 +399,9 @@ describe("durable cron inference authorization", () => {
           },
         },
       };
-      await expect(
-        resolveFreshRun({
-          storePath,
-          cfg: incompatible,
-          agentDir: root.agentDir,
-          modelId: "gpt-4o",
-        }),
-      ).rejects.toThrow(/route|subscription|compatible/i);
+      await expect(resolveFreshRun(storePath, incompatible, root.agentDir)).rejects.toThrow(
+        /route|subscription|compatible/i,
+      );
     });
   });
 });

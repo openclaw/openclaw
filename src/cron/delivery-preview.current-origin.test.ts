@@ -33,6 +33,15 @@ import type { CronDelivery, CronJob, CronStoredJob } from "./types.js";
 afterEach(() => resetPluginRuntimeStateForTest());
 
 const sourceRoute = { channel: "telegram", to: "recipient" };
+function currentJob(id: string, agentId = id) {
+  return makeCronJob({
+    id,
+    agentId,
+    sessionTarget: "current",
+    sessionKey: `agent:${agentId}:dashboard:current-origin`,
+    delivery: { mode: "announce" },
+  });
+}
 function sessionEntry(
   context: DeliveryContext | undefined,
   sessionId = "source-session",
@@ -128,13 +137,7 @@ it.each(["single", "batch"] as const)(
       const cfg: OpenClawConfig = { agents: { entries: { main: {}, missing: {} } } };
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "missing" });
       expect(fs.existsSync(databasePath)).toBe(false);
-      const missing = makeCronJob({
-        id: "missing-current",
-        agentId: "missing",
-        sessionTarget: "current",
-        sessionKey: "agent:missing:dashboard:current-origin",
-        delivery: { mode: "announce" },
-      });
+      const missing = currentJob("missing-current", "missing");
       const explicit = {
         ...missing,
         id: "missing-explicit",
@@ -146,14 +149,6 @@ it.each(["single", "batch"] as const)(
         { ...missing, id: "missing-last", sessionTarget: "isolated" as const },
         explicit,
       ];
-      await expect(
-        resolveDeliveryTarget(cfg, "missing", {
-          ...explicit.delivery,
-          sessionKey: explicit.sessionKey,
-          sessionTarget: explicit.sessionTarget,
-        }),
-      ).resolves.toMatchObject({ ok: true, channel: "telegram", to: "explicit-recipient" });
-
       const previews =
         mode === "batch"
           ? await resolveCronDeliveryPreviews({ cfg, jobs })
@@ -180,13 +175,7 @@ it.each(["single", "batch"] as const)(
 it("records a lost metadata table beside two healthy delivery previews", () =>
   withCurrentOrigin({ source: sourceRoute }, async ({ job }) => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {}, interrupted: {} } } };
-    const interrupted = makeCronJob({
-      id: "interrupted",
-      agentId: "interrupted",
-      sessionTarget: "current",
-      sessionKey: "agent:interrupted:dashboard:current-origin",
-      delivery: { mode: "announce" },
-    });
+    const interrupted = currentJob("interrupted");
     replaceSessionEntrySync(
       { agentId: "interrupted", sessionKey: interrupted.sessionKey! },
       { sessionId: "interrupted-source", updatedAt: 1 },
@@ -307,6 +296,10 @@ it.each([
   { coordinates: { to: "recipient" }, channelCount: 0 },
   { coordinates: { accountId: "work" }, channelCount: 0 },
   { coordinates: { threadId: 0 }, channelCount: 2 },
+  {
+    coordinates: { channel: "telegram", to: "recipient", accountId: "work", threadId: "topic" },
+    channelCount: 1,
+  },
 ])(
   "retains explicit delivery coordinates $coordinates with $channelCount channels",
   ({ coordinates, channelCount }) =>
@@ -315,6 +308,7 @@ it.each([
       async ({ cfg, job, preview }) => {
         const resolved = await target(cfg, job);
         expect(resolved).toMatchObject({
+          ...(channelCount === 1 && "to" in coordinates ? coordinates : {}),
           channel: channelCount === 1 ? "telegram" : undefined,
           ok: channelCount === 1 && "to" in coordinates,
         });
@@ -326,25 +320,6 @@ it.each([
       },
     ),
 );
-
-it("preserves the explicit recipient, account, and thread", async () => {
-  const delivery = {
-    mode: "announce",
-    channel: "telegram",
-    to: "recipient",
-    accountId: "work",
-    threadId: "topic",
-  } as const;
-  await withCurrentOrigin({ delivery }, async ({ cfg, job }) => {
-    expect(await target(cfg, job, delivery)).toMatchObject({
-      ok: true,
-      channel: "telegram",
-      to: "recipient",
-      accountId: "work",
-      threadId: "topic",
-    });
-  });
-});
 
 it.each(["current", "isolated"] as const)(
   "retains an unavailable external source route for %s",

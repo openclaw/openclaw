@@ -40,12 +40,6 @@ function failRoute(error: string, channel?: string) {
   });
 }
 
-const current = {
-  sessionTarget: "current",
-  sessionKey: "agent:main:dashboard:c5557dcf",
-  delivery: undefined,
-} as const;
-
 beforeEach(() => {
   resolveDeliveryTarget.mockReset().mockResolvedValue({
     ok: true,
@@ -141,21 +135,3 @@ it.each([
     expectTarget({ ...delivery, sessionKey: undefined, sessionTarget: "isolated" });
   },
 );
-
-it("previews current-target announce with no external route as a conversation commit", async () => {
-  failRoute("Channel is required (no configured channels detected).");
-  expect(await previewForJob(current)).toEqual({
-    label: "announce -> current session",
-    detail: "commits to this conversation (no external channel route)",
-  });
-});
-
-it("keeps unavailable external plugin routes fail-closed", async () => {
-  failRoute("Channel plugin unavailable", "unavailable-plugin");
-  expect(await previewForJob(current)).toEqual({
-    label: "announce -> last",
-    detail: expect.stringContaining(
-      "last -> no route, will be blocked: Channel plugin unavailable",
-    ),
-  });
-});
