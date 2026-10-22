@@ -355,7 +355,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/discord/src/monitor/thread-bindings.worker.test.ts",
   "extensions/facetime/tests/runtime-admission.test.ts",
   "extensions/facetime/tests/runtime-authority-boundary.test.ts",
-  "extensions/facetime/tests/runtime-carrier-aliases.test.ts",
   "extensions/facetime/tests/runtime-persistence.test.ts",
   "extensions/facetime/tests/runtime-reconciliation.test.ts",
   "extensions/facetime/tests/runtime.test.ts",

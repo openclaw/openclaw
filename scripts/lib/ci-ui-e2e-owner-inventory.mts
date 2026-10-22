@@ -221,13 +221,13 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     [
       "ui/src/components/image-lightbox.tsx",
       "ui/src/lib/session-pull-requests.ts",
-      "ui/src/pages/activity/activity-page.ts",
+      "ui/src/pages/activity/activity-page.tsx",
     ],
   ),
   pageWatch(
     "ui/src/e2e/activity-session-feed.capture.e2e.test.ts",
     ["activity", "chat", "cron", "profile"],
-    ["ui/src/pages/activity/activity-page.ts"],
+    ["ui/src/pages/activity/activity-page.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/activity-session-git.e2e.test.ts",
@@ -235,7 +235,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     [
       "ui/src/components/link-reader-panel.tsx",
       "ui/src/lib/session-pull-requests.ts",
-      "ui/src/pages/activity/activity-page.ts",
+      "ui/src/pages/activity/activity-page.tsx",
       "ui/src/pages/activity/session-activity-git.ts",
     ],
   ),
@@ -243,12 +243,12 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/activity-session-subagents.e2e.test.ts",
     ["activity"],
-    ["ui/src/pages/activity/activity-page.ts"],
+    ["ui/src/pages/activity/activity-page.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/activity-summaries.e2e.test.ts",
     ["activity", "config"],
-    ["ui/src/pages/activity/activity-page.ts"],
+    ["ui/src/pages/activity/activity-page.tsx"],
   ),
   pageWatch("ui/src/e2e/agent-channel-runtime-status.e2e.test.ts", [
     "agents-home",
@@ -1636,7 +1636,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/session-link-reconnect.e2e.test.ts",
     ["activity", "chat"],
-    ["ui/src/pages/activity/activity-page.ts", "ui/src/pages/chat/chat-pane.ts"],
+    ["ui/src/pages/activity/activity-page.tsx", "ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch(
     "ui/src/e2e/session-list-filter.e2e.test.ts",

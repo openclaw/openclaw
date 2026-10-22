@@ -1,5 +1,20 @@
-import { createMemo, createSignal, Match, Show, Switch } from "solid-js";
+import {
+  action,
+  affects,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  isPending,
+  latest,
+  Loading,
+  Match,
+  refresh,
+  Show,
+  Switch,
+} from "solid-js";
 import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createTimeout } from "../lib/reactive/timers.ts";
 import { ConfigError } from "./config-error.tsx";
@@ -15,16 +30,22 @@ export type SettingsSaveIndicatorProps = {
   saving: boolean;
   applying: boolean;
   applyDisabled: boolean;
-  onRetry: () => void;
-  onSave: () => void;
-  onReload: () => void;
-  onApply: () => void;
+  presentationRetired: () => Promise<void>;
+  onRetry: () => Promise<unknown>;
+  onSave: () => Promise<unknown>;
+  onReload: () => Promise<unknown>;
+  onApply: () => Promise<unknown>;
 };
 
-function action(label: string, onClick: () => void) {
+function IndicatorAction(props: { label: string; busy: boolean; onClick: () => void }) {
   return (
-    <button class="btn btn--xs settings-save-indicator__action" type="button" onClick={onClick}>
-      {label}
+    <button
+      class="btn btn--xs settings-save-indicator__action"
+      type="button"
+      disabled={props.busy}
+      onClick={() => props.onClick()}
+    >
+      {props.label}
     </button>
   );
 }
@@ -47,6 +68,75 @@ function Claw(props: { saved?: boolean }) {
 }
 
 export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
+  type Command = "retry" | "save" | "reload" | "apply";
+  const lifetime = createMemo(() => ({ retired: props.presentationRetired() }), {
+    equals: (previous, next) => previous.retired === next.retired,
+  });
+  const presentation = createMemo(() => {
+    const { retired } = lifetime();
+    const [command, setCommand] = createOptimistic<Command | null>(null);
+    const [saving, setSaving] = createOptimistic(false);
+    const needsApply = createMemo(() => props.needsApply);
+    return { retired, command, setCommand, saving, setSaving, needsApply };
+  });
+  const [completion, setCompletion] = createSignal<Promise<unknown> | null>(null);
+  const outcome = createMemo(async () => {
+    await completion();
+    return null;
+  });
+  const current = (view: ReturnType<typeof presentation>) =>
+    view.retired === props.presentationRetired();
+  const present = action(function* (
+    view: ReturnType<typeof presentation>,
+    pending: Promise<unknown>,
+    retired: Promise<void>,
+    command: Command,
+  ) {
+    try {
+      if (current(view)) {
+        view.setCommand(command);
+        view.setSaving(true);
+        // The owner decides whether the accepted operation still needs an Apply.
+        affects(view.needsApply);
+      }
+      yield Promise.race([pending, retired]);
+      if (current(view)) {
+        yield refresh(view.needsApply);
+      }
+    } catch (error) {
+      if (current(view)) {
+        throw error;
+      }
+    }
+  });
+  function submit(command: Command) {
+    const view = presentation();
+    const retired = props.presentationRetired();
+    if (busy() || (command === "apply" && props.applyDisabled)) {
+      return;
+    }
+    const pending =
+      command === "retry"
+        ? props.onRetry()
+        : command === "save"
+          ? props.onSave()
+          : command === "reload"
+            ? props.onReload()
+            : props.onApply();
+    // Reload publishes its editor lock after draining writes. Keep that read
+    // outside the write action so the lock can land before the read finishes.
+    void setCompletion(
+      command === "reload"
+        ? Promise.race([pending, retired]).catch((error: unknown) => {
+            if (current(view)) {
+              throw error;
+            }
+          })
+        : Promise.resolve().then(() => present(view, pending, retired, command)),
+    );
+  }
+  const saving = () => presentation().saving();
+  const busy = () => saving() || isPending(outcome);
   const status = createMemo(() => (props.saving ? "saving" : props.status));
   // Only a saving → saved transition starts a fresh display window.
   type SaveState = SettingsSaveIndicatorProps["status"] | "saved-visible";
@@ -58,13 +148,21 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
     () => (saved() === "saved-visible" ? SAVED_VISIBLE_MS : undefined),
   );
   const state = createMemo(() => {
-    if (props.applying) {
+    const command = presentation().command();
+    if ((saving() && command === "apply") || props.applying) {
       return "applying";
+    }
+    if (saving() && (command === "save" || command === "retry")) {
+      return "saving";
     }
     if (["saving", "recovery", "rejected", "error", "paused", "conflict"].includes(status())) {
       return status();
     }
-    return saved() === "saved-visible" ? "saved" : props.needsApply ? "apply" : undefined;
+    return saved() === "saved-visible"
+      ? "saved"
+      : latest(presentation().needsApply)
+        ? "apply"
+        : undefined;
   });
   function Feedback(feedback: { error?: string }) {
     return (
@@ -82,6 +180,7 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
         ]}
         role="status"
         aria-live="polite"
+        aria-busy={busy() ? "true" : undefined}
         title={feedback.error}
         aria-label={
           feedback.error ? `${t("configView.autoSaveFailed")}: ${feedback.error}` : undefined
@@ -100,7 +199,11 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
           </Match>
           <Match when={state() === "recovery"}>
             <span>{props.lastError}</span>
-            {action(t("configView.recoveryReload"), () => props.onReload())}
+            <IndicatorAction
+              label={busy() ? t("common.loading") : t("configView.recoveryReload")}
+              busy={busy()}
+              onClick={() => submit("reload")}
+            />
           </Match>
           <Match when={state() === "rejected"}>
             <span>{t("configView.autoSaveRejected")}</span>
@@ -111,20 +214,40 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
                 <span>{props.lastError}</span>
               </details>
             </Show>
-            {action(t("configView.retry"), () => props.onRetry())}
-            {action(t("configView.recoveryReload"), () => props.onReload())}
+            <IndicatorAction
+              label={t("configView.retry")}
+              busy={busy()}
+              onClick={() => submit("retry")}
+            />
+            <IndicatorAction
+              label={busy() ? t("common.loading") : t("configView.recoveryReload")}
+              busy={busy()}
+              onClick={() => submit("reload")}
+            />
           </Match>
           <Match when={state() === "error"}>
             <span>{t("configView.autoSaveFailed")}</span>
-            {action(t("configView.retry"), () => props.onRetry())}
+            <IndicatorAction
+              label={t("configView.retry")}
+              busy={busy()}
+              onClick={() => submit("retry")}
+            />
           </Match>
           <Match when={state() === "paused"}>
             <span>{t("configView.autoSavePaused")}</span>
-            {action(t("configView.saveNow"), () => props.onSave())}
+            <IndicatorAction
+              label={t("configView.saveNow")}
+              busy={busy()}
+              onClick={() => submit("save")}
+            />
           </Match>
           <Match when={state() === "conflict"}>
             <span>{t("configView.autoSaveConflict")}</span>
-            {action(t("common.reload"), () => props.onReload())}
+            <IndicatorAction
+              label={busy() ? t("common.loading") : t("common.reload")}
+              busy={busy()}
+              onClick={() => submit("reload")}
+            />
           </Match>
           <Match when={state() === "saved"}>
             <Claw saved />
@@ -137,8 +260,8 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
             <button
               class="btn btn--xs settings-save-indicator__apply"
               type="button"
-              disabled={props.applyDisabled}
-              onClick={() => props.onApply()}
+              disabled={busy() || props.applyDisabled}
+              onClick={() => submit("apply")}
             >
               {t("configView.applyChanges")}
             </button>
@@ -149,14 +272,19 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
   }
   return (
     <openclaw-settings-save-indicator>
-      <Show when={state()}>
-        <ConfigError
-          message={state() === "error" ? props.lastError?.trim() : undefined}
-          fallback={<Feedback />}
-        >
-          {(message) => <Feedback error={message} />}
-        </ConfigError>
-      </Show>
+      <Loading>
+        <Show when={state()}>
+          <ConfigError
+            message={state() === "error" ? props.lastError?.trim() : undefined}
+            fallback={<Feedback />}
+          >
+            {(message) => <Feedback error={message} />}
+          </ConfigError>
+        </Show>
+      </Loading>
+      <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>
+        <Loading on={latest(completion)}>{outcome()}</Loading>
+      </Errored>
     </openclaw-settings-save-indicator>
   );
 }

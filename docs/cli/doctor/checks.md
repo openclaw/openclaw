@@ -20,6 +20,28 @@ postures and maintenance modes documented on the other pages.
 - Doctor does not execute `exec` SecretRefs while checking secrets by default. Use `--allow-exec` (with or without `--lint`) only when you intentionally want doctor to run those configured secret resolvers.
 - An explicitly empty agent roster produces no workspace suggestions. Config validation still reports that at least one configured agent is required.
 
+## Choosing which findings to address
+
+The final Doctor summary separates current problems from optional improvements.
+The category describes what needs attention; the diagnostic severity remains
+available to lint and automation.
+
+| Finding                                                    | Priority and next step                                                                                                                                                                                                                                          |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gateway mode or authentication is incomplete               | **Fix now.** Set the mode and credentials described in [Gateway configuration](/gateway/configuration), then rerun Doctor.                                                                                                                                      |
+| A workspace alias points to a different folder             | **Fix now.** Restore the original link, or run `openclaw doctor --fix` and confirm only if the same workspace moved. Do not transfer records between unrelated workspaces.                                                                                      |
+| Device auth or an existing pairing record is inconsistent  | **Fix now.** Inspect `openclaw devices list`, reconnect the device to request its intended access, and approve the exact request only after reviewing it. See [Devices](/cli/devices).                                                                          |
+| A new device or access upgrade is awaiting approval        | **Recommended improvement.** Approve it if you want to grant the requested access; reject an unrecognized request. A pending request alone does not mean existing Gateway access is broken.                                                                     |
+| A managed project clone is shallow or partial              | **Recommended improvement.** A full clone makes managed worktrees more reliable offline. Follow the printed repair commands, which preserve the clone's files; stop if any command fails. A missing or unreadable registered clone instead needs attention now. |
+| Bootstrap files exceed the context budget                  | **Recommended improvement.** Shorten them to include more of their instructions in each turn, or adjust the supported agent budgets. See [Agent workspace](/concepts/agent-workspace). The Gateway can keep running with the configured truncation.             |
+| Old plugin installation generations remain                 | **Recommended improvement.** Run `openclaw doctor --fix` to retire unused generations for safe pruning after restart. The current plugin installation remains authoritative.                                                                                    |
+| WhatsApp pressure and local terminal clients were observed | **Recommended improvement.** Export [Gateway diagnostics](/gateway/diagnostics) before choosing an action. This observation does not prove those clients caused the pressure.                                                                                   |
+| A Gmail hook model cannot be resolved                      | **Fix now.** Run `openclaw models list`, choose a configured provider/model for `hooks.gmail.model`, or remove the override to use the agent default. Check [Gmail automation](/automation/cron-jobs/gmail).                                                    |
+
+Successful repair removes the resolved finding from the final summary. A repair
+that was skipped or failed keeps its next step visible. Recommended improvements
+do not require stopping a healthy Gateway simply to clear the summary.
+
 ## Config writes and backups
 
 Update-history inspection and reconciliation are best-effort maintenance. A failure
@@ -43,6 +65,10 @@ After its checks finish, `doctor --fix` settles its own inspection workers while
 - If `openclaw.json` cannot be parsed and no last-known-good config can be recovered, `doctor --fix` leaves the file unchanged and exits with an error instead of writing a partial replacement. The error points to `openclaw config validate` for the exact parse position and explains how to edit or regenerate the config.
 
 ## Gateway and service repairs
+
+Current startup, WAL, runtime, secret, plugin, channel, and service repair failures appear in **Fix now** with a status or repair command. Use the same installation, profile, account, and configuration when following that command. A completed installation replacement is **Historical recovery notices**: no action is needed when the current Gateway is healthy. Channel/exporter diagnostics that time out after a successful status reply appear in **Recommended improvements** with a retry command; they do not prove the Gateway is unhealthy. Healthy telemetry results and service repair previews still appear as progress.
+
+An enabled install policy is informational. Static policy configuration errors or a failed-closed deep check appear in **Fix now**: correct `security.installPolicy.exec`, command permissions, and the reported command error, then run `openclaw doctor --deep`. Covered installs remain blocked until the policy works. A synthetic request that the policy deliberately blocks proves the command ran; it does not require repair. A policy warning appears in **Recommended improvements**: review and explicitly approve each real install only if intended. Doctor does not approve an install or bypass policy. See [install policy](/gateway/security/tool-permissions#plugins).
 
 - Set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when another supervisor owns the gateway lifecycle. Have that owner stop the Gateway, run Doctor as the state-owning account, then restart through the owner. Doctor skips native maintenance inspection and service mutations, including install/start/restart/bootstrap and legacy service cleanup; it keeps Gateway/state coordinators and agent-database lease checks, reports service health, and applies non-service repairs. See [Existing system LaunchDaemons](/gateway#existing-system-launchdaemons).
 - Doctor and `gateway status --deep` distinguish an unavailable launchd domain, a missing systemd user bus, and native check access denial. See [Gateway and service recovery](/cli/doctor/recovery) for runtime-environment, `dbus-user-session`, and external-supervisor guidance.

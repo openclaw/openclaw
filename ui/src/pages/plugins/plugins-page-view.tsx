@@ -10,6 +10,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { WizardLogin } from "../../components/wizard-login-controller.tsx";
+import { currentConfigRead } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -136,6 +137,8 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     mutationBlockedReason: page().accessBlockedReason(page().state.result?.mutationAllowed),
     configBusy: configState().configLoading,
     configError: configState().lastError,
+    configRead: currentConfigRead(configState()),
+    configSchemaRead: page().context.runtimeConfig.schemaRead,
     canEditConfig: page().canEditConfig(),
     configValue: configState().configForm,
     configHints: configState().configUiHints,

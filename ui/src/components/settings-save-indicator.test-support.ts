@@ -1,6 +1,8 @@
 import { vi } from "vitest";
 import type { SettingsSaveIndicatorProps as Props } from "./settings-save-indicator.tsx";
 
+const activePresentation = new Promise<void>(() => {});
+
 export function saveIndicatorProps(overrides: Partial<Props> = {}): Props {
   return {
     status: "idle",
@@ -9,10 +11,11 @@ export function saveIndicatorProps(overrides: Partial<Props> = {}): Props {
     saving: false,
     applying: false,
     applyDisabled: false,
-    onRetry: vi.fn(),
-    onSave: vi.fn(),
-    onReload: vi.fn(),
-    onApply: vi.fn(),
+    presentationRetired: () => activePresentation,
+    onRetry: vi.fn(async () => false),
+    onSave: vi.fn(async () => false),
+    onReload: vi.fn(async () => undefined),
+    onApply: vi.fn(async () => false),
     ...overrides,
   };
 }

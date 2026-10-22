@@ -8,10 +8,9 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { agentCreationRejection } from "./creation.test-support.ts";
 import {
+  buildToolsEffectiveRequestKey,
   createAgentCapability,
-  loadToolsCatalog,
-  loadToolsEffective,
-  refreshVisibleToolsEffectiveForCurrentSession,
+  readToolsEffective,
 } from "./index.ts";
 import type { AgentsState } from "./index.ts";
 import { setDefaultAgent } from "./mutations.ts";
@@ -70,14 +69,6 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<T
         sectionOrder: [],
       },
     },
-    toolsCatalogLoading: false,
-    toolsCatalogError: null,
-    toolsCatalogResult: null,
-    toolsEffectiveLoading: false,
-    toolsEffectiveLoadingKey: null,
-    toolsEffectiveResultKey: null,
-    toolsEffectiveError: null,
-    toolsEffectiveResult: null,
     sessionKey: "main",
     sessionsResult: {
       ts: 0,
@@ -416,189 +407,35 @@ describe("createAgentCapability lifecycle", () => {
   });
 });
 
-describe("loadToolsCatalog", () => {
-  it("loads catalog and stores result", async () => {
-    const { state, request } = createState();
-    const payload = {
-      agentId: "main",
-      profiles: [{ id: "full", label: "Full" }],
-      groups: [
-        {
-          id: "media",
-          label: "Media",
-          source: "core",
-          tools: [{ id: "tts", label: "tts", description: "Text-to-speech", source: "core" }],
-        },
-      ],
-    };
-    request.mockResolvedValue(payload);
-
-    await loadToolsCatalog(state, "main");
-
-    expect(request).toHaveBeenCalledWith("tools.catalog", {
-      agentId: "main",
-      includePlugins: true,
-    });
-    expect(state.toolsCatalogResult).toEqual(payload);
-    expect(state.toolsCatalogError).toBeNull();
-    expect(state.toolsCatalogLoading).toBe(false);
-  });
-
-  it("captures request errors for fallback UI handling", async () => {
-    const { state, request } = createState();
-    request.mockRejectedValue(new Error("gateway unavailable"));
-
-    await loadToolsCatalog(state, "main");
-
-    expect(state.toolsCatalogResult).toBeNull();
-    expect(state.toolsCatalogError).toBe("gateway unavailable");
-    expect(state.toolsCatalogLoading).toBe(false);
-  });
-
-  it("keeps a replacement-client catalog load isolated from the old request", async () => {
-    const { state, request: oldRequest } = createState();
-    const oldResult = deferred<unknown>();
-    const nextResult = deferred<unknown>();
-    oldRequest.mockReturnValue(oldResult.promise);
-    const nextRequest = vi.fn<TestRequest>().mockReturnValue(nextResult.promise);
-
-    const oldLoad = loadToolsCatalog(state, "main");
-    state.client = { request: nextRequest } as unknown as AgentsState["client"];
-    state.requestGeneration += 1;
-    state.toolsCatalogLoading = false;
-    state.toolsCatalogLoadingAgentId = null;
-    const nextLoad = loadToolsCatalog(state, "main");
-
-    oldResult.resolve({ agentId: "main", profiles: [], groups: [{ id: "old" }] });
-    await oldLoad;
-    expect(state.toolsCatalogResult).toBeNull();
-    expect(state.toolsCatalogLoading).toBe(true);
-
-    nextResult.resolve({ agentId: "main", profiles: [], groups: [{ id: "new" }] });
-    await nextLoad;
-    expect(state.toolsCatalogResult?.groups).toEqual([{ id: "new" }]);
-    expect(state.toolsCatalogLoading).toBe(false);
-  });
-});
-
-describe("loadToolsEffective", () => {
-  it("loads effective tools for the active session", async () => {
-    const { state, request } = createState();
-    const payload = {
-      agentId: "main",
-      profile: "coding",
-      groups: [
-        {
-          id: "core",
-          label: "Built-in tools",
-          source: "core",
-          tools: [
-            {
-              id: "read",
-              label: "Read",
-              description: "Read files",
-              rawDescription: "Read files",
-              source: "core",
-            },
-          ],
-        },
-      ],
-    };
-    request.mockResolvedValue(payload);
-
-    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-
+describe("readToolsEffective", () => {
+  it("returns the effective-tools payload for the requested agent and session", async () => {
+    const payload = { agentId: "main", profile: "coding", groups: [] };
+    const request = vi.fn(async () => payload);
+    const client = createTestGatewayClient(request);
+    await expect(
+      readToolsEffective(client, { agentId: "main", sessionKey: "main" }),
+    ).resolves.toEqual(payload);
     expect(request).toHaveBeenCalledWith("tools.effective", {
       agentId: "main",
       sessionKey: "main",
     });
-    expect(state.toolsEffectiveResult).toEqual(payload);
-    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
-    expect(state.toolsEffectiveError).toBeNull();
-    expect(state.toolsEffectiveLoading).toBe(false);
   });
 
-  it("captures effective-tool request errors", async () => {
-    const { state, request } = createState();
-    request.mockRejectedValue(new Error("gateway unavailable"));
-
-    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-
-    expect(state.toolsEffectiveResult).toBeNull();
-    expect(state.toolsEffectiveResultKey).toBeNull();
-    expect(state.toolsEffectiveError).toBe("gateway unavailable");
-    expect(state.toolsEffectiveLoading).toBe(false);
+  it("throws the existing display error for the native error boundary", async () => {
+    const client = createTestGatewayClient(
+      vi.fn(async () => {
+        throw new Error("gateway unavailable");
+      }),
+    );
+    await expect(
+      readToolsEffective(client, { agentId: "main", sessionKey: "main" }),
+    ).rejects.toThrow("gateway unavailable");
   });
+});
 
-  it("keeps a replacement-client effective-tools load isolated from the old request", async () => {
-    const { state, request: oldRequest } = createState();
-    const oldResult = deferred<unknown>();
-    const nextResult = deferred<unknown>();
-    oldRequest.mockReturnValue(oldResult.promise);
-    const nextRequest = vi.fn<TestRequest>().mockReturnValue(nextResult.promise);
-
-    const oldLoad = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-    state.client = { request: nextRequest } as unknown as AgentsState["client"];
-    state.requestGeneration += 1;
-    state.toolsEffectiveLoading = false;
-    state.toolsEffectiveLoadingKey = null;
-    const nextLoad = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-
-    oldResult.resolve({ agentId: "main", profile: "old", groups: [] });
-    await oldLoad;
-    expect(state.toolsEffectiveResult).toBeNull();
-    expect(state.toolsEffectiveLoading).toBe(true);
-
-    nextResult.resolve({ agentId: "main", profile: "new", groups: [] });
-    await nextLoad;
-    expect(state.toolsEffectiveResult?.profile).toBe("new");
-    expect(state.toolsEffectiveLoading).toBe(false);
-  });
-
-  it("keeps the newest visible-session tools when an older response finishes last", async () => {
-    const { state, request } = createState();
-    const oldRequest = deferred<unknown>();
-    const currentRequest = deferred<unknown>();
-    request.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(currentRequest.promise);
-    state.agentsPanel = "tools";
-    state.sessionKey = "agent:main:older";
-
-    const staleLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
-    state.sessionKey = "agent:main:current";
-    const currentLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
-    currentRequest.resolve({ agentId: "main", profile: "current", groups: [] });
-    await currentLoad;
-    oldRequest.resolve({ agentId: "main", profile: "stale", groups: [] });
-    await staleLoad;
-
-    expect(state.toolsEffectiveResult?.profile).toBe("current");
-    expect(state.toolsEffectiveError).toBeNull();
-    expect(state.toolsEffectiveLoading).toBe(false);
-  });
-
-  it("ignores a retired visible-session failure after a newer tools response", async () => {
-    const { state, request } = createState();
-    const oldRequest = deferred<unknown>();
-    request.mockReturnValueOnce(oldRequest.promise).mockResolvedValueOnce({
-      agentId: "main",
-      profile: "current",
-      groups: [],
-    });
-    state.agentsPanel = "tools";
-    state.sessionKey = "agent:main:older";
-
-    const staleLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
-    state.sessionKey = "agent:main:current";
-    await refreshVisibleToolsEffectiveForCurrentSession(state);
-    oldRequest.reject(new Error("retired connection failed"));
-    await staleLoad;
-
-    expect(state.toolsEffectiveResult?.profile).toBe("current");
-    expect(state.toolsEffectiveError).toBeNull();
-  });
-
+describe("buildToolsEffectiveRequestKey", () => {
   it("uses the catalog provider when the active session reports a stale provider", async () => {
-    const { state, request } = createState();
+    const { state } = createState();
     const sessionsResult = state.sessionsResult!;
     state.sessionsResult = {
       ts: sessionsResult.ts,
@@ -616,19 +453,13 @@ describe("loadToolsEffective", () => {
       ],
     };
     state.chatModelCatalog = [{ id: "deepseek-chat", name: "DeepSeek Chat", provider: "deepseek" }];
-    request.mockResolvedValue({
-      agentId: "main",
-      profile: "coding",
-      groups: [],
-    });
-
-    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-
-    expect(state.toolsEffectiveResultKey).toBe("main:main:model=deepseek/deepseek-chat");
+    expect(buildToolsEffectiveRequestKey(state, { agentId: "main", sessionKey: "main" })).toBe(
+      "main:main:model=deepseek/deepseek-chat",
+    );
   });
 
   it("preserves already-qualified session models when the active session provider is stale and the catalog is empty", async () => {
-    const { state, request } = createState();
+    const { state } = createState();
     const sessionsResult = state.sessionsResult!;
     state.sessionsResult = {
       ts: sessionsResult.ts,
@@ -646,15 +477,9 @@ describe("loadToolsEffective", () => {
       ],
     };
     state.chatModelCatalog = [];
-    request.mockResolvedValue({
-      agentId: "main",
-      profile: "coding",
-      groups: [],
-    });
-
-    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-
-    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
+    expect(buildToolsEffectiveRequestKey(state, { agentId: "main", sessionKey: "main" })).toBe(
+      "main:main:model=openai/gpt-5-mini",
+    );
   });
 });
 

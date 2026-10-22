@@ -38,33 +38,30 @@ async function expectReparseArgv(params: {
 }
 
 describe("lazy command action reparsing", () => {
-  it.each([{ args: ["config", "get", "--", "--help"] }])(
-    "keeps literal flag-looking values through actual lazy reparse: $args",
-    async ({ args }) => {
-      const program = new Command().name("openclaw").enablePositionalOptions();
-      const received: string[] = [];
-      registerCommandGroups(
-        program,
-        [
-          {
-            placeholders: [{ name: "config", description: "Read config" }],
-            register: () => {
-              program
-                .command("config")
-                .command("get")
-                .argument("<path>")
-                .action((value: string) => {
-                  received.push(value);
-                });
-            },
+  it("keeps literal flag-looking values through actual lazy reparse", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    const received: string[] = [];
+    registerCommandGroups(
+      program,
+      [
+        {
+          placeholders: [{ name: "config", description: "Read config" }],
+          register: () => {
+            program
+              .command("config")
+              .command("get")
+              .argument("<path>")
+              .action((value: string) => {
+                received.push(value);
+              });
           },
-        ],
-        { eager: false, primary: null, registerPrimaryOnly: false },
-      );
-      await program.parseAsync(["node", "openclaw", ...args]);
-      expect(received).toEqual(["--help"]);
-    },
-  );
+        },
+      ],
+      { eager: false, primary: null, registerPrimaryOnly: false },
+    );
+    await program.parseAsync(["node", "openclaw", "config", "get", "--", "--help"]);
+    expect(received).toEqual(["--help"]);
+  });
 
   it("uses root raw args and reparses the root for nested lazy commands", async () => {
     const root = new Command().name("openclaw");
@@ -115,30 +112,20 @@ describe("lazy command action reparsing", () => {
     await expectReparseArgv({ parent: browser, action: extension, argv, expected: argv });
   });
 
-  it.each([
-    {
-      label: "an optional separate value",
-      retryFlags: "-r, --retry [value]",
-      tokens: ["-pr", "remote"],
-      expected: { preview: true, retry: "remote" },
-    },
-  ] as const)(
-    "preserves child-owned short groups with $label",
-    async ({ retryFlags, tokens, expected }) => {
-      const root = new Command().name("openclaw");
-      const browser = root.command("browser").option("-p, --browser-profile <name>");
-      const extension = browser.command("extension");
-      const pair = extension.command("pair").option("-p, --preview").option(retryFlags);
+  it("preserves child-owned short groups with an optional separate value", async () => {
+    const root = new Command().name("openclaw");
+    const browser = root.command("browser").option("-p, --browser-profile <name>");
+    const extension = browser.command("extension");
+    const pair = extension.command("pair").option("-p, --preview").option("-r, --retry [value]");
 
-      const parsed = pair.parseOptions([...tokens]);
+    const parsed = pair.parseOptions(["-pr", "remote"]);
 
-      expect(parsed.unknown).toEqual([]);
-      expect(pair.opts()).toEqual(expected);
+    expect(parsed.unknown).toEqual([]);
+    expect(pair.opts()).toEqual({ preview: true, retry: "remote" });
 
-      const argv = ["node", "openclaw", "browser", "extension", "pair", ...tokens];
-      await expectReparseArgv({ parent: browser, action: extension, argv, expected: argv });
-    },
-  );
+    const argv = ["node", "openclaw", "browser", "extension", "pair", "-pr", "remote"];
+    await expectReparseArgv({ parent: browser, action: extension, argv, expected: argv });
+  });
 
   it("rejects a missing parent option value before loading the lazy command", async () => {
     const root = new Command().name("openclaw").exitOverride();
