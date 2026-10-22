@@ -1,6 +1,7 @@
 import { createMemo, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuControls } from "../../../components/solid/menu.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import "../../../components/tooltip.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
@@ -75,7 +76,12 @@ export function GitHubPublicationAccountSelector(props: {
         {(value) => (
           <span class="github-publication-mobile__account-identity">
             <GitHubPublicationAvatar login={value().login} />
-            <span class="github-publication-mobile__login" aria-label={`@${value().login}`}>
+            <span
+              ref={createTextOverflow(() => value().login)}
+              class="github-publication-mobile__login"
+              aria-label={`@${value().login}`}
+              title={`@${value().login}`}
+            >
               @{value().login}
             </span>
           </span>

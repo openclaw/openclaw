@@ -5,11 +5,8 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import {
-  createGatewayHarness,
-  createTestSessionCapability,
-  sessionsResult,
-} from "./session-capability.test-support.ts";
+import { sessionsResult } from "./session-capability.test-support.ts";
+import { sessionRpcHarness } from "./session-rpc.test-support.ts";
 
 const initial: GatewaySessionRow = {
   key: "agent:main:category-test",
@@ -33,13 +30,11 @@ function setup(readList?: (params: unknown) => Promise<ReturnType<typeof session
   const listStarted = createDeferred();
   let reads = 0;
   let writes = 0;
-  const client = createTestGatewayClient(async (method, params) => {
-    switch (method) {
-      case "sessions.subscribe":
-        return { subscribed: true };
-      case "sessions.patch":
-        return replies[writes++]!.promise;
-      case "sessions.list":
+  const harness = sessionRpcHarness(
+    {
+      "sessions.subscribe": () => ({ subscribed: true }),
+      "sessions.patch": () => replies[writes++]!.promise,
+      "sessions.list": (params) => {
         if (readList) {
           return readList(params);
         }
@@ -48,11 +43,11 @@ function setup(readList?: (params: unknown) => Promise<ReturnType<typeof session
         }
         listStarted.resolve();
         return list.promise;
-    }
-    throw new Error(`Unexpected method: ${method}`);
-  });
-  const harness = createGatewayHarness(client);
-  const sessions = createTestSessionCapability(harness.gateway);
+      },
+    },
+    createTestGatewayClient,
+  );
+  const { sessions } = harness;
   const confirm = (index: number, category: string | undefined, updatedAt = index + 2) =>
     replies[index]!.resolve(receipt({ category }, updatedAt));
   return {

@@ -113,7 +113,6 @@ async function nativeChild(startChild = true, keepParent = false, attributed = t
   const releaseChild = vi.fn();
   const claimDirectChild = vi.fn(() => releaseChild);
   const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-    recoveryPollDelaysMs: [],
     retainParentThread: (threadId) => protectCodexAppServerLiveThread(client.client, threadId),
     interruptChildAndWait: (threadId, turnId, assertCurrent, timeoutMs) => {
       interruptBudgets.push(timeoutMs);
@@ -236,7 +235,7 @@ it.each(["interrupted", "preturn", "natural success"] as const)(
 );
 
 it("joins selected custody while admitting another request during Stop", async () => {
-  const { runtime, monitor } = createMonitorFixture({ recoveryPollDelaysMs: [] });
+  const { runtime, monitor } = createMonitorFixture();
   const capture = createDeferred<undefined>();
   runtime.captureAgentHarnessCompletionCustody.mockImplementation(() => capture.promise);
   onTestFinished(() => monitor.dispose());

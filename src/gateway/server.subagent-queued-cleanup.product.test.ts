@@ -1,6 +1,4 @@
-import { X509Certificate } from "node:crypto";
 import { text } from "node:stream/consumers";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import {
@@ -9,7 +7,6 @@ import {
 } from "../../test/helpers/openai-responses-sse.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import * as subagentKillSettlement from "../agents/subagents/registry/subagent-control-kill-settlement.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { dispatchReplyWithBufferedBlockDispatcherCore } from "../auto-reply/reply/provider-dispatcher.js";
@@ -21,92 +18,20 @@ import {
 import { createTestIngressQueue } from "../channels/message/ingress-drain.test-helpers.js";
 import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../sessions/session-controller.lifecycle.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
-import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
-  buildSubagentStopConfig,
+  createSubagentStopFixture,
+  findSubagentSpawnReceipt,
   postSubagentKill,
-  subagentStopProxyHeaders,
+  subagentToolCallEvents,
   type KillResponse,
   type SpawnReceipt,
 } from "./server.subagent-stop-settlement.product.test-support.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { disconnectGatewayClient } from "./test-helpers.e2e.js";
 
-const proxyUser = "subagent-stop-administrator@example.test";
 const parentPrompt = "Spawn the child that will yield.";
 const childTask = "Pause this unfinished task until an incoming continuation arrives.";
 const queuedInput = "Queued durable child input";
 let responseSequence = 0;
-
-function toolCallEvents(name: string, args: Record<string, unknown>) {
-  // Preserve the streamed call sequence; the real runner executes the tools.
-  const sequence = ++responseSequence;
-  const itemId = `fc_queued_cleanup_${sequence}`;
-  const argumentsText = JSON.stringify(args);
-  const item = {
-    type: "function_call",
-    id: itemId,
-    call_id: `call_queued_cleanup_${sequence}`,
-    name,
-    arguments: argumentsText,
-  };
-  const response = { id: `resp_queued_cleanup_${sequence}`, object: "response" };
-  const argumentEvent = (type: string, data: Record<string, unknown>) => ({
-    type: `response.function_call_arguments.${type}`,
-    item_id: itemId,
-    output_index: 0,
-    ...data,
-  });
-  return [
-    {
-      type: "response.created",
-      response: { ...response, status: "in_progress", output: [] },
-    },
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    argumentEvent("delta", { delta: argumentsText }),
-    argumentEvent("done", { arguments: argumentsText }),
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        ...response,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 8, output_tokens: 4, total_tokens: 12 },
-      },
-    },
-  ];
-}
-
-function findSpawnReceipt(value: unknown): SpawnReceipt | undefined {
-  // Read the public sessions_spawn result, never the in-process registry.
-  if (typeof value === "string") {
-    try {
-      return findSpawnReceipt(JSON.parse(value) as unknown);
-    } catch {
-      return undefined;
-    }
-  }
-  if (isRecord(value) || Array.isArray(value)) {
-    if (
-      isRecord(value) &&
-      value.status === "accepted" &&
-      typeof value.childSessionKey === "string" &&
-      typeof value.runId === "string"
-    ) {
-      return { childSessionKey: value.childSessionKey, runId: value.runId };
-    }
-    for (const item of Array.isArray(value) ? value : Object.values(value)) {
-      const matched = findSpawnReceipt(item);
-      if (matched) {
-        return matched;
-      }
-    }
-  }
-  return undefined;
-}
 
 async function startYieldModelServer(allowYield: Promise<void>) {
   const childAccepted = createDeferred<SpawnReceipt>();
@@ -127,18 +52,25 @@ async function startYieldModelServer(allowYield: Promise<void>) {
         childModelStarted.resolve();
         await allowYield;
         yieldSent = true;
-        writeOpenAiResponsesSse(response, toolCallEvents("sessions_yield", { waitFor: "message" }));
+        writeOpenAiResponsesSse(
+          response,
+          subagentToolCallEvents("sessions_yield", { waitFor: "message" }, ++responseSequence),
+        );
         return;
       }
       // The parent's next request carries the accepted child key in its tool output.
       if (body.includes(parentPrompt) && !body.includes("function_call_output")) {
         writeOpenAiResponsesSse(
           response,
-          toolCallEvents("sessions_spawn", { task: childTask, context: "isolated" }),
+          subagentToolCallEvents(
+            "sessions_spawn",
+            { task: childTask, context: "isolated" },
+            ++responseSequence,
+          ),
         );
         return;
       }
-      const receipt = findSpawnReceipt(parsed);
+      const receipt = findSubagentSpawnReceipt(parsed);
       if (receipt) {
         childAccepted.resolve(receipt);
       }
@@ -167,44 +99,24 @@ afterEach(async () => {
 it("bounds public child Stop while yielded queued-input cleanup remains pending", async () => {
   const allowYield = createDeferred();
   const model = await startYieldModelServer(allowYield.promise);
-  const state = await createOpenClawTestState({ label: "subagent-yielded-queued-cleanup" });
-  setUserProfileRole(ensureProfileForEmail(proxyUser).id, "administrator");
-  const cfg = buildSubagentStopConfig(state.workspaceDir, {
-    certPath: await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM),
-    keyPath: await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM),
-  });
-  const provider = cfg.models?.providers?.synthetic;
-  if (!provider) {
-    throw new Error("Missing synthetic model provider");
-  }
-  provider.baseUrl = model.url;
-  provider.request = { allowPrivateNetwork: true };
+  const { state, cfg, start } = await createSubagentStopFixture(
+    "subagent-yielded-queued-cleanup",
+    model.url,
+  );
   cfg.messages = { queue: { mode: "followup" } };
   const childTerminal = createDeferred();
   let childSessionKey: string | undefined;
-  const gateway = await startGatewayWithClient({
-    cfg,
-    configPath: state.configPath,
-    auth: cfg.gateway?.auth,
-    edgeAuthHeaders: subagentStopProxyHeaders,
-    secure: true,
-    tlsFingerprint: new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256,
-    clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-    mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-    origin: "https://control.example.com",
-    scopes: ["operator.admin", "operator.read", "operator.write"],
-    onEvent: (event) => {
-      const payload = event.payload as { sessionKey?: unknown; state?: unknown } | undefined;
-      if (
-        event.event === "chat" &&
-        payload &&
-        payload.sessionKey === childSessionKey &&
-        model.hasSentYield() &&
-        ["aborted", "error", "final"].includes(String(payload.state))
-      ) {
-        childTerminal.resolve();
-      }
-    },
+  const gateway = await start((event) => {
+    const payload = event.payload as { sessionKey?: unknown; state?: unknown } | undefined;
+    if (
+      event.event === "chat" &&
+      payload &&
+      payload.sessionKey === childSessionKey &&
+      model.hasSentYield() &&
+      ["aborted", "error", "final"].includes(String(payload.state))
+    ) {
+      childTerminal.resolve();
+    }
   });
   const releaseCleanup = createDeferred();
   const releaseStarted = createDeferred();

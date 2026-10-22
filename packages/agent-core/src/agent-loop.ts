@@ -40,7 +40,9 @@ import {
   createErrorToolResult,
   createToolExecutionErrorResult,
   finalizeToolCallOutcome,
+  immediateToolArgumentValidationError,
   immediateToolCallError,
+  immediateToolPreparationError,
   resolveToolResultContentSource,
   type FinalizedToolCallOutcome,
   type ImmediateToolCallOutcome,
@@ -1045,17 +1047,14 @@ async function validateToolCallForBatchAdmission(
         ? toolCall
         : { ...toolCall, arguments: preparedArguments as Record<string, unknown> };
   } catch (error) {
-    return immediateToolCallError(coerceErrorMessage(error));
+    return immediateToolPreparationError(error);
   }
 
   let validatedArgs: unknown;
   try {
     validatedArgs = validateToolArguments(tool, preparedToolCall);
   } catch (error) {
-    return {
-      ...immediateToolCallError(coerceErrorMessage(error)),
-      errorKind: "argument-validation",
-    };
+    return immediateToolArgumentValidationError(error);
   }
   return { kind: "prepared", toolCall, tool, args: validatedArgs };
 }

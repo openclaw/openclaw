@@ -80,16 +80,6 @@ function timestampForPath(now: Date): string {
   return now.toISOString().replaceAll(":", "-");
 }
 
-function toFeishuSessionEntry(value: unknown): FeishuSessionEntry {
-  if (!isRecord(value)) {
-    return {};
-  }
-  return {
-    sessionId: value.sessionId,
-    sessionFile: value.sessionFile,
-  };
-}
-
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
@@ -532,19 +522,18 @@ async function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: Nod
           isFeishuSessionEntry(sessionKey, sessionEntry),
       )
       .toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey))) {
-      const sessionEntry = toFeishuSessionEntry(entry);
       sessionEntries.push({
         key,
         storePath: target.storePath,
         agentId: target.agentId,
-        entry: sessionEntry,
+        entry,
       });
       findings.push(
         ...(await collectFeishuSessionFindings({
           sessionKey: key,
           storePath: target.storePath,
           agentId: target.agentId,
-          entry: sessionEntry,
+          entry,
         })),
       );
     }

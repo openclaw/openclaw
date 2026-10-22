@@ -382,7 +382,7 @@ describe("renderUpdates", () => {
     expect(row("App updates unavailable").textContent).toContain("Updater is not bundled");
     expect(container.textContent).not.toContain("Check for updates automatically");
     renderUpdates();
-    expect(container.textContent).not.toContain("This Mac");
+    await waitForSolid(() => expect(container.textContent).not.toContain("This Mac"));
   });
 
   it("renders build facts, policy controls, status, and the shared update action", () => {
@@ -554,8 +554,7 @@ describe("renderUpdates", () => {
     const hold = row("Status").querySelector<HTMLButtonElement>("button");
     expect(hold?.textContent?.trim()).toBe("Hold 1 h");
     hold!.click();
-    flush();
-    expect(hold!.disabled).toBe(true);
+    await waitForSolid(() => expect(hold!.disabled).toBe(true));
     hold!.click();
     expect(onHoldUpdate).toHaveBeenCalledOnce();
     expect(row("Status").querySelector("[role='timer']")).toBe(timer);
@@ -577,8 +576,7 @@ describe("renderUpdates", () => {
     renderUpdates({ update: waitingUpdate({ forceAtMs: 762_000 }), onHoldUpdate });
     const hold = row("Status").querySelector<HTMLButtonElement>("button")!;
     hold.click();
-    flush();
-    expect(hold.disabled).toBe(true);
+    await waitForSolid(() => expect(hold.disabled).toBe(true));
 
     renderUpdates({
       update: waitingUpdate({ id: "campaign-2", forceAtMs: 762_000 }),
@@ -590,9 +588,8 @@ describe("renderUpdates", () => {
     await retired.promise;
     await waitForSolid(() => expect(replacement.disabled).toBe(false));
     replacement.click();
-    flush();
     expect(onHoldUpdate).toHaveBeenCalledTimes(2);
-    expect(replacement.disabled).toBe(true);
+    await waitForSolid(() => expect(replacement.disabled).toBe(true));
     current.resolve(false);
     await waitForSolid(() => expect(replacement.disabled).toBe(false));
   });

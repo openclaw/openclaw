@@ -12,6 +12,7 @@ import {
   MISSING_REPLY_NOTICE_TEXT,
   isRequiredReplyExpectation,
   isSyntheticSourceReplyTurn,
+  resolveClaimedReplyExpectation,
   resolveReplyCompletion,
   shouldDeliverMissingReplyNotice,
 } from "../../agents/reply-completion.js";
@@ -234,7 +235,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     }),
   );
   let completion = resolveReplyCompletion(
-    terminalReplyExpectation,
+    resolveClaimedReplyExpectation(terminalReplyExpectation, result.meta),
     result.meta?.error?.kind === "hook_block" || result.didSendDeterministicApprovalPrompt === true
       ? "blocked"
       : authoredSilence

@@ -42,20 +42,23 @@ type SidebarIdentityMenuParams = {
   onRetryConnect?: () => void;
 };
 
+// The slot shares the command icon column so dots, glyphs, and labels line up.
 function renderGatewayHealth(health: NativeGatewaysSnapshot["gateways"][number]["health"]) {
   return (
-    <span
-      class="sidebar-gateway-health"
-      data-health={health}
-      role="img"
-      aria-label={
-        {
-          ok: t("nav.gateway.connected"),
-          error: t("nav.gateway.unreachable"),
-          unknown: t("nav.gateway.unknown"),
-        }[health]
-      }
-    />
+    <span class="sidebar-gateway-health-slot">
+      <span
+        class="sidebar-gateway-health"
+        data-health={health}
+        role="img"
+        aria-label={
+          {
+            ok: t("nav.gateway.connected"),
+            error: t("nav.gateway.unreachable"),
+            unknown: t("nav.gateway.unknown"),
+          }[health]
+        }
+      />
+    </span>
   );
 }
 
@@ -114,7 +117,7 @@ function renderIdentityGateways(
           ),
         ]
       : []),
-    renderSidebarMenuAction("command:gateway-settings", t("nav.gateway.openSettings"), "server"),
+    renderSidebarMenuAction("command:gateway-settings", t("nav.gateway.openSettings"), "settings"),
   ];
   return [
     {

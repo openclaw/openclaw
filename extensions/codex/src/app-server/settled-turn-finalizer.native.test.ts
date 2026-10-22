@@ -355,6 +355,7 @@ it.skipIf(process.platform === "win32").each(["before completion", "after comple
         agentDir: fixture.agentDir,
         timeoutMs: 15_000,
       });
+      vi.spyOn(sharedClients, "createIsolatedCodexAppServerClient").mockResolvedValue(client);
       let settled: Promise<unknown> = Promise.resolve();
       cleanups.push(async () => {
         await closeNativeClient(client);
@@ -375,7 +376,7 @@ it.skipIf(process.platform === "win32").each(["before completion", "after comple
         developerInstructions: "Wait for the answer.",
         input: textInput("Start the request."),
         isolation: "configured-transport",
-        options: { pluginConfig, clientFactory: async () => client },
+        options: { pluginConfig },
       });
       settled = run.then(
         () => undefined,

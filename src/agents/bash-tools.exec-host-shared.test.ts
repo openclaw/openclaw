@@ -216,6 +216,8 @@ describe("resolveExecApprovalWaitOutcome", () => {
     mocks.logWarn.mockClear();
   });
 
+  const secret = "private-fixture-secret";
+  const privateError = () => new Error(secret, { cause: new Error(secret) });
   it.each([
     ["allow-always", true, null],
     ["deny", false, "user-denied"],
@@ -244,33 +246,25 @@ describe("resolveExecApprovalWaitOutcome", () => {
 
   it.each([
     [
-      new Error("Approval requester authority changed", {
-        cause: new Error("private-fixture-secret"),
-      }),
+      new Error("Approval requester authority changed", { cause: new Error(secret) }),
       "authority-changed",
     ],
     [
       new GatewayProtocolRequestTimeoutError(
-        { method: "private-fixture-secret", timeoutMs: 100, requestSent: true },
-        "private-fixture-secret",
+        { method: secret, timeoutMs: 100, requestSent: true },
+        secret,
       ),
       "gateway-timeout",
     ],
     [
       new GatewayProtocolRequestError({
-        code: "private-fixture-secret",
-        message: "private-fixture-secret",
-        details: { command: "private-fixture-secret" },
+        code: secret,
+        message: secret,
+        details: { command: secret },
       }),
       "gateway-rejected",
     ],
-    [
-      Object.assign(
-        new Error("private-fixture-secret", { cause: new Error("private-fixture-secret") }),
-        { code: "private-fixture-secret", stack: "private-fixture-secret" },
-      ),
-      "unknown",
-    ],
+    [Object.assign(privateError(), { code: secret, stack: secret }), "unknown"],
     [mocks.approvalRunAbortedError, null],
   ])("keeps waiter failures denied and logs only the safe category %s", async (error, reason) => {
     mocks.resolveRegisteredExecApprovalDecision.mockRejectedValue(error);
@@ -283,7 +277,7 @@ describe("resolveExecApprovalWaitOutcome", () => {
       expect(mocks.logWarn).toHaveBeenCalledExactlyOnceWith(
         `exec approval wait failed (id=approval-wait, reason=${reason})`,
       );
-      expect(JSON.stringify(mocks.logWarn.mock.calls)).not.toContain("private-fixture-secret");
+      expect(JSON.stringify(mocks.logWarn.mock.calls)).not.toContain(secret);
     }
   });
 

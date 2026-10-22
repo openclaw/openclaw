@@ -127,7 +127,6 @@ export async function createMSTeamsQaTransportAdapter(
       });
       nativeByBusMessageId.set(message.id, outbound.activityId);
       busByNativeMessageId.set(outbound.activityId, message.id);
-      conversationKindByNativeId.set(outbound.conversationId, kind);
     },
   });
   try {

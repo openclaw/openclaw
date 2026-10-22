@@ -34,21 +34,18 @@ function attempt(kind: "rich" | "html", message: string, plainText: string, limi
 describe("withTelegramPlainFallback", () => {
   it.each(
     (["rich", "html"] as const).flatMap((kind) =>
-      fallbackCases.map(([message, richTrigger, htmlTrigger]) => ({
-        kind,
-        message,
-        richTrigger,
-        htmlTrigger,
-      })),
+      fallbackCases.map(
+        ([message, richTrigger, htmlTrigger]) =>
+          [kind, message, kind === "rich" ? richTrigger : htmlTrigger] as const,
+      ),
     ),
-  )("classifies $kind $message consistently", async (testCase) => {
+  )("classifies %s %s consistently", async (kind, message, trigger) => {
     const { error, warn, sendFormatted, sendPlain, run } = attempt(
-      testCase.kind,
-      testCase.message,
+      kind,
+      message,
       "fallback body",
       8,
     );
-    const trigger = testCase.kind === "rich" ? testCase.richTrigger : testCase.htmlTrigger;
     expect(sendFormatted).toHaveBeenCalledTimes(1);
 
     if (!trigger) {
@@ -65,7 +62,7 @@ describe("withTelegramPlainFallback", () => {
     );
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      `telegram test send degrade=plain-fallback:${trigger}: ${testCase.message}`,
+      `telegram test send degrade=plain-fallback:${trigger}: ${message}`,
     );
   });
 

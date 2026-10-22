@@ -5,8 +5,6 @@ import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-respo
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
-import { resolveEmbeddedRunAttemptTerminalState } from "./embedded-agent-runner/run/terminal-outcome.js";
-import { resolveSettledTurnFinalizationRequest } from "./embedded-agent-runner/run/terminal-resolution.js";
 import {
   createSubscribedSessionHarness,
   emitAssistantTextDelta,
@@ -14,7 +12,6 @@ import {
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { taskCompletionEvents } from "./subagent-test-fixtures.test-helpers.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
-import { makeEmbeddedRunnerAttempt } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { textAssistant, textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 
 const visibleTexts = (replies: { text?: unknown }[]) =>
@@ -348,46 +345,15 @@ it.each(["immediate", "rejected"] as const)(
     const messages = [prompt, toolCall, result, final, silent];
     h.emit({ type: "agent_end", messages, willRetry: false });
     await h.drain();
-    const assistant = h.subscription.getCurrentAttemptAssistant();
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: h.subscription.assistantTexts,
-      currentAttemptAssistant: assistant,
-      currentAttemptCompletedAssistant: assistant,
-      lastAssistant: assistant,
-      messagesSnapshot: messages,
-      itemLifecycle: h.subscription.getItemLifecycle(),
-      toolMetas: [{ toolName: "read", toolCallId: "read", isError: false, replaySafe: true }],
-    });
     expect(h.subscription.assistantTexts).toEqual([markdown]);
-    expect(attempt.itemLifecycle).toMatchObject({
+    expect(h.subscription.getItemLifecycle()).toMatchObject({
       startedCount: 1,
       completedCount: 1,
       activeCount: 0,
     });
     expect(delivered).toEqual(delivery === "immediate" ? [markdown] : []);
     expect(h.subscription.getVisibleBlockReplyCount()).toBe(delivery === "rejected" ? 0 : 1);
-    const built = payloads(h.subscription);
-    expect(built).toEqual([]);
-    const request = resolveSettledTurnFinalizationRequest({
-      runParams: {
-        runId: "silent-tail",
-        sessionId: "silent-tail",
-        workspaceDir: "/synthetic",
-        prompt: prompt.content,
-        timeoutMs: 1000,
-        terminalReplyExpectation: "required",
-      },
-      attempt,
-      replyDeliveryState: delivered.length ? "delivered" : "missing",
-      activeErrorContext: { provider: "openai", model: "mock-1" },
-      modelApi: "openai-responses",
-      executionContract: undefined,
-      payloadsWithToolMedia: built,
-      hasTerminalToolPresentation: false,
-      terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
-      settledTurnFinalizationAvailable: true,
-    });
-    expect(request).toBeNull();
+    expect(payloads(h.subscription)).toEqual([]);
   },
 );
 

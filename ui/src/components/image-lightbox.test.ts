@@ -50,6 +50,7 @@ function mockDecoder(decode = async () => {}) {
   );
 }
 function interceptDownload() {
+  vi.useFakeTimers();
   const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
   onTestFinished(() => click.mockRestore());
   return click;
@@ -108,6 +109,11 @@ beforeEach(() => {
 afterEach(async () => {
   container.remove();
   await Promise.resolve();
+  if (vi.isFakeTimers()) {
+    // Finish delayed download revocation while this test still owns the URL stub.
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+  }
   restoreDialogPolyfill();
   vi.unstubAllGlobals();
 });
@@ -300,9 +306,9 @@ it("retires detached work and reconnects without downloading", async () => {
   expect(fetchImage).not.toHaveBeenCalled();
 });
 
-it.each([false, true])(
-  "reports failed downloads only while mounted (removed: %s)",
-  async (removed) => {
+it.each(["open", "closed", "reopened"] as const)(
+  "reports failed downloads only in their mounted view: %s",
+  async (state) => {
     const toast = container.appendChild(document.createElement("openclaw-toast-host"));
     toast.toast = null;
     toast.active = false;
@@ -314,23 +320,35 @@ it.each([false, true])(
       toast.remove();
       vi.useRealTimers();
     });
-    button(modal, ".download-image").click();
+    const download = button(modal, ".download-image");
+    download.click();
     expect(readOriginalBlob).toHaveBeenCalledOnce();
-    if (removed) {
-      modal.remove();
+    if (state !== "open") {
+      modal.addEventListener("image-lightbox-close", () => modal.remove());
+      button(modal, ".close").click();
+      expect(modal.isConnected).toBe(false);
       await Promise.resolve();
+      if (state === "reopened") {
+        container.append(modal);
+        await modal.updateComplete;
+        const replacement = button(modal, ".download-image");
+        expect(replacement).not.toBe(download);
+        expect(replacement.disabled).toBe(false);
+      }
     }
     original.reject(new Error("Image unavailable"));
     await vi.advanceTimersByTimeAsync(0);
     flush();
-    expect(toast.active).toBe(!removed);
+    expect(toast.active).toBe(state === "open");
     expect(toast.toast).toEqual(
-      removed
-        ? null
-        : expect.objectContaining({
-            message: "Could not download this image. Try again.",
-          }),
+      state === "open"
+        ? expect.objectContaining({ message: "Could not download this image. Try again." })
+        : null,
     );
+    if (state === "open") {
+      expect(download.disabled).toBe(false);
+      expect(download.hasAttribute("aria-busy")).toBe(false);
+    }
   },
 );
 
@@ -343,10 +361,10 @@ it.each([
     ok: true,
     blob: async () => new Blob(["image"], { type }),
   });
-  const click = interceptDownload();
   const { modal } = await renderLightbox({ src });
   expect(fetchImage).not.toHaveBeenCalled();
   expect(modal.querySelector(".open-original")).toBeNull();
+  const click = interceptDownload();
   button(modal, ".download-image").click();
   await waitForSolid(() =>
     expect(modal.querySelector(".download-image")?.hasAttribute("disabled")).toBe(false),
@@ -365,7 +383,6 @@ it.each(["url", "blob", "gallery-url", "gallery-blob"] as const)(
     const readOriginalBlob = vi.fn(() =>
       blob ? original.promise : Promise.resolve(new Blob(["first"], { type: "image/png" })),
     );
-    const click = interceptDownload();
     const first = "https://example.com/first.png",
       next = "https://example.com/next.png";
     const { modal } = await renderLightbox({
@@ -388,6 +405,7 @@ it.each(["url", "blob", "gallery-url", "gallery-blob"] as const)(
       expect(fetchImage).not.toHaveBeenCalled();
     }
     const download = button(modal, ".download-image");
+    const click = interceptDownload();
     download.click();
     if (blob) {
       flush();

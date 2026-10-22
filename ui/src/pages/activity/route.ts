@@ -21,7 +21,6 @@ export const page = definePage({
   loader: (_context, { location }) => sessionActivityRouteLocation(location),
   component: () =>
     import("./activity-page.ts").then((module) => ({
-      header: true,
       renderSolid: (props: SolidRouteProps<RouteLocation>) =>
         createComponent(ShellLayoutBoundary, {
           traits: { activityPage: true, settingsWorkspace: true },

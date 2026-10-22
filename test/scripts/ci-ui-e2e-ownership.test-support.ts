@@ -58,6 +58,7 @@ export function assertControlUiE2eOwnership(
           (inSuiteServer &&
             [
               "createOpenClawTestInstance",
+              "createChatGatewayInstance",
               "createBackgroundWorkInstance",
               "createDesktopResizeProxy",
               "createWaitClockInstance",
@@ -162,7 +163,6 @@ export function assertControlUiE2eOwnership(
     );
     expect(selection.slice(2).flat().toSorted()).toEqual(files.filter((file) => serial.has(file)));
     expect(selection.flat().toSorted()).toEqual(files);
-    expect(new Set(selection.flat()).size).toBe(files.length);
   };
   const localSelected = select(config);
   expect(selectedFiles(rootTest)).toEqual(trackedUiE2eFiles);
@@ -224,7 +224,6 @@ export function assertControlUiE2eOwnership(
     path.matchesGlob(file, "ui/src/e2e/*.e2e.test.ts"),
   );
   expect(globSelected.toSorted()).toEqual(expectedGlobFiles);
-  expect(new Set(globSelected).size).toBe(expectedGlobFiles.length);
 }
 
 // Historical fallback for frozen targets predating prebuilt E2E config.

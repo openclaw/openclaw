@@ -1,3 +1,4 @@
+import { getQueriesForElement } from "@solidjs/testing-library";
 import hljs from "highlight.js/lib/core";
 import { createComponent, flush } from "solid-js";
 import { afterEach, assert, expect, it, vi } from "vitest";
@@ -152,6 +153,11 @@ useDebugTestEnvironment();
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it("names the page with a level-one heading", async () => {
+  const page = await mountDebugPage(diagnosticRequest({}));
+  expect(getQueriesForElement(page).getByRole("heading", { level: 1 }).textContent).toBe("Debug");
 });
 
 it("only highlights changed diagnostics and tolerates out-of-range event timestamps", async () => {

@@ -64,27 +64,13 @@ describe("docs Markdown rendering", () => {
   });
 
   it.each(["html", "jsx"])("keeps quoted list fences after multiline %s", (kind) => {
-    const quote = "> ";
     const source = [
-      `${quote}10. item`,
-      quote.trimEnd(),
-      `${quote}    ${kind === "html" ? "<pre>" : "{/*"}`,
-      `${quote}    <Card href="/hidden">literal</Card>`,
-      quote.trimEnd(),
-      `${quote}    continued literal`,
-      `${quote}    ${kind === "html" ? "</pre>" : "*/}"}`,
-      quote.trimEnd(),
-      `${quote}    ~~~html`,
-      `${quote}    <code>`,
-      `${quote}    ~~~`,
-      "",
-      '<ParamField path="live" type="string">',
-      "[Visible](/visible)",
-      "</ParamField>",
-      "",
-      "~~~html",
-      "</code>",
-      "~~~",
+      `> 10. item\n>\n>     ${kind === "html" ? "<pre>" : "{/*"}`,
+      '>     <Card href="/hidden">literal</Card>\n>\n>     continued literal',
+      `>     ${kind === "html" ? "</pre>" : "*/}"}\n>`,
+      ">     ~~~html\n>     <code>\n>     ~~~\n",
+      '<ParamField path="live" type="string">\n[Visible](/visible)\n</ParamField>\n',
+      "~~~html\n</code>\n~~~",
     ].join("\n");
     const { document, html, fences } = render(source, true);
     expect(fences).toEqual(["<code>\n", "</code>\n"]);

@@ -172,7 +172,8 @@ vi.mock("./gateway-install-token.js", () => ({
 }));
 
 // mock-isolation: Each fixture controls its closed-connection diagnostic and health text.
-vi.mock("./health-format.js", () => ({
+vi.mock("./health-format.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./health-format.js")>()),
   formatGatewayClosedDiagnostic,
   formatHealthCheckFailure,
 }));
@@ -672,18 +673,20 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
-  it("reports a typed close after restart without depending on error wording", async () => {
+  it("reports a typed close after restart and masks the connection note", async () => {
     const error = new Error("transport closed after restart");
     healthCommand.mockRejectedValueOnce(error);
     formatGatewayClosedDiagnostic.mockReturnValueOnce(
       "Gateway connect failed: transport closed after restart",
     );
 
-    const runtime = await runAutoRepair();
+    const runtime = await runAutoRepair(undefined, {
+      gatewayDetailsMessage: "details password=doctorSynthetic7",
+    });
 
     expect(formatGatewayClosedDiagnostic).toHaveBeenCalledWith(error);
     expectNote("Gateway connect failed: transport closed after restart");
-    expect(note).toHaveBeenCalledWith("details", "Gateway connection");
+    expect(note).toHaveBeenCalledWith("details password=***", "Gateway connection");
     expect(runtime.error).not.toHaveBeenCalled();
   });
 

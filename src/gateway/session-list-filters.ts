@@ -30,7 +30,7 @@ import {
   projectSessionOwner,
   addSessionOwnerFacetIdentity,
   sortSessionOwnerFacet,
-  projectSessionParticipant,
+  resolveSessionProfileId,
   projectSessionPeople,
   projectSessionPeopleFacet,
   resolveSessionListProfileReference,
@@ -46,11 +46,7 @@ import type {
   SessionListRowContext,
   SessionListRowContextProvider,
 } from "./session-utils-contracts.js";
-import {
-  isFinitePositiveTimestamp,
-  matchesSessionArchiveFilter,
-  resolveSessionChildOwners,
-} from "./session-utils-core.js";
+import { isFinitePositiveTimestamp, resolveSessionChildOwners } from "./session-utils-core.js";
 import {
   resolveGatewaySessionDisplayName,
   resolveGatewaySessionKind,
@@ -86,7 +82,7 @@ export type SessionEntrySelection = Omit<SessionListFilteredEntries, "ownerEntri
 
 export type SessionListFilterParams = {
   cfg: OpenClawConfig;
-  entries: (archived: SessionsListParams["archived"]) => Iterable<SessionListEntry>;
+  entries: () => Iterable<SessionListEntry>;
   entriesSorted?: boolean;
   getTarget: SessionListTargetLookup;
   getModelFacts?: SessionListModelFactsLookup;
@@ -179,6 +175,7 @@ export function* filterSessionEntries(
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => (rowContext ??= params.getRowContext());
   const search = normalizeLowercaseStringOrEmpty(opts.search);
+  const archived = opts.archived === "all" ? undefined : opts.archived === true;
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
@@ -209,11 +206,7 @@ export function* filterSessionEntries(
   const profileRelation = opts.profileRelation
     ? {
         ...opts.profileRelation,
-        profileId: projectSessionParticipant(
-          { type: "profile", id: opts.profileRelation.profileId },
-          identities,
-          cfg,
-        ).identity.id,
+        profileId: resolveSessionProfileId(opts.profileRelation.profileId, identities),
       }
     : undefined;
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
@@ -221,7 +214,7 @@ export function* filterSessionEntries(
   // Person references resolve before candidate filters; ordinary reads need no roster copy.
   const visibleEntries: SessionListEntry[] = [];
   if (opts.involvingProfileId) {
-    for (const pair of params.entries("all")) {
+    for (const pair of params.entries()) {
       if (
         params.entryFilter?.(
           pair[0],
@@ -264,9 +257,7 @@ export function* filterSessionEntries(
   }
   const selectedProfileId = profileReference?.value;
 
-  const candidateEntries = opts.involvingProfileId
-    ? visibleEntries.filter(([, entry]) => matchesSessionArchiveFilter(entry, opts.archived))
-    : params.entries(opts.archived);
+  const candidateEntries = opts.involvingProfileId ? visibleEntries : params.entries();
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
@@ -385,6 +376,9 @@ export function* filterSessionEntries(
     }
     const key = pair[0];
     const entry = pair[1];
+    if (archived !== undefined && (entry.archivedAt !== undefined) !== archived) {
+      continue;
+    }
     if (
       opts.requireLastInteraction === true &&
       (!isFinitePositiveTimestamp(entry.lastInteractionAt) ||
@@ -474,8 +468,7 @@ export function* filterSessionEntries(
       const createdProfileId = sessionCreatorProfileId(entry.createdActor);
       if (
         !createdProfileId ||
-        projectSessionParticipant({ type: "profile", id: createdProfileId }, identities, cfg)
-          .identity.id !== profileRelation.profileId
+        resolveSessionProfileId(createdProfileId, identities) !== profileRelation.profileId
       ) {
         continue;
       }

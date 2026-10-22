@@ -68,7 +68,18 @@ value_after() {
 }
 case "$command_name" in
   create)
+    create_attempts_file="\${HDIUTIL_LOG}.create-attempts"
+    create_attempts=0
+    if [[ -f "$create_attempts_file" ]]; then
+      create_attempts="$(cat "$create_attempts_file")"
+    fi
+    create_attempts=$((create_attempts + 1))
+    printf '%s' "$create_attempts" > "$create_attempts_file"
     : > "\${!#}"
+    if (( create_attempts <= \${HDIUTIL_CREATE_BUSY_COUNT:-0} )); then
+      echo "hdiutil: create failed - Resource busy" >&2
+      exit 16
+    fi
     ;;
   attach)
     printf '%s' "$1" > "\${HDIUTIL_LOG}.image"
@@ -297,6 +308,32 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(log).toContain("convert ");
     expect(log).toContain("final.dmg");
   });
+
+  it.each([
+    ["recovers", "2", 0, 3],
+    ["stops after the retry budget", "3", 16, 3],
+  ] as const)(
+    "%s when image creation reports Resource busy",
+    (_name, failures, status, attempts) => {
+      const { output, tools, run } = fixture();
+
+      const result = run({ HDIUTIL_CREATE_BUSY_COUNT: failures });
+
+      expect(result.status, result.stderr).toBe(status);
+      const log = readFileSync(tools.hdiutilLog, "utf8");
+      const attachIndex = log.indexOf("attach ");
+      const creationLog = attachIndex === -1 ? log : log.slice(0, attachIndex);
+      expect(log.match(/^create /gm)).toHaveLength(attempts);
+      expect(creationLog.match(/^sleep /gm)).toHaveLength(2);
+      expect(result.stderr.match(/^hdiutil: create failed - Resource busy$/gm)).toHaveLength(
+        status === 0 ? 2 : 3,
+      );
+      expect(existsSync(output)).toBe(status === 0);
+      if (status !== 0) {
+        expect(log).not.toContain("attach ");
+      }
+    },
+  );
 
   it("fails before resize and conversion when its private mount cannot detach", () => {
     const { tools, run } = fixture();
