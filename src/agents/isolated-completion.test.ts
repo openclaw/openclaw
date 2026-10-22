@@ -6,11 +6,14 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { AdmittedRunContext } from "./admitted-run-context.js";
 import {
   isolatedAssistant,
-  nativeAuthPlan,
+  isolatedReply as reply,
+  isolatedErrorReply as errorReply,
+  prepareQuotaProfiles,
   isolatedCompletionMocks as mocks,
   runIsolatedCompletion,
   preparedModelRuntime,
   registerIsolatedHarness,
+  registerIsolatedRuntime,
   releaseRuntimeLease,
   isolatedRequest,
   resetIsolatedCompletionTestState,
@@ -47,7 +50,7 @@ function expectNoCalls(...functions: unknown[]) {
 }
 
 function complete(overrides: Partial<Parameters<typeof runIsolatedCompletion>[0]> = {}) {
-  return runIsolatedCompletion({ ...isolatedRequest(), ...overrides });
+  return runIsolatedCompletion(isolatedRequest(overrides));
 }
 
 function cliReply(text = "done") {
@@ -65,13 +68,9 @@ function cliComplete(overrides: Parameters<typeof complete>[0] = {}) {
 }
 
 const cliOwner = { kind: "cli", id: "claude-cli" };
-const reply = (text: string) => ({ assistant: isolatedAssistant([{ type: "text", text }]) });
 const runtimeLease = () => ({
   snapshot: preparedModelRuntime,
   [Symbol.asyncDispose]: releaseRuntimeLease,
-});
-const errorReply = (errorMessage: string) => ({
-  assistant: { ...isolatedAssistant([], "error"), errorMessage },
 });
 const admittedFixture = () => ({
   config: { agents: { defaults: { workspace: "/tmp/admitted-workspace" } } },
@@ -107,9 +106,7 @@ function pausedHarness(stage: PreparationStage, version: "v1" | "v2" = "v2") {
   const expired = new Error("The completion owner retired.");
   let current = true;
   const dispatch = vi.fn(async () => reply("done"));
-  registerIsolatedHarness(
-    version === "v1" ? { runIsolatedCompletion: dispatch } : { runIsolatedCompletionV2: dispatch },
-  );
+  registerIsolatedRuntime(version, dispatch);
   pausePreparation(stage, async () => {
     entered.resolve();
     await release.promise;
@@ -231,24 +228,6 @@ describe("runIsolatedCompletion", () => {
     );
     expect(releaseRuntimeLease).toHaveBeenCalledOnce();
   });
-
-  function prepareQuotaProfiles() {
-    const profileIds = ["openai:first", "openai:backup"];
-    mocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: Object.fromEntries(
-        profileIds.map((id) => [id, { type: "token", provider: "openai", token: id }]),
-      ),
-    });
-    mocks.prepareAgentRuntimeAuth.mockReturnValue({
-      plan: nativeAuthPlan,
-      attempts: profileIds.map((profileId) => ({
-        kind: "profile",
-        profileId,
-        plan: { ...nativeAuthPlan, forwardedAuthProfileId: profileId },
-      })),
-    });
-  }
 
   it.each([
     ["429 Too many requests", 400],

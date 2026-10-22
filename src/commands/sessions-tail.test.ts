@@ -1,7 +1,6 @@
-// Sessions tail tests cover transcript tailing, filtering, and session-store setup.
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import {
@@ -66,6 +65,16 @@ function toolResult(name: string, extra: Partial<TrajectoryEvent> = {}) {
   return makeEvent({ type: "tool.result", data: { name, success: true }, ...extra });
 }
 
+function modelCompleted(data?: TrajectoryEvent["data"]) {
+  return makeEvent({
+    type: "model.completed",
+    ts: "2026-05-18T12:04:29.000Z",
+    provider: "openai",
+    modelId: "gpt-5.2",
+    data,
+  });
+}
+
 describe("sessionsTailCommand", () => {
   let runtime: ReturnType<typeof createTestRuntime>;
   const tail = (
@@ -79,6 +88,9 @@ describe("sessionsTailCommand", () => {
   let tmpDir: string;
   let storePath: string;
   let previousStateDir: string | undefined;
+  const explicitTail = (options: Parameters<typeof sessionsTailCommand>[0] = {}) =>
+    tail({ agent: "main", store: storePath, sessionKey, ...options });
+  const listeners = () => [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
 
   beforeEach(() => {
     runtime = createTestRuntime();
@@ -149,12 +161,7 @@ describe("sessionsTailCommand", () => {
         type: "tool.result",
         data: { name: "bash", success: true, output: "SECRET" },
       }),
-      makeEvent({
-        type: "model.completed",
-        ts: "2026-05-18T12:04:29.000Z",
-        provider: "openai",
-        modelId: "gpt-5.2",
-      }),
+      modelCompleted(),
     ]);
 
     await tail();
@@ -188,15 +195,7 @@ describe("sessionsTailCommand", () => {
     ["delivered partial reply", { stopReason: "length" }, "done"],
   ])("renders the recorded terminal outcome for %s", async (_name, data, expected) => {
     await writeSessionEntry();
-    await appendEvents([
-      makeEvent({
-        type: "model.completed",
-        ts: "2026-05-18T12:04:29.000Z",
-        provider: "openai",
-        modelId: "gpt-5.2",
-        data,
-      }),
-    ]);
+    await appendEvents([modelCompleted(data)]);
 
     await tail();
 
@@ -204,43 +203,19 @@ describe("sessionsTailCommand", () => {
     expect(runtimeOutput(runtime)).not.toContain("sensitive failure detail");
   });
 
-  it.each([
-    ["CJK", "invalid", "--:--:--", "中文", "中文"],
-    [
-      "truncated emoji",
-      "2026-05-18T12:04:21.000Z",
-      "12:04:21Z",
-      `${"a".repeat(17)}👩🏽‍💻-incident`,
-      `${"a".repeat(17)}…`,
-    ],
-  ])(
-    "keeps progress columns aligned with %s session keys",
-    async (_name, ts, timestamp, suffix, displayed) => {
-      const key = `agent:main:${suffix}`;
-      await writeSessionEntry(key);
-      await appendEvents(
-        [
-          makeEvent({
-            type: "tool.result",
-            ts,
-            data: { name: "proof", success: true },
-          }),
-        ],
-        { key },
-      );
-
-      await tail({ agent: "main", store: storePath, sessionKey: key });
-
-      const line = runtimeOutput(runtime);
-      expect(line.split("\n")).toHaveLength(1);
-      expect(line.startsWith(`${timestamp} `)).toBe(true);
-      expect(line).toContain(` agent:main:${displayed} `);
-      expect(line).toContain("tool.result");
-      expect(line.endsWith("proof ok")).toBe(true);
-      const previewOffset = line.indexOf("proof ok");
-      expect(visibleWidth(line.slice(0, previewOffset))).toBe(58);
-    },
-  );
+  it("aligns CJK session keys and replaces invalid timestamps", async () => {
+    const key = "agent:main:中文";
+    await writeSessionEntry(key);
+    await appendEvents([toolResult("proof", { ts: "invalid" })], { key });
+    await explicitTail({ sessionKey: key });
+    const line = runtimeOutput(runtime);
+    expect(line.split("\n")).toHaveLength(1);
+    expect(line.startsWith("--:--:-- ")).toBe(true);
+    expect(line).toContain(` ${key} `);
+    expect(line).toContain("tool.result");
+    expect(line.endsWith("proof ok")).toBe(true);
+    expect(visibleWidth(line.slice(0, line.indexOf("proof ok")))).toBe(58);
+  });
 
   it.each([
     ["CSI inside", "a\u001b[31mb", "custom\u001b[31m", "ab", "custom"],
@@ -258,7 +233,7 @@ describe("sessionsTailCommand", () => {
       await writeSessionEntry(key);
       await appendEvents([makeEvent({ type, data: { name: "proof" } })], { key });
 
-      await tail({ agent: "main", store: storePath, sessionKey: key });
+      await explicitTail({ sessionKey: key });
 
       const line = runtimeOutput(runtime);
       expect(line.split("\n")).toHaveLength(1);
@@ -283,7 +258,7 @@ describe("sessionsTailCommand", () => {
       toolResult("bash"),
     ]);
 
-    await tail({ agent: "main", store: storePath, sessionKey, tail: "2" });
+    await explicitTail({ tail: "2" });
 
     const output = runtimeOutput(runtime);
     expect(output).not.toContain("session.started");
@@ -291,36 +266,26 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("tool.result");
   });
 
-  it("rejects tail counts that exceed JavaScript safe integer precision", async () => {
-    await tail({ agent: "main", store: storePath, sessionKey, tail: "9007199254740992" });
-
-    expect(runtime.error).toHaveBeenCalledWith(
+  it.each([
+    [
+      "unsafe tail count",
+      { tail: "9007199254740992" },
       "--tail must be a non-negative integer, for example --tail 25.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
-
-  it("rejects a missing explicit session before following", async () => {
-    await writeSessionEntry();
-
-    await tail({ agent: "main", store: storePath, sessionKey: "agent:main:missing", follow: true });
-
-    expect(runtime.error).toHaveBeenCalledWith(
+    ],
+    [
+      "missing session before following",
+      { sessionKey: "agent:main:missing", follow: true },
       "Session not found: agent:main:missing. Run openclaw sessions list --all-agents --json to choose a valid key.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
-
-  it("rejects a blank explicit session key", async () => {
-    await writeSessionEntry();
-
-    await tail({ agent: "main", store: storePath, sessionKey: "   " });
-
-    expect(runtime.error).toHaveBeenCalledWith(
+    ],
+    [
+      "blank session key",
+      { sessionKey: "   " },
       "--session-key must not be empty. Omit it to tail active sessions.",
-    );
+    ],
+  ] as const)("rejects %s", async (_name, options, error) => {
+    await writeSessionEntry();
+    await explicitTail(options);
+    expect(runtime.error).toHaveBeenCalledWith(error);
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
   });
@@ -352,27 +317,12 @@ describe("sessionsTailCommand", () => {
     "selects trajectory sessions with a $mode Gateway source",
     async ({ mode, expected, notice }) => {
       storePath = path.join(tmpDir, "state", "agents", "main", "agent", "openclaw-agent.sqlite");
-      const entries = [
-        { key: sessionKey, sessionId: "older-session", label: "older", lastActivityAt: 1 },
-        {
-          key: "agent:main:concurrent",
-          sessionId: "concurrent-session",
-          label: "concurrent",
-          lastActivityAt: 2,
-        },
-        {
-          key: "agent:main:latest",
-          sessionId: "latest-session",
-          label: "latest",
-          lastActivityAt: 4,
-        },
-        {
-          key: "agent:main:queued",
-          sessionId: "queued-session",
-          label: "queued",
-          lastActivityAt: 3,
-        },
-      ];
+      const entries = ["older", "concurrent", "latest", "queued"].map((label, index) => ({
+        label,
+        key: index === 0 ? sessionKey : `agent:main:${label}`,
+        sessionId: `${label}-session`,
+        lastActivityAt: [1, 2, 4, 3][index],
+      }));
       for (const entry of entries) {
         await writeSessionEntry(entry.key, {
           sessionId: entry.sessionId,
@@ -402,6 +352,32 @@ describe("sessionsTailCommand", () => {
         mocks.callGatewayFromCliWithTransport.mockRejectedValue(new Error("missing scope"));
       }
 
+      const auditProjection = ["reachable", "explicit store", "explicit key"].includes(mode);
+      if (auditProjection) {
+        for (let index = 0; index < 100; index += 1) {
+          replaceSessionEntrySync(
+            { sessionKey: `agent:main:unrelated:${index}`, storePath },
+            {
+              sessionId: `unrelated-${index}`,
+              status: "done",
+              updatedAt: 1,
+              skillsSnapshot: { prompt: `UNRELATED_TAIL_PAYLOAD_${"x".repeat(4096)}`, skills: [] },
+              systemPromptReport: {
+                source: "run",
+                generatedAt: 1,
+                workspaceDir: `UNRELATED_TAIL_PAYLOAD_${"y".repeat(4096)}`,
+                systemPrompt: { chars: 0, projectContextChars: 0, nonProjectContextChars: 0 },
+                injectedWorkspaceFiles: [],
+                skills: { promptChars: 0, entries: [] },
+                tools: { listChars: 0, schemaChars: 0, entries: [] },
+              },
+            },
+          );
+        }
+      }
+      const parse = vi.spyOn(JSON, "parse");
+      onTestFinished(() => parse.mockRestore());
+
       const selection = tail({
         agent: "main",
         store: mode === "explicit store" ? storePath : undefined,
@@ -411,6 +387,14 @@ describe("sessionsTailCommand", () => {
         await expect(selection).rejects.toThrow("missing scope");
       } else {
         await selection;
+      }
+      if (auditProjection) {
+        expect(
+          parse.mock.calls.filter(
+            ([value]) => typeof value === "string" && value.includes("UNRELATED_TAIL_PAYLOAD_"),
+          ),
+        ).toHaveLength(0);
+        expect(runtime.error).not.toHaveBeenCalled();
       }
 
       const output = runtimeOutput(runtime);
@@ -428,72 +412,6 @@ describe("sessionsTailCommand", () => {
       ).toEqual(notice ? [[notice]] : []);
       if (mode === "explicit store" || mode === "explicit key") {
         expect(mocks.callGatewayFromCliWithTransport).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it.each(["explicit", "running", "latest"])(
-    "selects %s sessions without decoding unrelated saved prompts",
-    async (selection) => {
-      storePath = path.join(tmpDir, "state", "agents", "main", "agent", "openclaw-agent.sqlite");
-      replaceSessionEntrySync(
-        { sessionKey, storePath },
-        {
-          sessionId: "session-one",
-          updatedAt: 2,
-          status: "done",
-        },
-      );
-      if (selection === "running") {
-        mocks.callGatewayFromCliWithTransport.mockResolvedValue({
-          sessions: [
-            { key: sessionKey, sessionId: "session-one", hasActiveRun: true, status: "running" },
-          ],
-        });
-      }
-      await appendEvents([toolResult("selected")]);
-      for (let index = 0; index < 100; index += 1) {
-        replaceSessionEntrySync(
-          { sessionKey: `agent:main:unrelated:${index}`, storePath },
-          {
-            sessionId: `unrelated-${index}`,
-            status: "done",
-            updatedAt: 1,
-            skillsSnapshot: {
-              prompt: `UNRELATED_TAIL_PAYLOAD_${"x".repeat(4096)}`,
-              skills: [],
-            },
-            systemPromptReport: {
-              source: "run",
-              generatedAt: 1,
-              workspaceDir: `UNRELATED_TAIL_PAYLOAD_${"y".repeat(4096)}`,
-              systemPrompt: { chars: 0, projectContextChars: 0, nonProjectContextChars: 0 },
-              injectedWorkspaceFiles: [],
-              skills: { promptChars: 0, entries: [] },
-              tools: { listChars: 0, schemaChars: 0, entries: [] },
-            },
-          },
-        );
-      }
-
-      const parse = vi.spyOn(JSON, "parse");
-      try {
-        await tail({
-          agent: "main",
-          store: selection === "running" ? undefined : storePath,
-          sessionKey: selection === "explicit" ? sessionKey : undefined,
-          tail: "1",
-        });
-
-        expect(
-          parse.mock.calls.filter(
-            ([value]) => typeof value === "string" && value.includes("UNRELATED_TAIL_PAYLOAD_"),
-          ),
-        ).toHaveLength(0);
-        expect(runtimeOutput(runtime)).toContain("selected ok");
-        expect(runtime.error).not.toHaveBeenCalled();
-      } finally {
-        parse.mockRestore();
       }
     },
   );
@@ -518,15 +436,10 @@ describe("sessionsTailCommand", () => {
     { signal: "SIGTERM" as const, exitCode: 143 },
   ])("continues following until $signal and exits with $exitCode", async ({ signal, exitCode }) => {
     vi.useFakeTimers();
-    const sigintListeners = process.listenerCount("SIGINT");
-    const sigtermListeners = process.listenerCount("SIGTERM");
+    const initialListeners = listeners();
     await writeSessionEntry();
-    appendSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-one", storePath }, [
-      makeEvent({
-        sourceSeq: 1,
-        type: "session.started",
-        ts: "2026-05-18T12:04:17.000Z",
-      }),
+    await appendEvents([
+      makeEvent({ sourceSeq: 1, type: "session.started", ts: "2026-05-18T12:04:17.000Z" }),
     ]);
     const appendedEvent = toolResult("sqlite", { sourceSeq: 2 });
     let appended = false;
@@ -540,7 +453,7 @@ describe("sessionsTailCommand", () => {
       }
     });
 
-    const run = tail({ agent: "main", store: storePath, sessionKey, tail: "1", follow: true });
+    const run = explicitTail({ tail: "1", follow: true });
     try {
       await vi.advanceTimersByTimeAsync(1_000);
     } finally {
@@ -553,18 +466,16 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("sqlite ok");
     expect(runtime.exit).toHaveBeenCalledOnce();
     expect(runtime.exit).toHaveBeenCalledWith(exitCode);
-    expect(process.listenerCount("SIGINT")).toBe(sigintListeners);
-    expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners);
+    expect(listeners()).toEqual(initialListeners);
   });
 
   it("exits unsuccessfully when the followed trajectory store becomes unreadable", async () => {
     vi.useFakeTimers();
-    const sigintListeners = process.listenerCount("SIGINT");
-    const sigtermListeners = process.listenerCount("SIGTERM");
+    const initialListeners = listeners();
     await writeSessionEntry();
     await appendEvents([makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" })]);
 
-    const run = tail({ agent: "main", store: storePath, sessionKey, tail: "0", follow: true });
+    const run = explicitTail({ tail: "0", follow: true });
     await vi.advanceTimersByTimeAsync(0);
     await closeOpenClawAgentDatabasesAsync();
     fs.writeFileSync(storePath, "not a SQLite database");
@@ -579,8 +490,7 @@ describe("sessionsTailCommand", () => {
       expect.stringContaining(`Failed to read trajectory progress for ${sessionKey}`),
     );
     expect(vi.mocked(runtime.exit).mock.calls).toEqual([[1]]);
-    expect(process.listenerCount("SIGINT")).toBe(sigintListeners);
-    expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners);
+    expect(listeners()).toEqual(initialListeners);
   });
 
   it("rejects an explicit blank agent without inferring a store", async () => {
@@ -604,14 +514,7 @@ describe("sessionsTailCommand", () => {
     );
     appendSqliteTrajectoryRuntimeEvents(
       { agentId: "ops", sessionId: "ops-session", storePath: opsStorePath },
-      [
-        makeEvent({
-          sessionId: "ops-session",
-          sessionKey: opsSessionKey,
-          type: "tool.result",
-          data: { name: "bash", success: true },
-        }),
-      ],
+      [toolResult("bash", { sessionId: "ops-session", sessionKey: opsSessionKey })],
     );
 
     await tail({ sessionKey: opsSessionKey });

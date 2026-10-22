@@ -31,7 +31,6 @@ export function createOperatorContinuationService(params: {
     defaultAgentId: "main",
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runSchedulerOwned: createScheduledGatewayRunner(params.resolveGatewayContext),
     runSessionEvent: (request) =>
       runCronSessionTurn({

@@ -8,6 +8,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent config save",
@@ -23,15 +24,7 @@ const agentRoster = {
   scope: "agent",
 };
 function configResponse(config: Record<string, unknown>, hash = "agent-config-hash-1") {
-  return {
-    config,
-    sourceConfig: config,
-    runtimeConfig: config,
-    hash,
-    issues: [],
-    raw: JSON.stringify(config),
-    valid: true,
-  };
+  return { ...configSnapshot(config, hash), runtimeConfig: config };
 }
 async function saveParams(gateway: Awaited<ReturnType<typeof installMockGateway>>, after = 0) {
   return requireRecord((await gateway.waitForRequest("config.set", { after })).params);

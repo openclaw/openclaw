@@ -97,6 +97,8 @@ function CompanionPanel(props: Props) {
       prop:presented={presented()}
       prop:focusRequest={props.companionFocusRequest}
       prop:sessionKey={props.state.sessionKey}
+      prop:agentId={props.agentId}
+      prop:assistantName={props.state.assistantName}
       prop:digest={props.digest}
       prop:running={Boolean(props.activeRunId)}
       prop:activeRunId={props.activeRunId}
@@ -453,6 +455,8 @@ declare module "@solidjs/web" {
       "openclaw-chat-session-rail": HTMLAttributes<HTMLElement> & {
         "prop:presentation"?: SidebarPanelDefinitionParams["presentation"];
         "prop:sessionKey"?: SidebarPanelDefinitionParams["state"]["sessionKey"];
+        "prop:agentId"?: SidebarPanelDefinitionParams["agentId"];
+        "prop:assistantName"?: SidebarPanelDefinitionParams["state"]["assistantName"];
         "prop:digest"?: SidebarPanelDefinitionParams["digest"];
         "prop:running"?: boolean;
         "prop:activeRunId"?: SidebarPanelDefinitionParams["activeRunId"];

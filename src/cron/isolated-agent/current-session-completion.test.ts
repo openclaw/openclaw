@@ -155,7 +155,6 @@ it.each([
         isAgentAvailable: () => available,
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob,
       });
       try {

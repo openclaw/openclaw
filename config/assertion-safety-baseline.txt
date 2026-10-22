@@ -415,7 +415,7 @@ extensions/matrix/src/matrix/monitor/verification-events.ts	5
 extensions/matrix/src/matrix/poll-summary.ts	1
 extensions/matrix/src/matrix/poll-types.ts	7
 extensions/matrix/src/matrix/probe.ts	1
-extensions/matrix/src/matrix/sdk.ts	8
+extensions/matrix/src/matrix/sdk.ts	6
 extensions/matrix/src/matrix/sdk/client-base.ts	1
 extensions/matrix/src/matrix/sdk/client-core.ts	14
 extensions/matrix/src/matrix/sdk/client-event-bridge.ts	1
@@ -558,7 +558,6 @@ extensions/ollama/src/stream.runtime.ts	3
 extensions/onepassword/index.ts	2
 extensions/openai/embedding-batch.ts	2
 extensions/openai/index.ts	2
-extensions/openai/native-web-search.ts	1
 extensions/openai/openai-chatgpt-oauth-token.runtime.ts	1
 extensions/openai/provider-policy-api.ts	2
 extensions/opencode/provider-catalog.ts	2
@@ -723,7 +722,7 @@ extensions/slack/src/monitor/context.ts	2
 extensions/slack/src/monitor/event-scope.ts	1
 extensions/slack/src/monitor/events/assistant.ts	1
 extensions/slack/src/monitor/events/channels.ts	1
-extensions/slack/src/monitor/events/interactions.block-actions.ts	12
+extensions/slack/src/monitor/events/interactions.block-actions.ts	9
 extensions/slack/src/monitor/events/interactions.modal.ts	1
 extensions/slack/src/monitor/events/message-subtype-handlers.ts	2
 extensions/slack/src/monitor/events/messages.ts	11
@@ -908,7 +907,7 @@ extensions/zalouser/src/tool.ts	1
 extensions/zalouser/src/zalo-js.ts	7
 extensions/zalouser/src/zca-client.ts	1
 packages/acp-core/src/runtime/errors.ts	6
-packages/agent-core/src/agent-loop.ts	2
+packages/agent-core/src/agent-loop.ts	1
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	1
 packages/agent-core/src/harness/session/tool-result-pairing.ts	3
@@ -965,7 +964,6 @@ packages/ai/src/transports/openai-responses-replay-internal.ts	10
 packages/ai/src/transports/openai-responses-replay-messages-internal.ts	7
 packages/ai/src/transports/openai-responses-stream-observer-internal.ts	1
 packages/ai/src/transports/openai-responses-stream-slots-internal.ts	2
-packages/ai/src/transports/openai-responses-stream-terminal-internal.ts	1
 packages/ai/src/transports/openai-responses-websocket.ts	3
 packages/ai/src/transports/openai-transport-params.ts	2
 packages/ai/src/transports/openai-transport-shared.ts	2
@@ -1096,7 +1094,7 @@ src/agents/cli-runner/bundle-mcp-runtime.ts	1
 src/agents/cli-runner/bundle-mcp.ts	5
 src/agents/cli-runner/cli-backend-auth-policy.ts	1
 src/agents/cli-runner/cli-run-transcript.ts	1
-src/agents/cli-runner/execute-node-claude.ts	4
+src/agents/cli-runner/execute-node-claude.ts	3
 src/agents/cli-runner/execute.ts	2
 src/agents/cli-runner/prepare.ts	1
 src/agents/cli-runner/session-history.ts	1
@@ -1117,7 +1115,7 @@ src/agents/embedded-agent-helpers/bootstrap.ts	2
 src/agents/embedded-agent-helpers/images.ts	6
 src/agents/embedded-agent-helpers/openai.ts	11
 src/agents/embedded-agent-helpers/turns.ts	8
-src/agents/embedded-agent-live-edit-diff.ts	3
+src/agents/embedded-agent-live-edit-diff.ts	1
 src/agents/embedded-agent-messaging-extraction.ts	1
 src/agents/embedded-agent-messaging.ts	1
 src/agents/embedded-agent-runner/cache-ttl.ts	2
@@ -1301,7 +1299,7 @@ src/agents/tool-catalog.ts	1
 src/agents/tool-display-common.ts	1
 src/agents/tool-images.ts	2
 src/agents/tool-policy-shared.ts	1
-src/agents/tool-result-error.ts	3
+src/agents/tool-result-error.ts	2
 src/agents/tool-schema-hints.ts	1
 src/agents/tool-search-catalog.ts	2
 src/agents/tool-search-directory.ts	1
@@ -1593,8 +1591,6 @@ src/commands/doctor/shared/allowfrom-fallback-migration.ts	1
 src/commands/doctor/shared/codex-native-assets.ts	1
 src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
-src/commands/doctor/shared/empty-allowlist-policy.ts	12
-src/commands/doctor/shared/empty-allowlist-scan.ts	3
 src/commands/doctor/shared/legacy-config-core-normalizers.ts	1
 src/commands/doctor/shared/legacy-config-issues.ts	1
 src/commands/doctor/shared/legacy-config-migrate.ts	2
@@ -2051,7 +2047,6 @@ src/logging/parse-log-line.ts	1
 src/logging/redact.ts	2
 src/logging/secret-redaction-registry.ts	1
 src/logging/state.ts	6
-src/logging/subsystem.ts	1
 src/mcp/channel-bridge.ts	4
 src/mcp/channel-shared.ts	2
 src/mcp/codex-supervision-tools-serve.ts	1
@@ -2373,7 +2368,6 @@ src/tui/tui-formatters.ts	2
 src/tui/tui-session-actions.ts	3
 src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2
-src/tui/tui-session-run-coordinator.ts	1
 src/tui/tui-task-suggestions.ts	6
 src/tui/tui.ts	2
 src/utils.ts	1

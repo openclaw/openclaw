@@ -104,7 +104,14 @@ afterEach(async () => {
 function fixture(options: { parkSteer?: boolean; onQueuedFollowupSettled?: () => void } = {}) {
   const sessionKey = `agent:work:queued-refresh-` + randomUUID();
   queueKeys.add(sessionKey);
-  const storeScope = "/synthetic/progress-refresh/" + randomUUID();
+  const scope = {
+    storeScope: "/synthetic/progress-refresh/" + randomUUID(),
+    sessionKey,
+    sessionId: "session",
+    agentId: "work",
+  };
+  const { storeScope, ...identity } = scope;
+  const target = { sessionKey, agentId: identity.agentId };
   const card: ProgressCard = { sessionKey, revision: 7, updatedAt: 1, markdown: "Previous status" };
   const context = {
     chatRunState: createChatRunState(),
@@ -148,8 +155,6 @@ function fixture(options: { parkSteer?: boolean; onQueuedFollowupSettled?: () =>
       request.respond(cached.ok, cached.payload, cached.error);
       return;
     }
-    const target = { sessionKey, agentId: "work" };
-    const identity = { ...target, sessionId: "session" };
     const registration = registerChatAbortController({
       runId,
       ...identity,
@@ -158,9 +163,8 @@ function fixture(options: { parkSteer?: boolean; onQueuedFollowupSettled?: () =>
       projectSessionActive: false,
       target: captureSessionTarget({
         storeScope,
-        sessionKey,
-        incarnation: "session",
-        agentId: "work",
+        ...target,
+        incarnation: identity.sessionId,
       }),
     });
     if (!registration.entry) {
@@ -236,13 +240,7 @@ function fixture(options: { parkSteer?: boolean; onQueuedFollowupSettled?: () =>
   });
   const refresh = async (key = "click-1") => {
     invocation.respond.mockClear();
-    await requestProgressCardRefresh(
-      invocation,
-      { sessionKey, agentId: "work" },
-      card,
-      key,
-      async () => card,
-    );
+    await requestProgressCardRefresh(invocation, target, card, key, async () => card);
     return invocation.respond;
   };
   const start = async () => {
@@ -253,7 +251,7 @@ function fixture(options: { parkSteer?: boolean; onQueuedFollowupSettled?: () =>
     }
     return { runId: item[0], ...item[1] };
   };
-  return { context, card, sources, sessionKey, storeScope, releases, refresh, start, runFollowup };
+  return { context, card, sources, sessionKey, scope, releases, refresh, start, runFollowup };
 }
 
 function expectReleased(f: ReturnType<typeof fixture>, runId: string) {
@@ -360,6 +358,7 @@ describe("queued progress refresh settlement", () => {
         lateCancellation ? requestRpcSourceCancellation(source.sourceRef) : undefined,
       );
       const f = fixture({ onQueuedFollowupSettled });
+      const originalCard = structuredClone(f.card);
       const source = await f.start();
       expect(isRpcSourceQueued(source.sourceRef)).toBe(true);
       expect(rpcSourceTesting.get(source.runId)).toBe(source.sourceRef);
@@ -382,12 +381,7 @@ describe("queued progress refresh settlement", () => {
       expect(f.context.dedupe.get(`chat:` + source.runId)?.payload).toMatchObject({
         status: "completed",
       });
-      expect(f.card).toEqual({
-        sessionKey: f.sessionKey,
-        revision: 7,
-        updatedAt: 1,
-        markdown: "Previous status",
-      });
+      expect(f.card).toEqual(originalCard);
       expect(f.context.broadcast).not.toHaveBeenCalled();
       expect(mocks.execute).toHaveBeenCalledOnce();
 
@@ -422,15 +416,7 @@ describe("queued progress refresh settlement", () => {
       turnAdoptionLifecycle: undefined,
       queuedFollowupReplyDisposition: undefined,
     };
-    const replacementSource = createRpcSourceForTest(
-      {},
-      {
-        storeScope: f.storeScope,
-        sessionKey: f.sessionKey,
-        sessionId: "session",
-        agentId: "work",
-      },
-    );
+    const replacementSource = createRpcSourceForTest({}, f.scope);
     bindSessionControllerSource(replacementSource.input, replacement);
     expect(
       enqueueFollowupRun(
@@ -480,12 +466,10 @@ describe("queued progress refresh settlement", () => {
     const successor = createRpcSourceForTest(
       {},
       {
+        ...f.scope,
         runId: source.runId,
-        storeScope: f.storeScope,
         phase: "waiting",
         sessionId: "successor-session",
-        sessionKey: f.sessionKey,
-        agentId: "work",
       },
     );
     // The old producer retains custody; replacing correlation cannot transfer it.

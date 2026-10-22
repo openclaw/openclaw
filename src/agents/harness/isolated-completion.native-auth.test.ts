@@ -1,5 +1,6 @@
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isolatedAssistant,
   isolatedCompletionMocks as mocks,
@@ -17,7 +18,14 @@ const { createPluginMetadataSnapshot, makeRegistry } =
 
 const { AsyncWorkScope } = await import("../../shared/async-work-scope.js");
 
-beforeEach(resetIsolatedCompletionTestState);
+beforeEach(() => {
+  resetIsolatedCompletionTestState();
+  // Authorization routing must not consume its budget while CI schedules other workers.
+  // isolated-completion.deadline.test.ts owns elapsed-time and expiry behavior.
+  vi.spyOn(performance, "now").mockReturnValue(0);
+});
+
+afterEach(() => vi.restoreAllMocks());
 
 const reply = (text: string) => ({ assistant: isolatedAssistant([{ type: "text", text }]) });
 function registerReply(text: string) {

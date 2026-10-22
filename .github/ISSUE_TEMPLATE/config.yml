@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Onboarding
-    url: https://discord.gg/clawd
-    about: "New to OpenClaw? Join Discord for setup guidance in #help."
+    url: https://community.openclaw.ai/
+    about: "For official OpenClaw support with onboarding and setup, visit community.openclaw.ai."
   - name: Support
-    url: https://discord.gg/clawd
-    about: "Get help from the OpenClaw community on Discord in #help."
+    url: https://community.openclaw.ai/
+    about: "For official OpenClaw support, visit community.openclaw.ai."

@@ -54,6 +54,29 @@ import {
 } from "./sessions-read-cache.test-support.js";
 import { addReadSubagent, sessionReader } from "./sessions-read-fixture.test-support.js";
 
+function sourceRegistrar(
+  config: OpenClawConfig,
+  storePathFor = (agentId: string) => resolvePhysicalSessionStorePath({ agentId }, config),
+) {
+  return async (
+    runId: string,
+    sessionKey: string,
+    sessionId: string,
+    agentId = "main",
+    options: Parameters<typeof createActiveRpcSourceForTest>[0] = {},
+  ) => {
+    const storeScope = storePathFor(agentId);
+    const source = await createActiveRpcSourceForTest(options, {
+      agentId,
+      sessionKey,
+      sessionId,
+      storeScope,
+    });
+    rpcSourceTesting.set(runId, source);
+    return source;
+  };
+}
+
 async function changeDuringReadiness(
   context: ReturnType<typeof requestContext>,
   change: () => void | Promise<void>,
@@ -110,6 +133,7 @@ it("selects current work before pagination and represents an isolated cron run o
       agents: { entries: { main: {}, work: {} } },
     };
     setRuntimeConfigSnapshot(config);
+    const activate = sourceRegistrar(config);
     const context = requestContext(config);
     const { list } = sessionReader(config, "viewer@example.test", context);
     const childKey = "agent:main:subagent:child";
@@ -140,15 +164,7 @@ it("selects current work before pagination and represents an isolated cron run o
       ["hidden", "hidden-session", { controlUiVisible: false }],
       ["settled", "settled-session", { projectSessionActive: false }],
     ] as const) {
-      rpcSourceTesting.set(
-        `${name}-run`,
-        await createActiveRpcSourceForTest(options, {
-          sessionKey: `agent:main:${name}`,
-          sessionId,
-          agentId: "main",
-          storeScope: resolvePhysicalSessionStorePath({ agentId: "main" }, config),
-        }),
-      );
+      await activate(`${name}-run`, `agent:main:${name}`, sessionId, "main", options);
     }
     registerAgentRunContext("remote-run", {
       agentId: "work",
@@ -292,6 +308,7 @@ it.for(["global", "unknown"] as const)(
       const { list } = sessionReader(config, "viewer@example.test", context);
       const storePathFor = (agentId: string) => state.statePath(`${agentId}.sqlite`);
       const boardFace = "chat" as const;
+      const activate = sourceRegistrar(config, storePathFor);
       for (const [index, agentId] of agents.entries()) {
         const sessionId = `${sentinel}-${agentId}`;
         const storePath = storePathFor(agentId);
@@ -317,18 +334,7 @@ it.for(["global", "unknown"] as const)(
           },
         );
         if (agentId !== "main") {
-          rpcSourceTesting.set(
-            `sentinel-run-${agentId}`,
-            await createActiveRpcSourceForTest(
-              {},
-              {
-                sessionKey: sentinel,
-                sessionId,
-                agentId,
-                storeScope: storePath,
-              },
-            ),
-          );
+          await activate(`sentinel-run-${agentId}`, sentinel, sessionId, agentId);
         }
       }
       const childKey = `agent:ops:subagent:${sentinel}-child`;
@@ -364,18 +370,7 @@ it.for(["global", "unknown"] as const)(
         visibility: "shared",
       });
       await replaceSessionEntry(literalScope, { ...literalEntry!, updatedAt: 1 });
-      rpcSourceTesting.set(
-        "literal-sentinel-run",
-        await createActiveRpcSourceForTest(
-          {},
-          {
-            sessionKey: literalKey,
-            sessionId: literalSessionId,
-            agentId: "ops",
-            storeScope: storePathFor("ops"),
-          },
-        ),
-      );
+      await activate("literal-sentinel-run", literalKey, literalSessionId, "ops");
 
       await new SqliteBoardStore({
         resolveSession: () => ({ agentId: "ops", path: storePathFor("ops"), sessionKey: sentinel }),
@@ -503,18 +498,7 @@ it.each([{ activeMinutes: 1 }, { activeOnly: true }])(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
       const context = requestContext(config);
-      rpcSourceTesting.set(
-        "active-run",
-        await createActiveRpcSourceForTest(
-          {},
-          {
-            agentId: "main",
-            sessionKey: "agent:main:active",
-            sessionId: "main-active",
-            storeScope: resolvePhysicalSessionStorePath({ agentId: "main" }, config),
-          },
-        ),
-      );
+      await sourceRegistrar(config)("active-run", "agent:main:active", "main-active");
       const { list } = sessionReader(config, "owner@example.com", context);
       clock.mockReturnValue(60_400);
       const request = { ...filter, agentId: "main", limit: 100 };
@@ -544,6 +528,7 @@ it.each(["settled", "replaced"] as const)(
         string,
         Awaited<ReturnType<typeof createActiveRpcSourceForTest>>
       >();
+      const activate = sourceRegistrar(config);
       for (const agentId of ["main", "work"]) {
         const scope = { agentId, sessionKey: `agent:${agentId}:active` };
         const entry = loadSessionEntry(scope);
@@ -551,17 +536,13 @@ it.each(["settled", "replaced"] as const)(
           throw new Error("Missing seeded active session");
         }
         await replaceSessionEntry(scope, { ...entry, updatedAt: agentId === "main" ? 400 : 100 });
-        const source = await createActiveRpcSourceForTest(
-          {},
-          {
-            agentId,
-            sessionKey: `agent:${agentId}:active`,
-            sessionId: `${agentId}-active`,
-            storeScope: resolvePhysicalSessionStorePath({ agentId }, config),
-          },
+        const source = await activate(
+          `run-${agentId}`,
+          `agent:${agentId}:active`,
+          `${agentId}-active`,
+          agentId,
         );
         activeSources.set(agentId, source);
-        rpcSourceTesting.set(`run-${agentId}`, source);
       }
       const readiness = await changeDuringReadiness(context, async () => {
         expectDefined(activeSources.get("main"), "main source").release();
@@ -572,18 +553,7 @@ it.each(["settled", "replaced"] as const)(
             { agentId: "main", sessionKey: "agent:main:active" },
             { sessionId: "replacement-session" },
           );
-          rpcSourceTesting.set(
-            "run-replacement",
-            await createActiveRpcSourceForTest(
-              {},
-              {
-                agentId: "main",
-                sessionKey: "agent:main:active",
-                sessionId: "replacement-session",
-                storeScope: resolvePhysicalSessionStorePath({ agentId: "main" }, config),
-              },
-            ),
-          );
+          await activate("run-replacement", "agent:main:active", "replacement-session");
         }
       });
       const request = { activeOnly: true, limit: 1 };

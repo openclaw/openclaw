@@ -10,6 +10,7 @@ import {
   GitHubPublicationOwner,
   type GitHubPublicationOptions,
 } from "./github-publication-owner.ts";
+import { sessionRequest } from "./hydration-family.test-support.ts";
 import {
   createGatewayHarness as baseGateway,
   createTestSessionCapability,
@@ -135,13 +136,7 @@ function publicationHarness(responses?: {
     "sessions.subscribe": responses ? responses.subscribe : () => ({ subscribed: true }),
     "sessions.github.status": responses?.status,
   };
-  const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
-    const reply = replies[method];
-    if (!reply) {
-      throw new Error(`Unexpected request: ${method}`);
-    }
-    return reply();
-  });
+  const request = sessionRequest(replies);
   const harness = createGatewayHarness(createTestGatewayClient(request));
   const sessions = createTestSessionCapability(harness.gateway);
   const row = (id: string): GatewaySessionRow => ({

@@ -4574,7 +4574,6 @@ td.data-table-key-col {
   pointer-events: none;
   transition:
     opacity var(--duration-fast) ease,
-    background var(--duration-fast) ease,
     color var(--duration-fast) ease;
 }
 
@@ -4592,9 +4591,9 @@ td.data-table-key-col {
   display: none;
 }
 
+/* Hover brightens the glyph instead of filling a chip inside the row. */
 .session-action:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bg-hover) 92%, transparent);
-  color: var(--text);
+  color: var(--text-strong);
 }
 
 .session-action:disabled {
