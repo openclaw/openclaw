@@ -10,6 +10,7 @@ import {
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
+import { Icon } from "../solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board.css";
 import { BoardTabs } from "./board-tabs.tsx";
@@ -245,13 +246,28 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
             </Show>
           </div>
           <Show when={view().empty}>
-            <div class="board-empty" data-test-id="board-empty">
-              <span class="board-empty__mark" aria-hidden="true">
-                ＋
-              </span>
-              <strong>{t("board.emptyTitle")}</strong>
-              <span>{t("board.emptyHint")}</span>
-            </div>
+            <Show
+              when={props.websiteIdentity}
+              fallback={
+                <div class="board-empty" data-test-id="board-empty">
+                  <span class="board-empty__mark" aria-hidden="true">
+                    ＋
+                  </span>
+                  <strong>{t("board.emptyTitle")}</strong>
+                  <span>{t("board.emptyHint")}</span>
+                </div>
+              }
+            >
+              {(identity) => (
+                <div class="board-empty board-empty--website" data-test-id="board-website-preview">
+                  <span class="board-empty__mark" aria-hidden="true">
+                    <Icon name="globe" />
+                  </span>
+                  <strong>{identity().title || t("board.widget.kindWebsite")}</strong>
+                  <span>{t("board.widget.kindWebsite")}</span>
+                </div>
+              )}
+            </Show>
           </Show>
         </Show>
         <Show when={view().state.actionError}>
@@ -280,6 +296,7 @@ export const BoardView = defineSolidBridge<BoardViewProps, BoardViewMethods>(
     properties: {
       session: { default: { sessionKey: "" }, attribute: false },
       snapshot: { default: undefined, attribute: false },
+      websiteIdentity: { default: null, attribute: false },
       activeTabId: { default: "", attribute: false },
       widgetFrameUrl: { default: undefined, attribute: false },
       callbacks: { default: undefined, attribute: false },
