@@ -942,8 +942,6 @@
 ["extensions/signal/src/monitor.attachment-base64.test.ts","./sse-reconnect.js","1887aec0062518b7b22119e8379b4866aca52708f26a1002b849524163eafa84",1]
 ["extensions/signal/src/monitor/event-handler.inbound-context.test.ts","../send-reactions.js","98c92e9c715e859afee30d629c27d4efa42e382d35766e800521d35c650bec3b",1]
 ["extensions/signal/src/monitor/event-handler.inbound-context.test.ts","../send.js","386696f4e48db50131cb99b3574ae83e30b1274501e16009a2e5e93d9afae329",1]
-["extensions/signal/src/monitor/event-handler.ingress-lifecycle.test.ts","../send-reactions.js","957cfa7c26568502de2465e4ce2c3ecf200fc05cea3c25aa03fe9116e58fa6fc",1]
-["extensions/signal/src/monitor/event-handler.ingress-lifecycle.test.ts","../send.js","077629126400e720d43f2cc0f6254276a869adb9227492e13dd3c8de897f3ef5",1]
 ["extensions/signal/src/monitor/event-handler.partial-delivery.test.ts","../send-reactions.js","957cfa7c26568502de2465e4ce2c3ecf200fc05cea3c25aa03fe9116e58fa6fc",1]
 ["extensions/signal/src/monitor/event-handler.partial-delivery.test.ts","../send.js","a5c95c614006f2ef5d095a172e893284696a9d124adb597b793c64a4df8e1699",1]
 ["extensions/signal/src/monitor/event-handler.reply-session-conflict.test.ts","../send-reactions.js","0d230048d1cde12ffacd6ba6066fbe9385c40ba1f897299da49449f0092347aa",1]
