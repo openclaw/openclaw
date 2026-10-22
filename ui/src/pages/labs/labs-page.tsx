@@ -140,7 +140,9 @@ export function LabsPage() {
           throw new Error(runtimeConfig.state.lastError ?? t("labsPage.saveFailed"));
         }
       } finally {
-        if (isCurrent()) admitted = false;
+        if (isCurrent()) {
+          admitted = false;
+        }
       }
     })();
     // Publish the owner's synchronous changes before entering its presentation action.
@@ -166,7 +168,7 @@ export function LabsPage() {
     const featureState = resolveLabFeatureState(value, feature);
     const resetPatch =
       enabled === featureState.defaultEnabled ? labFeatureResetPatch(value, feature) : null;
-    void updateSetting(feature.id, enabled, resetPatch ?? labFeatureMergePatch(feature, enabled));
+    updateSetting(feature.id, enabled, resetPatch ?? labFeatureMergePatch(feature, enabled));
   }
   function codeModeConfig(): unknown {
     const tools = editableConfig()?.tools;
@@ -177,7 +179,7 @@ export function LabsPage() {
       return;
     }
     const value = codeModeConfig();
-    void updateSetting("codeModeExecutor", executor, {
+    updateSetting("codeModeExecutor", executor, {
       tools: {
         codeMode: {
           ...(value === undefined
@@ -219,7 +221,7 @@ export function LabsPage() {
     if (model !== "utility" && model !== "conversation" && model !== "default") {
       return;
     }
-    void updateSetting("predictionModel", model, {
+    updateSetting("predictionModel", model, {
       gateway: { controlUi: { experimental: { composerPredictions: { model } } } },
     });
   }
