@@ -151,7 +151,7 @@ export function McpServersCard(props: McpServersCardProps) {
       draft.message = null;
     });
     const result = performMutation(() => patchMcpServers(context.runtimeConfig, options));
-    setCompletion(result);
+    void setCompletion(result);
     try {
       await result;
       setView((draft) => {

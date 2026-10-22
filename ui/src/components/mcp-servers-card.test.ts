@@ -633,7 +633,14 @@ describe("openclaw-mcp-servers-card", () => {
       );
       expect(actionButton(card, "Disable").disabled).toBe(false);
 
+      const retry = deferred<boolean>();
+      harness.patch.mockReturnValueOnce(retry.promise);
       actionButton(card, "Disable").click();
+      await waitForFast(() => {
+        expect(card.querySelector('[role="alert"]')).toBeNull();
+        expect(actionButton(card, "Working").disabled).toBe(true);
+      });
+      retry.resolve(true);
       await waitForFast(() =>
         expect(card.querySelector('[role="status"]')?.textContent).toBe(
           "Disabled MCP server local.",
@@ -641,6 +648,21 @@ describe("openclaw-mcp-servers-card", () => {
       );
     },
   );
+
+  it("shows an initial configuration failure without replacing the controls", async () => {
+    const initialLoad = deferred();
+    const { card } = await mountCard({
+      config: configWith({ local: { command: "node" } }),
+      initialLoad: initialLoad.promise,
+    });
+    initialLoad.reject(new Error("Configuration could not be loaded"));
+    await waitForFast(() =>
+      expect(card.querySelector('[role="alert"]')?.textContent).toBe(
+        "Configuration could not be loaded",
+      ),
+    );
+    expect(actionButton(card, "Disable").disabled).toBe(false);
+  });
 
   it("keeps a successful mutation visible when an older initial read fails", async () => {
     const initialLoad = deferred();
