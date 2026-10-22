@@ -107,29 +107,23 @@ it("updates loader data without replacing the registered page host", async () =>
   });
 });
 
-it.each([true, false])("reuses retained DOM only while authorized (%s)", async (authorized) => {
+it("rejects retained DOM after its authorization changes", async () => {
   const { auth, data, page, input } = retainedDraft();
-  if (!authorized) {
-    auth.recoveryScope = "replacement-principal";
-  }
+  auth.recoveryScope = "replacement-principal";
   const { container } = mountRoute(data);
-  if (authorized) {
-    await waitForSolid(() => expect(container.firstElementChild).toBe(page));
-    expect(container.querySelector("input")).toBe(input);
-    expect(input.value).toBe("Keep this private unsent draft");
-    expect(pageHost(container)).toBeNull();
-  } else {
-    await waitForSolid(() => expect(pageHost(container)?.data).toBe(data));
-    expect(container.contains(page)).toBe(false);
-    expect(container.contains(input)).toBe(false);
-  }
+  await waitForSolid(() => expect(pageHost(container)?.data).toBe(data));
+  expect(container.contains(page)).toBe(false);
+  expect(container.contains(input)).toBe(false);
 });
 
-it("replaces the displayed restored page when a later rollback supplies another host", async () => {
+it("restores owned DOM and replaces it when a later rollback supplies another host", async () => {
   const first = retainedDraft();
   const second = retainedDraft();
   const { container, setData } = mountRoute(first.data);
   await waitForSolid(() => expect(container.firstElementChild).toBe(first.page));
+  expect(container.querySelector("input")).toBe(first.input);
+  expect(first.input.value).toBe("Keep this private unsent draft");
+  expect(pageHost(container)).toBeNull();
   setData(second.data);
   await waitForSolid(() => expect(container.firstElementChild).toBe(second.page));
   expect(container.contains(first.input)).toBe(false);

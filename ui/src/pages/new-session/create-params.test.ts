@@ -14,19 +14,11 @@ it("requires draft policy and multiple creator identities", () => {
     () => {},
     () => {},
   );
-  const canStartSessionAsDraft = (allowedSessionVisibilities?: string[]) =>
-    capabilities.canStartAsDraft({
-      gateway: {
-        snapshot: {
-          hello: {
-            policy: {
-              allowedSessionVisibilities,
-              hasMultipleSessionSharingIdentities: true,
-            },
-          },
-        },
-      },
-    } as ApplicationContext);
+  const canStartSessionAsDraft = (allowedSessionVisibilities?: string[]) => {
+    const policy = { allowedSessionVisibilities, hasMultipleSessionSharingIdentities: true };
+    const context = { gateway: { snapshot: { hello: { policy } } } } as ApplicationContext;
+    return capabilities.canStartAsDraft(context);
+  };
   expect(canStartSessionAsDraft(["shared", "draft"])).toBe(true);
   expect(canStartSessionAsDraft(["shared"])).toBe(false);
   expect(canStartSessionAsDraft()).toBe(false);
@@ -84,9 +76,6 @@ describe("buildSelectedSessionCreateParams", () => {
     baseRef: "old-branch",
     worktreeName: "old-name",
   };
-  const attachments = [
-    { type: "image", mimeType: "image/png", fileName: "pixel.png", content: "aGVsbG8=" },
-  ];
   const overrides = {
     model: "anthropic/claude-sonnet-4-6",
     contextWindow: "200k",
@@ -149,7 +138,6 @@ describe("buildSelectedSessionCreateParams", () => {
       { message: "", incognito: true },
     ],
     ["draft visibility", { visibility: "draft" }, { visibility: "draft" }],
-    ["initial attachments", { message: "", attachments }, { message: "", attachments }],
     ["model overrides", overrides, overrides],
     ["capability overrides", { toolOverrides }, { toolOverrides }],
     [

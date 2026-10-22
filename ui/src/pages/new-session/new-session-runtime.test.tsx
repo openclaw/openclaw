@@ -9,7 +9,7 @@ import { pickerParams } from "./where-chip.test-support.ts";
 
 afterEach(cleanupSolid);
 
-async function mountedMenu(veto = false) {
+it.each([false, true])("closes only owned menus and honors vetoes (veto: %s)", async (veto) => {
   let menu!: MenuHandle;
   const view = mountSolid(() => (
     <Menu
@@ -26,27 +26,16 @@ async function mountedMenu(veto = false) {
   ));
   await waitForSolid(() => expect(menu).toBeDefined());
   menu.open();
-  return { menu, view };
-}
-
-it("closes owned menus even when their surface is reparented", async () => {
-  const { menu, view } = await mountedMenu();
+  expect(menu.overlay.open).toBe(true);
+  closeMenusWithin(document.createElement("div"));
   expect(menu.overlay.open).toBe(true);
   document.body.append(menu.overlay.surface);
   try {
     closeMenusWithin(view.container);
-    expect(menu.overlay.open).toBe(false);
+    expect(menu.overlay.open).toBe(veto);
   } finally {
     view.container.append(menu.overlay.surface);
   }
-});
-
-it("honors close vetoes and leaves menus outside the draft alone", async () => {
-  const { menu, view } = await mountedMenu(true);
-  closeMenusWithin(document.createElement("div"));
-  expect(menu.overlay.open).toBe(true);
-  closeMenusWithin(view.container);
-  expect(menu.overlay.open).toBe(true);
 });
 
 it.each(["inside", "body", "outside"])("restores only its own lost focus from %s", async (from) => {
