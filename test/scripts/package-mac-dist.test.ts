@@ -725,6 +725,26 @@ it("fails closed when required dSYM outputs are missing", () => {
   expect(dsymBlock).toContain('if ! ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"; then');
 });
 
+it.runIf(process.platform === "darwin")(
+  "prints required plist keys and fails when a key is missing",
+  () => {
+    const plist = path.join(checkpointDirs.make("openclaw-dist-plist-"), "Info.plist");
+    writeFileSync(
+      plist,
+      '<plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>1.2.3</string></dict></plist>',
+    );
+    const result = runHelper(`
+        set -euo pipefail
+        source scripts/lib/plistbuddy.sh
+        plist_print_required ${JSON.stringify(plist)} CFBundleShortVersionString
+        plist_print_required ${JSON.stringify(plist)} CFBundleVersion
+      `);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("1.2.3");
+    expect(result.stderr).toContain("Does Not Exist");
+  },
+);
 describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives", () => {
   it.each(["native", "xcode"] as const)(
     "archives matching universal symbols from the %s build output",
