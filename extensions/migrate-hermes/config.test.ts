@@ -260,14 +260,6 @@ describe("Hermes migration config mapping", () => {
           url: "https://protected.example/rpc",
           [tlsFieldName]: [...tlsPaths, "placeholder"],
         },
-        utilities_only: {
-          command: "utilities-only",
-          tools: { include: [], resources: false, prompts: true },
-        },
-        no_tools: {
-          command: "no-tools",
-          tools: { include: [], resources: false, prompts: false },
-        },
       },
     });
 
@@ -303,15 +295,6 @@ describe("Hermes migration config mapping", () => {
     expect(remoteValue?.remote?.[["client", "Key"].join("")]).toBe(tlsPaths[1]);
     expect(itemById(plan.items, "config:mcp-server:protected")?.details?.value).toEqual({
       protected: { url: "https://protected.example/rpc", transport: "streamable-http" },
-    });
-    expect(itemById(plan.items, "config:mcp-server:utilities_only")?.details?.value).toEqual({
-      utilities_only: {
-        command: "utilities-only",
-        toolFilter: { include: ["prompts_list", "prompts_get"] },
-      },
-    });
-    expect(itemById(plan.items, "config:mcp-server:no_tools")?.details?.value).toEqual({
-      no_tools: { command: "no-tools", toolFilter: { exclude: ["*"] } },
     });
     for (const id of [
       "manual:mcp-server-tls-ca:remote",

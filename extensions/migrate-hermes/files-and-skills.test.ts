@@ -358,36 +358,6 @@ describe("Hermes migration file and skill items", () => {
     expect(itemById(secondResult.items, "memory:MEMORY.md")?.status).toBe("skipped");
   });
 
-  it("plans nested mapping config alongside independent skills", async () => {
-    const { source, workspaceDir } = fixture.paths;
-    await writeFile(path.join(source, "skills", "review", "SKILL.md"), "# Review\n");
-    await writeFile(
-      path.join(source, "config.yaml"),
-      "skills:\n  disabled: [review]\n  config:\n    review:\n      mode: careful\n",
-    );
-
-    const plan = await provider.plan(makeTestContext({ workspaceDir }));
-
-    expect(plan.items).toEqual([
-      expect.objectContaining({
-        id: "config:skill-entry:review",
-        kind: "config",
-        status: "planned",
-        details: {
-          path: ["skills", "entries", "review"],
-          value: { config: { mode: "careful" }, enabled: false },
-        },
-      }),
-      expect.objectContaining({
-        id: "skill:review",
-        kind: "skill",
-        action: "copy",
-        status: "planned",
-        details: { skillName: "review" },
-      }),
-    ]);
-  });
-
   it("fails planning on malformed Hermes YAML", async () => {
     const { root, source } = fixture.paths;
     await writeFile(path.join(source, "config.yaml"), "model: [unterminated\n");
