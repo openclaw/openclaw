@@ -91,9 +91,9 @@ function renderNodeServiceStartHints(): string[] {
   return buildPlatformServiceStartHints({
     installHint: formatCliCommand("openclaw node install"),
     startCommand: formatCliCommand("openclaw node start"),
-    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
-    systemdServiceName: resolveNodeSystemdServiceName(),
-    windowsTaskName: resolveNodeWindowsTaskName(),
+    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel(process.env.OPENCLAW_PROFILE)}.plist`,
+    systemdServiceName: resolveNodeSystemdServiceName(process.env.OPENCLAW_PROFILE),
+    windowsTaskName: resolveNodeWindowsTaskName(process.env.OPENCLAW_PROFILE),
   });
 }
 
@@ -173,7 +173,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   let pinSnapshot;
   try {
     pinSnapshot = await withDaemonRuntimePinMigration(
-      { ...installEnv, ...resolveNodeServiceIdentityEnvironment() },
+      { ...installEnv, ...resolveNodeServiceIdentityEnvironment(installEnv) },
       () =>
         readDaemonRuntimePinForInstall(
           { kind: "node", env: installEnv },
@@ -479,8 +479,8 @@ export async function runNodeDaemonStatus(opts: NodeDaemonOutputOptions = {}) {
     );
     for (const hint of buildPlatformRuntimeLogHints({
       env: hintEnv,
-      systemdServiceName: resolveNodeSystemdServiceName(),
-      windowsTaskName: resolveNodeWindowsTaskName(),
+      systemdServiceName: resolveNodeSystemdServiceName(process.env.OPENCLAW_PROFILE),
+      windowsTaskName: resolveNodeWindowsTaskName(process.env.OPENCLAW_PROFILE),
     })) {
       defaultRuntime.log(errorText(hint));
     }

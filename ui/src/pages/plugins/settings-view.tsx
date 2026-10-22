@@ -536,15 +536,10 @@ function PluginOverview(props: DetailProps): JSX.Element {
             when={Boolean(props.installProgress)}
             fallback={
               <PluginLifecycle
-                plugin={plugin()}
-                busy={props.busy}
-                canMutate={props.canMutate}
-                mutationBlockedReason={props.mutationBlockedReason}
-                onSetEnabled={props.onSetEnabled}
-                onUninstall={props.onUninstall}
-                onAskPlugin={props.onAskPlugin}
+                {...props}
                 settingsHref={props.settingsHref ?? "#configuration"}
                 onSettings={() => props.onTabChange("configuration")}
+                plugin={plugin()}
               />
             }
           >

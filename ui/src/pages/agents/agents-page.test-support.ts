@@ -39,7 +39,7 @@ function fillMissing(target: object, defaults: object) {
   }
 }
 
-function completeContext(context: ApplicationContext) {
+export function completeContext(context: ApplicationContext) {
   const subscribe = () => () => {};
   const defaultAgents = agentsCapability(async () => ({
     agentId: "main",

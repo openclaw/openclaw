@@ -234,7 +234,7 @@ describe("qa multipass runtime", () => {
   it.skipIf(process.platform === "win32").each([
     ["missing", "24.99.0"],
     ["24.15.0", "24.99.0"],
-    ["24.16.0", "24.16.0"],
+    ["24.22.1", "24.22.1"],
   ])("bootstraps a runnable guest toolchain from Node %s", async (version, expectedVersion) => {
     const { executableScript } = await guestScripts(
       {

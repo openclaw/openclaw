@@ -121,6 +121,7 @@ export function createUpdatesViewDom() {
 export function nativeSettings(snapshot: NativeDeviceSettingsCapability["snapshot"]) {
   return {
     snapshot,
+    initialSnapshot: Promise.resolve(snapshot),
     subscribe: () => () => undefined,
     set: vi.fn<NativeDeviceSettingsCapability["set"]>((_key, _value, onSettled) => onSettled?.()),
     requestPermission: vi.fn(),

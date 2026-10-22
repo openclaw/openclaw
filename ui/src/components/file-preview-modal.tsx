@@ -15,7 +15,7 @@ import { PanelLoadingSkeleton } from "./solid/panel-loading-skeleton.tsx";
 import { SanitizedHtml } from "./solid/sanitized-html.tsx";
 import styles from "./file-preview-modal.styles.css?inline";
 import kbdStyles from "./kbd.css?inline";
-import "./modal-dialog.ts";
+import "./modal-dialog.tsx";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 

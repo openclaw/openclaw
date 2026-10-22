@@ -70,7 +70,7 @@ it.each([
           ],
     });
     mocks.resolveSystemNodeInfo.mockResolvedValue(
-      supported ? { path: "/usr/bin/node", status: "supported", version: "24.16.0" } : null,
+      supported ? { path: "/usr/bin/node", status: "supported", version: "24.22.1" } : null,
     );
     const prompter = makeDoctorPrompts();
     prompter.confirmRuntimeRepair.mockImplementation(async ({ message }) => {

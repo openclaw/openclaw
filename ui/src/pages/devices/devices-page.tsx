@@ -60,6 +60,13 @@ export type DevicesRouteData = {
   devices: DevicesPageDataState;
 };
 
+type InventoryReadReceipt = {
+  gateway: ApplicationContext["gateway"];
+  state: DevicesPageDataState;
+  epoch: number;
+  result: Promise<void>;
+};
+
 const DEVICES_ACTIVE_POLL_INTERVAL_MS = 30_000;
 const SYSTEM_INFO_POLL_INTERVAL_MS = 60_000;
 
@@ -83,6 +90,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   }
   let systemInfoUnavailable = false;
   let dataState = createInitialDevicesState();
+  const [nodesRead, setNodesRead] = createSignal<InventoryReadReceipt | null>(null);
+  const [devicesRead, setDevicesRead] = createSignal<InventoryReadReceipt | null>(null);
   let canManagePairing = false;
   let canAdmin = false;
   let canRead = true;
@@ -169,7 +178,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   const polling = useVisiblePoll(DEVICES_ACTIVE_POLL_INTERVAL_MS, () => {
     refreshNodeInventory(true);
     if (canManagePairing) {
-      void runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+      void refreshDeviceInventory(true);
     }
   });
   const gatewayBinding = useGatewayPage({
@@ -182,6 +191,23 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     invalidateRequests,
     onSnapshot: handleGatewaySnapshot,
     ensureInitialData,
+  });
+  const inventoryScope = createMemo(
+    () => ({ gateway: context.gateway, state: pageData.read(), epoch: gatewayBinding.epoch }),
+    { equals: (a, b) => a.gateway === b.gateway && a.state === b.state && a.epoch === b.epoch },
+  );
+  const inventoryRead = createMemo(() => {
+    const scope = inventoryScope();
+    const receipts = [nodesRead(), devicesRead()].filter(
+      (receipt): receipt is InventoryReadReceipt =>
+        receipt?.gateway === scope.gateway &&
+        receipt.state === scope.state &&
+        receipt.epoch === scope.epoch,
+    );
+    // The route has already awaited its snapshot; only admitted reads suspend.
+    return receipts.length
+      ? Promise.all(receipts.map((receipt) => receipt.result)).then(() => undefined)
+      : undefined;
   });
   onSettled(() => {
     syncConfigCustody();
@@ -235,7 +261,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
           presenceTask.cancel();
           if (updatePresence(entries)) {
             if (canManagePairing) {
-              void runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+              void refreshDeviceInventory(true);
             }
             refreshNodeInventory(true);
           }
@@ -246,7 +272,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
           event.event === "device.pair.resolved"
         ) {
           if (canManagePairing) {
-            void runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+            void refreshDeviceInventory(true);
           }
         }
         if (
@@ -283,7 +309,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       void presenceTask.run();
       refreshNodeInventory(true);
       if (canManagePairing) {
-        void runPageTask((current) => loadDevices(current, { quiet: true }));
+        void refreshDeviceInventory(true);
       }
     }
     if (change.initial || change.identityChanged || change.connectionChanged) {
@@ -444,7 +470,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       refreshNodeInventory();
     }
     if (canManagePairing && !pageState.devicesList && !pageState.devicesLoading) {
-      void runPageTask((current) => loadDevices(current));
+      void refreshDeviceInventory();
     }
     const config = context.runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading) {
@@ -484,6 +510,26 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     }
   }
 
+  function readInventory(kind: "nodes" | "devices", quiet: boolean) {
+    const gateway = context.gateway;
+    const state = dataState;
+    const epoch = gatewayBinding.epoch;
+    const queued = kind === "nodes" ? state.nodesLoading : state.devicesLoading;
+    const result = runPageTask((current) =>
+      kind === "nodes" ? loadNodes(current, { quiet }) : loadDevices(current, { quiet }),
+    );
+    // The first promise includes trailing refreshes; queued callers resolve before that drain.
+    if (!queued) {
+      const receipt = { gateway, state, epoch, result };
+      (kind === "nodes" ? setNodesRead : setDevicesRead)(receipt);
+    }
+    return result;
+  }
+
+  function refreshDeviceInventory(quiet = false) {
+    return readInventory("devices", quiet);
+  }
+
   function refreshNodeInventory(quiet = false) {
     if (!canRead) {
       return;
@@ -492,7 +538,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     if (canLoadDesktopEnvironments() && !environmentsTask.pending) {
       void environmentsTask.run();
     }
-    void runPageTask((pageState) => loadNodes(pageState, { quiet }));
+    void readInventory("nodes", quiet);
   }
 
   function clearInventorySamples() {
@@ -575,6 +621,14 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     const gatewayVersion = gatewaySnapshot.hello?.server?.version?.trim() || null;
     return {
       loading: devices.nodesLoading,
+      inventoryRead,
+      inventoryScope: inventoryScope(),
+      onReloadInventory: () => {
+        refreshNodeInventory();
+        if (canManagePairing) {
+          void refreshDeviceInventory();
+        }
+      },
       connected: gatewayBinding.connected,
       nodes: devices.nodes,
       presence: presence(),

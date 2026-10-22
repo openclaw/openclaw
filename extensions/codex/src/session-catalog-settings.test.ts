@@ -105,36 +105,32 @@ async function fixture(overflow = false, evicted = false) {
       timeoutMs: 1_000,
     });
   const sessions = async (cwd?: string) => (await index.list({ cwd })).sessions;
-  const session = async (cwd?: string) =>
-    (await sessions(cwd)).find((row) => row.threadId === "thread-1");
+  const session = async (cwd?: string) => {
+    let cursor: string | undefined;
+    do {
+      const page = await index.list({ cwd, cursor });
+      const found = page.sessions.find((row) => row.threadId === "thread-1");
+      if (found) {
+        return found;
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+    return undefined;
+  };
   return { a, b, index, inventory, methods, homeId, resume, abandonClient, sessions, session };
 }
 
 it.each([false, true])(
   "keeps acknowledged resume settings authoritative (overflow=%s)",
   async (overflow) => {
-    const { a, index, inventory, methods, resume, abandonClient, sessions } = await fixture(
-      overflow,
-      overflow,
-    );
+    const { a, index, inventory, methods, resume, abandonClient, sessions, session } =
+      await fixture(overflow, overflow);
     if (overflow) {
       expect(index.get("thread-1")).toBeUndefined();
     }
-    const findThread = async (cwd: string) => {
-      let cursor: string | undefined;
-      do {
-        const page = await index.list({ cwd, cursor });
-        const thread = page.sessions.find((session) => session.threadId === "thread-1");
-        if (thread) {
-          return thread;
-        }
-        cursor = page.nextCursor;
-      } while (cursor);
-      return undefined;
-    };
     await resume();
-    expect(await findThread(runtime.cwd)).toMatchObject({ threadId: "thread-1", ...runtime });
-    expect(await findThread(persisted.cwd)).toBeUndefined();
+    expect(await session(runtime.cwd)).toMatchObject({ threadId: "thread-1", ...runtime });
+    expect(await session(persisted.cwd)).toBeUndefined();
     if (!overflow) {
       expect(await sessions(runtime.cwd)).toEqual([
         expect.objectContaining({ threadId: "thread-1", ...runtime }),
@@ -151,7 +147,7 @@ it.each([false, true])(
     }
     a.client.close();
     expect(await sessions(runtime.cwd)).toEqual([]);
-    expect(await findThread(persisted.cwd)).toMatchObject({
+    expect(await session(persisted.cwd)).toMatchObject({
       threadId: "thread-1",
       modelProvider: "openai",
     });

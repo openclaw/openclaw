@@ -152,6 +152,7 @@ import { modelsAuthOrderHandlers } from "./models-auth-order.js";
 import { clearModelAuthStatusUsageCache } from "./models-auth-status-usage-cache.js";
 import { modelsAuthStatusHandlers } from "./models-auth-status.js";
 import type { ModelAuthLogoutResult, ModelAuthStatusResult } from "./models-auth-status.types.js";
+import { registerModelAuthStatusUsageRefreshTests } from "./models-auth-status.usage-refresh.test-support.js";
 
 function createOptions(
   params: Record<string, unknown> = {},
@@ -356,10 +357,7 @@ async function warmOAuthUsage() {
       { provider: "openai", displayName: "OpenAI", windows: [{ label: "5h", usedPercent: 10 }] },
     ],
   });
-  await readAuthStatus();
-  await waitForFast(async () => {
-    expect((await readAuthStatus()).providers[0]?.usage?.windows[0]?.usedPercent).toBe(10);
-  });
+  await readAuthStatus({ refreshUsage: true });
 }
 
 function resetAuthStatusMocks(): void {
@@ -922,18 +920,28 @@ describe("models.authStatus", () => {
     }
   });
 
-  it("does not publish usage captured before a concurrent logout", async () => {
-    mocks.removeModelAuthCredentials.mockImplementationOnce(async () => {
-      setPreparedAuthStore({ version: 1, profiles: {} });
-    });
-    let usageFinished = false;
-    const usageBlocked = createDeferred();
-    const oauthProfile = healthProfile("openrouter", "oauth", "ok", "openrouter:default");
-    mockHealthProvider({ provider: "openrouter", status: "ok", profiles: [oauthProfile] });
-    mocks.loadProviderUsageSummary.mockImplementationOnce(async () => {
-      await usageBlocked.promise;
-      usageFinished = true;
-      return {
+  it.each([false, true])(
+    "does not publish usage captured before a concurrent logout (refreshUsage=%s)",
+    async (refreshUsage) => {
+      mocks.removeModelAuthCredentials.mockImplementationOnce(async () => {
+        setPreparedAuthStore({ version: 1, profiles: {} });
+      });
+      const started = createDeferred();
+      const usage = createDeferred<UsageSummary>();
+      const oauthProfile = healthProfile("openrouter", "oauth", "ok", "openrouter:default");
+      mockHealthProvider({ provider: "openrouter", status: "ok", profiles: [oauthProfile] });
+      mocks.loadProviderUsageSummary.mockImplementationOnce(() => {
+        started.resolve();
+        return usage.promise;
+      });
+
+      const pending = readAuthStatus({ refreshUsage });
+      await started.promise;
+      if (!refreshUsage) {
+        expect((await pending).providers[0]?.usage).toBeUndefined();
+      }
+      await logoutHandler(createLogoutOptions({ provider: "openrouter" }));
+      usage.resolve({
         updatedAt: 0,
         providers: [
           {
@@ -942,20 +950,12 @@ describe("models.authStatus", () => {
             windows: [{ label: "day", usedPercent: 99 }],
           },
         ],
-      };
-    });
-
-    const first = await readAuthStatus();
-    expect(first.providers[0]?.usage).toBeUndefined();
-    await waitForFast(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
-    await logoutHandler(createLogoutOptions({ provider: "openrouter" }));
-    usageBlocked.resolve();
-    await waitForFast(() => expect(usageFinished).toBe(true));
-
-    const afterLogout = await readAuthStatus();
-    expect(afterLogout.providers[0]?.usage).toBeUndefined();
-    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
-  });
+      });
+      expect((await pending).providers[0]?.usage).toBeUndefined();
+      expect((await readAuthStatus()).providers[0]?.usage).toBeUndefined();
+      expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("routes claude-cli OAuth profiles to Anthropic usage with plan and billing", async () => {
     const runtimeConfig = {};
@@ -1053,35 +1053,11 @@ describe("models.authStatus", () => {
     });
   });
 
-  it("keeps same-account stale usage visible during an explicit refresh", async () => {
-    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
-    await warmOAuthUsage();
-
-    const { promise: refreshBlocked, resolve: releaseRefresh } = createDeferred();
-    mocks.loadProviderUsageSummary.mockImplementationOnce(async () => {
-      await refreshBlocked;
-      return {
-        updatedAt: 1,
-        providers: [
-          {
-            provider: "openai",
-            displayName: "OpenAI",
-            windows: [{ label: "5h", usedPercent: 20 }],
-          },
-        ],
-      };
-    });
-
-    const refreshing = await readAuthStatus({ refresh: true });
-    expect(refreshing.providers[0]?.usage?.windows[0]?.usedPercent).toBe(10);
-    const concurrent = await readAuthStatus({ refresh: true });
-    expect(concurrent.providers[0]?.usage?.windows[0]?.usedPercent).toBe(10);
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
-    releaseRefresh();
-    await waitForFast(async () => {
-      expect((await readAuthStatus()).providers[0]?.usage?.windows[0]?.usedPercent).toBe(20);
-    });
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+  registerModelAuthStatusUsageRefreshTests({
+    mocks,
+    readAuthStatus,
+    warmOAuthUsage,
+    createOptions,
   });
 
   it.each(["directory", "credentials"] as const)(

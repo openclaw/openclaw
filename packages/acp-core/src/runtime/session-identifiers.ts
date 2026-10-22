@@ -24,23 +24,6 @@ function normalizeAgentHintKey(value: unknown): string | undefined {
   return normalizeLowercaseStringOrEmpty(normalized).replace(/[\s_]+/g, "-");
 }
 
-function resolveAcpAgentResumeHintLine(params: {
-  agentId?: string;
-  agentSessionId?: string;
-}): string | undefined {
-  const agentSessionId = normalizeText(params.agentSessionId);
-  const agentKey = normalizeAgentHintKey(params.agentId);
-  if (!agentSessionId || !agentKey) {
-    return undefined;
-  }
-  const command = ACP_AGENT_RESUME_COMMAND_BY_KEY.get(agentKey);
-  if (!command) {
-    return undefined;
-  }
-  const label = command === "codex" ? "Codex" : "Kimi";
-  return `resume in ${label} CLI: \`${command} resume ${agentSessionId}\` (continues this conversation).`;
-}
-
 /** Renders resolved ACP backend/agent ids, hiding pending ids from thread intros. */
 export function resolveAcpSessionIdentifierLinesFromIdentity(params: {
   backend: string;
@@ -92,12 +75,16 @@ export function resolveAcpThreadSessionDetailLines(meta?: SessionAcpMeta): strin
   if (lines.length === 0) {
     return lines;
   }
-  const hint = resolveAcpAgentResumeHintLine({
-    agentId: meta?.agent,
-    agentSessionId: identity?.agentSessionId,
-  });
-  if (hint) {
-    lines.push(hint);
+  const agentId = meta?.agent;
+  const agentSessionId = normalizeText(identity?.agentSessionId);
+  const agentKey = normalizeAgentHintKey(agentId);
+  const command =
+    agentSessionId && agentKey ? ACP_AGENT_RESUME_COMMAND_BY_KEY.get(agentKey) : undefined;
+  if (command) {
+    const label = command === "codex" ? "Codex" : "Kimi";
+    lines.push(
+      `resume in ${label} CLI: \`${command} resume ${agentSessionId}\` (continues this conversation).`,
+    );
   }
   return lines;
 }

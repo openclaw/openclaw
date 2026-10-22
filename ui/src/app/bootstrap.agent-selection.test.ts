@@ -91,6 +91,28 @@ it.each([
   },
 );
 
+it.each([
+  { sessionKey: "global", pathname: "/chat/openclaw" },
+  { sessionKey: "workspace", pathname: "/chat/openclaw/workspace" },
+])(
+  "restores a configured saved agent after hydrating a cold roster for $sessionKey",
+  async ({ sessionKey, pathname }) => {
+    const liveList = roster(["dummy", "openclaw"], "dummy", "global");
+    const ensureAgentsList = vi.fn(async () => liveList);
+
+    await expect(
+      resolveLocation({
+        location: makeLocation("/chat"),
+        sessionKey,
+        selectedAgentId: "openclaw",
+        agentsList: () => null,
+        ensureAgentsList,
+      }),
+    ).resolves.toEqual(makeLocation(pathname));
+    expect(ensureAgentsList).toHaveBeenCalledOnce();
+  },
+);
+
 it("refreshes a cached roster and its default before accepting a remembered agent", async () => {
   const cachedList = roster(["retired"]);
   const liveList = roster(["next"]);

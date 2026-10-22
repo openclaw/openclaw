@@ -62,7 +62,6 @@ type SlashHttpHandlerParams = {
   /** Map from trigger to original command name (for skill commands that start with oc_). */
   triggerMap?: ReadonlyMap<string, string>;
   log?: (msg: string) => void;
-  bodyTimeoutMs?: number;
 };
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -95,12 +94,11 @@ export function sendSlashCommandResponse(res: ServerResponse, status: number, te
 export async function readSlashCommandBody(
   req: IncomingMessage,
   res: ServerResponse,
-  timeoutMs = BODY_READ_TIMEOUT_MS,
 ): Promise<string | undefined> {
   try {
     return await readRequestBodyWithLimit(req, {
       maxBytes: MAX_BODY_BYTES,
-      timeoutMs,
+      timeoutMs: BODY_READ_TIMEOUT_MS,
       // Let rejection reach Mattermost before closing the connection.
       destroyOnLimit: false,
     });
@@ -283,7 +281,7 @@ type SlashInvocationAuth =
   | { ok: false; denyText: string };
 
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
-  const { account, cfg, runtime, registeredCommands, triggerMap, log, bodyTimeoutMs } = params;
+  const { account, cfg, runtime, registeredCommands, triggerMap, log } = params;
 
   return async (
     req: IncomingMessage,
@@ -298,7 +296,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
-    const body = bufferedBody ?? (await readSlashCommandBody(req, res, bodyTimeoutMs));
+    const body = bufferedBody ?? (await readSlashCommandBody(req, res));
     if (body === undefined) {
       return;
     }
