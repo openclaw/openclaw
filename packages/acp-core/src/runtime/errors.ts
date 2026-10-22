@@ -1,3 +1,4 @@
+import { mapErrorCauseChain } from "@openclaw/normalization-core/error-coercion";
 import { redactSensitiveText, stringifyNonErrorCause } from "../error-format.js";
 
 export const ACP_ERROR_CODES = [
@@ -117,20 +118,7 @@ export function formatAcpErrorChain(error: unknown): string {
   if (!(error instanceof Error)) {
     return redactSensitiveText(String(error));
   }
-  const segments: string[] = [renderSingleError(error)];
-  let current: unknown = error.cause;
-  let depth = 0;
-  while (current !== undefined && current !== null && depth < 8) {
-    if (current instanceof Error) {
-      segments.push(renderSingleError(current));
-      current = current.cause;
-    } else {
-      segments.push(stringifyNonErrorCause(current));
-      current = undefined;
-    }
-    depth += 1;
-  }
-  return redactSensitiveText(segments.join(" <- "));
+  return redactSensitiveText(mapErrorCauseChain(error, renderSingleError).join(" <- "));
 }
 
 function renderSingleError(error: Error): string {
