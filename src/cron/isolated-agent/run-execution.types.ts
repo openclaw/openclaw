@@ -51,6 +51,7 @@ export type CronRunExecutionParams = Pick<
     | "executionIdentity"
     | "admissionSource"
     | "deliveryAttemptFence"
+    | "occurrence"
   > & {
     runId: string;
     operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -68,7 +69,7 @@ export type CronRunExecutionParams = Pick<
     isAborted: () => boolean;
     lifecycle: Omit<AgentLifecycleTerminalBackstop, "emit">;
     onPromptAdmission: (admission: { close: () => void; finish: () => Promise<void> }) => void;
-    onExecutionStarted?: (info?: CronRunnerStartedInfo) => void;
+    onExecutionStarted?: (info?: CronRunnerStartedInfo) => void | Promise<void>;
     onExecutionPhase?: (
       info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
         Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,

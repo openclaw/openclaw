@@ -1,3 +1,4 @@
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -65,7 +66,7 @@ export function buildSessionEventContext(params: {
   text: string;
   options: Pick<
     SessionEventOptions,
-    "source" | "sourceTurnId" | "readmissionAttempt" | "scheduledAutomation"
+    "source" | "sourceTurnId" | "sourceRunId" | "readmissionAttempt" | "scheduledAutomation"
   >;
   occurrenceId: string;
   deliveryContext?: DeliveryContext;
@@ -83,7 +84,11 @@ export function buildSessionEventContext(params: {
     CommandBody: "",
     RawBody: "",
     CommandAuthorized: false,
-    InputProvenance: { kind: "internal_system", sourceTool: options.source },
+    InputProvenance: {
+      kind: "internal_system",
+      sourceTool: options.source,
+      ...(options.sourceRunId ? { runId: options.sourceRunId } : {}),
+    },
     ChatType: channelRouteTargetsMatchExact({
       left: deliveryContext,
       right: target.deliveryContext,
@@ -111,9 +116,19 @@ export function buildSessionEventContext(params: {
       skillLibrarySelections: automation.job.skillLibrarySelections,
     };
   }
-  if (automation?.controlUiAdmin && automation.operatorAuthority) {
+  const operatorAuthority = automation?.controlUiAdmin
+    ? automation.operatorAuthority
+    : options.source === "plugin"
+      ? readSessionEventTargetOperatorAuthority(target)
+      : undefined;
+  if (
+    operatorAuthority &&
+    (automation?.controlUiAdmin || operatorAuthority.profileId === GATEWAY_OWNER_PROFILE_ID)
+  ) {
+    // Plugin handoffs continue their captured owner capability while retaining
+    // internal provenance and the event text's existing command authorization.
     bindCommandOwnerAuthority(ctx, {
-      operatorAuthority: automation.operatorAuthority,
+      operatorAuthority,
       isCurrent: () => {
         params.assertCurrent();
         return true;

@@ -16,6 +16,7 @@ import {
   holdWorkerTurn,
 } from "./github-publication-requester.test-support.js";
 import * as repositoryPublicationExecutor from "./github-repository-publication-executor.js";
+import { observeRepositoryCommands } from "./github-repository-publication.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 
 const mocks = githubPublicationTestMocks();
@@ -292,14 +293,11 @@ describe("repository checkpoint workflow authority", () => {
   it("rechecks workflow authority after a blob response before writing the tree or branch", async () => {
     const f = await createFixture();
     await f.repository.capture("accepted code\n", "authority-change", { [workflow]: definition });
-    const transport = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (args, options) => {
-      const result = await transport(args, options);
+    observeRepositoryCommands(async (args) => {
       if (args.some((arg: string) => arg.endsWith("/git/blobs"))) {
         await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
         invalidateOperatorRolePolicy(f.maintainerProfile);
       }
-      return result;
     });
     expect(await f.publish("authority-change", f.maintainer)).toMatchObject(identityChanged);
     expect(f.repository.runtime.uploaded.size).toBeGreaterThan(0);

@@ -526,6 +526,18 @@ function renderClaudePreservedTurns(replies: ClaudeReply[]): string | undefined 
     : undefined;
 }
 
+// A reset closes the chat window: only its retained prefix and later entries belong to it.
+// Compaction does not; summarized turns are still earlier messages in this chat.
+function resolveResetWindowStart(entries: SessionEntry[]): number {
+  const boundaryIndex = entries.findLastIndex((entry) => entry.type === "reset");
+  const boundary = entries[boundaryIndex];
+  if (boundary?.type !== "reset") {
+    return 0;
+  }
+  const keptIndex = entries.findIndex((entry) => entry.id === boundary.firstKeptEntryId);
+  return keptIndex >= 0 && keptIndex < boundaryIndex ? keptIndex : boundaryIndex + 1;
+}
+
 /** Reads one active branch for bounded reference notes and eligible fresh-session history. */
 export async function loadCliSessionPromptContext(
   params: CliSessionHistoryParams & {
@@ -585,11 +597,13 @@ export async function loadCliSessionPromptContext(
     const lastClaude =
       replies.findLast((reply) => !contentBlocked || reply.kind === "ordinary")?.index ?? -1;
     if (freshSession || lastClaude >= 0) {
+      const windowStart = resolveResetWindowStart(entries);
+      const start = freshSession ? windowStart : Math.max(windowStart, lastClaude + 1);
       const countsPreservedTurns =
         !freshSession &&
-        replies.some((reply) => reply.index > lastClaude && reply.kind === "preserved");
+        replies.some((reply) => reply.index >= start && reply.kind === "preserved");
       const gap = entries
-        .slice(freshSession ? 0 : lastClaude + 1)
+        .slice(start)
         .filter(
           (entry): entry is SessionMessageEntry =>
             entry.type === "message" &&

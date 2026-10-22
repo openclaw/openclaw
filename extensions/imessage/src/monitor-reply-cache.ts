@@ -262,7 +262,6 @@ function buildCrossChatError(
 export async function resolveIMessageMessageId(
   shortOrUuid: string,
   opts?: {
-    requireKnownShortId?: boolean;
     chatContext?: IMessageChatContext;
     /** Reject inbound, uncached, or provenance-free records for edit/unsend. */
     requireFromMe?: boolean;
@@ -276,17 +275,14 @@ export async function resolveIMessageMessageId(
   const inputKind = /^\d+$/.test(trimmed) ? "short" : "uuid";
   const messageId = inputKind === "short" ? imessageShortIdToUuid.get(trimmed) : trimmed;
   if (!messageId) {
-    if (opts?.requireKnownShortId) {
-      if (!hasChatScope(opts.chatContext)) {
-        throw new Error(
-          `iMessage short message id ${describeMessageIdForError(trimmed, "short")} requires a chat scope (chatGuid / chatIdentifier / chatId or a target).`,
-        );
-      }
+    if (!hasChatScope(opts?.chatContext)) {
       throw new Error(
-        `iMessage short message id ${describeMessageIdForError(trimmed, "short")} is no longer available. Use MessageSidFull.`,
+        `iMessage short message id ${describeMessageIdForError(trimmed, "short")} requires a chat scope (chatGuid / chatIdentifier / chatId or a target).`,
       );
     }
-    return trimmed;
+    throw new Error(
+      `iMessage short message id ${describeMessageIdForError(trimmed, "short")} is no longer available. Use MessageSidFull.`,
+    );
   }
 
   const cached = imessageReplyCacheByMessageId.get(messageId);
@@ -326,15 +322,11 @@ export async function isKnownFromMeIMessageTarget(params: {
   chatId?: number;
   chatGuid?: string;
   chatIdentifier?: string;
-  isKnownFromMeMessageId?: (
-    ...args: Parameters<typeof isKnownFromMeIMessageMessageId>
-  ) => boolean | Promise<boolean>;
 }): Promise<boolean> {
   const { accountId, chatId, chatGuid, chatIdentifier } = params;
   const ctx = { accountId, chatId, chatGuid, chatIdentifier };
-  const isKnownFromMe = params.isKnownFromMeMessageId ?? isKnownFromMeIMessageMessageId;
   for (const messageId of params.messageIds) {
-    if (await isKnownFromMe(messageId, ctx)) {
+    if (await isKnownFromMeIMessageMessageId(messageId, ctx)) {
       return true;
     }
   }

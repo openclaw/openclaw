@@ -18,7 +18,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeClawRouterApiBaseUrl } from "./provider-catalog.js";
+import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
 
 // Qualified by ClawRouter's JSON Images API contract; not a list of key grants.
 const SUPPORTED_IMAGE_MODELS = new Set([

@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import { serializeSidebarEntry, type SidebarZoneEntry } from "../app-navigation.ts";
 import { isRouteId, pluginTabLocation } from "../app-route-paths.ts";
@@ -20,7 +20,7 @@ import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
-import { pluginTabKey } from "../pages/plugin/route.ts";
+import { pluginTabKey } from "../pages/plugin/route.tsx";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -106,7 +106,7 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   function AgentCard() {
     const avatarLoader = createIdentityAvatars();
-    onCleanup(avatarLoader.connect());
+    onSettled(() => avatarLoader.connect());
     const avatarSource = projectOwner(avatarLoader, (owner) => owner);
     const avatar = createMemo(() => {
       const sourceUrl = avatarUrl();
@@ -244,7 +244,7 @@ export function readSidebarBrandPresentation(host: AppSidebarRenderHost) {
 function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Element {
   let button: HTMLButtonElement | undefined;
   const focusHeader = () => button?.focus();
-  onCleanup(() => {
+  onSettled(() => () => {
     if (host.sidebarMenus.focusAgentRoster === focusHeader) {
       host.sidebarMenus.focusAgentRoster = undefined;
     }
@@ -450,11 +450,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
                         return session();
                       },
                       attribution: "owned",
-                      icon: (
-                        <span class="nav-item__icon" aria-hidden="true">
-                          <Icon name="home" />
-                        </span>
-                      ),
+                      icon: <Icon name="home" />,
                     }).leadingIndicator
                   }
                   <SessionRowBadges
@@ -619,8 +615,8 @@ export function renderAppSidebarPluginTab(
     />
   );
   return (
-    <Show when={routeId()} fallback={link}>
-      {(route) => host.sidebarMenus.renderRoute(route(), host)}
+    <Show when={routeId()} fallback={link} keyed>
+      {(route) => host.sidebarMenus.renderRoute(route, host)}
     </Show>
   );
 }

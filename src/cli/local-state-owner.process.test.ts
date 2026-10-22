@@ -156,6 +156,7 @@ describe("same-root local mutation routing", () => {
   const maintenanceClock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(maintenanceClock.clock);
   let maintenance: ReturnType<typeof startWorktreeMaintenance>;
+  let worktreeGc: { mockRestore: () => void };
   let mode: "normal" | "old" | "refused" | "lost-reply" = "normal";
   const requests: string[] = [];
   const methods: string[] = [];
@@ -211,10 +212,12 @@ describe("same-root local mutation routing", () => {
     owner = await acquireOwner();
     expect(owner).not.toBeNull();
     const context = createSessionMutationTestContext(cfg);
+    worktreeGc = vi
+      .spyOn(managedWorktrees, "gc")
+      .mockImplementation(() => service.gc(createManagedWorktreeOwnerPolicy(cfg)));
     maintenance = startWorktreeMaintenance({
       scheduler,
       getRuntimeConfig: context.getRuntimeConfig,
-      runGc: () => service.gc(createManagedWorktreeOwnerPolicy(cfg)),
       onComplete: () => {},
       onError: (error) => failures.push(error),
     });
@@ -300,6 +303,7 @@ describe("same-root local mutation routing", () => {
   afterAll(async () => {
     await maintenance.stop();
     await scheduler.stop();
+    worktreeGc.mockRestore();
     await closeMinimalGatewayServer(server);
     await rpcLifetime.cleanup();
     vi.restoreAllMocks();

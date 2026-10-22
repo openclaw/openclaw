@@ -32,7 +32,7 @@ beforeEach(() => {
         entries: {
           "ui.theme": "claw",
           "ui.themeMode": "light",
-          "ui.railShortcuts": ["route:agents-home"],
+          "ui.railShortcuts": ["route:sessions"],
         },
       },
     }),
@@ -58,7 +58,7 @@ it("uses the viewer's document preferences before hello without loading editable
     theme: "claw",
     themeMode: "light",
     locale: "de",
-    sidebarEntries: ["route:agents-home"],
+    sidebarEntries: ["route:sessions"],
   });
   expect(document.documentElement.dataset.themeMode).toBe("light");
   expect(runtime.context.runtimeConfig.state.configSnapshot).toBeNull();

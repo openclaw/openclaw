@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { declareAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
@@ -15,26 +16,22 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { materializeSkill } from "../loading/skill-materializer.js";
-import { prepareSkillResourceDelivery as deliver } from "../runtime/resources.js";
+import {
+  materializeSkillResources,
+  prepareSkillResourceDelivery as deliver,
+} from "../runtime/resources.js";
 import type { SkillSnapshot } from "../types.js";
 import * as bundles from "./bundle.js";
-import { decodeSkillLibraryFile as decodeFile } from "./bundle.js";
+import { decodeSkillLibraryFile as decodeFile, prepareSkillLibraryBundle } from "./bundle.js";
 import * as selectionReads from "./selection-read.js";
 import * as selection from "./selection.js";
 import { loadSkillLibrarySelection as loadSelection } from "./selection.js";
 import { saveSkillLibrary } from "./service.js";
+import { draft, expectCode, libraryPin as pinOf } from "./service.test-support.js";
 
 const dirs = useStateDatabaseTempDirs();
 const content =
   "---\nname: guide\ndescription: Saved procedure\n---\n# Guide\nRead references/data.bin.\n";
-type Pin = NonNullable<SkillSnapshot["librarySelections"]>[number];
-const pinOf = ({ skillId, revision, name, ownerProfileId }: Pin): Pin => ({
-  skillId,
-  revision,
-  name,
-  ownerProfileId,
-});
-
 function snapshotFor(...pins: NonNullable<SkillSnapshot["librarySelections"]>): SkillSnapshot {
   return { prompt: "", skills: pins.map(({ name }) => ({ name })), librarySelections: pins };
 }
@@ -54,7 +51,7 @@ async function fixture() {
       slug: "guide",
       content,
       expectedRevision: null,
-      files: [{ path: "references/data.bin", content: "AP+A", encoding: "base64" }],
+      files: draft().files,
     },
     options,
   );
@@ -87,6 +84,7 @@ it.each(["ordinary", "artifact-preserving", "disposable"] as const)(
         const first = await deliver(snapshot, () => {});
         expect(first?.skills).toHaveLength(1);
         const skill = first!.skills[0]!;
+        expect(skill.modelVisible).toBe(false);
         const bytes = (name: string) => decodeFile(skill.files.find((file) => file.path === name)!);
         expect(skill.revision).toBe(pin.revision);
         expect(bytes("SKILL.md").toString("utf8")).toBe(content);
@@ -94,6 +92,35 @@ it.each(["ordinary", "artifact-preserving", "disposable"] as const)(
         // The synchronous caller must reuse the same cache key as async preparation.
         expect(loadSelection([pin])[0]?.skill.name).toBe(pin.name);
         expect(await deliver(structuredClone(snapshot), () => {})).toEqual(first);
+        if (mode === "ordinary") {
+          const selectedSnapshot = {
+            ...snapshot,
+            resolvedSkills: loadSelection([pin]).map((entry) => entry.skill),
+            version: 1,
+          };
+          const remoteWorkspace = path.join(root, "remote-workspace");
+          declareAgentWorkspaceAccess(remoteWorkspace);
+          const selectedDelivery = await deliver(selectedSnapshot, () => {}, [], remoteWorkspace);
+          expect(selectedDelivery).toEqual({
+            ...first,
+            skills: [{ ...skill, modelVisible: true }],
+          });
+          const materialized = await materializeSkillResources(selectedDelivery!, () => {});
+          try {
+            const local = materialized.snapshot.resolvedSkills![0]!;
+            expect(await fs.promises.readFile(local.filePath, "utf8")).toBe(content);
+            expect(
+              await fs.promises.readFile(path.join(local.baseDir, "references/data.bin")),
+            ).toEqual(Buffer.from([0, 255, 128]));
+            expect(materialized.snapshot.prompt).toContain(local.filePath);
+            expect(materialized.snapshot.prompt).not.toContain(
+              path.dirname(selectedSnapshot.resolvedSkills[0]!.filePath),
+            );
+          } finally {
+            await materialized.cleanup();
+          }
+          expect(prepareSkillLibraryBundle(first!.skills[0]!.files).revision).toBe(pin.revision);
+        }
         await closeDatabase();
       });
     try {
@@ -111,6 +138,7 @@ it.each(["ordinary", "artifact-preserving", "disposable"] as const)(
         "skills.library.descriptions",
         "skills.library.manifests",
         "skills.library.manifests",
+        ...(mode === "ordinary" ? ["skills.library.manifests"] : []),
       ]);
       if (mode === "artifact-preserving") {
         expect(familyHashes(databasePath)).toEqual(before);
@@ -254,9 +282,10 @@ it.each(["file", "table"] as const)(
       ownerProfileId: null,
     });
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      await expect(deliver(snapshot, () => {})).rejects.toMatchObject({
-        code: "NOT_FOUND",
-      });
+      await expectCode(
+        deliver(snapshot, () => {}),
+        "NOT_FOUND",
+      );
     });
     if (missing === "file") {
       expect(fs.existsSync(path.join(root, "state", "openclaw.sqlite"))).toBe(false);

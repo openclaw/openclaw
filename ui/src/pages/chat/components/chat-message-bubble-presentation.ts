@@ -202,11 +202,7 @@ export function prepareGroupedMessage(
     codeBlockChrome: role === "user" ? "none" : "copy",
     codeBlockInteraction: role === "assistant" ? "interactive" : "static",
     fileLinks: true,
-    githubRepo: role === "assistant" ? (opts.githubRepo ?? null) : null,
     humanMentions: markdown === displayMarkdown ? humanMentions : undefined,
-    ...(role === "assistant" && opts.githubRepositories
-      ? { githubRepositories: opts.githubRepositories }
-      : {}),
     interactiveImages: opts.onOpenImage !== undefined,
     sessionLinks: true,
     tableInteractions: "enabled",
@@ -216,7 +212,17 @@ export function prepareGroupedMessage(
   // Classify completed bare JSON before Markdown can interpret its literal values.
   const jsonResult = markdown && !opts.isStreaming ? parseMarkdownJson(markdown) : null;
 
+  const inlineComments =
+    normalizedRole === "user" &&
+    !markdown &&
+    !normalizedMessage.replyTarget &&
+    !hasImagesOrNotices &&
+    !hasToolCards &&
+    !asyncQuestions &&
+    visibleAttachments.length > 0 &&
+    visibleAttachments.every(isSentCommentAttachment);
   const onlyPreviewChips =
+    !inlineComments &&
     normalizedRole === "user" &&
     !markdown &&
     !normalizedMessage.replyTarget &&
@@ -231,6 +237,7 @@ export function prepareGroupedMessage(
     videoPreviews.length > 0 ||
     hasUserFiles ||
     (normalizedRole === "user" &&
+      !inlineComments &&
       cardAttachments.some(
         (item) => isSentCommentAttachment(item) || isSentPastedTextAttachment(item),
       ));
@@ -347,6 +354,7 @@ export function prepareGroupedMessage(
     supplementalAttachments,
     videoPreviews,
     cardAttachments,
+    inlineComments,
     imageRenderOptions,
     actionText,
     omittedMedia,

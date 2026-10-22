@@ -1,8 +1,11 @@
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { HeaderPanelAction } from "./components/chat-header-panel-actions.tsx";
 import { isSidebarSlotVisible, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
+
+registerChatSessionEnglish();
 
 type PanelControls = {
   openPanelSlot: (slot: SidebarSlotId) => void;
@@ -16,8 +19,7 @@ export function buildHeaderPanelActions(input: {
     () => void
   >;
   desktopPanelAvailable: boolean;
-  discussion: { label: string; active?: boolean; onToggle: () => void } | null | undefined;
-  usesMobileHost: boolean;
+  discussion: { label: string; active?: boolean } | null | undefined;
   sessionRailVisible: boolean;
   subagentsVisible: boolean;
   processesVisible: boolean;
@@ -34,7 +36,6 @@ export function buildHeaderPanelActions(input: {
     callbacks,
     desktopPanelAvailable,
     discussion,
-    usesMobileHost,
     sessionRailVisible,
     subagentsVisible,
     processesVisible,
@@ -76,12 +77,7 @@ export function buildHeaderPanelActions(input: {
       "monitor",
       desktopPanelAvailable && sessionWorkspace.onToggleDesktop && callbacks.desktop,
     ],
-    [
-      "discussion",
-      discussion?.label ?? "",
-      "messageSquare",
-      discussion && (usesMobileHost ? discussion.onToggle : callbacks.discussion),
-    ],
+    ["discussion", discussion?.label ?? "", "messageSquare", discussion && callbacks.discussion],
     [
       "changes",
       t("chat.sessionDiff.show"),

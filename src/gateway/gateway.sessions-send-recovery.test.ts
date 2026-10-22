@@ -327,7 +327,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         const provider = buildMockOpenAiResponsesProvider(baseUrl);
         const config = {
           diagnostics: { enabled: true },
-          logging: { file: gateway.state.path("gateway.log") },
+          logging: { level: "debug", file: gateway.state.path("gateway.log") },
           gateway: {
             port: gateway.port,
             auth: { mode: "token", token: gateway.gatewayToken },
@@ -341,7 +341,6 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
               skipBootstrap: true,
               utilityModel: "",
               skills: [],
-              heartbeat: { every: "0m" },
               model: { primary: provider.modelRef, fallbacks: [] },
               models: {
                 [provider.modelRef]: {

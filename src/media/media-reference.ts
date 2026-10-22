@@ -1,7 +1,8 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { realpathOrResolve } from "../infra/path-existence.js";
+import { relativePathEscapesRoot } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
 import {
   MediaReferenceError,
@@ -76,23 +77,6 @@ function maybeLocalPathFromSource(source: string): string | null {
   return null;
 }
 
-function relativePathEscapesBase(relativePath: string): boolean {
-  return (
-    relativePath === ".." ||
-    relativePath.startsWith("../") ||
-    relativePath.startsWith("..\\") ||
-    path.isAbsolute(relativePath)
-  );
-}
-
-async function resolvePathForContainment(candidate: string): Promise<string> {
-  try {
-    return await fs.realpath(candidate);
-  } catch {
-    return path.resolve(candidate);
-  }
-}
-
 /** Converts a managed inbound path to a URI without exposing paths outside its store. */
 export function buildInboundMediaUriFromPath(source: string): string | undefined {
   const localPath = maybeLocalPathFromSource(source.trim());
@@ -105,7 +89,7 @@ export function buildInboundMediaUriFromPath(source: string): string | undefined
   // reject traversal, nested segments, and absolute/empty results.
   if (
     !relativePath ||
-    relativePathEscapesBase(relativePath) ||
+    relativePathEscapesRoot(relativePath) ||
     relativePath.includes(path.sep) ||
     relativePath.includes("\\")
   ) {
@@ -164,13 +148,10 @@ export async function resolveInboundMediaReference(
   const rawRel = path.relative(rawInboundDir, rawResolvedPath);
   // Realpath fallback catches symlinks and moved state dirs before accepting direct paths.
   const rel =
-    rawRel && !relativePathEscapesBase(rawRel)
+    rawRel && !relativePathEscapesRoot(rawRel)
       ? rawRel
-      : path.relative(
-          await resolvePathForContainment(rawInboundDir),
-          await resolvePathForContainment(localPath),
-        );
-  if (!rel || relativePathEscapesBase(rel) || rel.includes(path.sep)) {
+      : path.relative(await realpathOrResolve(rawInboundDir), await realpathOrResolve(localPath));
+  if (!rel || relativePathEscapesRoot(rel) || rel.includes(path.sep)) {
     return null;
   }
 

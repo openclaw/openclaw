@@ -487,7 +487,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         list: [{ id: "reviewer", model: "codex/gpt-5.6-sol" }],
       },
     });
-    const repaired = maybeRepairCodexRoutes({ cfg: normalized.config, shouldRepair: true });
+    const repaired = maybeRepairCodexRoutes({ cfg: normalized.config });
 
     expect(repaired.cfg.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.6-sol",
@@ -527,7 +527,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     };
 
-    const repaired = maybeRepairCodexRoutes({ cfg: input, shouldRepair: true });
+    const repaired = maybeRepairCodexRoutes({ cfg: input });
 
     expect(repaired.cfg.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.5",
@@ -580,7 +580,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     const repaired = maybeRepairCodexRoutes({
       cfg: normalized.config,
-      shouldRepair: true,
       blockedProviderPlan,
     });
 
@@ -635,7 +634,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       migration.apply(migrated, migrationChanges);
     }
     const normalized = normalizeCompatibilityConfigValues(migrated);
-    const repaired = maybeRepairCodexRoutes({ cfg: normalized.config, shouldRepair: true });
+    const repaired = maybeRepairCodexRoutes({ cfg: normalized.config });
 
     expect(repaired.cfg.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.6-sol",

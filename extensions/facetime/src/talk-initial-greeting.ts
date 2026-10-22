@@ -15,10 +15,8 @@ export function createFaceTimeInitialGreeting(params: { speak: (instructions: st
   let dismissed = false;
 
   const clear = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
 
   return {

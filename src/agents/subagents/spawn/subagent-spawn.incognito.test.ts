@@ -191,8 +191,8 @@ it.each([
   },
 );
 
-it("reads unbound ACP requester delivery and heartbeat routing from memory", async () => {
-  const parentKey = await create(parent, "heartbeat", {
+it("reads unbound ACP requester delivery from memory", async () => {
+  const parentKey = await create(parent, "delivery", {
     delivery: normalizeSessionDeliveryState({
       context: { channel: "telegram", to: "123", accountId: "default" },
     }),
@@ -204,13 +204,17 @@ it("reads unbound ACP requester delivery and heartbeat routing from memory", asy
     }),
   ).toMatchObject({ channel: "telegram", to: "123" });
   const requester = await resolveAcpSpawnRequesterState({
-    cfg: { agents: { defaults: { heartbeat: { every: "5m", target: "last" } } } },
+    cfg: {},
     parentSessionKey: parentKey,
     requesterAgentId: parent.agentId,
     ownerAgentId: sibling.agentId,
     ctx: {},
   });
-  expect(requester.heartbeatRelayRouteUsable).toBe(true);
+  expect(requester).toMatchObject({
+    isSubagentSession: false,
+    hasActiveSubagentBinding: false,
+    hasThreadContext: false,
+  });
 });
 
 it("checks current memory controller depth before cancellation", async () => {

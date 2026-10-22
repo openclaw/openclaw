@@ -5,6 +5,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../agents/agent-scope.js";
 import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
 import {
   findAuthorizedSwarmCollectorRequest,
@@ -209,6 +210,14 @@ export async function prepareAgentRequestPreflight(params: {
   if (isProgressCardRefreshInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
     return rejectInvalidRequest("Progress refresh input is reserved for progressCard.refresh.");
   }
+  // Plugin tools read the starting run named on exec completion wakes; only the host stamps it.
+  if (
+    inputProvenance?.kind === "internal_system" &&
+    inputProvenance.sourceTool === "exec" &&
+    !canUseInternalRuntimeHandoff
+  ) {
+    return rejectInvalidRequest("Exec completion input is reserved for background exec owners.");
+  }
   if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
     const sourceSessionKey = inputProvenance.sourceSessionKey;
     const sourceAgentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
@@ -262,10 +271,16 @@ export async function prepareAgentRequestPreflight(params: {
       "internal execution identity recovery fields are reserved for main-session restart recovery.",
     );
   }
-  if (request.forceCodeModeTools === true && !isRestartRecoveryResumeRun) {
-    return rejectInvalidRequest(
-      "forceCodeModeTools is reserved for main-session restart recovery.",
-    );
+  // Child recovery shares the restricted tool policy, but not main-session cycle ownership.
+  const canUseRestartRecoveryToolPolicy =
+    isRestartRecoveryResumeRun ||
+    (canUseInternalRuntimeHandoff &&
+      inputProvenance?.kind === "internal_system" &&
+      inputProvenance.sourceTool === "subagent_restart_recovery" &&
+      requestSessionKey !== undefined &&
+      inputProvenance.sourceSessionKey === requestSessionKey);
+  if (request.forceCodeModeTools === true && !canUseRestartRecoveryToolPolicy) {
+    return rejectInvalidRequest("forceCodeModeTools is reserved for native restart recovery.");
   }
   const sessionEffects =
     isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
@@ -273,8 +288,12 @@ export async function prepareAgentRequestPreflight(params: {
     idempotencyKey: runId,
     execApprovalFollowupApprovalId,
   });
+  // The public legacy wire tag retains noninteractive bootstrap behavior.
+  const bootstrapContextRunKind: BootstrapContextRunKind | undefined =
+    request.bootstrapContextRunKind === "heartbeat" ? "cron" : request.bootstrapContextRunKind;
   return {
     request,
+    bootstrapContextRunKind,
     cfg,
     runId,
     allowModelOverride,

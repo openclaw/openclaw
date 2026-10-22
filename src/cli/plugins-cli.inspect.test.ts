@@ -19,11 +19,13 @@ import {
   buildPluginRegistrySnapshotReportMock as registryReport,
   buildPluginSnapshotReportMock as snapshot,
   loadPluginMetadataSnapshotMock,
+  expectNoPluginCliCalls as expectNoCalls,
   pluginCliConfigMock as configMock,
   pluginsCliRuntimeLogs as logs,
   resetPluginsCliTestState,
   retirePluginDiagnosticsMock,
   runPluginsCommand,
+  runPluginCli as plugins,
   runtimeErrors,
   setInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
@@ -76,16 +78,6 @@ function mockInspection(
   inspectOne.mockReturnValue(inspect);
   inspectAll.mockReturnValue([inspect]);
   return report;
-}
-
-function expectNoCalls(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
-
-function plugins(...args: string[]) {
-  return runPluginsCommand(["plugins", ...args]);
 }
 
 function shadowMessage(source: string) {

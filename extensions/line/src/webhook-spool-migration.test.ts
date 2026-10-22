@@ -49,19 +49,32 @@ describe("LINE webhook spool upgrade migration", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
   });
-  it("re-runs a partially applied migration without a duplicate delivery", async () => {
-    await withQueue(async (queue, legacySeed) => {
-      // Simulate a crash between the migration's enqueue and complete: the
-      // canonical row already exists while the legacy row is still pending.
-      const event = createEvent({ webhookEventId: "legacy-partial" });
-      await seedLegacy(legacySeed, "legacy-partial", event);
-      await queue.enqueue("message:message-legacy-partial", payloadFor(event), {
-        laneKey: "user:user-1",
+  it.each(["partial", "claimed", "buried"] as const)(
+    "delivers legacy-%s exactly once after recovering interrupted migration or upgrade state",
+    async (state) => {
+      await withQueue(async (queue, legacySeed) => {
+        const id = `legacy-${state}`;
+        const event = createEvent({ webhookEventId: id });
+        await seedLegacy(legacySeed, id, event);
+        if (state === "partial") {
+          // Crash after canonical enqueue but before retiring the legacy row.
+          await queue.enqueue(`message:message-${id}`, payloadFor(event), {
+            laneKey: "user:user-1",
+          });
+        } else if (state === "claimed") {
+          expect(await legacySeed.claim(id, { ownerId: "retired-worker" })).toBeTruthy();
+        } else {
+          // Exact signature left by the canonical decoder before migration existed.
+          await queue.fail(id, {
+            reason: "invalid-event",
+            message: "LINE webhook spool payload is invalid.",
+          });
+        }
+        await migrateLineLegacySpoolRows(queue);
+        await expectMigratedDelivery(queue, id);
       });
-      await migrateLineLegacySpoolRows(queue);
-      await expectMigratedDelivery(queue, "legacy-partial");
-    });
-  });
+    },
+  );
   it("reports no delivery when the canonical id already dead-lettered", async () => {
     await withQueue(async (queue, legacySeed) => {
       // A redelivered message id can reach the migration after an earlier copy
@@ -81,29 +94,6 @@ describe("LINE webhook spool upgrade migration", () => {
       // canonical dead-letter rather than being resurrected by the migration.
       await waitForVerdict(queue, "legacy-buried-canonical", "completed");
       await waitForVerdict(queue, "message:message-legacy-buried-canonical", "failed");
-    });
-  });
-  it("recovers a legacy row still claimed by the retired worker before migrating", async () => {
-    await withQueue(async (queue, legacySeed) => {
-      const event = createEvent({ webhookEventId: "legacy-claimed" });
-      await seedLegacy(legacySeed, "legacy-claimed", event);
-      expect(await legacySeed.claim("legacy-claimed", { ownerId: "retired-worker" })).toBeTruthy();
-      await migrateLineLegacySpoolRows(queue);
-      await expectMigratedDelivery(queue, "legacy-claimed");
-    });
-  });
-  it("recovers a row the pre-fix decoder dead-lettered and delivers it once", async () => {
-    await withQueue(async (queue, legacySeed) => {
-      // A deployment that upgraded before the migration existed dead-lettered its
-      // pre-drain rows at the canonical decoder with this exact signature.
-      const event = createEvent({ webhookEventId: "legacy-buried" });
-      await seedLegacy(legacySeed, "legacy-buried", event);
-      await queue.fail("legacy-buried", {
-        reason: "invalid-event",
-        message: "LINE webhook spool payload is invalid.",
-      });
-      await migrateLineLegacySpoolRows(queue);
-      await expectMigratedDelivery(queue, "legacy-buried");
     });
   });
   it("does not recover a row the identity fence dead-lettered", async () => {

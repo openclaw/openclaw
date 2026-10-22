@@ -51,8 +51,3 @@ export function resolveSingleUnitDurationParts(ms: number): DurationPart[] {
   }
   return resolveDurationParts(Math.round(ms / scale) * scale, 1);
 }
-
-/** Keep single-unit rounding identical for compact and verbose core displays. */
-export function formatSingleUnitDuration(ms: number, verbose = false): string {
-  return formatDurationParts(resolveSingleUnitDurationParts(ms), verbose);
-}

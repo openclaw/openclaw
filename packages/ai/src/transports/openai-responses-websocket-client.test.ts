@@ -15,6 +15,7 @@ import { isRetryableAssistantError } from "../../../../src/llm/utils/retry.js";
 import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../../../src/plugins/runtime/generation-scope.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   OpenAIResponsesWebSocketSafeRetryError,
@@ -23,6 +24,11 @@ import {
   type ResponsesPromptObservation,
   type ResponsesServiceTierObservation,
 } from "./openai-responses-contracts.js";
+import {
+  message as responseMessage,
+  outputItem,
+  tool,
+} from "./openai-responses-stream-parity.test-helpers.js";
 import {
   withProviderAcceptanceObserver,
   type ProviderAcceptance,
@@ -135,18 +141,13 @@ import {
 import { createOpenAIResponsesWebSocketStream as createSocketStream } from "./openai-responses-websocket.js";
 
 const initialHost = getAiTransportHost();
-const model = {
-  id: "gpt-5.6-luna",
+const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
   maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+});
 
 function history(...messages: Context["messages"]): Context {
   return { messages, tools: [] };
@@ -161,9 +162,7 @@ function completedEvent(responseId: string, content?: string | Array<Record<stri
     typeof content === "string"
       ? [
           {
-            id: `msg_${responseId}`,
-            type: "message",
-            status: "completed",
+            ...responseMessage(`msg_${responseId}`, content, "final_answer"),
             content: [
               {
                 text: content,
@@ -172,8 +171,6 @@ function completedEvent(responseId: string, content?: string | Array<Record<stri
                 logprobs: [{ token: content, logprob: -0.1 }],
               },
             ],
-            role: "assistant",
-            phase: "final_answer",
           },
         ]
       : (content ?? []);
@@ -235,21 +232,10 @@ function wrappedSdkServerError(params: {
 }
 
 function toolCallResponse(responseId: string): StreamMessage[] {
-  const functionCall = {
-    type: "function_call",
-    id: "fc_read",
-    call_id: "call_read",
-    name: "read",
-    arguments: '{"path":"README.md"}',
-    status: "completed",
-  };
+  const functionCall = tool("read", '{"path":"README.md"}', "completed", "read");
   const position = { output_index: 0, item_id: functionCall.id };
   return [
-    message({
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...functionCall, arguments: "", status: "in_progress" },
-    }),
+    message(outputItem("added", { ...functionCall, arguments: "", status: "in_progress" }, 0)),
     message({
       type: "response.function_call_arguments.delta",
       ...position,
@@ -261,7 +247,7 @@ function toolCallResponse(responseId: string): StreamMessage[] {
       name: functionCall.name,
       arguments: functionCall.arguments,
     }),
-    message({ type: "response.output_item.done", output_index: 0, item: functionCall }),
+    message(outputItem("done", functionCall, 0)),
     message(completedEvent(responseId, [functionCall])),
   ];
 }
@@ -313,14 +299,12 @@ async function run(
 describe("native OpenAI Responses WebSocket client integration", () => {
   beforeEach(() => {
     cleanupSessionResources();
-    transport.handshakeMessages.length = 0;
-    transport.responseBatches.length = 0;
-    transport.sdkOutcomes.length = 0;
-    transport.sdkRequests.length = 0;
     transport.closeCount = 0;
-    transport.wsClients.length = 0;
-    transport.wsOptions.length = 0;
-    transport.wsRequests.length = 0;
+    for (const value of Object.values(transport)) {
+      if (Array.isArray(value)) {
+        value.length = 0;
+      }
+    }
     let turn = 0;
     configureAiTransportHost({
       ...initialHost,

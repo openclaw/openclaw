@@ -43,37 +43,6 @@ function formatMarkerOrSecret(value: string): string {
     : maskApiKey(value);
 }
 
-function formatProfileSecretLabel(params: {
-  value: string | undefined;
-  ref: { source: string; id: string } | undefined;
-  kind: "api-key" | "token";
-}): string {
-  const value = normalizeOptionalString(params.value) ?? "";
-  const display = value
-    ? formatMarkerOrSecret(value)
-    : params.ref
-      ? `ref(${params.ref.source}:${params.ref.id})`
-      : "missing";
-  return params.kind === "token" ? `token:${display}` : display;
-}
-
-function resolveProfileSourceAgentDir(params: {
-  agentDir?: string;
-  profileIds: string[];
-}): string | undefined {
-  if (!params.agentDir || params.profileIds.length === 0) {
-    return params.agentDir;
-  }
-  const localStore = loadPersistedAuthProfileStore(params.agentDir);
-  if (params.profileIds.some((profileId) => Boolean(localStore?.profiles[profileId]))) {
-    return params.agentDir;
-  }
-  const mainStore = loadPersistedAuthProfileStore(undefined);
-  return params.profileIds.every((profileId) => Boolean(mainStore?.profiles[profileId]))
-    ? undefined
-    : params.agentDir;
-}
-
 export function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;
@@ -108,12 +77,17 @@ export function resolveProviderAuthOverview(params: {
       return `${profileId}=missing`;
     }
     if (profile.type === "api_key" || profile.type === "token") {
+      const rawValue = profile.type === "api_key" ? profile.key : profile.token;
+      const ref = profile.type === "api_key" ? profile.keyRef : profile.tokenRef;
+      const kind = profile.type === "api_key" ? "api-key" : "token";
+      const value = normalizeOptionalString(rawValue) ?? "";
+      const display = value
+        ? formatMarkerOrSecret(value)
+        : ref
+          ? `ref(${ref.source}:${ref.id})`
+          : "missing";
       return withUnusableSuffix(
-        `${profileId}=${formatProfileSecretLabel({
-          value: profile.type === "api_key" ? profile.key : profile.token,
-          ref: profile.type === "api_key" ? profile.keyRef : profile.tokenRef,
-          kind: profile.type === "api_key" ? "api-key" : "token",
-        })}`,
+        `${profileId}=${kind === "token" ? `token:${display}` : display}`,
         profileId,
       );
     }
@@ -189,10 +163,20 @@ export function resolveProviderAuthOverview(params: {
         kind: "profiles",
         detail: shortenHomePath(
           resolveAuthStorePathForDisplay(
-            resolveProfileSourceAgentDir({
-              agentDir: params.agentDir,
-              profileIds: profiles,
-            }),
+            (() => {
+              const agentDir = params.agentDir;
+              if (!agentDir || profiles.length === 0) {
+                return agentDir;
+              }
+              const localStore = loadPersistedAuthProfileStore(agentDir);
+              if (profiles.some((profileId) => Boolean(localStore?.profiles[profileId]))) {
+                return agentDir;
+              }
+              const mainStore = loadPersistedAuthProfileStore(undefined);
+              return profiles.every((profileId) => Boolean(mainStore?.profiles[profileId]))
+                ? undefined
+                : agentDir;
+            })(),
           ),
         ),
       };

@@ -4,9 +4,9 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
-import { renderChatView, requireElement } from "./chat-view.test-helpers.ts";
+import { renderChatInto, renderChatView, requireElement } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -34,7 +34,7 @@ function expectFooterContext(container: Element, surface: Element) {
   expect(surface.compareDocumentPosition(input)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 }
 
-it("keeps Swarm progress between the transcript and composer", () => {
+it("keeps Swarm progress between the transcript and composer", async () => {
   const sessionKey = "agent:main:parent";
   const childKey = "agent:main:subagent:worker";
   const groupId = `swarm:${sessionKey}:turn-42`;
@@ -51,15 +51,29 @@ it("keeps Swarm progress between the transcript and composer", () => {
     { key: sessionKey, kind: "direct", swarm: { groups: [group], otherActiveGroups: 0 } },
     { key: childKey, kind: "direct", swarmGroupId: groupId, label: "Worker A" },
   ];
-  const container = renderChatView({
+  const props = {
     sessionKey,
     canAbort: true,
     showNewMessages: true,
-    swarm: { sessionKey, sessions },
-  });
-  const widget = requireElement(container, "[data-test-id=chat-swarm]", "Swarm progress");
+    draft: "Keep the draft while progress arrives",
+  };
+  const container = renderChatView({ ...props, swarm: { sessionKey, sessions: [] } });
+  const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+  textarea.focus();
+  expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
+  renderChatInto(container, { ...props, swarm: { sessionKey, sessions } });
+  await vi.dynamicImportSettled();
+  const widget = await waitForSolid(() =>
+    requireElement(container, "[data-test-id=chat-swarm]", "Swarm progress"),
+  );
   expectFooterContext(container, widget);
   expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe("Worker A");
+  expect(container.querySelector("textarea")).toBe(textarea);
+  expect(textarea.value).toBe(props.draft);
+  expect(document.activeElement).toBe(textarea);
+  renderChatInto(container, { ...props, swarm: { sessionKey, sessions: [] } });
+  expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
+  expect(document.activeElement).toBe(textarea);
 });
 
 it("places inline approval above the composer and enforces its grant projection", async () => {
@@ -80,10 +94,14 @@ it("places inline approval above the composer and enforces its grant projection"
     const container = renderChatView({ ...approvalProps, approvalCanGrant, approvalErrors });
     document.body.append(container);
     onTestFinished(() => container.remove());
-    await expectDefined(
-      container.querySelector<SolidBridgeElement<object>>("openclaw-exec-approval-card"),
-      "inline approval host",
-    ).updateComplete;
+    await vi.dynamicImportSettled();
+    const host = await waitForSolid(() =>
+      expectDefined(
+        container.querySelector<SolidBridgeElement<object>>("openclaw-exec-approval-card"),
+        "inline approval host",
+      ),
+    );
+    await host.updateComplete;
     return container;
   };
   const container = await render(

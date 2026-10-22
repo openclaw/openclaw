@@ -1,7 +1,8 @@
 import { dynamic, render, type JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, onCleanup, runWithOwner, Show, untrack } from "solid-js";
+import { createMemo, createSignal, For, onSettled, runWithOwner, Show, untrack } from "solid-js";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../../lib/presentation.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -75,14 +76,17 @@ function TranscriptRows(props: {
               // The keyed row owns one measurement binding for its entire mounted lifetime.
               const initialKey = untrack(() => String(virtualRow().key));
               const measureRef = props.measureRowRefFor(initialKey);
-              onCleanup(() => measureRef(undefined));
+              const rowRef = elementRef((element: HTMLDivElement) => {
+                measureRef(element);
+                return () => measureRef(undefined);
+              });
               return (
                 <>
                   <Show when={gap() > 0}>
                     <div aria-hidden="true" style={{ height: `${gap()}px` }} />
                   </Show>
                   <div
-                    ref={measureRef}
+                    ref={rowRef}
                     class={[
                       "chat-virtual-row",
                       { "chat-virtual-row--first": virtualRow().index === 0 },
@@ -254,7 +258,7 @@ export class ChatTranscriptRenderer {
           this.lifecycle = lifecycle;
           const snapshot = createMemo(lifecycle.snapshot);
           const capture = (event: Event) => snapshot().captureInteractionResize(event);
-          onCleanup(listen(element, "click", capture, true));
+          onSettled(() => listen(element, "click", capture, true));
           const content = () => (
             <TranscriptMessageElementsContext value={next.messageElements}>
               <TranscriptMediaDisconnect value={this.mediaDisconnect}>

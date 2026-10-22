@@ -12,7 +12,7 @@ type PickerPresentation = {
   gatewayName?: string;
   environmentQuery?: string;
   suggestedProfile?: NewSessionPlaceControlsOptions["gateway"]["suggestedProfile"];
-  catalogLoading?: boolean;
+  catalogRead?: Promise<void>;
   onEnvironmentQueryInput?: (query: string) => void;
   onSelectDevice?: (id: string) => void;
   onSelectCloudProfile?: (id: string) => void;
@@ -29,32 +29,20 @@ export function pickerParams(
   presentation: PickerPresentation = {},
 ) {
   const state = resolveWhereChip({
-    environments: [
-      {
-        id: "node:runner",
-        type: "node",
-        label: "Build runner",
-        status: "available",
-        sessionHost: true,
-        workerSlots: { total: 2, available: 1 },
-      },
-      {
-        id: "node:alpha-device",
-        type: "node",
-        label: "Duplicate runner",
-        status: "available",
-        sessionHost: true,
-        workerSlots: { total: 1, available: 1 },
-      },
-      {
-        id: "node:beta-device",
-        type: "node",
-        label: "Duplicate runner",
-        status: "available",
-        sessionHost: true,
-        workerSlots: { total: 1, available: 1 },
-      },
-    ],
+    environments: (
+      [
+        ["runner", "Build runner", 2],
+        ["alpha-device", "Duplicate runner", 1],
+        ["beta-device", "Duplicate runner", 1],
+      ] as const
+    ).map(([id, label, total]) => ({
+      id: `node:${id}`,
+      label,
+      type: "node" as const,
+      status: "available" as const,
+      sessionHost: true,
+      workerSlots: { total, available: 1 },
+    })),
     cloudProfiles: [{ id: "aws", providerId: "crabbox" }],
     cloudProfileId: "",
     deviceId: "",
@@ -101,7 +89,7 @@ export function pickerParams(
   Object.defineProperties(gateway, {
     gatewayName: { value: presentation.gatewayName ?? "" },
     suggestedProfile: { value: presentation.suggestedProfile },
-    cloudProfilesPending: { value: presentation.catalogLoading ?? false },
+    cloudProfilesRead: { value: presentation.catalogRead },
   });
   if (presentation.cloudProfileDisabledReason) {
     const original = hosted.environmentCloudDisabledReason;

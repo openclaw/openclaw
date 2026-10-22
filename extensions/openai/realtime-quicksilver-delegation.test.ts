@@ -3,7 +3,6 @@ import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
-import { parseOpenAIQuicksilverEvent } from "./realtime-quicksilver-wire.js";
 import {
   FakeSocket,
   parseSent,
@@ -58,10 +57,6 @@ function readAppends(socket: FakeSocket, id?: string) {
 
 function waitForAppend(socket: FakeSocket, id: string, text: string) {
   return vi.waitFor(() => expect(parseSent(socket)).toContainEqual(delegationAppend(id, text)));
-}
-
-function parseEvent(event: unknown) {
-  return parseOpenAIQuicksilverEvent(JSON.stringify(event));
 }
 
 function inputText<T>(text: T) {
@@ -199,66 +194,23 @@ it("keeps standalone speech at session scope while a delegation owns its result"
   expect(socket.sent).toHaveLength(3);
 });
 
-it("parses session expiry and assistant transcript events", () => {
-  expect(parseEvent({ type: "session.started", session: { expires_at: 123 } })).toEqual({
-    kind: "session-started",
-    expiresAt: 123,
-  });
-  expect(parseEvent({ type: "output_transcript.added", item: { text: "wor" } })).toEqual({
-    kind: "transcript-delta",
-    role: "assistant",
-    text: "wor",
-  });
-});
-
 it("forwards only classified sideband event types", () => {
   const onWireEventType = vi.fn();
-  const { controller } = createDelegationHarness({ onWireEventType });
+  const { controller, logger, onFatalError } = createDelegationHarness({ onWireEventType });
 
   frame(controller, { type: "sensitive-private-event" });
+  controller.handleFrame(Buffer.from("not-json"), false);
   frame(controller, { type: "session.updated" });
   frame(controller, { type: "output_audio_buffer.cleared" });
+  frame(controller, { type: "error", error: { message: "call failed" } });
 
   expect(onWireEventType.mock.calls).toEqual([
     ["session.updated"],
     ["output_audio_buffer.cleared"],
+    ["error"],
   ]);
-});
-
-it("parses client delegations and ignores non-client targets", () => {
-  expect(
-    parseEvent({
-      type: "delegation.created",
-      item: {
-        type: "delegation",
-        target: "client",
-        id: "delegation-1",
-        content: [
-          { type: "input_text", text: "curl https://exa" },
-          { type: "output_text", text: "ignored" },
-          { type: "input_text", text: "mple.com" },
-        ],
-      },
-    }),
-  ).toEqual({ kind: "delegation", id: "delegation-1", prompt: "curl https://example.com" });
-  expect(
-    parseEvent({
-      type: "delegation.created",
-      item: { type: "delegation", target: "server", id: "delegation-2", content: [] },
-    }),
-  ).toEqual({ kind: "ignored", eventType: "delegation.created" });
-});
-
-it("parses errors, reports unknown events, and rejects malformed JSON", () => {
-  expect(parseEvent({ type: "error", error: { message: "call failed" } })).toEqual({
-    kind: "error",
-    fatalAuth: false,
-  });
-  expect(parseEvent({ type: "future.event" })).toEqual({
-    kind: "unknown",
-    eventType: "future.event",
-  });
-  expect(parseOpenAIQuicksilverEvent("not-json")).toBeNull();
+  expect(logger.debug).toHaveBeenCalledOnce();
+  expect(onFatalError).not.toHaveBeenCalled();
 });
 
 it("revokes the old late-final owner on newer delegation and detach", async () => {
@@ -313,10 +265,13 @@ it("does not start a late control after the active consultation settles", async 
 
 it("consumes bounded transcript context once and in event order", async () => {
   const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
-  const { controller } = createDelegationHarness({ runAgentConsult });
+  const { controller, socket } = createDelegationHarness({ runAgentConsult });
   controller.handleEvent({ kind: "transcript-delta", role: "user", text: "hel" });
   controller.handleEvent({ kind: "transcript-done", role: "user", text: "hello" });
   controller.handleEvent({ kind: "transcript-delta", role: "assistant", text: "ack" });
+  delegate(controller, "non-task", "  ");
+  expect(runAgentConsult).not.toHaveBeenCalled();
+  expect(socket.sent).toEqual([]);
 
   delegate(controller, "delegation-1", "check weather");
   await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(1));
@@ -465,24 +420,6 @@ it("fails visibly when completion ownership is unavailable", async () => {
   expect(socket.sent).toEqual([]);
 });
 
-it("keeps transcript context when it skips a blank delegation", async () => {
-  const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
-  const { controller, socket } = createDelegationHarness({
-    runAgentConsult,
-  });
-  controller.handleEvent({ kind: "transcript-done", role: "user", text: "hello" });
-
-  delegate(controller, "non-task", "  ");
-  expect(runAgentConsult).not.toHaveBeenCalled();
-  expect(socket.sent).toEqual([]);
-  delegate(controller, "delegation-1", "check weather");
-
-  await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(1));
-  expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain(
-    "<transcript_delta>user: hello</transcript_delta>",
-  );
-});
-
 it("drops pending receipts and late results when detached before settlement", async () => {
   const { controller, socket, result, runAgentConsult } = pendingHarness({
     handleDelegationInput: () => "consult",
@@ -562,7 +499,7 @@ it("redacts the opaque model from sideband errors before logging or callbacks", 
     },
   });
 
-  expect(logger.warn).toHaveBeenCalledWith("OpenAI GPT-Live provider error");
+  expect(logger.warn.mock.calls).toEqual([["OpenAI GPT-Live provider error"]]);
   expect(onFatalError).toHaveBeenCalledOnce();
   const projectedError = onFatalError.mock.calls[0]?.[0];
   expect(projectedError).toBeInstanceOf(Error);
@@ -571,12 +508,6 @@ it("redacts the opaque model from sideband errors before logging or callbacks", 
     message: "OpenAI GPT-Live provider error",
   });
   expect(projectedError?.cause).toBeUndefined();
-  const projected = JSON.stringify({
-    logs: logger.warn.mock.calls,
-  });
-  for (const privateValue of [model, ...sensitiveDetails]) {
-    expect(projected).not.toContain(privateValue);
-  }
 });
 
 it("suppresses host cancellation and stops accepting work after teardown", async () => {

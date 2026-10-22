@@ -150,23 +150,29 @@ describe("worker environment node enrollment store", () => {
     });
   }
 
-  it("refuses first-device redemption from a closed enrollment invocation", async () => {
-    const { manager, enrollment, token, verification } = await beginConnect();
-    await expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({ ok: true });
-
-    manager.close(enrollment);
-
-    await expect(
-      consumeDeviceBootstrapTokenWithSetupCompletion({
-        baseDir: root,
-        token,
-        deviceId: verification.deviceId,
-        completedAtMs: Date.now(),
-        admitsCloudWorkerSetup: manager.admitsNodeSetupCompletion,
-      }),
-    ).resolves.toBeNull();
-    expect(store.get("worker-enrollment")?.nodeDeviceId).toBeNull();
-  });
+  it.each(["closed invocation", "fresh manager"] as const)(
+    "refuses first-device redemption with a %s and no live binding",
+    async (kind) => {
+      const connection = await beginConnect();
+      const { manager, enrollment, verification } = connection;
+      const verify = () =>
+        expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({ ok: true });
+      if (kind === "closed invocation") {
+        await verify();
+        manager.close(enrollment);
+      } else {
+        manager.stop();
+      }
+      const authority = kind === "fresh manager" ? createManager() : manager;
+      if (kind === "fresh manager") {
+        await verify();
+      }
+      await expect(
+        consume(connection, { admitsCloudWorkerSetup: authority.admitsNodeSetupCompletion }),
+      ).resolves.toBeNull();
+      expect(store.get(environmentId)?.nodeDeviceId).toBeNull();
+    },
+  );
 
   function holdResult(type: string) {
     const reached = createDeferredCore();
@@ -254,24 +260,6 @@ describe("worker environment node enrollment store", () => {
       delivery.afterResult = undefined;
       ensureSpy.mockRestore();
     }
-  });
-
-  it("refuses first-device redemption through a fresh manager without a live binding", async () => {
-    const { manager, token, verification } = await beginConnect();
-    manager.stop();
-    const replacement = createManager();
-    await expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({ ok: true });
-
-    await expect(
-      consumeDeviceBootstrapTokenWithSetupCompletion({
-        baseDir: root,
-        token,
-        deviceId: verification.deviceId,
-        completedAtMs: Date.now(),
-        admitsCloudWorkerSetup: replacement.admitsNodeSetupCompletion,
-      }),
-    ).resolves.toBeNull();
-    expect(store.get("worker-enrollment")?.nodeDeviceId).toBeNull();
   });
 
   it("adopts the surviving bearer after restart only for its exact credential digest", async () => {

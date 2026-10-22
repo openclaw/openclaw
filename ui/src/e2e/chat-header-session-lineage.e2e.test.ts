@@ -79,6 +79,7 @@ suite.define(() => {
         await actions.click();
         const menu = header.locator("openclaw-chat-header-session-menu");
         await page.getByRole("menu", { name: "Actions for Header lineage" }).waitFor();
+        await menu.getByText("Move to group", { exact: true }).waitFor();
         const count = (name: string) => menu.getByText(name, { exact: true }).count();
         expect(await count("Pin session")).toBe(Number(independent));
         expect(await count("Move to group")).toBe(1);

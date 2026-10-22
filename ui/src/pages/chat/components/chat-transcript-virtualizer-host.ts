@@ -130,7 +130,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.scrollElementAttachQueued = false;
       this.renderer.connect();
       if (this.connected && this.virtualizer.scrollElement !== this.scrollElement) {
-        this.layout.connect(this.scrollElement, this.callbacks.getComposerFloat);
+        this.layout.connect(this.scrollElement, this.callbacks);
         const { _willUpdate: updateVirtualizer } = this.virtualizer;
         updateVirtualizer();
         this.invalidate();
@@ -342,7 +342,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
 
   private readonly didCommit = () => {
     this.entryAnimations.didCommit();
-    this.layout.connect(this.scrollElement, this.callbacks.getComposerFloat);
+    this.layout.connect(this.scrollElement, this.callbacks);
     this.positionRail.update();
     const { _willUpdate: updateVirtualizer } = this.virtualizer;
     updateVirtualizer();

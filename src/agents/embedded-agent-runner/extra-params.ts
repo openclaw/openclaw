@@ -138,13 +138,12 @@ export function resolvePreparedExtraParams(params: {
   extraParamsOverride?: Record<string, unknown>;
   thinkingLevel?: ProviderThinkLevel;
   agentId?: string;
-  resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
   resolvedTransport?: AgentRuntimeTransport;
   providerRuntimeHandle?: ProviderRuntimePluginHandle;
   auth?: ProviderPrepareExtraParamsContext["auth"];
 }): Record<string, unknown> {
-  const resolvedExtraParams = params.resolvedExtraParams ?? resolveExtraParams(params);
+  const resolvedExtraParams = resolveExtraParams(params);
   const override = stripRequestScopedExtraParams(
     sanitizeExtraParamsOverride(params.extraParamsOverride),
   );

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-import type { Alias } from "vite";
+import { createServer, type Alias } from "vite";
 import { expect, it, vi } from "vitest";
 import {
   hashControlUiTranslationText,
@@ -235,6 +235,32 @@ it("uses the supplied artifact identity without reading Git metadata", () => {
     JSON.stringify(buildInfo),
   );
   expect(childProcessMocks.execFileSync).not.toHaveBeenCalled();
+});
+
+it("selects a polling watcher when the existing environment opt-in is enabled", async ({
+  onTestFinished,
+}) => {
+  vi.stubEnv("CHOKIDAR_USEPOLLING", "1");
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-ui-watcher-"));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const config = controlUiViteConfig({ command: "serve", buildInfo: resolveBuildInfo() });
+  const server = await createServer({
+    configFile: false,
+    root,
+    logLevel: "silent",
+    optimizeDeps: { noDiscovery: true },
+    server: { ...config.server, middlewareMode: true, hmr: false },
+  });
+  try {
+    // Chokidar can report polling enabled while still choosing FSEvents on macOS.
+    expect(server.watcher.options.usePolling).toBe(true);
+    expect(server.watcher.options.useFsEvents).toBe(false);
+  } finally {
+    await server.close();
+  }
 });
 
 it("embeds one canonical artifact identity from explicit build inputs", () => {

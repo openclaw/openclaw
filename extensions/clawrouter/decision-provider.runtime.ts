@@ -21,7 +21,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeClawRouterRootUrl } from "./provider-catalog.js";
+import { normalizeClawRouterRootUrl } from "./base-url.js";
 
 // Only this reviewed native protocol is implemented. Catalog strings cannot select
 // an arbitrary destination, model alias, or another upstream credential owner.

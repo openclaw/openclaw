@@ -153,7 +153,6 @@ async function executeAgentTurnInternalLoop(
       agentId: params.followupRun.run.agentId,
       lifecycleGeneration,
       verboseLevel: params.resolvedVerboseLevel,
-      isHeartbeat: params.isHeartbeat,
       isControlUiVisible: shouldSurfaceToControlUi,
       ...progressCardRefreshRunProjection(params.followupRun.run.inputProvenance),
       completionSource: params.completionSource,
@@ -512,11 +511,10 @@ async function executeAgentTurnInternalLoop(
         result: runResult,
         run: {
           ...params.followupRun.run,
+          scheduledAutomation: params.followupRun.run.scheduledAutomation !== undefined,
           trigger: resolveReplyRunTrigger(params),
-          isHeartbeat: params.isHeartbeat,
           currentInboundEventKind: params.followupRun.currentInboundEventKind,
         },
-        useHeartbeatFailureCopy: params.opts?.useHeartbeatFailureCopy,
         visibleReplyDelivered: () =>
           resolveReplyFailureVisibility(params.resolveVisibleReplyDelivery, directBlockDeliveries),
       })
@@ -559,14 +557,12 @@ async function executeAgentTurnOutcome(
   let modelContextLease: AppContextTurnParams["mcpAppContextLease"];
   const prepareMcpAppModelContext = async () => {
     requester?.assertCurrent();
-    modelContextLease = executionParams.isHeartbeat
-      ? undefined
-      : await leaseMcpAppModelContextForSessionTurn({
-          agentId: executionParams.followupRun.run.agentId,
-          sessionId: executionParams.followupRun.run.sessionId,
-          sessionKey: executionParams.sessionKey ?? executionParams.followupRun.run.sessionKey,
-          requesterId: requester?.profileId,
-        });
+    modelContextLease = await leaseMcpAppModelContextForSessionTurn({
+      agentId: executionParams.followupRun.run.agentId,
+      sessionId: executionParams.followupRun.run.sessionId,
+      sessionKey: executionParams.sessionKey ?? executionParams.followupRun.run.sessionKey,
+      requesterId: requester?.profileId,
+    });
     requester?.assertCurrent();
     return modelContextLease;
   };

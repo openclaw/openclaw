@@ -62,10 +62,10 @@ export function prepareAgentSettingsSnapshot(params: PreparedSettingsParams): Pr
     prepared.pluginMetadataSnapshot !== params.pluginMetadataSnapshot
   ) {
     const globalSettings = freezeJsonSnapshot(
-      readSettingsScope(join(params.agentDir, "settings.json")).settings,
+      readSettingsScope(join(params.agentDir, "settings.json")),
     );
     const projectSettings = freezeJsonSnapshot(
-      readSettingsScope(join(params.cwd, CONFIG_DIR_NAME, "settings.json")).settings,
+      readSettingsScope(join(params.cwd, CONFIG_DIR_NAME, "settings.json")),
     );
     const metadata =
       params.pluginMetadataSnapshot ??

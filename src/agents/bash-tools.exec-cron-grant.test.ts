@@ -7,6 +7,7 @@ import { bindCronJobAdmittedRun, resetCronActiveJobs } from "../cron/active-jobs
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { prepareCronRunAdmission } from "../cron/run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "../cron/scheduled-occurrence.test-support.js";
 import { markServiceCronJobActive } from "../cron/service/run-receipts.js";
 import { createCronServiceState } from "../cron/service/state.js";
 import {
@@ -258,13 +259,13 @@ async function prepareCronRun(mintGrant = true, expiresAtMs: number | null = nul
       cronEnabled: true,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     }),
     job,
     receipt,
   );
   runOwner = prepareCronRunAdmission({
+    scheduledExecution: TEST_SCHEDULED_EXECUTION,
     cfg: {},
     agentId: "main",
     runId: "cron-run-1",

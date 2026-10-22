@@ -7,6 +7,7 @@ import {
   turnCompleted,
   type CodexAppServerEventProjector,
   type ProjectorNotification,
+  type EmbeddedRunAttemptParams,
 } from "./event-projector.test-harness.js";
 
 export function notify(
@@ -70,9 +71,15 @@ export function events(callback: Mock, stream: string, kind?: string) {
     .filter((event) => event.stream === stream && (!kind || event.data.kind === kind));
 }
 
-export async function observe() {
+export async function observe(
+  overrides: Partial<EmbeddedRunAttemptParams> = {},
+  options?: Parameters<typeof createProjector>[1],
+) {
   const onAgentEvent = vi.fn();
-  const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+  const projector = await createProjector(
+    { ...(await createParams()), onAgentEvent, ...overrides },
+    options,
+  );
   return {
     projector,
     onAgentEvent,

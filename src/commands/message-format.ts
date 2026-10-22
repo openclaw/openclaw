@@ -1,4 +1,5 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getTerminalTableWidth,
@@ -6,16 +7,18 @@ import {
   renderTerminalSafeTable,
 } from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
+import { findChatChannelMeta } from "../channels/chat-meta.js";
+import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
-import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
 import {
   resolveMessageActionMessageId,
   resolveMessageActionOutcome,
   type MessageActionResult,
 } from "../infra/outbound/message-action-contracts.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
+import { readParsedField } from "../utils/string-readers.js";
 import { shortenText } from "./text-format.js";
 
 const resolveChannelLabel = (channel: ChannelId) =>
@@ -25,13 +28,7 @@ function firstNonemptyString(
   record: Record<string, unknown> | undefined,
   ...keys: string[]
 ): string {
-  for (const key of keys) {
-    const value = record?.[key];
-    if (typeof value === "string" && value) {
-      return value;
-    }
-  }
-  return "";
+  return (record && readParsedField(record, keys, readNonEmptyStringPreservingWhitespace)) ?? "";
 }
 
 type FormatOpts = {
@@ -135,79 +132,6 @@ function renderMessageList(
   }).trimEnd();
 }
 
-function extractDiscordSearchResultsMessages(results: unknown): unknown[] | null {
-  if (!results || typeof results !== "object") {
-    return null;
-  }
-  const raw = (results as { messages?: unknown }).messages;
-  if (!Array.isArray(raw)) {
-    return null;
-  }
-  // Discord search returns messages as array-of-array; first element is the message.
-  const flattened: unknown[] = [];
-  for (const entry of raw) {
-    if (Array.isArray(entry) && entry.length > 0) {
-      flattened.push(entry[0]);
-    } else if (entry && typeof entry === "object") {
-      flattened.push(entry);
-    }
-  }
-  return flattened;
-}
-
-function renderReactions(payload: unknown, opts: FormatOpts): string | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const reactions = (payload as { reactions?: unknown }).reactions;
-  if (!Array.isArray(reactions)) {
-    return null;
-  }
-
-  const rows = reactions.slice(0, opts.displayLimit ?? 50).map((r) => {
-    const entry = r as Record<string, unknown>;
-    const emojiObj = entry.emoji as Record<string, unknown> | undefined;
-    const emoji =
-      firstNonemptyString(emojiObj, "raw") || firstNonemptyString(entry, "name", "emoji", "key");
-    const count = typeof entry.count === "number" ? String(entry.count) : "";
-    const userList = Array.isArray(entry.users)
-      ? (entry.users as unknown[])
-          .slice(0, 8)
-          .map((u) => {
-            if (typeof u === "string") {
-              return u;
-            }
-            if (!u || typeof u !== "object") {
-              return "";
-            }
-            const user = u as Record<string, unknown>;
-            return firstNonemptyString(user, "tag", "username", "id");
-          })
-          .filter(Boolean)
-      : [];
-    return {
-      Emoji: emoji,
-      Count: count,
-      Users: shortenText(userList.join(", "), 72),
-    };
-  });
-
-  if (rows.length === 0) {
-    return theme.muted("No reactions.");
-  }
-
-  // Escape remote labels and users only for display; raw keys remain identities in JSON.
-  return renderTerminalSafeTable({
-    width: opts.width,
-    columns: [
-      { key: "Emoji", header: "Emoji", minWidth: 8 },
-      { key: "Count", header: "Count", align: "right", minWidth: 6 },
-      { key: "Users", header: "Users", flex: true, minWidth: 20 },
-    ],
-    rows,
-  }).trimEnd();
-}
-
 function renderPaginationHint(payload: unknown, muted: (text: string) => string): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -290,14 +214,26 @@ export function formatMessageCliText(
       const directResult = poll?.result
         ? { ...poll.result, channel: poll.channel }
         : (send?.result as OutboundDeliveryResult | undefined);
-      const summary =
-        delivery.via === "direct"
-          ? formatOutboundDeliverySummary(delivery.channel, directResult, { action })
-          : formatGatewaySummary({
-              action,
-              channel: delivery.channel,
-              messageId: delivery.result?.messageId ?? null,
-            });
+      let summary: string;
+      if (delivery.via === "direct") {
+        const resultChannel = directResult ? directResult.channel : delivery.channel;
+        let label = getChannelPlugin(resultChannel)?.meta.label;
+        if (!label) {
+          // Some legacy chat channels are not plugins; keep their human labels for CLI output.
+          const normalized = normalizeChatChannelId(resultChannel);
+          label = normalized
+            ? (findChatChannelMeta(normalized)?.label ?? resultChannel)
+            : resultChannel;
+        }
+        const base = `✅ ${action} via ${label}. Message ID: ${directResult ? directResult.messageId : "unknown"}`;
+        summary = directResult?.target
+          ? `${base} (${directResult.target.kind} ${directResult.target.id})`
+          : base;
+      } else {
+        const channelSuffix = delivery.channel ? ` (${delivery.channel})` : "";
+        const messageId = delivery.result?.messageId ?? "unknown";
+        summary = `✅ ${action} via gateway${channelSuffix}. Message ID: ${messageId}`;
+      }
       const lines = [ok(summary)];
       if (pollId) {
         lines.push(ok(`Poll id: ${pollId}`));
@@ -329,9 +265,52 @@ export function formatMessageCliText(
     return [ok("✅ Reaction updated.")];
   }
 
-  const reactionsTable = renderReactions(payload, formatOpts);
-  if (reactionsTable !== null && result.action === "reactions") {
-    return [heading("Reactions"), reactionsTable];
+  if (result.action === "reactions" && payload && typeof payload === "object") {
+    const reactions = (payload as { reactions?: unknown }).reactions;
+    if (Array.isArray(reactions)) {
+      const rows = reactions.slice(0, displayLimit ?? 50).map((r) => {
+        const entry = r as Record<string, unknown>;
+        const emojiObj = entry.emoji as Record<string, unknown> | undefined;
+        const emoji =
+          firstNonemptyString(emojiObj, "raw") ||
+          firstNonemptyString(entry, "name", "emoji", "key");
+        const count = typeof entry.count === "number" ? String(entry.count) : "";
+        const userList = Array.isArray(entry.users)
+          ? (entry.users as unknown[])
+              .slice(0, 8)
+              .map((u) => {
+                if (typeof u === "string") {
+                  return u;
+                }
+                if (!u || typeof u !== "object") {
+                  return "";
+                }
+                const user = u as Record<string, unknown>;
+                return firstNonemptyString(user, "tag", "username", "id");
+              })
+              .filter(Boolean)
+          : [];
+        return {
+          Emoji: emoji,
+          Count: count,
+          Users: shortenText(userList.join(", "), 72),
+        };
+      });
+      // Escape remote labels and users only for display; raw keys remain identities in JSON.
+      const table =
+        rows.length === 0
+          ? theme.muted("No reactions.")
+          : renderTerminalSafeTable({
+              width,
+              columns: [
+                { key: "Emoji", header: "Emoji", minWidth: 8 },
+                { key: "Count", header: "Count", align: "right", minWidth: 6 },
+                { key: "Users", header: "Users", flex: true, minWidth: 20 },
+              ],
+              rows,
+            }).trimEnd();
+      return [heading("Reactions"), table];
+    }
   }
 
   if (result.action === "read" || result.action === "list-pins") {
@@ -364,7 +343,21 @@ export function formatMessageCliText(
 
   if (result.action === "search") {
     const results = (payload as { results?: unknown }).results;
-    let list = extractDiscordSearchResultsMessages(results);
+    let list: unknown[] | null = null;
+    if (results && typeof results === "object") {
+      const raw = (results as { messages?: unknown }).messages;
+      if (Array.isArray(raw)) {
+        list = [];
+        // Discord search returns messages as array-of-array; first element is the message.
+        for (const entry of raw) {
+          if (Array.isArray(entry) && entry.length > 0) {
+            list.push(entry[0]);
+          } else if (entry && typeof entry === "object") {
+            list.push(entry);
+          }
+        }
+      }
+    }
     if (list === null) {
       const messages = asOptionalObjectRecord(payload)?.messages;
       if (Array.isArray(messages)) {

@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createGatewayMethodDescriptorsFromHandlers,
@@ -14,7 +14,10 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDashboardTool } from "./dashboard-tool.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import * as inProcessGateway from "./in-process-gateway.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const snapshot: BoardSnapshot = {
   sessionKey: "agent:main:main",
@@ -43,10 +46,10 @@ function recorder(boardSnapshot: BoardSnapshot = snapshot) {
     }
     return boardSnapshot as T;
   };
+  vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockImplementation(callGateway);
   return {
     tool: createDashboardTool({
       agentSessionKey: snapshot.sessionKey,
-      callGateway,
     }),
     calls,
     commands,

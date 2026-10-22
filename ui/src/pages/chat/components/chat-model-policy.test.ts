@@ -52,14 +52,16 @@ async function mountControls(catalog: ModelCatalogResult, retired = false) {
   flush();
   await waitForModelMenu(container);
   expect(JSON.stringify(selectedSession)).toBe(before);
-  return { container, onModelSelect };
+  const control = (kind: string, value?: string) =>
+    container.querySelector<HTMLElement>(modelControlSelector(kind, value));
+  return { container, onModelSelect, control };
 }
 
 it.each([undefined, "fixture/primary", "fixture/automatic", null])(
   "uses only catalog choices and the canonical default %s",
   async (defaultModel) => {
     const restricted = defaultModel !== undefined;
-    const { container, onModelSelect } = await mountControls({
+    const { container, onModelSelect, control } = await mountControls({
       models,
       ...(restricted ? { modelSelectionPolicy: { restricted: true as const, defaultModel } } : {}),
     });
@@ -74,27 +76,19 @@ it.each([undefined, "fixture/primary", "fixture/automatic", null])(
     }
     expect(values).toHaveLength(expected.length);
     expect(values).toEqual(expect.arrayContaining(expected));
-    container
-      .querySelector<HTMLButtonElement>(modelControlSelector("option", "fixture/custom"))
-      ?.click();
+    control("option", "fixture/custom")?.click();
     expect(onModelSelect).toHaveBeenCalledWith("fixture/custom", "main", undefined);
     if (restricted) {
       expect(container.textContent).not.toContain("forbidden");
-      expect(
-        container.querySelector<HTMLElement>(modelControlSelector("policy"))?.textContent,
-      ).toContain("administrator");
-      const reset = container.querySelector<HTMLButtonElement>(
-        modelControlSelector("default", "true"),
-      );
+      expect(control("policy")?.textContent).toContain("administrator");
+      const reset = control("default", "true");
       if (defaultModel) {
         expect(reset?.getAttribute("data-chat-model-option")).toBe(defaultModel);
         reset?.click();
         expect(onModelSelect).toHaveBeenCalledWith("", "main", null);
       } else {
         expect(reset).toBeNull();
-        expect(
-          container.querySelector<HTMLElement>(modelControlSelector("select"))?.textContent,
-        ).toContain("Choose a model");
+        expect(control("select")?.textContent).toContain("Choose a model");
       }
     }
   },
@@ -103,7 +97,7 @@ it.each([undefined, "fixture/primary", "fixture/automatic", null])(
 it.each([false, true])(
   "hides forbidden choices in an empty catalog (retired=%s)",
   async (retired) => {
-    const { container } = await mountControls(
+    const { container, control } = await mountControls(
       {
         models: [],
         ...(retired
@@ -112,18 +106,18 @@ it.each([false, true])(
       },
       retired,
     );
-    expect(container.querySelector<HTMLElement>(modelControlSelector("option"))).toBeNull();
+    expect(control("option")).toBeNull();
     if (retired) {
       expect(container.textContent).not.toContain("forbidden");
     } else {
       expect(container.textContent).toContain("No models are permitted by your administrator.");
-      expect(container.querySelector<HTMLElement>(modelControlSelector("setup"))).toBeNull();
+      expect(control("setup")).toBeNull();
     }
   },
 );
 
 it("retains permitted runtime alternatives without offering denied ones", async () => {
-  const { container } = await mountControls({
+  const { control } = await mountControls({
     models: [
       {
         ...models[0]!,
@@ -138,10 +132,6 @@ it("retains permitted runtime alternatives without offering denied ones", async 
     ],
     modelSelectionPolicy: { restricted: true, defaultModel: "fixture/primary" },
   });
-  expect(
-    container.querySelector<HTMLElement>(modelControlSelector("runtime", "permitted-route")),
-  ).not.toBeNull();
-  expect(
-    container.querySelector<HTMLElement>(modelControlSelector("runtime", "denied-route")),
-  ).toBeNull();
+  expect(control("runtime", "permitted-route")).not.toBeNull();
+  expect(control("runtime", "denied-route")).toBeNull();
 });

@@ -159,10 +159,12 @@ describe("AppSidebar footer identity menu", () => {
     const links = domProbe(helpRow!.parentElement!).all('[role="menu"] a[href]');
     expect([...links].map((link) => link.getAttribute("href"))).toEqual([
       "https://docs.openclaw.ai",
-      "https://docs.openclaw.ai/help",
+      "https://community.openclaw.ai/",
       "https://discord.gg/clawd",
       "https://docs.openclaw.ai/releases",
     ]);
+
+    expect([...links].find((link) => link.textContent?.includes("Get support"))).toBeDefined();
 
     view.query<HTMLElement>('[data-value="command:profile"]')?.focus();
     await dom.key(menu, "Escape", { cancelable: false });

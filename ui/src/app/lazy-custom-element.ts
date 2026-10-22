@@ -298,7 +298,7 @@ export const BROWSER_PANEL_ELEMENT = {
 export const BROWSER_DOCUMENT_ELEMENT = {
   tagName: "openclaw-browser-document",
   label: BROWSER_PANEL_ELEMENT.label,
-  loadModule: () => import("../components/browser/browser-document.ts"),
+  loadModule: () => import("../components/browser/browser-document.tsx"),
 } satisfies OptionalCustomElement;
 
 export const DESKTOP_PANEL_ELEMENT = {

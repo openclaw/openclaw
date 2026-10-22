@@ -25,7 +25,9 @@ export function bindReplyOperationDatabaseAdmission(
       params.workSignal?.throwIfAborted();
     }
     if (releasing || readerOperation.key !== params.sessionKey) {
-      throw new SessionWorkStartChangedError("Session reader operation is no longer current");
+      throw new SessionWorkStartChangedError(
+        "Session reader operation is no longer current. Retry the turn.",
+      );
     }
   };
   const assertTransitionActive = () => {

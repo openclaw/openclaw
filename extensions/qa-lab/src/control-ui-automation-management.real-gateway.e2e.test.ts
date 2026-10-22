@@ -305,7 +305,40 @@ suite.define(() => {
         disabledJob(automationName, "Complete this synthetic reminder."),
       );
       await send("100001", "create", "Create a disabled hourly reminder.");
-      await transport.waitForOutbound({ textIncludes: "create:", timeoutMs: 60_000 });
+      try {
+        await transport.waitForOutbound({ textIncludes: "create:", timeoutMs: 60_000 });
+      } catch (error) {
+        const providerState = provider.diagnostics("create");
+        const snapshot = transport.state.getSnapshot();
+        const outbound = snapshot.messages.filter((message) => message.direction === "outbound");
+        const matchingRequests = providerState.observedRequests.filter(
+          (request) => request.marker === "create",
+        );
+        const facts = {
+          phase: "telegram-create-reply",
+          provider: {
+            initialRequestObserved: providerState.matchingInitialRequestObserved,
+            automationsToolAvailable: providerState.automationsToolAvailable,
+            resultReceived: providerState.resultReceived,
+            requestCount: providerState.observedRequests.length,
+            matchingRequestCount: matchingRequests.length,
+            toolOutputRequestCount: matchingRequests.filter((request) => request.hasOutput).length,
+            errorCount: providerState.providerErrors.length,
+          },
+          transport: {
+            inboundCount: snapshot.messages.filter((message) => message.direction === "inbound")
+              .length,
+            outboundCount: outbound.length,
+            errorCount: outbound.filter((message) => message.isError).length,
+            matchingReplyCount: outbound.filter((message) => message.text.includes("create:"))
+              .length,
+          },
+        };
+        console.error("[control-ui-e2e] automation creation failure facts", JSON.stringify(facts));
+        // Diagnostics must preserve the original timeout even if artifact writing fails.
+        await writeVerdict("create-failure-facts.public.json", facts).catch(() => undefined);
+        throw error;
+      }
       const created = readResult(provider.results.get("create") ?? "null");
       expect(created).toMatchObject({
         id: expect.any(String),

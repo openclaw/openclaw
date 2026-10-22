@@ -174,7 +174,8 @@ openclaw-chat-details[mobile] {
   font-size: 13px;
 }
 .chat-details__toolbar button,
-.chat-details__row .chat-copy-btn {
+.chat-details__row .chat-copy-btn,
+.chat-details .chat-pr__actions-trigger {
   display: grid;
   place-items: center;
   width: 24px;
@@ -184,7 +185,8 @@ openclaw-chat-details[mobile] {
   border-radius: 5px;
   background: transparent;
 }
-.chat-details__toolbar button {
+.chat-details__toolbar button,
+.chat-details .chat-pr__actions-trigger {
   color: var(--muted);
 }
 @media (hover: hover) {
@@ -272,7 +274,7 @@ openclaw-chat-details[mobile] {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
+  text-overflow: clip;
 }
 .chat-details button:hover {
   background: var(--bg-hover);
@@ -291,32 +293,6 @@ openclaw-chat-details[mobile] {
   align-items: start;
   gap: 8px;
   margin-top: 4px;
-}
-.chat-details__change-summary {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: end;
-  align-items: center;
-  gap: 3px 7px;
-  color: var(--muted);
-}
-.chat-details__change-summary > span {
-  white-space: nowrap;
-}
-.chat-details__change-files,
-.chat-details__change-status {
-  color: var(--muted);
-}
-.chat-details__change-lines {
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
-.chat-details__change-lines--add {
-  color: var(--ok);
-}
-.chat-details__change-lines--del {
-  color: var(--danger);
 }
 .chat-details__meta-actions > button,
 .chat-details__participants > summary {
@@ -416,7 +392,7 @@ openclaw-chat-details[mobile] {
   font-weight: 400;
   overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
+  text-overflow: clip;
 }
 .chat-details .chat-subagent-activity__status {
   grid-column: 2;
@@ -568,7 +544,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-details__process-tail {
   overflow: hidden;
   min-width: 0;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 .chat-details__process-name {
@@ -632,7 +608,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
 }
 .chat-details .chat-pr__repo {
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
   font-size: 12px;
   font-weight: 500;
@@ -660,31 +636,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
 }
 .chat-details__changes {
   position: relative;
-}
-.chat-details__changes .chat-details__caption {
-  padding-inline-end: 92px;
-}
-.chat-details__changes--summary .chat-details__caption {
-  min-height: 56px;
-  padding-inline-end: 185px;
-}
-.chat-details__all-changes {
-  position: absolute;
-  display: flex;
-  flex-direction: column;
-  align-items: end;
-  gap: 4px;
-  max-width: calc(100% - 100px);
-  inset-block-start: 10px;
-  inset-inline-end: 4px;
-  min-height: 28px;
-  padding: 3px 8px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 11px;
 }
 .chat-details .chat-pr--compact {
   grid-template-columns: minmax(0, 1fr);
@@ -733,7 +684,15 @@ button.chat-details__process:is(:hover, :focus-visible) {
   background: transparent;
   color: var(--muted);
 }
+.chat-details .chat-pr__actions-trigger > .oc-menu-item__label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
 .chat-details .chat-pr__actions-trigger svg {
+  display: block;
   width: 15px;
   height: 15px;
 }
@@ -884,7 +843,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 .chat-environment__action > svg,
@@ -983,7 +942,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 .chat-environment__machine-trigger svg {

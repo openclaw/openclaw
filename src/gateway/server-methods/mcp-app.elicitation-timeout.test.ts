@@ -7,6 +7,7 @@ import { createSessionMcpRuntime } from "../../agents/agent-bundle-mcp-runtime.j
 import type { McpAppViewLease } from "../../agents/mcp-ui-resource.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { mcpAppHandlers } from "./mcp-app.js";
+import { appView } from "./mcp-app.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({ transport: vi.fn(), view: vi.fn(), question: vi.fn() }));
@@ -113,26 +114,13 @@ beforeEach(async () => {
     cfg,
   });
   await runtime.getCatalog();
-  view = {
+  view = appView(runtime, {
     viewId: "cv_timeout",
-    runtime,
-    sessionId: runtime.sessionId,
-    agentId: "main",
-    serverName: "demo",
     toolName: "pick",
-    uiResourceUri: "ui://demo/app",
     html: "",
-    byteSize: 0,
-    toolInput: {},
-    toolResult: { content: [] },
     allowedAppToolNames: new Set(["pick"]),
-    expiresAtMs: Date.now() + 600_000,
-    requestWindowStartedAtMs: Date.now(),
-    requestCount: 0,
-    toolCallCount: 0,
-    activeRequests: 0,
     prepareToolCall: async () => {},
-  };
+  });
   mocks.view.mockReturnValue(view);
 });
 

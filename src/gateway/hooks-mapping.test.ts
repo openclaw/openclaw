@@ -232,59 +232,37 @@ describe("hooks mapping", () => {
     });
   });
 
-  it("treats transform-provided session keys as templated by default", async () => {
-    const result = await applyGmailTransformSessionKey({
-      tempPrefix: "openclaw-config-sessionkey-xform-",
-      payload: { subject: "external" },
-      sessionKey: "hook:gmail:static",
-      transformLines: [
-        "export default ({ payload }) => ({",
-        '  kind: "agent",',
-        '  message: "Transformed",',
-        "  sessionKey: `hook:gmail:${payload.subject}`,",
-        "});",
-      ],
-    });
-
-    expectAgentSessionKey(result, {
-      sessionKey: "hook:gmail:external",
-      sessionKeySource: "templated",
-    });
-  });
-
-  it("uses transform-provided static session key source metadata", async () => {
-    const result = await applyGmailTransformSessionKey({
-      tempPrefix: "openclaw-config-sessionkey-static-",
-      sessionKey: "hook:gmail:{{messages[0].subject}}",
-      transformLines: [
-        "export default () => ({",
-        '  kind: "agent",',
-        '  message: "Transformed",',
-        '  sessionKey: "hook:gmail:fixed",',
-        '  sessionKeySource: "static",',
-        "});",
-      ],
-    });
-
-    expectAgentSessionKey(result, { sessionKey: "hook:gmail:fixed", sessionKeySource: "static" });
-  });
-
-  it("treats empty transform session keys as absent for source tracking", async () => {
-    const result = await applyGmailTransformSessionKey({
-      tempPrefix: "openclaw-config-sessionkey-empty-",
-      sessionKey: "hook:gmail:{{messages[0].subject}}",
-      transformLines: [
-        "export default () => ({",
-        '  kind: "agent",',
-        '  message: "Transformed",',
-        '  sessionKey: "",',
-        '  sessionKeySource: "templated",',
-        "});",
-      ],
-    });
-
-    expectAgentSessionKey(result, { sessionKey: "" });
-  });
+  it.each([
+    ["templated by default", "hook:gmail:static", undefined, "hook:gmail:external", "templated"],
+    [
+      "explicitly static",
+      "hook:gmail:{{messages[0].subject}}",
+      "static",
+      "hook:gmail:fixed",
+      "static",
+    ],
+    ["empty", "hook:gmail:{{messages[0].subject}}", "templated", "", undefined],
+  ] as const)(
+    "tracks %s transform session keys",
+    async (_, sessionKey, source, expected, expectedSource) => {
+      const result = await applyGmailTransformSessionKey({
+        tempPrefix: "openclaw-config-sessionkey-",
+        payload: { subject: "external" },
+        sessionKey,
+        transformLines: [
+          source === undefined ? "export default ({ payload }) => ({" : "export default () => ({",
+          '  kind: "agent",',
+          '  message: "Transformed",',
+          source === undefined
+            ? "  sessionKey: `hook:gmail:${payload.subject}`,"
+            : `  sessionKey: ${JSON.stringify(expected)},`,
+          ...(source === undefined ? [] : [`  sessionKeySource: ${JSON.stringify(source)},`]),
+          "});",
+        ],
+      });
+      expectAgentSessionKey(result, { sessionKey: expected, sessionKeySource: expectedSource });
+    },
+  );
 
   it("rejects transform module traversal outside transformsDir", () => {
     const { configDir } = makeTransforms("openclaw-config-traversal-");
@@ -386,21 +364,16 @@ describe("hooks mapping", () => {
       { configDir },
     );
 
-    const resultA = await applySingleHookMapping(mappings, mappingContext("testA"));
-    const resultB = await applySingleHookMapping(mappings, mappingContext("testB"));
-
-    expect(resultA?.ok).toBe(true);
-    expect(resultB?.ok).toBe(true);
-    let instanceA: string | undefined;
-    let instanceB: string | undefined;
-    if (resultA?.ok && resultA.action?.kind === "wake") {
-      instanceA = resultA.action.text.match(/^A-(.+)$/)?.[1];
-    }
-    if (resultB?.ok && resultB.action?.kind === "wake") {
-      instanceB = resultB.action.text.match(/^B-(.+)$/)?.[1];
-    }
+    const instance = async (suffix: string) => {
+      const result = await applySingleHookMapping(mappings, mappingContext(`test${suffix}`));
+      expect(result?.ok).toBe(true);
+      return result?.ok && result.action?.kind === "wake"
+        ? result.action.text.match(new RegExp(`^${suffix}-(.+)$`))?.[1]
+        : undefined;
+    };
+    const instanceA = await instance("A");
     expect(instanceA).toBeDefined();
-    expect(instanceB).toBe(instanceA);
+    expect(await instance("B")).toBe(instanceA);
   });
 
   function resolveReloadableMappings(configDir: string) {
@@ -540,23 +513,30 @@ describe("hook mapping fan-out", () => {
         { id: "m2", from: "b@example.com", subject: "Two" },
       ],
     });
-    expect(result?.ok).toBe(true);
-    if (!result?.ok) {
-      return;
+    expect(result).toMatchObject({
+      ok: true,
+      fanout: true,
+      dropped: 0,
+      actions: [
+        {
+          kind: "agent",
+          sessionMode: "isolated",
+          sessionKey: "hook:gmail:m1",
+          message: expect.stringContaining("a@example.com"),
+        },
+        {
+          kind: "agent",
+          sessionMode: "isolated",
+          sessionKey: "hook:gmail:m2",
+          message: expect.stringContaining("b@example.com"),
+        },
+      ],
+    });
+    if (result?.ok) {
+      expect(
+        result.actions.map((action) => (action.kind === "agent" ? action.message : undefined)),
+      ).toEqual([expect.stringContaining("One"), expect.stringContaining("Two")]);
     }
-    expect(result.fanout).toBe(true);
-    expect(result.dropped).toBe(0);
-    expect(result.actions).toHaveLength(2);
-    const agentActions = result.actions.filter((action) => action.kind === "agent");
-    expect(agentActions.map((action) => action.sessionMode)).toEqual(["isolated", "isolated"]);
-    expect(agentActions.map((action) => action.sessionKey)).toEqual([
-      "hook:gmail:m1",
-      "hook:gmail:m2",
-    ]);
-    expect(agentActions[0]?.message).toContain("a@example.com");
-    expect(agentActions[0]?.message).toContain("One");
-    expect(agentActions[1]?.message).toContain("b@example.com");
-    expect(agentActions[1]?.message).toContain("Two");
   });
 
   it("produces no actions for an empty or missing fan-out array", async () => {

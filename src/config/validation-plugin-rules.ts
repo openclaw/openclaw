@@ -32,9 +32,8 @@ import {
   bundledChannelIds,
   collectChannelDmPolicyDependencyWarnings,
   hasChannelDmPolicyDependencyWarningCandidates,
-  normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
-import { collectHeartbeatOwnerWarnings, collectRedactPatternWarnings } from "./validation-core.js";
+import { collectRedactPatternWarnings } from "./validation-core.js";
 import {
   formatChannelConfigIssueMessage,
   resolveDeferredChannelConfigWarning,
@@ -138,7 +137,6 @@ export function validatePreparedConfigWithPlugins(
     opts.deferredPluginMigrations?.map(({ pluginId }) => normalizePluginId(pluginId)),
   );
   warnings.push(
-    ...collectHeartbeatOwnerWarnings(config),
     ...collectRedactPatternWarnings(config),
     ...collectUtilityModelWarnings(config, () => ({
       plugins: ensureLoadedRegistryInfo().registry.plugins,
@@ -585,52 +583,6 @@ export function validatePreparedConfigWithPlugins(
     }
   }
 
-  const heartbeatChannelIds = new Set(bundledChannelIds);
-  const validateHeartbeatTarget = (target: string | undefined, issuePath: string): void => {
-    if (typeof target !== "string") {
-      return;
-    }
-    const trimmed = target.trim();
-    if (!trimmed) {
-      issues.push({ path: issuePath, message: "heartbeat target must not be empty" });
-      return;
-    }
-    const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-    if (
-      normalized === "owner" ||
-      normalized === "last" ||
-      normalized === "none" ||
-      normalizeBundledChannelId(trimmed)
-    ) {
-      return;
-    }
-    if (!heartbeatChannelIds.has(normalized)) {
-      for (const record of ensureRegistry().registry.plugins) {
-        for (const channelId of record.channels) {
-          const pluginChannel = channelId.trim();
-          if (pluginChannel) {
-            heartbeatChannelIds.add(normalizeLowercaseStringOrEmpty(pluginChannel));
-          }
-        }
-      }
-    }
-    if (!heartbeatChannelIds.has(normalized)) {
-      if (preserveUnavailableConfig(issuePath)) {
-        return;
-      }
-      issues.push({ path: issuePath, message: `unknown heartbeat target: ${target}` });
-    }
-  };
-
-  validateHeartbeatTarget(
-    config.agents?.defaults?.heartbeat?.target,
-    "agents.defaults.heartbeat.target",
-  );
-  for (const { entry, source } of listAgentEntriesWithSource(config)) {
-    const pathPrefix =
-      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
-    validateHeartbeatTarget(entry?.heartbeat?.target, `${pathPrefix}.heartbeat.target`);
-  }
   validateWebSearchProvider();
   validateConfiguredModelRefs();
 

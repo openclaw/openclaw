@@ -43,6 +43,7 @@ import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { isPathInside } from "../path-guards.js";
 import { throwIfAborted } from "./abort.js";
+import { mirrorDeliveredPayloads } from "./deliver-transcript.js";
 import {
   messageActionRequesterMediaContext,
   type MessageActionInput,
@@ -66,12 +67,14 @@ import {
   resolveAndApplyOutboundReplyToId,
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
+import type { OutboundMirror } from "./mirror.js";
 import {
   executeSendAction,
   hasCorePresentationDelivery,
   materializeMessagePresentationFallback,
 } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { summarizeOutboundPayloadForTransport } from "./payloads.js";
 
 // Keep the TTS runtime lazy so ordinary sends do not pay the provider import cost.
 const loadMessageActionTtsRuntime = createLazyRuntimeModule(
@@ -597,10 +600,36 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
           dryRun,
         }),
       });
+  const resolveTranscriptMirror = (): OutboundMirror | undefined =>
+    !dryRun && input.transcriptMirror
+      ? {
+          ...input.transcriptMirror,
+          text: sendPayload.message,
+          mediaUrls: sendPayload.mediaUrls,
+        }
+      : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
+        ? {
+            sessionKey: outboundRoute.sessionKey,
+            agentId,
+            text: sendPayload.message,
+            mediaUrls: sendPayload.mediaUrls,
+            idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
+          }
+        : undefined;
   if (gatewayPluginAction) {
     const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
     if (!deliveryFact || deliveryFact.status === "settled") {
       await commitOutboundSessionRoute();
+      // The Gateway owns source-reply mirroring; other conversations use the
+      // delivery owner's destination controller, outside the sending turn's fence.
+      const mirror = resolveTranscriptMirror();
+      const sourceSessionKey = input.sourceReplySessionKey ?? input.sessionKey;
+      if (mirror && !deliveryFact?.partialDelivery && mirror.sessionKey !== sourceSessionKey) {
+        await mirrorDeliveredPayloads({
+          delivery: { cfg, channel, to, mirror: { ...mirror, deferToSessionLane: true } },
+          payloads: [summarizeOutboundPayloadForTransport(sendPayload.payload)],
+        });
+      }
     }
     return await annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),
@@ -635,22 +664,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
       // Both delivery paths must commit a first-contact route before mirroring.
       onSendAccepted: commitOutboundSessionRoute,
-      mirror:
-        !dryRun && input.transcriptMirror
-          ? {
-              ...input.transcriptMirror,
-              text: sendPayload.message,
-              mediaUrls: sendPayload.mediaUrls,
-            }
-          : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
-            ? {
-                sessionKey: outboundRoute.sessionKey,
-                agentId,
-                text: sendPayload.message,
-                mediaUrls: sendPayload.mediaUrls,
-                idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
-              }
-            : undefined,
+      mirror: resolveTranscriptMirror(),
       silent: sendPayload.silent ?? undefined,
     },
     to,

@@ -1,6 +1,7 @@
 import type { HeapSpaceInfo } from "node:v8";
 import type { GcSample } from "./gc-observer.js";
 import type { WorkerMessageMetric } from "./worker-message-metrics.js";
+import type { WorkerPoolClass } from "./worker-pool-sizing.js";
 import type { WorkerRequestKind } from "./worker-request-kind.js";
 
 export type DiagnosticRuntimeMeasurementFields =
@@ -151,6 +152,14 @@ export type DiagnosticMemoryUsage = {
     script: string;
     started: number;
     retired: { reason: string; count: number }[];
+  }[];
+  /** Process-lifetime pool totals; completed workers remain represented after native exit. */
+  workerTaskMetrics?: {
+    workerClass: WorkerPoolClass | "other";
+    script: string;
+    tasksCompleted: number;
+    heapUsedHighWaterBytes: number;
+    gc: { kind: GcSample["kind"]; count: number; durationMs: number; reclaimedBytes: number }[];
   }[];
   /** Main-thread transport totals; unknown payload sizes remain separate from known zero bytes. */
   workerMessages?: WorkerMessageMetric[];

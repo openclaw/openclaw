@@ -322,7 +322,8 @@ suite.define(() => {
       );
     }
 
-    await panes.first().click({ position: { x: 20, y: 80 } });
+    // Activate through the composer; a retained hovercard can cover a pane-relative pixel.
+    await panes.first().locator(".agent-chat__composer-combobox textarea").click();
     await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
     await expect.poll(visibleActionLabels).toEqual([activeActions, ["Details"]]);
     expect(await headers.first().locator(".chat-header-session-menu__trigger").isVisible()).toBe(
@@ -345,7 +346,7 @@ suite.define(() => {
     ]);
 
     const lastPane = page.locator(".chat-split-view__pane").last();
-    await lastPane.click({ position: { x: 20, y: 80 } });
+    await lastPane.locator(".agent-chat__composer-combobox textarea").click();
     await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
     await expect.poll(visibleActionLabels).toEqual([["Details"], activeActions]);
     expect(await headers.last().locator(".chat-header-session-menu__trigger").isVisible()).toBe(
@@ -543,7 +544,7 @@ suite.define(() => {
       .poll(() => composer.evaluate((element) => element === document.activeElement))
       .toBe(true);
 
-    await page.getByRole("button", { name: "Open command palette" }).click();
+    await page.getByRole("button", { name: "Command palette" }).click();
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
     await expect

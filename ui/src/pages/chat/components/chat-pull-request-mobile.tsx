@@ -1,16 +1,17 @@
-import { For, Show, createSignal, onCleanup } from "solid-js";
+import { For, Show } from "solid-js";
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
+import { GitDiffValues } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { sessionPullRequestStateIcons } from "../../../lib/session-pull-request-presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { ChecksRow } from "./chat-pull-request-shared.tsx";
+import { createPullRequestCopy } from "./chat-pull-request-copy.ts";
+import { ChecksRows } from "./chat-pull-request-shared.tsx";
 import { chatPullRequestId } from "./chat-pull-requests.ts";
 import "./chat-pull-request-presenters.css";
 import "./chat-ci-details.ts";
@@ -116,16 +117,7 @@ export function ChatPullRequestMobileRow(props: ChatPullRequestMobileRowProps) {
             }
           >
             <span aria-hidden="true"> · </span>
-            <Show when={props.pullRequest.additions !== undefined}>
-              <span class="chat-pr__additions">
-                +{props.pullRequest.additions?.toLocaleString("en-US")}
-              </span>
-            </Show>{" "}
-            <Show when={props.pullRequest.deletions !== undefined}>
-              <span class="chat-pr__deletions">
-                −{props.pullRequest.deletions?.toLocaleString("en-US")}
-              </span>
-            </Show>
+            <GitDiffValues item={props.pullRequest} classPrefix="chat-pr" locale="en-US" spaced />
           </Show>
         </span>
       </span>
@@ -173,34 +165,11 @@ export type ChatPullRequestMobileDetailProps = ChatPullRequestMobileRecoveryProp
 
 /** Body only: actual title, Back, scroll fades and presentation are owned by the mobile host. */
 export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailProps) {
-  const [copying, setCopying] = createSignal(false);
-  const [copyFailed, setCopyFailed] = createSignal(false);
-  let mounted = true;
-  onCleanup(() => {
-    mounted = false;
+  const clipboard = createPullRequestCopy({
+    url: () => props.pullRequest?.url,
+    presented: () => props.hasSnapshot,
+    onCopied: () => showToast({ message: t("chat.pullRequests.linkCopied") }),
   });
-  const copy = async () => {
-    const pr = props.pullRequest;
-    if (!pr || copying()) {
-      return;
-    }
-    setCopying(true);
-    setCopyFailed(false);
-    const current = () => mounted && props.pullRequest?.url === pr.url;
-    const copied = await copyToClipboard(pr.url, current);
-    if (!mounted) {
-      return;
-    }
-    setCopying(false);
-    if (!current()) {
-      return;
-    }
-    if (copied) {
-      showToast({ message: t("chat.pullRequests.linkCopied") });
-    } else {
-      setCopyFailed(true);
-    }
-  };
   return (
     <div class="chat-pr-mobile">
       <ChatPullRequestMobileRecovery {...props} />
@@ -238,16 +207,7 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
                         })}
                       </span>
                     </Show>
-                    <Show when={pullRequest().additions !== undefined}>
-                      <span class="chat-pr__additions">
-                        +{pullRequest().additions?.toLocaleString("en-US")}
-                      </span>
-                    </Show>
-                    <Show when={pullRequest().deletions !== undefined}>
-                      <span class="chat-pr__deletions">
-                        −{pullRequest().deletions?.toLocaleString("en-US")}
-                      </span>
-                    </Show>
+                    <GitDiffValues item={pullRequest()} classPrefix="chat-pr" locale="en-US" />
                   </div>
                 </Show>
               </div>
@@ -277,26 +237,7 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
               >
                 <h3>{t("chat.pullRequests.checksTitle")}</h3>
                 <div class="chat-pr-mobile__group chat-pr-mobile__check-rows">
-                  <ChecksRow
-                    label={t("chat.pullRequests.checksFailed")}
-                    count={pullRequest().checks?.failed ?? 0}
-                    modifier="failed"
-                  />
-                  <ChecksRow
-                    label={t("chat.pullRequests.checksPassed")}
-                    count={pullRequest().checks?.passed ?? 0}
-                    modifier="passed"
-                  />
-                  <ChecksRow
-                    label={t("chat.pullRequests.checksRunning")}
-                    count={pullRequest().checks?.running ?? 0}
-                    modifier="running"
-                  />
-                  <ChecksRow
-                    label={t("chat.pullRequests.checksSkipped")}
-                    count={pullRequest().checks?.skipped ?? 0}
-                    modifier="skipped"
-                  />
+                  <ChecksRows checks={pullRequest().checks} />
                   <Show when={pullRequest().checksUrl}>
                     {(url) => (
                       <a
@@ -334,11 +275,15 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
                 <span>{t("chat.pullRequests.openGitHub")}</span>
                 <Icon name="externalLink" />
               </a>
-              <button type="button" disabled={copying()} onClick={() => void copy()}>
+              <button
+                type="button"
+                disabled={clipboard.copying()}
+                onClick={() => void clipboard.copy()}
+              >
                 <Icon name="link" />
                 <span>{t("chat.pullRequests.copyLink")}</span>
               </button>
-              <Show when={copyFailed()}>
+              <Show when={clipboard.failed()}>
                 <p class="chat-pr-menu__error" role="alert">
                   {t("chat.pullRequests.copyFailed")}
                 </p>

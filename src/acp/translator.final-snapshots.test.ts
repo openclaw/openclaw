@@ -29,9 +29,13 @@ describe("acp final chat snapshots", () => {
       }
       await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
       expect(
-        sessionUpdate.mock.calls.flatMap(([{ update }]) =>
-          update.sessionUpdate === "agent_message_chunk" ? [update.content.text] : [],
-        ),
+        sessionUpdate.mock.calls.flatMap(([{ update }]) => {
+          if (update.sessionUpdate !== "agent_message_chunk") {
+            return [];
+          }
+          expect(update.content.type).toBe("text");
+          return update.content.type === "text" ? [update.content.text] : [];
+        }),
       ).toEqual(["Hello wide", " world"]);
     },
   );

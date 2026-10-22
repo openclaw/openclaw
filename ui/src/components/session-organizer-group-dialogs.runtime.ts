@@ -1,3 +1,7 @@
+import type {
+  FsListDirResult,
+  WorktreesBranchesResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { t } from "../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import type {
@@ -7,18 +11,6 @@ import type {
 import type { SessionOrganizerDependencies } from "./session-organizer-types.ts";
 
 registerSessionOrganizationEnglish();
-
-async function loadDialog<T>(deps: SessionOrganizerDependencies, load: Promise<T>) {
-  try {
-    return await load;
-  } catch (error) {
-    const scope = deps.sessionData.beginSessionMutation();
-    if (scope) {
-      deps.sessionData.publishSessionMutationError(scope, error);
-    }
-    return null;
-  }
-}
 
 async function loadOperations(
   deps: SessionOrganizerDependencies,
@@ -39,8 +31,8 @@ export async function createSessionGroupDialog(
   sessions: readonly SidebarRecentSession[],
   notify: () => void,
 ) {
-  const dialog = await loadDialog(deps, import("./input-dialog.ts"));
-  await dialog?.showInputDialog({
+  const dialog = await import("./input-dialog.tsx");
+  await dialog.showInputDialog({
     signal,
     gateway: scope.gateway,
     title: t("sessionsView.newGroupTitle"),
@@ -77,8 +69,8 @@ export async function renameSessionGroupDialog(
   group: string,
   onRenamed: (next: string) => void,
 ) {
-  const dialog = await loadDialog(deps, import("./input-dialog.ts"));
-  await dialog?.showInputDialog({
+  const dialog = await import("./input-dialog.tsx");
+  await dialog.showInputDialog({
     signal,
     gateway: scope.gateway,
     title: t("sessionsView.renameGroupTitle", { group }),
@@ -109,33 +101,54 @@ export async function editSessionGroupDefaultsDialog(
   scope: SidebarSessionMutationScope,
   group: string,
 ) {
-  const dialog = await loadDialog(deps, import("./session-group-defaults-dialog.tsx"));
-  if (!dialog || !deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const dialog = await import("./session-group-defaults-dialog.tsx");
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
-  const defaults = deps.sessionGroupDefaults(group);
+  const readDefaults = () => {
+    if (scope.sessions.groupsStatus() !== "ready") {
+      return null;
+    }
+    const entry = scope.sessions.state.groupSettings.find((item) => item.name === group);
+    return entry ? { cwd: entry.cwd ?? "", worktree: entry.worktree === true } : null;
+  };
+  const requireCurrent = () => {
+    if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+  };
+  const defaults = readDefaults();
   if (defaults) {
     await dialog.showSessionGroupDefaultsDialog({
       group,
       defaults,
       signal: scope.signal,
-      listDirectory: (path) => {
-        if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-          return Promise.reject(new Error(t("sessionsView.groupDefaultsStale")));
-        }
-        return deps.listSessionGroupFolders(path);
+      listDirectory: async (path) => {
+        requireCurrent();
+        const result = await scope.client.request<FsListDirResult>(
+          "fs.listDir",
+          path ? { path } : {},
+        );
+        requireCurrent();
+        return result;
       },
-      inspectRepository: (path) => {
-        if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-          return Promise.reject(new Error(t("sessionsView.groupDefaultsStale")));
+      inspectRepository: async (path) => {
+        requireCurrent();
+        const repoRoot = path?.trim() || deps.sessionGroupWorkspace()?.trim();
+        if (!repoRoot) {
+          return "unavailable";
         }
-        return deps.inspectSessionGroupRepository(path);
+        const result = await scope.client.request<WorktreesBranchesResult>("worktrees.branches", {
+          repoRoot,
+          includeRepositoryStatus: true,
+        });
+        requireCurrent();
+        return result.repositoryStatus === "git" || result.repositoryStatus === "not_git"
+          ? result.repositoryStatus
+          : "unavailable";
       },
       submit: async (nextDefaults) => {
-        if (
-          !deps.sessionData.isSessionMutationScopeCurrent(scope) ||
-          !deps.sessionGroupDefaults(group)
-        ) {
+        if (!deps.sessionData.isSessionMutationScopeCurrent(scope) || !readDefaults()) {
           return t("sessionsView.groupDefaultsStale");
         }
         const operations = await loadOperations(deps, scope);

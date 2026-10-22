@@ -24,6 +24,7 @@ import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-stor
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { writeTree } from "./plugin-generation-capture.test-support.js";
 import type { GenerationWorkerInput } from "./plugin-generation-worker-contract.js";
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import {
@@ -77,13 +78,11 @@ const withInstalledCapture = <T>(
 function sourceFixture(version?: string) {
   const root = fs.realpathSync(temp.make("plugin-generation-worker-"));
   const source = path.join(root, "source");
-  fs.mkdirSync(source);
-  fs.writeFileSync(
-    path.join(source, "package.json"),
-    JSON.stringify({ name: "fixture", version, type: "module" }),
-  );
   const entry = path.join(source, "index.js");
-  fs.writeFileSync(entry, "export const value = 42;");
+  writeTree(source, {
+    "package.json": { name: "fixture", version, type: "module" },
+    "index.js": "export const value = 42;",
+  });
   return { root, source, entry };
 }
 

@@ -5,9 +5,9 @@ import type {
 } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { nextDraftRevision } from "../../lib/chat/outbox-store-draft-state.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
+import { chatAttachmentDraftSignature } from "../chat/composer-draft.ts";
 import {
   captureDurableChatAttachments,
-  chatAttachmentDraftSignature,
   durableComposerScopeIdentity,
   hydrateDurableComposerAttachments,
   reportDurableComposerStorageError,

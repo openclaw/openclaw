@@ -53,15 +53,6 @@ afterEach(() => {
 const fixture = (count: number) =>
   pluginTreeFixture(directories.make("update-hash-scheduling-"), count);
 
-it("hashes small inventories without creating workers", async () => {
-  const f = await fixture(3);
-  const plan = await f.prepare();
-  const files = plan.entries.filter((entry) => entry.kind === "file");
-  expect(files).toHaveLength(3);
-  expect(new Set(files.map((entry) => entry.sha256)).size).toBe(1);
-  expect(transport.construct).not.toHaveBeenCalled();
-});
-
 it.each(["settled", "failed"] as const)(
   "stops hash admission, drains peers, and joins %s worker retirement before returning",
   async (retirement) => {

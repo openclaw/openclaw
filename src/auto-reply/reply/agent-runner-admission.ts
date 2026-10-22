@@ -55,6 +55,14 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
   const cronAdmission =
     automation && sessionKey
       ? prepareCronRunAdmission({
+          scheduledExecution: automation.occurrence.mint({
+            cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
+            agentId: params.followupRun.run.agentId,
+            runId,
+            runSessionKey: sessionKey,
+            toolsAllow: resolveCronRunToolsAllow(automation.job),
+            operatorAuthorityRestored: params.followupRun.operatorAuthority !== undefined,
+          }),
           admissionSource: automation.admissionSource,
           assertSourceCurrent,
           cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
@@ -167,6 +175,16 @@ export function prepareReplyTurnRunSource(params: AgentTurnParams, runId: string
                   nextCheckEnabled:
                     automation.job.pacing !== undefined ||
                     isCronOneShotContinuationJob(automation.job),
+                  assertCurrent: () => {
+                    automation.assertCurrent();
+                    if (
+                      !params.replyOperation ||
+                      params.replyOperation.result ||
+                      params.replyOperation.abortSignal.aborted
+                    ) {
+                      throw new Error("Automation reply owner has closed");
+                    }
+                  },
                 },
               ],
             ]),

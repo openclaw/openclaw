@@ -22,5 +22,12 @@
     "../../src/agents/code-mode*.test.tsx",
     "../../src/agents/tool-*.test.ts",
     "../../src/agents/tool-*.test.tsx"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/agents/tools/cron-*.test.ts",
+    "../../src/agents/tools/cron-*.test.tsx"
   ]
 }

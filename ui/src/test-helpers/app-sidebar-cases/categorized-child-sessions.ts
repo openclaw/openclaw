@@ -83,9 +83,10 @@ it("promotes a categorized child loaded through the expanded-parent cache", asyn
   await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
 
   const researchSelector = '[data-session-section="category:Research"]';
-  const research = find(researchSelector);
   await waitForFast(() =>
-    expect(research?.querySelectorAll(`[data-session-key="${categorizedKey}"]`)).toHaveLength(1),
+    expect(
+      find(researchSelector)?.querySelectorAll(`[data-session-key="${categorizedKey}"]`),
+    ).toHaveLength(1),
   );
   expect(ordinaryChild()).not.toBeNull();
   expect(find(`[data-session-key="${archivedKey}"]`)).toBeNull();

@@ -49,11 +49,12 @@ describe("Claw project CLI", () => {
     await runClawsCreateCommand(root, { json: true });
     await runClawsValidateCommand(root, { json: true });
     await runClawsBuildCommand(root, { out: artifact, json: true });
-    await runClawsDevCommand(root, {
+    const options = {
       agentId: "author-flow-preview",
       workspace: join(root, "preview-workspace"),
       json: true,
-    });
+    };
+    await runClawsDevCommand(root, options);
     expect(payloads()).toMatchObject([
       { schemaVersion: "openclaw.clawProject.v1" },
       { schemaVersion: "openclaw.clawProject.v1", excludedPaths: [] },
@@ -70,20 +71,9 @@ describe("Claw project CLI", () => {
         packageRoot: `claw-artifact:${integrity}`,
       },
     });
-  });
-
-  it("emits stable dev plans without deleted extraction paths", async () => {
-    const root = join(tempDirs.make("openclaw-claw-dev-stable-"), "stable-dev");
-    await runClawsCreateCommand(root, { json: true });
-    const options = {
-      agentId: "stable-dev-preview",
-      workspace: join(root, "preview-workspace"),
-      json: true,
-    };
+    const first = devPlan(3);
     await runClawsDevCommand(root, options);
-    await runClawsDevCommand(root, options);
-    const first = devPlan(1);
-    expect(first).toEqual(devPlan(2));
+    expect(first).toEqual(devPlan(4));
     expect(JSON.stringify(first)).not.toContain("openclaw-claw-artifact-");
     expect(first.claw.packageRoot).toMatch(/^claw-artifact:sha256:/u);
   });

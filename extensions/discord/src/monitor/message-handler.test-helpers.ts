@@ -51,7 +51,7 @@ export function createDiscordHandlerParams(overrides?: {
   };
 }
 
-export function createDiscordPreflightContext(channelId = "ch-1", messageId = `msg-${channelId}`) {
+function createDiscordPreflightContext(channelId = "ch-1", messageId = `msg-${channelId}`) {
   const message = { id: messageId, channel_id: channelId, attachments: [] };
   return {
     data: { channel_id: channelId, message: { ...message, attachments: [] } },

@@ -373,9 +373,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: {
       configGuard: "skip",
       loadPlugins: "never",
-      // Shared-state maintenance must acquire exclusive ownership before any
-      // config-health observation can open the canonical SQLite database.
-      networkProxy: ({ argv }) => (hasCliOption(argv, "--state-sqlite") ? "bypass" : "default"),
+      // Local maintenance must acquire ownership before config-health observation
+      // can open the canonical database.
+      networkProxy: ({ argv }) =>
+        hasCliOption(argv, "--state-sqlite") || hasCliOption(argv, "--client-credentials")
+          ? "bypass"
+          : "default",
     },
   },
   {

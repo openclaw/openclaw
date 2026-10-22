@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 324590,
-  "reason": "Page-owned English catalogs, with shared secret-request labels kept eager, measure 324590 B at startup; preserve one CSS request and cap startup at 325000 B.",
-  "updatedAt": "2026-10-20"
+  "startupJsGzipBytes": 315852,
+  "reason": "Defer header session and sharing menus; retain Settings-only copy behind Settings",
+  "updatedAt": "2026-10-22"
 }

@@ -35,7 +35,7 @@ const mocks = vi.hoisted(() => ({
         channelsReady: true,
         pluginErrors: [],
       };
-      return { ok: true, score: 7, summary: "healthy" };
+      return { ok: true, summary: "healthy" };
     },
   ),
   printResult: vi.fn(),
@@ -323,7 +323,6 @@ describe("failed update recovery restart", () => {
       mocks.restart.mockResolvedValueOnce(service);
       mocks.verifyGateway.mockResolvedValueOnce({
         ok: service === "healthy",
-        score: service === "healthy" ? 7 : 0,
         summary: service === "healthy" ? "healthy" : "stopped-free",
       });
       const failure = await finishFailedUpdate(

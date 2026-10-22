@@ -31,6 +31,13 @@ registration/loading, not replicas of any private plugin implementation.
 `--latency-ms` sets the inbound message delay (default 35 ms). `--frame-gap-ms`
 sets the minimum separation between Gateway message deliveries (default 4 ms).
 Concurrent requests remain concurrent; replies share one serialized wire.
+`--sidebar-query-latency-ms ownerFirst=400` (also `involvingMe`, `ownerCounts`, and
+`children`) overrides method latency for that sidebar query shape. Use
+`--omit-hello-self-presence --method-latency-ms users.self=900` to exercise identity
+resolution after hello. `--sidebar-avatars` supplies synthetic avatar resources;
+`--sidebar-expanded` saves a Show more selection before replay. Warm-reload output
+includes per-frame sidebar row keys/order hashes, section headers, avatar sources,
+and retained cached row elements. These are DOM observations, not pixel paint times.
 `--sidebar-view` selects `sessions` (default, with Involving me selected) or `online`.
 Run both because current UI presents these inventories in separate sidebar views.
 Default reloads use one agent chip; explicit churn scenarios use the all-agent roster.
@@ -172,6 +179,20 @@ cycles with `--bundle-dir <baseline> --compare-bundle-dir <candidate> --runs 20
 --streaming-reply --transcript-messages 400 --face chat --untraced`. The benchmark
 restores each build's warm state before each run. Streaming comparisons do not
 require the separate `--warm-reload` diagnostics or external probe scripts.
+
+Add `--streaming-allocations` to sample JavaScript allocations during the stream
+with CDP HeapProfiler at a 4 KiB interval, retaining samples collected by both
+major and minor GC. `streaming.allocations` reports estimated bytes and bytes per
+delivered delta; `run-N.streaming.heapprofile` retains the allocation call tree.
+The interval covers the whole renderer, including synthetic delivery and native
+composer input, and excludes reload and report serialization. These are sampled
+allocation estimates, not retained heap sizes or exact array counts. Collect
+timings in separate runs without allocation sampling.
+
+For concurrent paired comparisons, use separate processes and bundle directories
+with the same `--fixture-now-ms` and a future `--live-start-at-ms`, `--runs 1`, and
+distinct `--port` / `--sandbox-port` values. The start barrier supports either
+`--streaming-reply` or `--live-events` and fails if setup misses the requested time.
 
 Use `--streaming-burst-size 5` to enqueue five snapshots every 166.7 ms
 while retaining the average 30 deltas/s. The mock transport still applies

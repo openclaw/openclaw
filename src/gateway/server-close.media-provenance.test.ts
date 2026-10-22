@@ -1,7 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -28,9 +27,7 @@ it("settles accepted media provenance cleanup across the close prelude before sh
   let closing: Promise<void> | undefined;
   let restorePruning: (() => void) | undefined;
   try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = expectDefined(fixture.kernels.get(port), "Gateway kernel");
+    const { server, kernel } = await fixture.startServer();
     const html = Buffer.from("<!doctype html><title>Cleanup close proof</title>");
     const artifact = await saveMediaBuffer(html, "text/html", "outbound", undefined, "proof.html");
     await webMedia.markTrustedGeneratedHtmlPath(artifact.path, html);

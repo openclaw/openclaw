@@ -532,8 +532,6 @@ function prepareStream(
     cancelPendingUserInputAsync: (resolvedBy, preparation, kind) =>
       cancelPendingUserInput(resolvedBy, preparation.assertCurrent, kind, preparation),
   } satisfies NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>;
-  const heartbeatReplyOperation =
-    attempt.replyOperation?.turnKind === "heartbeat" ? attempt.replyOperation : undefined;
   const canApplyPermissionMode = () =>
     admission.accepting && !input.runAbortController.signal.aborted && isCurrentRegistration();
   const applyPermissionMode = input.applyPermissionMode;
@@ -567,9 +565,6 @@ function prepareStream(
       : undefined,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
-    preemptByVisibleTurn: heartbeatReplyOperation
-      ? () => heartbeatReplyOperation.supersede()
-      : undefined,
     queueMessage,
     messageInjection,
     messageInjectionV2: messageInjection,

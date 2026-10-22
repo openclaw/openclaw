@@ -68,30 +68,6 @@ function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is st
   );
 }
 
-function resolveBrowserTabIdentity(params: {
-  targetId?: string;
-  profile?: string;
-  target: "host" | "node";
-  node?: string;
-  baseUrl?: string;
-}): BrowserTabIdentity | undefined {
-  // Bridge/sandbox tabs have no operator browser.request route. Identity must
-  // remain exact: truncation could address another tab, profile, or node.
-  if (
-    params.baseUrl ||
-    !isBrowserRouteIdentifier(params.targetId, 128) ||
-    !isBrowserRouteIdentifier(params.profile, 128)
-  ) {
-    return undefined;
-  }
-  if (params.target === "node") {
-    return isBrowserRouteIdentifier(params.node, 256)
-      ? { targetId: params.targetId, profile: params.profile, target: "node", node: params.node }
-      : undefined;
-  }
-  return { targetId: params.targetId, profile: params.profile, target: "host" };
-}
-
 function withBrowserTabDetails(
   result: AgentToolResult<unknown>,
   identity: BrowserTabIdentity | undefined,
@@ -589,13 +565,30 @@ export function createBrowserTool(
                 ? route.profile
                 : undefined
               : (profile ?? resolvedBrowser.defaultProfile);
-            tabIdentity = resolveBrowserTabIdentity({
-              targetId,
-              baseUrl,
-              profile: openedProfile ?? routeProfile,
-              target: onNode ? "node" : "host",
-              node: onNode && route?.status === "resolved" ? nodeTarget?.nodeId : undefined,
-            });
+            const identityProfile = openedProfile ?? routeProfile;
+            const identityNode =
+              onNode && route?.status === "resolved" ? nodeTarget?.nodeId : undefined;
+            tabIdentity = undefined;
+            // Bridge/sandbox tabs have no operator browser.request route. Identity must
+            // remain exact: truncation could address another tab, profile, or node.
+            if (
+              !baseUrl &&
+              isBrowserRouteIdentifier(targetId, 128) &&
+              isBrowserRouteIdentifier(identityProfile, 128)
+            ) {
+              if (onNode) {
+                if (isBrowserRouteIdentifier(identityNode, 256)) {
+                  tabIdentity = {
+                    targetId,
+                    profile: identityProfile,
+                    target: "node",
+                    node: identityNode,
+                  };
+                }
+              } else {
+                tabIdentity = { targetId, profile: identityProfile, target: "host" };
+              }
+            }
           },
         });
       const dashboardTarget = browserDashboard;

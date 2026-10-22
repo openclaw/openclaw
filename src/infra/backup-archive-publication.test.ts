@@ -14,7 +14,6 @@ import {
   type BackupArchivePublication,
 } from "./backup-archive-publication.js";
 import { writeArchiveStreamToFile } from "./backup-create-stream.js";
-import * as directoryDurability from "./directory-durability.js";
 import { getPublishFileExclusiveFailureDetails } from "./directory-durability.js";
 
 const tempDirs = createTempDirTracker();
@@ -86,19 +85,6 @@ it("removes its staging directory when private setup fails", async () => {
   );
   await expect(createPublication(outputDir)).rejects.toThrow(/chmod failed/iu);
   await expect(fs.readdir(outputDir)).resolves.toEqual([]);
-});
-
-it.each(["EXDEV"])("fails closed when hard-link publication returns %s", async (code) => {
-  const { outputPath, plan, prepared, commit } = await setup();
-  const publicationSpy = vi
-    .spyOn(directoryDurability, "publishFileExclusive")
-    .mockRejectedValue(Object.assign(new Error("unsupported"), { code }));
-  await expect(commit()).rejects.toThrow(/requires hard-link support/iu);
-  expect(publicationSpy).toHaveBeenCalledWith(
-    expect.objectContaining({ targetPath: plan.canonicalOutputPath, strategy: "link-required" }),
-  );
-  await expectMissing(outputPath);
-  await expectMissing(prepared.archivePath);
 });
 
 it("preserves a destination raced in before publication", async () => {

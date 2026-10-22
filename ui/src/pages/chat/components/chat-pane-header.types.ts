@@ -18,7 +18,7 @@ import type {
 import type { ChatSessionVersionsMobileProps } from "./chat-session-versions-mobile.tsx";
 import type { ContinueInTerminalDialogProps } from "./continue-in-terminal-dialog.tsx";
 
-export type ChatPaneParentSession = {
+type ChatPaneParentSession = {
   key: string;
   title: string;
 };
@@ -95,7 +95,6 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   onMenuAction: (action: ChatPaneHeaderAction) => void;
   onOpenParentSession: (sessionKey: string) => void;
   onOpenAgentSettings?: (agentId: string) => void;
-  onCreateClaw?: () => void;
   onBranchSelect: (leafEntryId: string) => void;
 };
 

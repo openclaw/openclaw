@@ -93,9 +93,13 @@ export class SessionOrganizer {
   ): Promise<void> {
     const scope = this.deps.sessionData.beginSessionMutation(allowDeferred);
     if (scope) {
-      const operations = await this.loadOperations(scope);
-      if (operations) {
-        await run(operations, scope);
+      try {
+        const operations = await this.loadOperations(scope);
+        if (operations) {
+          await run(operations, scope);
+        }
+      } catch (error) {
+        this.deps.sessionData.publishSessionMutationError(scope, error);
       }
     }
   }
@@ -460,16 +464,12 @@ export class SessionOrganizer {
     this.finishSidebarEntryDrag();
   }
 
-  /** A dialog that never opens still owes the operator a visible outcome. */
-  private async loadDialog<T>(load: Promise<T>): Promise<T | null> {
+  /** Preparation failures belong to the same scope as the requested dialog. */
+  private async runDialog(scope: SidebarSessionMutationScope, run: () => Promise<void>) {
     try {
-      return await load;
+      await run();
     } catch (error) {
-      const scope = this.deps.sessionData.beginSessionMutation();
-      if (scope) {
-        this.deps.sessionData.publishSessionMutationError(scope, error);
-      }
-      return null;
+      this.deps.sessionData.publishSessionMutationError(scope, error);
     }
   }
 
@@ -479,8 +479,10 @@ export class SessionOrganizer {
       return;
     }
     const signal = this.deps.sessionData.sessionDraftSignal;
-    const dialogs = await this.loadDialog(import("./session-organizer-group-dialogs.runtime.ts"));
-    await dialogs?.createSessionGroupDialog(this.deps, scope, signal, sessions, this.notify);
+    await this.runDialog(scope, async () => {
+      const dialogs = await import("./session-organizer-group-dialogs.runtime.ts");
+      await dialogs.createSessionGroupDialog(this.deps, scope, signal, sessions, this.notify);
+    });
   }
 
   async renameSessionGroupFromMenu(group: string): Promise<void> {
@@ -489,16 +491,18 @@ export class SessionOrganizer {
       return;
     }
     const signal = this.deps.sessionData.sessionDraftSignal;
-    const dialogs = await this.loadDialog(import("./session-organizer-group-dialogs.runtime.ts"));
-    await dialogs?.renameSessionGroupDialog(this.deps, scope, signal, group, (next) => {
-      const from = `category:${group}`;
-      if (this.collapsedSessionSections.has(from)) {
-        const collapsed = new Set(this.collapsedSessionSections);
-        collapsed.delete(from);
-        collapsed.add(`category:${next}`);
-        this.saveCollapsedSessionSections(collapsed);
-      }
-      this.notify();
+    await this.runDialog(scope, async () => {
+      const dialogs = await import("./session-organizer-group-dialogs.runtime.ts");
+      await dialogs.renameSessionGroupDialog(this.deps, scope, signal, group, (next) => {
+        const from = `category:${group}`;
+        if (this.collapsedSessionSections.has(from)) {
+          const collapsed = new Set(this.collapsedSessionSections);
+          collapsed.delete(from);
+          collapsed.add(`category:${next}`);
+          this.saveCollapsedSessionSections(collapsed);
+        }
+        this.notify();
+      });
     });
   }
 
@@ -518,8 +522,10 @@ export class SessionOrganizer {
     if (!scope) {
       return;
     }
-    const dialogs = await this.loadDialog(import("./session-organizer-group-dialogs.runtime.ts"));
-    await dialogs?.editSessionGroupDefaultsDialog(this.deps, scope, group);
+    await this.runDialog(scope, async () => {
+      const dialogs = await import("./session-organizer-group-dialogs.runtime.ts");
+      await dialogs.editSessionGroupDefaultsDialog(this.deps, scope, group);
+    });
   }
 
   saveCollapsedSessionSections(sections: ReadonlySet<string>) {

@@ -107,6 +107,10 @@ the current run's latest stop and restarts the installed package after Doctor's
 writers settle. It records the observed recovery outcome while preserving the
 failed update result. Earlier runs' stop receipts never authorize that restart;
 operator-stopped services and explicit data-risk refusals remain stopped.
+Normal Doctor exits do not require a separate process-settlement receipt. On
+Windows, recovery restores the suspended Scheduled Task before restarting the
+Gateway, while preserving the failed Doctor check IDs in the update report.
+This recovery behavior requires the installed updater to contain the fix.
 
 After activation succeeds, a failure to read or publish update reporting leaves
 the updated installation in place. Reporting failures do not trigger package
@@ -1037,9 +1041,12 @@ captures through their sealed manifests; it never reads the captured payload:
   is always retained.
 - `protected` / `retained-doctor-capture`: a standalone Doctor copy kept by that
   retention rule. Active recovery references remain `pending-update-recovery`.
-- `protected` / `unmanifested-update-capture`: an incomplete or unreadable Doctor
-  capture, a directory without the capture marker or without a matching update run
-  or standalone manifest, and any other file in the capture directory. `unreadable-update-history` also
+- `protected` / `orphan-update-capture`: a sealed update capture with no matching
+  update run, outside the Doctor namespace. Its creation time appears in the
+  detail. No supported command retires these unattributed captures.
+- `protected` / `unmanifested-update-capture`: an incomplete or unreadable capture,
+  a directory without the capture marker or a matching manifest, and any other
+  file in the capture directory. `unreadable-update-history` also
   keeps every capture protected.
 
 Older `doctor-*` directories classified as `candidate` are also safe to delete by

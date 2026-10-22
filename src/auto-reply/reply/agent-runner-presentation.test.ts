@@ -14,7 +14,6 @@ import { createTypingController } from "./typing.js";
 
 function createPresentation(
   options: {
-    isHeartbeat?: boolean;
     silentExpected?: boolean;
     conversationContext?: string;
     onPartialReply?: GetReplyOptions["onPartialReply"];
@@ -29,7 +28,7 @@ function createPresentation(
 ) {
   const turn = {
     followupRun: { run: { silentExpected: options.silentExpected === true } },
-    isHeartbeat: options.isHeartbeat === true,
+
     sessionCtx: { agentText: options.conversationContext },
     opts: { onPartialReply: options.onPartialReply },
     typingSignals:
@@ -37,7 +36,6 @@ function createPresentation(
       createTypingSignaler({
         typing: createTypingController({}),
         mode: "never",
-        isHeartbeat: options.isHeartbeat === true,
       }),
     replyOperation: options.replyOperation,
     ...options.delivery,
@@ -64,7 +62,7 @@ function createDeliveryPresentation(
       blockStreamingEnabled: true,
       blockReplyPipeline,
       applyReplyToMode: (payload) => payload,
-      typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+      typingSignals: createTypingSignaler({ typing, mode: "never" }),
     },
   });
   const handler = presentation.blockReplyHandler;
@@ -83,7 +81,7 @@ it("refreshes typing for whitespace appended while typing sends are failing", as
     .mockRejectedValue(new Error("temporary typing send failure"));
   const typing = createTypingController({ onReplyStart, onCleanup });
   const presentation = createPresentation({
-    typingSignals: createTypingSignaler({ typing, mode: "message", isHeartbeat: false }),
+    typingSignals: createTypingSignaler({ typing, mode: "message" }),
   });
   try {
     await presentation.presentPartialReply({ text: "answer", delta: "answer" }, "embedded");
@@ -394,7 +392,6 @@ it("presents streaming control tokens without changing final text", async () => 
     [{ text: "HEARTBEAT_OK visible after heartbeat" }, visible("visible after heartbeat")],
     [{ mediaUrls: ["https://example.invalid/image.png"] }, { text: undefined, skip: false }],
     [{ text: "visible" }, { skip: true }, { silentExpected: true }],
-    [{ text: "HEARTBEAT_OK details" }, visible("HEARTBEAT_OK details"), { isHeartbeat: true }],
   ];
   for (const [payload, expected, options] of cases) {
     const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>();

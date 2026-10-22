@@ -2,10 +2,8 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { SidebarDock } from "../pages/chat/sidebar-layout-types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import {
-  controlUiBundledSettingsStorageKey,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { dockChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -17,7 +15,6 @@ const sessionKey = "agent:main:main";
 const viewport = { height: 760, width: 1440 };
 
 async function openSidePanel(page: Page, dock: SidebarDock = "right") {
-  const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
   const column = {
     id: "side-panel-column",
     side: "right",
@@ -26,10 +23,9 @@ async function openSidePanel(page: Page, dock: SidebarDock = "right") {
     width: 420,
   };
   const layout = { columns: [column], dock };
-  const settings = { sessionKey, sidebarSessionLayouts: { [sessionKey]: layout } };
-  await page.addInitScript(({ key, value }) => localStorage.setItem(key, value), {
-    key: storageKey,
-    value: JSON.stringify(settings),
+  await seedChatSettings(page, suite.server.baseUrl, {
+    sessionKey,
+    sidebarSessionLayouts: { [sessionKey]: layout },
   });
   await installMockGateway(page, {
     featureMethods: ["sessions.diff"],

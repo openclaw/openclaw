@@ -1,3 +1,4 @@
+import { request, type ClientRequest } from "node:http";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -16,7 +17,7 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
 }) => {
   let now = 0;
   let providerUrl = "";
-  const providerRequest = new AbortController();
+  let providerRequest: ClientRequest | undefined;
   let providerReply: Promise<string> | undefined;
   let requestAt = 0;
   let releasedAt = 0;
@@ -75,13 +76,24 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
             }
             if (method === "chat.send") {
               requestAt = now;
-              providerReply = fetch(`${providerUrl}/responses`, {
-                method: "POST",
-                body: "{}",
-                signal: providerRequest.signal,
-              }).then((response) => {
-                releasedAt = now;
-                return response.text();
+              // Keep loopback I/O on the event loop driven by the fixture's simulated clock.
+              providerReply = new Promise<string>((resolve, reject) => {
+                providerRequest = request(
+                  `${providerUrl}/responses`,
+                  { method: "POST" },
+                  (response) => {
+                    releasedAt = now;
+                    let body = "";
+                    response.setEncoding("utf8");
+                    response.on("data", (chunk: string) => {
+                      body += chunk;
+                    });
+                    response.on("end", () => resolve(body));
+                    response.on("error", reject);
+                  },
+                );
+                providerRequest.on("error", reject);
+                providerRequest.end("{}");
               });
               return { status: "started", runId: "fixture-run" };
             }
@@ -141,7 +153,7 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
     );
     expect.soft(completed).toBe(true);
   } finally {
-    providerRequest.abort();
+    providerRequest?.destroy();
     for (const run of cleanup.splice(0).toReversed()) {
       await run();
     }

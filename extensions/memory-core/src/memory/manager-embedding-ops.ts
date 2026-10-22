@@ -55,7 +55,7 @@ import type {
   MemoryIndexWorkItem,
   MemorySemanticProviderGeneration,
   MemorySyncProviderGeneration,
-} from "./manager-sync-ops.js";
+} from "./manager-sync-base.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
 import { runEmbeddingOperationWithTimeout } from "./paused-deadline.js";

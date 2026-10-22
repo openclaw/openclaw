@@ -1,6 +1,6 @@
 import { createRouter, definePage, type PageDefinition, type RouteMatch } from "@openclaw/uirouter";
 import type { JSX } from "@solidjs/web";
-import type { SolidRouteProps } from "../app-route-types.ts";
+import type { SolidRouteProps } from "../app-route-types.tsx";
 
 export type OutletModule<Data> = {
   renderSolid: (props: SolidRouteProps<Data>) => JSX.Element;

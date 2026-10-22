@@ -9,11 +9,12 @@ import type { ApplicationPlacementStartupStatus } from "../../app/session-placem
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import {
   ChatProviderReviewNotice,
   type ChatProviderReviewOwner,
@@ -25,8 +26,10 @@ import { ChatConversationMobile } from "./components/chat-conversation-presentat
 import { WorkspaceConflictNotice } from "./components/chat-workspace-conflict.tsx";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
-import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../styles/chat/conversation-notices.css";
+import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 registerNewSessionSetupEnglish();
 

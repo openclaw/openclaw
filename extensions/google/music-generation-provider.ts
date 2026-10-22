@@ -3,7 +3,6 @@ import { generatedMusicAssetFromBase64 } from "openclaw/plugin-sdk/music-generat
 import type {
   GeneratedMusicAsset,
   MusicGenerationProvider,
-  MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
 import {
   createProviderOperationDeadline,
@@ -23,27 +22,6 @@ import { createGoogleGenAI } from "./google-genai-runtime.js";
 import { resolveGoogleGenerativeAiApiOrigin } from "./provider-policy.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
-
-function resolveConfiguredGoogleMusicBaseUrl(req: MusicGenerationRequest): string | undefined {
-  const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
-  return configured ? resolveGoogleGenerativeAiApiOrigin(configured) : undefined;
-}
-
-function buildMusicPrompt(req: MusicGenerationRequest): string {
-  const parts = [req.prompt.trim()];
-  const lyrics = normalizeOptionalString(req.lyrics);
-  if (req.instrumental === true) {
-    parts.push("Instrumental only. No vocals, no sung lyrics, no spoken word.");
-  }
-  if (lyrics) {
-    parts.push(`Lyrics:\n${lyrics}`);
-  }
-  return parts.join("\n\n");
-}
-
-function resolveSupportedFormats(model: string): readonly string[] {
-  return model === GOOGLE_PRO_MUSIC_MODEL ? ["mp3", "wav"] : ["mp3"];
-}
 
 function resolveTerminalNoAudioReason(payload: GoogleGenerateContentResponse): string | undefined {
   const blockReason = normalizeOptionalString(payload.promptFeedback?.blockReason);
@@ -71,7 +49,7 @@ export const googleMusicGenerationProvider: MusicGenerationProvider = {
 
     const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_MUSIC_MODEL;
     if (req.format) {
-      const supportedFormats = resolveSupportedFormats(model);
+      const supportedFormats = model === GOOGLE_PRO_MUSIC_MODEL ? ["mp3", "wav"] : ["mp3"];
       if (!supportedFormats.includes(req.format)) {
         throw new Error(
           `Google music generation model ${model} supports ${supportedFormats.join(", ")} output.`,
@@ -79,7 +57,10 @@ export const googleMusicGenerationProvider: MusicGenerationProvider = {
       }
     }
 
-    const configuredBaseUrl = resolveConfiguredGoogleMusicBaseUrl(req);
+    const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
+    const configuredBaseUrl = configured
+      ? resolveGoogleGenerativeAiApiOrigin(configured)
+      : undefined;
     const operationTimeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const deadline = createProviderOperationDeadline({
       timeoutMs: operationTimeoutMs,
@@ -99,10 +80,18 @@ export const googleMusicGenerationProvider: MusicGenerationProvider = {
           }),
         },
       });
+      const parts = [req.prompt.trim()];
+      const promptLyrics = normalizeOptionalString(req.lyrics);
+      if (req.instrumental === true) {
+        parts.push("Instrumental only. No vocals, no sung lyrics, no spoken word.");
+      }
+      if (promptLyrics) {
+        parts.push(`Lyrics:\n${promptLyrics}`);
+      }
       const response = (await client.models.generateContent({
         model,
         contents: [
-          { text: buildMusicPrompt(req) },
+          { text: parts.join("\n\n") },
           ...(req.inputImages ?? []).map((image) => ({
             inlineData: {
               mimeType: normalizeOptionalString(image.mimeType) || "image/png",

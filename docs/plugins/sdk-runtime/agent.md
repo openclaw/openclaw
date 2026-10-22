@@ -40,6 +40,8 @@ compaction with session-store patches and harness calls. The result contains
 `compacted`, optional `reason`, and optional `tokensBefore` and `tokensAfter`
 snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
+Opted-in authorized commands may also use [command-scoped native children](/plugins/sdk-runtime/background-work#command-scoped-native-children) through `ctx.runtimeContext?.subagents`.
+
 ## Auth-profile resolution
 
 The experimental `openclaw/plugin-sdk/agent-runtime` entrypoint exports
@@ -531,7 +533,7 @@ Each `SessionTranscriptMessageEntry` contains:
 
     `readLatestAssistantTextByIdentity(...)` preserves the selected assistant text's whitespace and includes optional validated `openclawDelivery` facts from that same persisted message. Recovery consumers can retain reply, voice, media, and TTS intent without reparsing removed directives. These facts do not grant delivery authority; callers still apply their current-turn and reply-policy checks.
 
-    `withSessionTranscriptWrite(...)` exposes `readMessageFacts({ idempotencyKeys })` for exact-key lookups without loading the complete transcript. Facts and writes retain the context’s captured session and store; retained callbacks reject after the context closes. Native-history repair can preserve an existing message’s original run attribution while leaving the append owner’s strict payload comparison intact. A returned identity is evidence, not new execution authority.
+    `withSessionTranscriptWrite(...)` exposes `readMessageFacts({ idempotencyKeys })` for exact-key lookups without loading the complete transcript when its index is current. Pass `activeBranchOnly: true` to exclude identities on abandoned branches; the default includes every branch. While projection repair is pending, the owner derives the same facts from raw history. Facts and writes retain the context’s captured session and store; retained callbacks reject after the context closes. Native-history repair can preserve an existing message’s original run attribution while leaving the append owner’s strict payload comparison intact. A returned identity is evidence, not new execution authority.
 
     `appendSessionTranscriptMessageByIdentity(...)` is a low-level append of a message already in the supported format. Plugins must not synthesize media-bearing user rows with top-level `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, or `MediaTypes`. Channel ingress should pass ordered facts through `MsgContext.media` and let the host own user-turn persistence. A host-prepared persisted user message carries normalized ordered facts under `message.__openclaw.media`; the generic append API does not infer or repair legacy parallel arrays.
 

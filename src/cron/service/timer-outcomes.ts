@@ -3,6 +3,7 @@ import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
 import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
+import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
@@ -28,6 +29,7 @@ import {
   resolveNextRunAtMsOrDisable,
   resolveCronRestartRetryAtMs,
 } from "./jobs-scheduling.js";
+import { cronNotificationJob, resolveCronNotificationQueueOwner } from "./notification-intents.js";
 import {
   isCronOneShotContinuationJob,
   resolveManualOneShotOccurrenceAtMs,
@@ -39,10 +41,8 @@ import {
   applyTriggerRunResult,
   resolveCronNextRunWithLowerBound,
   resolveDeliveryState,
-  resolveDisabledHeartbeatOneShotRetryDecision,
   holdsFailureNotificationForRetry,
   resolveTransientCronRetryDecision,
-  shouldRetryDisabledHeartbeatOneShot,
 } from "./timer-trigger.js";
 
 type CronScheduleOwnership = "current" | "stale";
@@ -255,17 +255,20 @@ export function applyJobResult(
     if (shouldDelete || job.schedule.kind === "event") {
       job.state.nextRunAtMs = undefined;
     }
-    const failureNotification = finalizeCronFailureNotifications(state, {
-      job,
-      alertConfig,
-      result,
-      completionStatus,
-      terminalRecurring,
-      terminalOneShot,
-      pendingTransientRetry,
-      replay: opts.replay,
-      deferredNotifications: opts.deferredNotifications,
-    });
+    // A parent pause is not a failure: its own notice below replaces the skipped-run alert.
+    const failureNotification = result.parentUnavailable
+      ? undefined
+      : finalizeCronFailureNotifications(state, {
+          job,
+          alertConfig,
+          result,
+          completionStatus,
+          terminalRecurring,
+          terminalOneShot,
+          pendingTransientRetry,
+          replay: opts.replay,
+          deferredNotifications: opts.deferredNotifications,
+        });
     if (terminalRecurring && failureNotification !== "queued") {
       // Same contract as a terminal one-shot: the route-backed alert carries the
       // safety notice; every other outcome keeps the in-app notice as before.
@@ -288,6 +291,28 @@ export function applyJobResult(
         deferredNotifications: opts.deferredNotifications,
       });
     }
+    // One-shot handling may already have disabled the job above; the notice
+    // belongs to the pause either way, sent once while the job was still enabled.
+    // A newer operator edit owns enablement, so a stale pause result changes nothing.
+    if (result.parentUnavailable && ownsSchedule && previousScheduleState.enabled) {
+      // The parent conversation is gone; pause until someone re-enables the job.
+      job.enabled = false;
+      job.state.nextRunAtMs = undefined;
+      if (!opts.replay) {
+        // The gone conversation cannot accept the notice; its owning agent gets it instead.
+        const notice = cronNotificationJob(job);
+        const { agentId } = resolveCronNotificationQueueOwner(notice, "auto-disabled");
+        const { sessionKey, ...ownerNotice } = notice;
+        opts.deferredNotifications.push({
+          kind: "auto-disabled",
+          job:
+            sessionKey === result.parentUnavailable.parentSessionKey
+              ? { ...ownerNotice, ...(agentId ? { agentId } : {}) }
+              : notice,
+          text: result.error ?? "Automation paused: its parent conversation is unavailable.",
+        });
+      }
+    }
     return shouldDelete;
   };
 
@@ -299,7 +324,17 @@ export function applyJobResult(
     job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
     job.state.forcePreservedNextRunAtMs = previousScheduleState.forcePreservedNextRunAtMs;
   } else if (!shouldDelete) {
-    if (job.schedule.kind === "event") {
+    if (
+      result.status === "error" &&
+      result.errorClassification?.kind === "permanent" &&
+      isPluginCommandCronJob(job)
+    ) {
+      // The bound plugin instance is gone for good: retire on this first refusal instead of
+      // erroring until generic auto-disable, whose re-enable advice could never help.
+      job.enabled = false;
+      job.state.nextRunAtMs = undefined;
+      job.state.startupCatchupAtMs = undefined;
+    } else if (job.schedule.kind === "event") {
       // The transferred ingress receipt owns this occurrence. A timer retry
       // would lose its immutable event and could repeat an external side effect.
       job.state.nextRunAtMs = undefined;
@@ -320,37 +355,7 @@ export function applyJobResult(
         result.endedAt + Math.max(MIN_REFIRE_GAP_MS, oneShotNextCheck.delayMs),
       );
     } else if (job.schedule.kind === "at" && isJobEnabled(job)) {
-      if (shouldRetryDisabledHeartbeatOneShot(job, result)) {
-        const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
-          consecutiveSkipped: job.state.consecutiveSkipped,
-        });
-        if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
-          if (scheduleNextRun(result.endedAt + retryDecision.backoffMs) !== undefined) {
-            state.deps.log.info(
-              {
-                jobId: job.id,
-                jobName: job.name,
-                consecutiveSkipped: retryDecision.consecutiveSkipped,
-                backoffMs: retryDecision.backoffMs,
-                nextRunAtMs: job.state.nextRunAtMs,
-              },
-              "cron: scheduling one-shot retry after disabled heartbeat",
-            );
-          }
-        } else {
-          job.enabled = false;
-          job.state.nextRunAtMs = undefined;
-          state.deps.log.warn(
-            {
-              jobId: job.id,
-              jobName: job.name,
-              consecutiveSkipped: retryDecision.consecutiveSkipped,
-              reason: retryDecision.reason,
-            },
-            "cron: disabling one-shot job after disabled heartbeat retries",
-          );
-        }
-      } else if (result.status === "ok" || result.status === "skipped") {
+      if (result.status === "ok" || result.status === "skipped") {
         // One-shot done or skipped: disable to prevent tight-loop (#11452).
         job.enabled = false;
         job.state.nextRunAtMs = undefined;

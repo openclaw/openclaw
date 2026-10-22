@@ -73,19 +73,6 @@ export type SessionManagementAction =
 
 export type SessionManagementActionKind = SessionManagementAction["kind"];
 
-export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
-  label: "",
-  sessionId: null,
-  pinned: false,
-  unread: false,
-  archived: false,
-  snoozedUntil: null,
-  category: null,
-  icon: null,
-  color: null,
-  categoryClearReturnsToGroups: false,
-};
-
 type SessionMenuActionsHost = {
   readonly updateComplete: Promise<boolean>;
   focusCurrentView(): void;

@@ -1,5 +1,6 @@
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -107,7 +108,7 @@ function loadLocalSkillTiers(
     opts?.bundledSkillsDir,
     opts?.pluginSkillsDir ?? resolvePluginSkillsDir(),
     resolveSkillsUserHomeDir(),
-    process.env.OPENCLAW_STATE_DIR,
+    resolveStateDir(),
   ]);
   const agentCacheKey = JSON.stringify([
     agentSourceKey,

@@ -39,13 +39,11 @@ suite.define(() => {
           const documentRelease = createDeferred();
           const configRelease = createDeferred();
           let reloading = false;
-          let boardRequestedAt = 0;
           let boardDocumentRequests = 0;
           let widgetHtml = buildWidgetDocument(title, "<h1>All systems ready</h1>");
           await page.route("**/__openclaw__/board/**", async (route) => {
             if (reloading) {
               boardDocumentRequests += 1;
-              boardRequestedAt = performance.now();
               documentRequested.resolve();
               await documentRelease.promise;
             }
@@ -332,16 +330,9 @@ suite.define(() => {
             const frame = page.locator(".board-widget__frame");
             await frame.waitFor({ state: "attached" });
             const warmFrame = await frame.elementHandle();
-            expect(boardDocumentRequests).toBe(0);
-            const helloReleasedAt = performance.now();
-            await gateway.resolveDeferred("connect");
-            await gateway.waitForRequest("board.get");
-            expect(await skeleton.count()).toBe(1);
+            await expect.poll(() => boardDocumentRequests).toBe(1);
             await documentRequested.promise;
-            console.log(
-              "Dashboard document request after hello release (ms)",
-              boardRequestedAt - helloReleasedAt,
-            );
+            expect(await gateway.getRequests("board.get")).toHaveLength(0);
             expect(await skeleton.count()).toBe(1);
             await page.screenshot({ path: path.join(suite.artifactDir, "before-widget.png") });
             documentRelease.resolve();
@@ -351,6 +342,8 @@ suite.define(() => {
               .getByText("All systems ready")
               .waitFor();
             await skeleton.waitFor({ state: "detached" });
+            await gateway.resolveDeferred("connect");
+            await gateway.waitForRequest("board.get");
             await gateway.resolveDeferred("board.get");
             await page.evaluate(
               () =>

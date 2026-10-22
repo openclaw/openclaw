@@ -246,7 +246,6 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
                 },
               },
               thinkingDefault: "low",
-              heartbeat: { every: "0m" },
               skipBootstrap: true,
               skills: [],
               timeoutSeconds: 240,

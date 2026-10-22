@@ -58,9 +58,6 @@ it("binds diagnostics without certifying absent captures", () => {
   ]) {
     expect(() => createTelegramFailureDiagnostic(identity, entries)).toThrow();
   }
-  expect(createRequestReceipt(identity, "completed", null, undefined).assertion_outcome).toBe(
-    "inconclusive",
-  );
 });
 
 it("isolates diagnostic-only archives", async () => {

@@ -43,10 +43,6 @@ export async function findFirstAccessibleGatewayEntrypoint(
 
 export async function resolveGatewayInstallEntrypoint(
   root: string | undefined,
-  exists: (candidate: string) => Promise<boolean> = pathExists,
 ): Promise<string | undefined> {
-  return findFirstAccessibleGatewayEntrypoint(
-    buildGatewayInstallEntrypointCandidates(root),
-    exists,
-  );
+  return findFirstAccessibleGatewayEntrypoint(buildGatewayInstallEntrypointCandidates(root));
 }

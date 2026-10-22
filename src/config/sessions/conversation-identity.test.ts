@@ -1,188 +1,141 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
-import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { conversationIdentityFromMsgContext } from "./conversation-identity-inbound.js";
 import { conversationIdentityFromSessionEntry as conversationIdentityFromCanonicalSessionEntry } from "./conversation-identity.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
 
 type LegacyDeliveryFixture = SessionEntry & {
-  route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   origin?: SessionOrigin;
   channel?: string;
-  lastAccountId?: string;
-  lastChannel?: string;
 };
 
-function conversationIdentityFromSessionEntry(entry: LegacyDeliveryFixture) {
-  return conversationIdentityFromCanonicalSessionEntry(normalizeLegacySessionEntryDelivery(entry));
-}
+const defaults = { sessionId: "session-main", updatedAt: 100, chatType: "direct" as const };
+const stored = (entry: Omit<LegacyDeliveryFixture, "sessionId" | "updatedAt">) =>
+  conversationIdentityFromCanonicalSessionEntry(
+    normalizeLegacySessionEntryDelivery({ ...defaults, ...entry }),
+  );
 
-function directEntry(peer: string) {
-  return {
-    sessionId: "session-main",
-    updatedAt: 100,
-    chatType: "direct" as const,
-    deliveryContext: {
-      channel: "reef",
-      accountId: "default",
-      to: `reef:${peer}`,
-    },
+const reefPeer = "reef:peer-b";
+const discordOrigin = { provider: "discord", accountId: "default" };
+const channelTarget = "channel:ops-room";
+const threadId = "user-context";
+const route = (channel: string, to: string, thread?: string): DeliveryContext => ({
+  channel,
+  to,
+  accountId: "default",
+  threadId: thread,
+});
+type Inbound = Parameters<typeof conversationIdentityFromMsgContext>[0];
+const liveIdentity = (ctx: Inbound["ctx"], groupResolution?: Inbound["groupResolution"]) =>
+  conversationIdentityFromMsgContext({
+    ctx: { Provider: "reef", ChatType: "direct", ...ctx },
+    groupResolution,
+  });
+
+it("rejects a peer id without an exact delivery target", () => {
+  expect(stored({ chatType: "channel", channel: "discord", groupId: "ops-room" })).toBeNull();
+});
+
+it("keeps the canonical outbound peer separate from its alias", () => {
+  const identity = stored({
+    deliveryContext: route("discord", "user:delivery-alias-456"),
     origin: {
-      provider: "reef",
-      accountId: "default",
-      nativeDirectUserId: peer,
-    },
-  };
-}
-
-describe("conversation identity", () => {
-  it("does not present a stripped peer id as an exact delivery target", () => {
-    expect(
-      conversationIdentityFromSessionEntry({
-        sessionId: "session-1",
-        updatedAt: 1,
-        chatType: "channel",
-        channel: "discord",
-        groupId: "ops-room",
-      }),
-    ).toBeNull();
-  });
-
-  it("keeps a paired canonical outbound peer separate from its delivery alias", () => {
-    const identity = conversationIdentityFromSessionEntry({
-      sessionId: "session-main",
-      updatedAt: 100,
+      ...discordOrigin,
       chatType: "direct",
-      deliveryContext: {
-        channel: "discord",
-        accountId: "default",
-        to: "user:delivery-alias-456",
-      },
-      origin: {
-        provider: "discord",
-        accountId: "default",
-        chatType: "direct",
-        from: "discord:canonical-peer-123",
-        to: "user:delivery-alias-456",
-        nativeDirectUserId: "canonical-peer-123",
-      },
-    });
-
-    expect(identity).toMatchObject({
-      channel: "discord",
-      deliveryTarget: "user:delivery-alias-456",
+      from: "discord:canonical-peer-123",
+      to: "user:delivery-alias-456",
       nativeDirectUserId: "canonical-peer-123",
-      peerId: "canonical-peer-123",
-    });
-    expect(identity?.conversationRef).toBe("conv_a97f28e8d3dd98471fb5d4127b1e8635");
+    },
   });
 
-  it("keeps fallback origin targets paired with their origin channel", () => {
-    const identity = conversationIdentityFromSessionEntry({
-      sessionId: "session-main",
-      updatedAt: 100,
-      chatType: "direct",
-      channel: "discord",
-      origin: {
-        provider: "reef",
-        accountId: "work",
-        from: "reef:peer-b",
-      },
-    });
+  expect(identity).toMatchObject({
+    conversationRef: "conv_a97f28e8d3dd98471fb5d4127b1e8635",
+    channel: "discord",
+    deliveryTarget: "user:delivery-alias-456",
+    nativeDirectUserId: "canonical-peer-123",
+    peerId: "canonical-peer-123",
+  });
+});
 
-    expect(identity).toMatchObject({
-      accountId: "work",
-      channel: "reef",
-      deliveryTarget: "reef:peer-b",
-      peerId: "peer-b",
-    });
+it("keeps fallback origin targets paired with their origin channel", () => {
+  const identity = stored({
+    channel: "discord",
+    origin: { provider: "reef", accountId: "work", from: reefPeer },
   });
 
-  it("derives live direct identity from the exact reply target, not native metadata", () => {
-    const identity = conversationIdentityFromMsgContext({
-      ctx: {
-        Provider: "reef",
-        ChatType: "direct",
-        From: "reef:peer-b",
-        OriginatingTo: "reef:self",
-        NativeDirectUserId: "peer-a",
-      },
-    });
+  expect(identity).toMatchObject({
+    accountId: "work",
+    channel: "reef",
+    deliveryTarget: reefPeer,
+    peerId: "peer-b",
+  });
+});
 
-    expect(identity).toMatchObject({
-      deliveryTarget: "reef:peer-b",
+it.each([
+  {
+    name: "live sender overrides native metadata",
+    ctx: { From: reefPeer, OriginatingTo: "reef:self", NativeDirectUserId: "peer-a" },
+    expected: {
       nativeDirectUserId: "peer-a",
-      peerId: "peer-b",
-    });
-    expect(identity?.conversationRef).toBe(
-      conversationIdentityFromSessionEntry(directEntry("peer-b"))?.conversationRef,
-    );
+      conversationRef: stored({
+        deliveryContext: route("reef", reefPeer),
+        origin: { provider: "reef", accountId: "default", nativeDirectUserId: "peer-b" },
+      })?.conversationRef,
+    },
+  },
+  {
+    name: "heartbeat uses the origin, not execution sender",
+    ctx: {
+      From: "reef:owner",
+      To: "reef:owner",
+      InternalTurnSource: "heartbeat",
+      OriginatingChannel: "reef",
+      OriginatingTo: reefPeer,
+      AccountId: "work",
+      MessageThreadId: "thread-b",
+    },
+    expected: { kind: "direct", accountId: "work", threadId: "thread-b" },
+  },
+] as const)("$name", ({ ctx, expected }) => {
+  expect(liveIdentity(ctx)).toMatchObject({
+    deliveryTarget: reefPeer,
+    peerId: "peer-b",
+    ...expected,
   });
+});
 
-  it.each(["heartbeat"] as const)(
-    "binds synthetic %s metadata to its originating direct route, not its execution sender",
-    (source) => {
-      const identity = conversationIdentityFromMsgContext({
-        ctx: {
-          Provider: "reef",
-          ChatType: "direct",
-          From: "reef:owner",
-          To: "reef:owner",
-          InternalTurnSource: source,
-          OriginatingChannel: "reef",
-          OriginatingTo: "reef:peer-b",
-          AccountId: "work",
-          MessageThreadId: "thread-b",
-        },
-      });
-      expect(identity).toMatchObject({
-        kind: "direct",
-        accountId: "work",
-        deliveryTarget: "reef:peer-b",
-        peerId: "peer-b",
-        threadId: "thread-b",
-      });
+it("matches live and persisted thread addresses", () => {
+  const persisted = stored({
+    chatType: "channel",
+    groupId: "ops-room",
+    deliveryContext: route("discord", channelTarget, threadId),
+    origin: { ...discordOrigin, nativeChannelId: "ops-room" },
+  });
+  const live = liveIdentity(
+    {
+      Provider: "discord",
+      AccountId: "default",
+      ChatType: "channel",
+      From: "discord:channel:ops-room",
+      OriginatingTo: channelTarget,
+      NativeChannelId: "ops-room",
+      MessageThreadId: threadId,
+      ThreadParentId: "unpersisted-parent-id",
+    },
+    {
+      key: "discord:channel:ops-room",
+      channel: "discord",
+      id: "ops-room",
+      chatType: "channel",
     },
   );
 
-  it("derives the same threaded address from live and persisted route facts", () => {
-    const persisted = conversationIdentityFromSessionEntry({
-      sessionId: "thread-session",
-      updatedAt: 100,
-      chatType: "channel",
-      groupId: "ops-room",
-      deliveryContext: {
-        channel: "discord",
-        accountId: "default",
-        to: "channel:ops-room",
-        threadId: "user-context",
-      },
-      origin: { provider: "discord", accountId: "default", nativeChannelId: "ops-room" },
-    });
-    const live = conversationIdentityFromMsgContext({
-      ctx: {
-        Provider: "discord",
-        AccountId: "default",
-        ChatType: "channel",
-        From: "discord:channel:ops-room",
-        OriginatingTo: "channel:ops-room",
-        NativeChannelId: "ops-room",
-        MessageThreadId: "user-context",
-        ThreadParentId: "unpersisted-parent-id",
-      },
-      groupResolution: {
-        key: "discord:channel:ops-room",
-        channel: "discord",
-        id: "ops-room",
-        chatType: "channel",
-      },
-    });
-
-    expect(live?.conversationRef).toBe(persisted?.conversationRef);
-    expect(live?.deliveryTarget).toBe("channel:ops-room");
-    expect(persisted?.deliveryTarget).toBe("channel:ops-room");
-    expect(live?.parentConversationRef).toBeUndefined();
+  expect(live).toMatchObject({
+    conversationRef: persisted?.conversationRef,
+    deliveryTarget: channelTarget,
   });
+  expect(persisted).toMatchObject({ deliveryTarget: channelTarget });
+  expect(live?.parentConversationRef).toBeUndefined();
 });

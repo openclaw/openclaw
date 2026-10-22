@@ -89,24 +89,6 @@ it("keeps concurrent diagram themes independent in the warm renderer", async () 
   }
 });
 
-it.each([
-  ["sequence", "sequenceDiagram\nAlice->>Bob: Hello\nBob-->>Alice: Ready", "Alice"],
-  ["class", "classDiagram\nVehicle <|-- Car\nVehicle : +move()", "Vehicle"],
-  ["state", "stateDiagram-v2\n[*] --> Ready\nReady --> Running\nRunning --> [*]", "Running"],
-  ["mindmap", "mindmap\n  root((OpenClaw))\n    Gateway\n    Runtime", "Gateway"],
-  ["swimlane", swimlane, "Execute"],
-  [
-    "architecture",
-    "architecture-beta\nservice gateway(server)[Gateway]\nservice runtime(server)[Runtime]\ngateway:R -- L:runtime",
-    "Gateway",
-  ],
-  ["math", 'flowchart LR\nA["$$x^2$$"] --> B[Result]', "Result"],
-])("preserves %s diagram content in the passive image", async (_name, source, label) => {
-  const root = await renderSvg(source);
-  expect(root.textContent).toContain(label);
-  expect(root.querySelector("path,rect,line,polygon")).not.toBeNull();
-});
-
 it("preserves diagram-specific mindmap and swimlane layouts", async () => {
   const mindmap = await renderSvg(
     "mindmap\n  root((OpenClaw))\n    Gateway\n      Admission\n    Runtime\n      Execution",

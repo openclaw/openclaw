@@ -83,7 +83,7 @@ suite.define(() => {
     for (const name of ["Back", "Forward"]) {
       await expect.poll(() => toolbar.getByRole("button", { name }).isVisible()).toBe(true);
     }
-    for (const name of ["Expand sidebar", "Open command palette", "New session"]) {
+    for (const name of ["Expand sidebar", "Command palette", "New session"]) {
       await expect.poll(() => toolbar.getByRole("button", { name }).count()).toBe(0);
     }
   });
