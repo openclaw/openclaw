@@ -63,6 +63,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/skills-store.conformance.test.ts",
   "src/infra/database-engine/update-run-admission.conformance.test.ts",
   "src/infra/database-engine/update-run-interruption.conformance.test.ts",
+  "src/infra/database-engine/apns-deletion.conformance.test.ts",
   "src/infra/database-engine/web-push-store.conformance.test.ts",
   "src/infra/database-engine/mixed-agent-readers.conformance.test.ts",
   "src/infra/database-engine/mixed-agent-lifecycle.conformance.test.ts",
