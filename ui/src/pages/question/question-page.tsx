@@ -95,10 +95,16 @@ function createQuestionPage(
       rememberPanelFocus();
       // Keep successive native writes in one turn on a single lookup.
       queueMicrotask(() => {
-        if (operationGeneration !== generation) return;
-        if (!id) failRead("unavailable");
-        else if (clientOwner) void loadQuestion(clientOwner, id);
-        else beginRead();
+        if (operationGeneration !== generation) {
+          return;
+        }
+        if (!id) {
+          failRead("unavailable");
+        } else if (clientOwner) {
+          void loadQuestion(clientOwner, id);
+        } else {
+          beginRead();
+        }
       });
     });
     const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);
@@ -372,7 +378,9 @@ function QuestionPageContent(
   function ReadyFrame() {
     const ready = createMemo(() =>
       page.request().completion.then((error) => {
-        if (error) throw new QuestionReadError(error);
+        if (error) {
+          throw new QuestionReadError(error);
+        }
         return true;
       }),
     );

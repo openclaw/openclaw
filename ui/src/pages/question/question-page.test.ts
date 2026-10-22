@@ -157,7 +157,7 @@ it("loads only the final question when native IDs change in one turn", async () 
 
   page.questionId = "q2";
   page.questionId = "q3";
-  await settle(page);
+  await waitForSolid(() => expect(page.textContent).toContain("q3"));
   await questionPanelIn(page);
 
   expect(request.mock.calls.map(([, params]) => params)).toEqual([{ id: "q1" }, { id: "q3" }]);
@@ -180,8 +180,8 @@ it("releases a held lookup when the native question ID changes", async () => {
   page.questionId = "q2";
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
   currentQuestion.resolve({ question: question("q2") });
+  await waitForSolid(() => expect(page.textContent).toContain("q2"));
   await questionPanelIn(page);
-  expect(page.textContent).toContain("q2");
   expect(page.querySelector("main")?.getAttribute("aria-busy")).toBe("false");
 
   oldQuestion.reject(new Error("retired lookup"));
