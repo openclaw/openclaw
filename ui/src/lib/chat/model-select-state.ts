@@ -159,6 +159,41 @@ function resolveCatalogChatModelValue(value: string, options: ChatModelSelectOpt
   return value;
 }
 
+function buildChatModelOptions(
+  catalog: ModelCatalogEntry[],
+  displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
+): ChatModelSelectOption[] {
+  const seen = new Set<string>();
+  const options: ChatModelSelectOption[] = [];
+
+  for (const entry of catalog.toSorted(
+    (left, right) =>
+      Number(left.available === false) - Number(right.available === false) ||
+      Number(left.provider.trim().toLowerCase() !== normalizeChatModelProviderId(left.provider)) -
+        Number(
+          right.provider.trim().toLowerCase() !== normalizeChatModelProviderId(right.provider),
+        ),
+  )) {
+    if (entry.manualSelectionAllowed === false) {
+      continue;
+    }
+    const option = buildChatModelOptionFromLookup(entry, displayLookup);
+    const value = option.value.trim();
+    const key = value.toLowerCase();
+    if (!value || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    options.push({
+      ...option,
+      ...(entry.available === false
+        ? { disabled: true, unavailableReason: entry.unavailableReason }
+        : {}),
+    });
+  }
+  return options;
+}
+
 export function resolveChatModelUnavailableReason(
   model: string | null | undefined,
   provider: string | null | undefined,
@@ -225,34 +260,7 @@ export function resolveChatModelSelectState(state: ChatModelSelectStateInput) {
     (entry) => entry.available !== false || !availableKeys.has(catalogModelAvailabilityKey(entry)),
   );
   const displayLookup = buildCatalogDisplayLookup(pickerCatalog);
-  const seen = new Set<string>();
-  const options: ChatModelSelectOption[] = [];
-
-  for (const entry of pickerCatalog.toSorted(
-    (left, right) =>
-      Number(left.available === false) - Number(right.available === false) ||
-      Number(left.provider.trim().toLowerCase() !== normalizeChatModelProviderId(left.provider)) -
-        Number(
-          right.provider.trim().toLowerCase() !== normalizeChatModelProviderId(right.provider),
-        ),
-  )) {
-    if (entry.manualSelectionAllowed === false) {
-      continue;
-    }
-    const option = buildChatModelOptionFromLookup(entry, displayLookup);
-    const value = option.value.trim();
-    const key = value.toLowerCase();
-    if (!value || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    options.push({
-      ...option,
-      ...(entry.available === false
-        ? { disabled: true, unavailableReason: entry.unavailableReason }
-        : {}),
-    });
-  }
+  const options = buildChatModelOptions(pickerCatalog, displayLookup);
   const currentOverride = resolveCatalogChatModelValue(
     resolveChatModelOverrideValue(state),
     options,
@@ -358,6 +366,20 @@ function resolveFastModeProvider(
   return hasCatalogMatch ? null : (sessionProvider ?? defaultProvider);
 }
 
+function isChatStandardOnlySpeed(
+  entry: Pick<ModelRuntimeEntry, "supportsFastMode" | "serviceTiers"> | undefined,
+  canRecoverRejectedTier: boolean,
+): boolean {
+  return (
+    entry?.serviceTiers !== undefined &&
+    !entry.serviceTiers.some((tier) => tier === "priority" || tier === "ultrafast") &&
+    (canRecoverRejectedTier ||
+      (entry.supportsFastMode === false &&
+        entry.serviceTiers.length === 1 &&
+        entry.serviceTiers[0] === "default"))
+  );
+}
+
 export function resolveChatFastModeSelectState(
   input: ChatFastModeSelectStateInput,
 ): ChatFastModeSelectState {
@@ -414,14 +436,8 @@ export function resolveChatFastModeSelectState(
   const canRecoverRejectedTier = everySelected(
     ({ runtime }) => runtime?.supportsServiceTierRecovery === true,
   );
-  const standardOnly = everySelected(
-    ({ runtime }) =>
-      runtime?.serviceTiers !== undefined &&
-      !runtime.serviceTiers.some((tier) => tier === "priority" || tier === "ultrafast") &&
-      (canRecoverRejectedTier ||
-        (runtime.supportsFastMode === false &&
-          runtime.serviceTiers.length === 1 &&
-          runtime.serviceTiers[0] === "default")),
+  const standardOnly = everySelected(({ runtime }) =>
+    isChatStandardOnlySpeed(runtime, canRecoverRejectedTier),
   );
   const ultrafastUnavailable = everySelected(
     ({ runtime }) =>

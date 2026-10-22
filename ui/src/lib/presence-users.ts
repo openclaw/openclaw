@@ -96,6 +96,18 @@ export function presenceActivityLabel(activity: PresenceActivity): string {
   );
 }
 
+function comparePresenceViewers(a: PresenceViewer, b: PresenceViewer, now: number): number {
+  const order = { active: 0, idle: 1, unknown: 2 };
+  const activityOrder =
+    order[presenceViewerActivity(a, now)] - order[presenceViewerActivity(b, now)];
+  if (activityOrder !== 0) {
+    return activityOrder;
+  }
+  const labelA = presenceViewerLabel(a).toLowerCase();
+  const labelB = presenceViewerLabel(b).toLowerCase();
+  return compareText(labelA, labelB) || compareText(presenceUserKey(a), presenceUserKey(b));
+}
+
 export function presenceMatchesProfile(
   user: PresenceViewer,
   identity?: SessionParticipantIdentity,
@@ -126,17 +138,7 @@ export function projectPresenceViewers(
 
 export function projectOnlinePresenceViewers(value: unknown): readonly PresenceViewer[] {
   const now = Date.now();
-  return projectPresencePayload(value).users.toSorted((a, b) => {
-    const order = { active: 0, idle: 1, unknown: 2 };
-    const activityOrder =
-      order[presenceViewerActivity(a, now)] - order[presenceViewerActivity(b, now)];
-    if (activityOrder !== 0) {
-      return activityOrder;
-    }
-    const labelA = presenceViewerLabel(a).toLowerCase();
-    const labelB = presenceViewerLabel(b).toLowerCase();
-    return compareText(labelA, labelB) || compareText(presenceUserKey(a), presenceUserKey(b));
-  });
+  return projectPresencePayload(value).users.toSorted((a, b) => comparePresenceViewers(a, b, now));
 }
 
 export function hasSessionPresenceViewers(

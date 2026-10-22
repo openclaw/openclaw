@@ -242,6 +242,36 @@ type ConfiguredModelOption = {
   disabled?: boolean;
 };
 
+function resolveConfiguredModels(
+  configForm: Record<string, unknown> | null,
+  agentId?: string,
+): ConfiguredModelOption[] {
+  const defaultModels = (configForm as ConfigSnapshot | null)?.agents?.defaults?.models;
+  const agentModels = agentId ? resolveAgentConfig(configForm, agentId)?.entry?.models : undefined;
+  const modelIds = Object.keys({ ...defaultModels, ...agentModels });
+  const options: ConfiguredModelOption[] = [];
+  for (const modelId of modelIds) {
+    const trimmed = modelId.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const defaultMetadata = defaultModels?.[modelId];
+    const agentMetadata = agentModels?.[modelId];
+    const alias =
+      agentMetadata?.alias !== undefined
+        ? (normalizeOptionalString(agentMetadata.alias) ?? "")
+        : normalizeOptionalString(defaultMetadata?.alias);
+    const separator = trimmed.indexOf("/");
+    options.push({
+      value: trimmed,
+      label: alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed,
+      provider: separator > 0 ? trimmed.slice(0, separator) : undefined,
+      alias,
+    });
+  }
+  return options;
+}
+
 /** Resolve primary exclusions from the current draft without changing authored fallback identity. */
 export function createPrimaryModelExclusion(
   configForm: Record<string, unknown> | null,
@@ -336,29 +366,7 @@ export function buildModelOptions(
   const seen = new Set<string>();
   const options: ConfiguredModelOption[] = [];
   const catalogOptions = new Map<string, ConfiguredModelOption>();
-  const defaultModels = (configForm as ConfigSnapshot | null)?.agents?.defaults?.models;
-  const agentModels = agentId ? resolveAgentConfig(configForm, agentId)?.entry?.models : undefined;
-  const modelIds = Object.keys({ ...defaultModels, ...agentModels });
-  const configuredOptions: ConfiguredModelOption[] = [];
-  for (const modelId of modelIds) {
-    const trimmed = modelId.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const defaultMetadata = defaultModels?.[modelId];
-    const agentMetadata = agentModels?.[modelId];
-    const alias =
-      agentMetadata?.alias !== undefined
-        ? (normalizeOptionalString(agentMetadata.alias) ?? "")
-        : normalizeOptionalString(defaultMetadata?.alias);
-    const separator = trimmed.indexOf("/");
-    configuredOptions.push({
-      value: trimmed,
-      label: alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed,
-      provider: separator > 0 ? trimmed.slice(0, separator) : undefined,
-      alias,
-    });
-  }
+  const configuredOptions = resolveConfiguredModels(configForm, agentId);
   const addOption = (option: ConfiguredModelOption) => {
     const key = normalizeAgentModelRefForConfig(option.value);
     if (seen.has(key)) {
