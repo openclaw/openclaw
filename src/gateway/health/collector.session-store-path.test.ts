@@ -160,7 +160,7 @@ function createReadGate() {
         await pending?.catch(() => {});
       }
     },
-    finish<P extends Promise<unknown>>(pending: P, change: () => void): Promise<Awaited<P>> {
+    finish<T>(pending: Promise<T>, change: () => void): Promise<T> {
       return this.run(pending, async (resume) => {
         change();
         resume();
