@@ -27,11 +27,11 @@ function sseResponse(
   const response = new Response(
     new ReadableStream<Uint8Array>({
       pull(controller) {
-        if (index === lines.length) {
+        const line = lines[index++];
+        if (line === undefined) {
           controller.close();
           return;
         }
-        const line = lines[index++];
         controller.enqueue(typeof line === "string" ? encoder.encode(line) : line);
       },
     }),

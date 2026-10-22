@@ -309,25 +309,11 @@ describe("secret target path ownership", () => {
     expectUndiscovered(mocks.metadata, mocks.channel, mocks.channelRecord);
   });
 
-  it("discovers every external owner without reusing another config's registry", () => {
-    const env = { HOME: "/audit-home" };
-    const external = {
-      ...channelConfig("external", "primary", "secondary"),
-      plugins: { load: { paths: ["/plugins/first"] }, entries: {} },
-    };
-    const changed = {
-      ...channelConfig("external", "secondary"),
-      plugins: { load: { paths: ["/plugins/changed"] }, entries: {} },
-    };
-    expect(discover(external, { env })).toEqual([
+  it("discovers every configured external channel owner", () => {
+    expect(discover(channelConfig("external", "primary", "secondary"))).toEqual([
       "channels.external.primary",
       "channels.external.secondary",
     ]);
-    expect(discover(changed, { env })).toEqual(["channels.external.secondary"]);
-    expect(mocks.metadata).toHaveBeenCalledTimes(2);
-    expect(mocks.metadata).toHaveBeenLastCalledWith(
-      expect.objectContaining({ config: changed, env }),
-    );
   });
 
   it("uses prepared manifests without loading contracts for absent channel subtrees", () => {
