@@ -7,6 +7,7 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { startBrowserAuthRecovery } from "./browser-auth-recovery.tsx";
 import { fetchControlUiResource } from "./browser-http.ts";
 
+// mock-isolation: Simulate a failed lazy download before the module has any exports.
 vi.mock("./browser-auth-recovery-dialog.tsx", () => {
   throw new Error("Synthetic sign-in dialog chunk unavailable");
 });

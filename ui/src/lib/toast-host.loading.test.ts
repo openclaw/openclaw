@@ -6,6 +6,7 @@ import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { showToast } from "./toast.ts";
 import "./toast-host.tsx";
 
+// mock-isolation: Simulate a failed lazy download before the module has any exports.
 vi.mock("./toast-view.tsx", () => {
   throw new Error("Synthetic toast chunk unavailable");
 });
