@@ -1,22 +1,17 @@
-import type { TSchema } from "typebox";
-import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
-import {
-  SessionMemberAddParamsSchema,
-  SessionMembersListEvidenceResultSchema,
-  SessionMembersListResultSchema,
-  SessionSharingEvidenceEventSchema,
-  SessionSharingEventSchema,
-  SessionVisibilitySetParamsSchema,
-} from "./sessions-sharing.js";
+import { describe, it } from "vitest";
+import { schemaValidation } from "./protocol-validation.test-support.js";
+import * as S from "./sessions-sharing.js";
 
-function check(schema: TSchema, expected: boolean, value: unknown) {
-  expect(Value.Check(schema, value)).toBe(expected);
-}
+const visibility = schemaValidation(S.SessionVisibilitySetParamsSchema);
+const members = schemaValidation(S.SessionMembersListResultSchema);
+const evidence = schemaValidation(S.SessionMembersListEvidenceResultSchema);
+const event = schemaValidation(S.SessionSharingEventSchema);
+const evidenceEvent = schemaValidation(S.SessionSharingEvidenceEventSchema);
+const target = { sessionKey: "agent:main:main" };
 
 const baseEvent = {
   action: "visibility",
-  sessionKey: "agent:main:main",
+  ...target,
   agentId: "main",
   visibility: "draft",
   ts: 1,
@@ -25,24 +20,21 @@ const baseEvent = {
 describe("session sharing protocol", () => {
   it("accepts additive visibility and membership payloads", () => {
     const list = {
-      sessionKey: "agent:main:main",
+      ...target,
       identities: [],
       role: "owner",
       allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
     };
-    check(SessionVisibilitySetParamsSchema, true, {
-      sessionKey: "agent:main:main",
-      visibility: "draft",
-    });
-    check(SessionMemberAddParamsSchema, true, {
-      sessionKey: "agent:main:main",
+    visibility.accepts({ ...target, visibility: "draft" });
+    schemaValidation(S.SessionMemberAddParamsSchema).accepts({
+      ...target,
       identityId: "alice@example.com",
     });
-    check(SessionMembersListResultSchema, true, {
+    members.accepts({
       ...list,
       members: [{ identityId: "alice", addedBy: "profile-ada", addedAt: 1 }],
     });
-    check(SessionMembersListResultSchema, false, {
+    members.rejects({
       ...list,
       members: [{ identityId: "bob", addedByState: "unknown", addedAt: 2 }],
       allowedVisibilities: [],
@@ -52,9 +44,9 @@ describe("session sharing protocol", () => {
       { identityId: "bob", addedByState: "unknown", addedAt: 2 },
       { identityId: "carol", addedAt: 3 },
     ]) {
-      check(SessionMembersListEvidenceResultSchema, true, { ...list, members: [member] });
+      evidence.accepts({ ...list, members: [member] });
     }
-    check(SessionMembersListEvidenceResultSchema, false, {
+    evidence.rejects({
       ...list,
       members: [
         { identityId: "mixed", addedBy: "profile-ada", addedByState: "unknown", addedAt: 4 },
@@ -64,21 +56,15 @@ describe("session sharing protocol", () => {
   });
 
   it("rejects unknown visibility modes", () => {
-    check(SessionVisibilitySetParamsSchema, false, {
-      sessionKey: "agent:main:main",
-      visibility: "private",
-    });
+    visibility.rejects({ ...target, visibility: "private" });
   });
 
   it("keeps the legacy event actor required", () => {
     const withActor = { ...baseEvent, actor: { type: "human", id: "profile-ada", label: "Ada" } };
     const unknownActor = { ...baseEvent, actorState: "unknown" };
-    check(SessionSharingEventSchema, true, withActor);
-    check(SessionSharingEventSchema, false, unknownActor);
-    check(SessionSharingEventSchema, false, baseEvent);
-    check(SessionSharingEventSchema, false, { ...withActor, actorState: "unknown" });
-    check(SessionSharingEvidenceEventSchema, true, unknownActor);
-    check(SessionSharingEvidenceEventSchema, true, baseEvent);
-    check(SessionSharingEvidenceEventSchema, false, withActor);
+    event.accepts(withActor);
+    event.rejects(unknownActor, baseEvent, { ...withActor, actorState: "unknown" });
+    evidenceEvent.accepts(unknownActor, baseEvent);
+    evidenceEvent.rejects(withActor);
   });
 });

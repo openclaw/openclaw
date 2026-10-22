@@ -1,69 +1,58 @@
-import type { TSchema } from "typebox";
-import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
-import {
-  SessionSuggestionEventSchema,
-  SessionSuggestionsAddParamsSchema,
-  SessionSuggestionsListResultSchema,
-  SessionSuggestionsResolveParamsSchema,
-  SessionTypingEventSchema,
-  SessionTypingParamsSchema,
-} from "./sessions-suggestions.js";
+import { describe, it } from "vitest";
+import { schemaValidation } from "./protocol-validation.test-support.js";
+import * as S from "./sessions-suggestions.js";
 
-function check(schema: TSchema, expected: boolean, value: unknown) {
-  expect(Value.Check(schema, value)).toBe(expected);
-}
+const add = schemaValidation(S.SessionSuggestionsAddParamsSchema);
+const resolve = schemaValidation(S.SessionSuggestionsResolveParamsSchema);
+const target = { sessionKey: "agent:main:main" };
 
 const suggestion = {
   id: "suggestion-1",
-  sessionKey: "agent:main:main",
+  ...target,
   agentId: "main",
   author: { type: "human", id: "alice", label: "Alice" },
   text: "Try the smaller refactor",
   createdAt: 1,
   state: "pending",
 };
-const params = { sessionKey: "agent:main:main", sessionId: "session-main", typing: true };
+const params = { ...target, sessionId: "session-main", typing: true };
 const event = { ...params, agentId: "main", actor: suggestion.author, ts: 1 };
 
 describe("session suggestions protocol", () => {
   it("accepts suggestion RPC and event payloads", () => {
-    check(SessionSuggestionsAddParamsSchema, true, {
-      sessionKey: "agent:main:main",
-      text: "Try the smaller refactor",
+    add.accepts({ ...target, text: suggestion.text });
+    resolve.accepts({ ...target, id: suggestion.id, resolution: "queue" });
+    schemaValidation(S.SessionSuggestionsListResultSchema).accepts({
+      suggestions: [suggestion],
+      role: "owner",
     });
-    check(SessionSuggestionsResolveParamsSchema, true, {
-      sessionKey: "agent:main:main",
-      id: "suggestion-1",
-      resolution: "queue",
-    });
-    check(SessionSuggestionsListResultSchema, true, { suggestions: [suggestion], role: "owner" });
-    check(SessionSuggestionEventSchema, true, { action: "added", suggestion });
-    check(SessionTypingParamsSchema, true, params);
-    check(SessionTypingEventSchema, true, event);
+    schemaValidation(S.SessionSuggestionEventSchema).accepts({ action: "added", suggestion });
+    schemaValidation(S.SessionTypingParamsSchema).accepts(params);
+    schemaValidation(S.SessionTypingEventSchema).accepts(event);
   });
 
   it("rejects empty suggestions and unknown resolutions", () => {
-    check(SessionSuggestionsAddParamsSchema, false, { sessionKey: "agent:main:main", text: "" });
-    check(SessionSuggestionsResolveParamsSchema, false, {
-      sessionKey: "agent:main:main",
-      id: "suggestion-1",
-      resolution: "accept",
-    });
+    add.rejects({ ...target, text: "" });
+    resolve.rejects({ ...target, id: suggestion.id, resolution: "accept" });
   });
 
   it("accepts optional bounded typing previews without requiring them", () => {
-    for (const cursor of [0, 4, 800]) {
-      check(SessionTypingParamsSchema, true, { ...params, preview: "draft", cursor });
-      check(SessionTypingEventSchema, true, { ...event, preview: "draft", cursor });
+    for (const [schema, base] of [
+      [S.SessionTypingParamsSchema, params],
+      [S.SessionTypingEventSchema, event],
+    ] as const) {
+      const typing = schemaValidation(schema);
+      typing.accepts(
+        ...[0, 4, 800].map((cursor) => Object.assign({}, base, { preview: "draft", cursor })),
+        {
+          ...base,
+          preview: "draft",
+        },
+      );
+      typing.rejects(...[-1, 0.5, 801, "2"].map((cursor) => Object.assign({}, base, { cursor })), {
+        ...base,
+        preview: "x".repeat(401),
+      });
     }
-    for (const cursor of [-1, 0.5, 801, "2"]) {
-      check(SessionTypingParamsSchema, false, { ...params, cursor });
-      check(SessionTypingEventSchema, false, { ...event, cursor });
-    }
-    check(SessionTypingParamsSchema, true, { ...params, preview: "draft" });
-    check(SessionTypingEventSchema, true, { ...event, preview: "draft" });
-    check(SessionTypingParamsSchema, false, { ...params, preview: "x".repeat(401) });
-    check(SessionTypingEventSchema, false, { ...event, preview: "x".repeat(401) });
   });
 });

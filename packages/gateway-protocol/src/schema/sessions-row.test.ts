@@ -13,6 +13,7 @@ const participants = (length: number) =>
 
 describe("SessionRowSchema", () => {
   it("validates optional sharing fields", () => {
+    const human = { type: "human", id: "profile-ada", label: "Ada" };
     const row = {
       ...baseRow,
       lastRunId: "run-settled",
@@ -20,15 +21,10 @@ describe("SessionRowSchema", () => {
       activeLeafEntryId: "leaf-rendered",
       parentSessionKey: "agent:main:dashboard:parent",
       parentSessionId: "sess-parent",
-      createdActor: {
-        type: "human",
-        id: "profile-ada",
-        label: "Ada",
-        avatarUrl: "/api/users/profile-ada/avatar?v=7",
-      },
+      createdActor: { ...human, avatarUrl: "/api/users/profile-ada/avatar?v=7" },
       owner: {
         actor: { type: "agent", id: "research", label: "Research" },
-        assignedBy: { type: "human", id: "profile-ada", label: "Ada" },
+        assignedBy: human,
         assignedAt: 42,
       },
       participants: [

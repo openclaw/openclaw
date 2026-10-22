@@ -32,11 +32,14 @@ const workspaceFields = {
   remoteWorkspaceDir: "/workspace/session-1",
 };
 const workerOwnedFields = { ...environmentFields, ...workspaceFields, activeOwnerEpoch: 7 };
+const key = "agent:main:dispatch";
+const expected = { generation: 4, environmentId: "environment-1", ownerEpoch: 7 };
+const moveRequest = { key, expected };
 
 describe("session dispatch protocol schemas", () => {
   it("accepts an explicit target, automatic device selection, or configured-default lookup", () => {
     const request = (target: Record<string, unknown>) => ({
-      key: "agent:main:dispatch",
+      key,
       ...target,
     });
     for (const target of [
@@ -139,11 +142,7 @@ describe("session dispatch protocol schemas", () => {
   });
 
   it("accepts explicit abandonment only for a Gateway target", () => {
-    const request = {
-      key: "agent:main:dispatch",
-      expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
-      abandonSource: true,
-    };
+    const request = { ...moveRequest, abandonSource: true };
     acceptsParams(validateSessionsMoveParams, { ...request, target: { kind: "gateway" } });
     rejectsParams(validateSessionsMoveParams, {
       ...request,
@@ -163,10 +162,7 @@ describe("session dispatch protocol schemas", () => {
   it("bounds move source and target identifiers", () => {
     const accepted = "x".repeat(256);
     const rejected = "x".repeat(257);
-    const request = {
-      key: "agent:main:dispatch",
-      expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
-    };
+    const request = moveRequest;
     acceptsParams(validateSessionsMoveParams, {
       ...request,
       expected: { ...request.expected, environmentId: accepted },
@@ -228,7 +224,6 @@ describe("session dispatch protocol schemas", () => {
   });
 
   it("validates projected retries with the same source and target constraints as Move requests", () => {
-    const expected = { generation: 4, environmentId: "environment-1", ownerEpoch: 7 };
     const retries = [
       { expected, target: { kind: "gateway" } },
       { expected, target: { kind: "gateway" }, abandonSource: true },

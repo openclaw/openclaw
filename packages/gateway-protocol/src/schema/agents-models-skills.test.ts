@@ -1,4 +1,3 @@
-// Gateway Protocol tests cover agents models skills behavior.
 import { Value } from "typebox/value";
 import { expect, it } from "vitest";
 import {
@@ -192,22 +191,7 @@ it("ToolsEffectiveResultSchema: keeps tool quarantine notices strict", () => {
   const result = {
     agentId: "main",
     profile: "full",
-    groups: [
-      {
-        id: "core",
-        label: "Built-in tools",
-        source: "core",
-        tools: [
-          {
-            id: "exec",
-            label: "Exec",
-            description: "Run shell commands",
-            rawDescription: "Run shell commands",
-            source: "core",
-          },
-        ],
-      },
-    ],
+    groups: [],
     notices: [
       {
         id: "unsupported-tool-schema:fuzzplugin_move_angles",

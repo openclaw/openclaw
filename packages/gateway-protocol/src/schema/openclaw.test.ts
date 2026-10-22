@@ -158,17 +158,21 @@ describe("OpenClaw setup detection protocol", () => {
   });
 
   it("accepts additive presentation metadata and older results without installs", () => {
+    const brand = {
+      brandId: "ollama",
+      label: "Ollama",
+      icon: "https://cdn.simpleicons.org/ollama",
+      website: "https://ollama.com/download",
+    };
+    const brandedOption = { id: "ollama", ...brand };
     const result = {
       candidates: [
         {
+          ...brand,
           kind: "provider-auto:ollama",
-          brandId: "ollama",
-          label: "Ollama",
           detail: "available locally",
           modelRef: "ollama/qwen3",
           recommended: false,
-          icon: "https://cdn.simpleicons.org/ollama",
-          website: "https://ollama.com/download",
         },
       ],
       unavailableCandidates: [
@@ -182,16 +186,7 @@ describe("OpenClaw setup detection protocol", () => {
           manualProviderId: "gemini-api-key",
         },
       ],
-      manualProviders: [
-        {
-          id: "ollama",
-          brandId: "ollama",
-          groupLabel: "Ollama",
-          label: "Ollama",
-          icon: "https://cdn.simpleicons.org/ollama",
-          website: "https://ollama.com/download",
-        },
-      ],
+      manualProviders: [{ ...brandedOption, groupLabel: "Ollama" }],
       authOptions: [
         {
           id: "meta-api-key",
@@ -209,26 +204,9 @@ describe("OpenClaw setup detection protocol", () => {
         },
       ],
       prepareOptions: [
-        {
-          id: "lmstudio",
-          brandId: "lmstudio",
-          label: "LM Studio",
-          hint: "Local/self-hosted LM Studio server",
-          actionLabel: "Connect server",
-          icon: "https://cdn.simpleicons.org/lmstudio",
-          website: "https://lmstudio.ai/download",
-        },
+        { ...brandedOption, hint: "Local/self-hosted server", actionLabel: "Connect server" },
       ],
-      recommendedInstalls: [
-        {
-          id: "ollama",
-          brandId: "ollama",
-          label: "Ollama",
-          hint: "Run open models locally",
-          website: "https://ollama.com/download",
-          icon: "https://cdn.simpleicons.org/ollama",
-        },
-      ],
+      recommendedInstalls: [{ ...brandedOption, hint: "Run open models locally" }],
       nativeSessionCatalogs: [
         {
           pluginId: "codex",
