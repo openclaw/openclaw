@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
@@ -105,9 +106,12 @@ describe("loadChatRoute", () => {
       } else {
         context.gateway.snapshot.selfUser = { id: "second" };
       }
-      request.mockImplementation(async (_method, params) =>
-        params.shortId ? resolvedRow(replacementKey) : { ok: false },
-      );
+      request.mockImplementation(async (_method, params) => {
+        if (!isRecord(params)) {
+          throw new Error("Missing resolution parameters");
+        }
+        return params.shortId ? resolvedRow(replacementKey) : { ok: false };
+      });
       const loaded = await route.loader!(scopedContext, {
         location,
         deps: route.loaderDeps!(scopedContext, location),
@@ -146,14 +150,17 @@ describe("loadChatRoute", () => {
     async (reference) => {
       const { request, router, scopedContext } = await mountedSession(reference);
       expect(router.getState().matches[0]?.data).toMatchObject({ sessionKey });
-      request.mockImplementation(async (_method, params) =>
-        params.reference &&
-        typeof params.reference === "object" &&
-        "key" in params.reference &&
-        params.reference.key === sessionKey
+      request.mockImplementation(async (_method, params) => {
+        if (!isRecord(params)) {
+          throw new Error("Missing resolution parameters");
+        }
+        return params.reference &&
+          typeof params.reference === "object" &&
+          "key" in params.reference &&
+          params.reference.key === sessionKey
           ? { ok: false }
-          : resolvedRow(replacementKey),
-      );
+          : resolvedRow(replacementKey);
+      });
       await router.revalidate(scopedContext, "chat");
       expect(router.getState().matches[0]?.data).toMatchObject({ kind: "missing-session" });
       expect(request).toHaveBeenLastCalledWith(
