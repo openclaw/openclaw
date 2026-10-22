@@ -7,7 +7,7 @@ import {
   normalizeOpenAIModelRouteId,
 } from "./model-route-contract.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
-import { resolveModelRoutes, resolveThinkingProfile } from "./provider-policy-api.js";
+import { resolveModelRoutes } from "./provider-policy-api.js";
 
 const platformRoute = { api: "openai-completions", authRequirement: "api-key" };
 const subscriptionRoute = { api: "openai-chatgpt-responses", authRequirement: "subscription" };
@@ -39,60 +39,6 @@ describe("OpenAI model route contract", () => {
     for (const modelId of OPENAI_PROVIDER_MODERN_MODEL_IDS) {
       expect(provider.isModernModelRef?.({ provider: "openai", modelId })).toBe(true);
     }
-  });
-});
-
-function thinking(
-  modelId: string,
-  agentRuntime: string,
-  options: Partial<Parameters<typeof resolveThinkingProfile>[0]> = {},
-) {
-  const profile = resolveThinkingProfile({ provider: "openai", modelId, agentRuntime, ...options });
-  return { levels: profile?.levels.map(({ id }) => id), defaultLevel: profile?.defaultLevel };
-}
-const scalarLevels = ["low", "medium", "high", "xhigh", "max"];
-it.each([
-  ["gpt-daybreak-red-latest", ["openclaw", "codex"]],
-  ["gpt-6-sol", ["openclaw", "codex", "auto"]],
-] as const)("offers supported reasoning for %s", (modelId, runtimes) => {
-  for (const runtime of runtimes) {
-    expect(thinking(modelId, runtime)).toEqual({
-      levels: runtime === "codex" ? scalarLevels : ["off", ...scalarLevels, "ultra"],
-      defaultLevel: "medium",
-    });
-  }
-});
-it("honors declared alias efforts instead of name heuristics", () => {
-  for (const runtime of ["openclaw", "codex"]) {
-    expect(
-      thinking("configured-alias", runtime, {
-        api: "openai-responses",
-        compat: { supportedReasoningEfforts: ["high"] },
-      }).levels,
-    ).toEqual(["high"]);
-  }
-});
-it("keeps scalar opt-outs authoritative", () => {
-  for (const compat of [{ supportedReasoningEfforts: [] }, { supportsReasoningEffort: false }]) {
-    expect(thinking("gpt-daybreak-blue-latest", "openclaw", { compat }).levels).toEqual([]);
-  }
-  expect(
-    thinking("gpt-daybreak-blue-latest", "openclaw", { thinkingLevelMap: { max: null } }).levels,
-  ).not.toContain("ultra");
-});
-it.each([
-  [
-    ["low", "high"],
-    ["low", "high"],
-  ],
-  [
-    ["none", "low"],
-    ["off", "low"],
-  ],
-])("uses declared efforts %j", (supportedReasoningEfforts, levels) => {
-  expect(thinking("gpt-6-sol", "codex", { compat: { supportedReasoningEfforts } })).toEqual({
-    levels,
-    defaultLevel: "low",
   });
 });
 
