@@ -6,9 +6,15 @@ import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness
 import * as providerFailover from "../../plugins/provider-failover.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 
-const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }));
+const { emitAgentEvent, registerAgentEventLifecycleRotationHandler } = vi.hoisted(() => ({
+  emitAgentEvent: vi.fn(),
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
+}));
 
-vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
+vi.mock("../../infra/agent-events.js", () => ({
+  emitAgentEvent,
+  registerAgentEventLifecycleRotationHandler,
+}));
 
 describe("createAgentLifecycleTerminalBackstop", () => {
   beforeEach(() => emitAgentEvent.mockClear());
