@@ -57,63 +57,13 @@ describe("OpenAI provider usage", () => {
     expect(result).toEqual({ handled: true });
     expect(resolveApiKeyFromConfigAndStore).not.toHaveBeenCalled();
   });
-  it("aggregates provider-reported costs, tokens, models, and categories", async () => {
-    const fetchFn = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
-      const url = requestUrl(input);
-      if (url.pathname.endsWith("/organization/costs")) {
-        return usagePage([{ amount: { value: "12.34", currency: "usd" }, line_item: "Responses" }]);
-      }
-      return usagePage([
-        {
-          input_tokens: 1_000,
-          input_cached_tokens: 400,
-          output_tokens: 250,
-          num_model_requests: 8,
-          model: "gpt-5.5",
-        },
-      ]);
-    });
-
-    const result = await fetchAdminUsage(fetchFn, "proj_test");
-
-    const tokens = {
-      requests: 8,
-      inputTokens: 600,
-      cacheReadTokens: 400,
-      cacheWriteTokens: 0,
-      outputTokens: 250,
-      totalTokens: 1_250,
-    };
-    expect(result).toEqual({
-      provider: "openai",
-      displayName: "OpenAI",
-      windows: [],
-      plan: "Admin API · proj_test",
-      billing: [
-        { type: "spend", label: "30-day API spend", amount: 12.34, unit: "USD", period: "30d" },
-      ],
-      costHistory: {
-        unit: "USD",
-        periodDays: 30,
-        scope: "Project proj_test",
-        daily: [{ date: "2026-07-06", amount: 12.34, ...tokens }],
-        models: [{ name: "gpt-5.5", ...tokens }],
-        categories: [{ name: "Responses", amount: 12.34 }],
-      },
-      summary: "8 requests · 1,250 tokens",
-    });
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    for (const [input, init] of fetchFn.mock.calls) {
-      const url = requestUrl(input);
-      expect(url.searchParams.get("project_ids")).toBe("proj_test");
-      expect(url.searchParams.get("bucket_width")).toBe("1d");
-      expect((init as RequestInit).headers).toMatchObject({
-        Authorization: "Bearer sk-admin-test",
-      });
-    }
-  });
-
   it.each([
+    {
+      name: "project costs and cached tokens",
+      usage: { input_tokens: 1_000, input_cached_tokens: 400, output_tokens: 250 },
+      expected: [8, 600, 400, 0, 250, 1_250] as const,
+      projectId: "proj_test",
+    },
     {
       name: "the documented mixed-modality and cache-write response",
       // https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/completions
@@ -134,7 +84,8 @@ describe("OpenAI provider usage", () => {
         input_cached_image_tokens: 50,
         output_image_tokens: 50,
       },
-      expected: [500, 400, 100, 500, 1_500] as const,
+      expected: [5, 500, 400, 100, 500, 1_500] as const,
+      projectId: undefined,
     },
     {
       name: "audio totals without optional text or cache breakdowns",
@@ -144,27 +95,67 @@ describe("OpenAI provider usage", () => {
         output_tokens: 300,
         output_audio_tokens: 300,
       },
-      expected: [200, 0, 0, 300, 500] as const,
+      expected: [5, 200, 0, 0, 300, 500] as const,
+      projectId: undefined,
     },
-  ])("counts each token once for $name", async ({ usage, expected }) => {
-    const result = await fetchAdminUsage(async (input) =>
+  ])("aggregates $name without double-counting", async ({ usage, expected, projectId }) => {
+    const [requests, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, totalTokens] =
+      expected;
+    const model = projectId ? "gpt-5.5" : "test-model";
+    const costs = projectId
+      ? [{ amount: { value: "12.34", currency: "usd" }, line_item: "Responses" }]
+      : [];
+    const fetchFn = vi.fn(async (input: string | URL | Request, _init?: RequestInit) =>
       requestUrl(input).pathname.endsWith("/organization/costs")
-        ? Response.json({ data: [], has_more: false })
-        : usagePage([{ ...usage, num_model_requests: 5, model: "test-model" }]),
+        ? projectId
+          ? usagePage(costs)
+          : Response.json({ data: [], has_more: false })
+        : usagePage([{ ...usage, num_model_requests: requests, model }]),
     );
-
-    const [inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, totalTokens] = expected;
+    const result = await fetchAdminUsage(fetchFn, projectId);
     const tokens = {
-      requests: 5,
+      requests,
       inputTokens,
       cacheReadTokens,
       cacheWriteTokens,
       outputTokens,
       totalTokens,
     };
-    expect(result.costHistory?.daily).toEqual([{ date: "2026-07-06", amount: 0, ...tokens }]);
-    expect(result.costHistory?.models).toEqual([{ name: "test-model", ...tokens }]);
-    expect(result.summary).toBe(`5 requests · ${totalTokens.toLocaleString("en-US")} tokens`);
+    const history = {
+      daily: [{ date: "2026-07-06", amount: projectId ? 12.34 : 0, ...tokens }],
+      models: [{ name: model, ...tokens }],
+    };
+    const summary = `${requests} requests · ${totalTokens.toLocaleString("en-US")} tokens`;
+    if (projectId) {
+      expect(result).toEqual({
+        provider: "openai",
+        displayName: "OpenAI",
+        windows: [],
+        plan: "Admin API · proj_test",
+        billing: [
+          { type: "spend", label: "30-day API spend", amount: 12.34, unit: "USD", period: "30d" },
+        ],
+        costHistory: {
+          ...history,
+          unit: "USD",
+          periodDays: 30,
+          scope: "Project proj_test",
+          categories: [{ name: "Responses", amount: 12.34 }],
+        },
+        summary,
+      });
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      for (const [input, init] of fetchFn.mock.calls) {
+        const url = requestUrl(input);
+        expect(url.searchParams.get("project_ids")).toBe(projectId);
+        expect(url.searchParams.get("bucket_width")).toBe("1d");
+        expect(init?.headers).toMatchObject({ Authorization: "Bearer sk-admin-test" });
+      }
+    } else {
+      expect(result.costHistory?.daily).toEqual(history.daily);
+      expect(result.costHistory?.models).toEqual(history.models);
+      expect(result.summary).toBe(summary);
+    }
   });
 
   it("reports when organization usage rejects a non-admin key", async () => {

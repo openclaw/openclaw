@@ -43,37 +43,18 @@ describe("OpenAI model route contract", () => {
 });
 
 describe("OpenAI billing route intent", () => {
-  it.each([undefined, { runtimeId: "codex", source: "inherited" } as const])(
-    "keeps subscription eligible with a legacy official Completions adapter (%j)",
-    (routeIntent) => {
-      expect(
-        resolveBilling({
-          configuredProvider: { ...completions, baseUrl: "https://api.openai.com/v1" },
-          routeIntent,
-        }),
-      ).toMatchObject({
-        kind: "routes",
-        preferredAuthRequirement: "subscription",
-        routes: [platformRoute, subscriptionRoute],
-      });
-    },
-  );
-
-  it("honors the inherited API route preference without dropping subscription", () => {
-    const routeIntent = { authRequirement: "api-key", source: "inherited" } as const;
-    expect(resolveBilling({ routeIntent })).toMatchObject({
+  it.each([
+    [undefined, "https://api.openai.com/v1", "subscription"],
+    [{ runtimeId: "codex", source: "inherited" }, "https://api.openai.com/v1", "subscription"],
+    [{ authRequirement: "api-key", source: "inherited" }, undefined, "api-key"],
+    [{ runtimeId: "openclaw", source: "explicit" }, undefined, "api-key"],
+  ] as const)("preserves both billing routes for intent %j", (routeIntent, baseUrl, preference) => {
+    expect(
+      resolveBilling({ configuredProvider: { ...completions, baseUrl }, routeIntent }),
+    ).toMatchObject({
       kind: "routes",
+      preferredAuthRequirement: preference,
       routes: [platformRoute, subscriptionRoute],
-      preferredAuthRequirement: "api-key",
-    });
-  });
-
-  it("keeps subscription eligible for an OpenClaw runtime pin with no API credential", () => {
-    const routeIntent = { runtimeId: "openclaw", source: "explicit" } as const;
-    expect(resolveBilling({ routeIntent })).toMatchObject({
-      kind: "routes",
-      preferredAuthRequirement: "api-key",
-      routes: [{ authRequirement: "api-key" }, { authRequirement: "subscription" }],
     });
   });
   it("retains the provider adapter for API-key callers when the model overrides its official URL", () => {
