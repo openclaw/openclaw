@@ -35,7 +35,7 @@ it.each([
 ] as const)(
   "reports $operation $workspace cleanup $cleanup failures without replacing its primary outcome (failure=$failure)",
   async ({ operation, failure, cleanup, workspace }) => {
-    const root = await tempRoot();
+    const root = tempRoot();
     const { stateDir, database } = createStateDatabaseFixture(root);
     const repositoryPath = path.join(root, "repository");
     const primary = new Error("synthetic backup I/O failure");

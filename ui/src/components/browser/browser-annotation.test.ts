@@ -83,11 +83,17 @@ it("uses a bounded plain-text URL fallback for non-host URLs", () => {
 it("preserves valid UTF-16 from inspected accessible names", async () => {
   const element = document.createElement("button");
   element.setAttribute("aria-label", `${"a".repeat(78)}${" ".repeat(41)}😀tail`);
-  const { client } = createBrowserClient(async ({ body }) => ({
-    result: runInNewContext(`(${expectDefined(body?.fn, "browser evaluation function")})()`, {
-      document: { elementFromPoint: () => element },
-    }),
-  }));
+  const { client } = createBrowserClient(async ({ body }) => {
+    const fn = body?.fn;
+    if (typeof fn !== "string") {
+      throw new Error("Expected browser evaluation function");
+    }
+    return {
+      result: runInNewContext(`(${fn})()`, {
+        document: { elementFromPoint: () => element },
+      }),
+    };
+  });
   const inspected = await inspectBrowserElementAt(client, {
     targetId: "proof-tab",
     x: 10,

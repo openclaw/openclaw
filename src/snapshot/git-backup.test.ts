@@ -102,7 +102,7 @@ afterEach(async () => {
 });
 
 async function backupFixture(name = "repository") {
-  const root = await tempRoot();
+  const root = tempRoot();
   const state = createStateDatabaseFixture(root);
   const repo = gitBackupRepository(root, name);
   return {
@@ -114,7 +114,7 @@ async function backupFixture(name = "repository") {
 }
 
 async function repositoryFixture(name = "repository") {
-  const repo = gitBackupRepository(await tempRoot(), name);
+  const repo = gitBackupRepository(tempRoot(), name);
   await fs.mkdir(repo.stateDir);
   return repo;
 }
@@ -133,7 +133,7 @@ async function agentFixture(stateDir: string, agentId: string, agentDir: string)
 }
 
 async function formatFixture() {
-  const root = await tempRoot();
+  const root = tempRoot();
   const source = path.join(root, "source.sqlite");
   const dump = path.join(root, "dump");
   const restoredPath = path.join(root, "restored.sqlite");
@@ -190,7 +190,7 @@ async function captureError(operation: Promise<unknown>) {
 }
 
 it("rejects state and repository overlap in either canonical direction", async () => {
-  const root = await fs.realpath(await tempRoot());
+  const root = await fs.realpath(tempRoot());
   const stateDir = path.join(root, "state");
   await fs.mkdir(stateDir, { recursive: true });
   const stateAlias = path.join(root, "state-alias");
@@ -208,7 +208,7 @@ it("rejects state and repository overlap in either canonical direction", async (
 });
 
 it("backs up a configured external agent database for explicit and all scopes", async () => {
-  const root = await fs.realpath(await tempRoot());
+  const root = await fs.realpath(tempRoot());
   const { stateDir } = createStateDatabaseFixture(root);
   const agentDir = path.join(root, "external-agent");
   const configPath = path.join(stateDir, "openclaw.json");
@@ -248,7 +248,7 @@ it.each(["missing", "old-schema", "removed"] as const)(
   "refreshes --all backups without losing a configured %s agent",
   async (condition) => {
     clearRuntimeConfigSnapshot();
-    const root = await fs.realpath(await tempRoot());
+    const root = await fs.realpath(tempRoot());
     const { stateDir } = createStateDatabaseFixture(root);
     const { repositoryPath, options, git, file } = gitBackupRepository(root);
     const configPath = path.join(stateDir, "openclaw.json");
@@ -606,7 +606,7 @@ it("redacts credential-bearing origins in conflict errors", async () => {
 it.each([false, true])(
   "redacts catalog credentials only for secret-excluded backups (exclude=%s)",
   async (excludeSecrets) => {
-    const root = await tempRoot();
+    const root = tempRoot();
     const source = path.join(root, "source.sqlite");
     const dump = path.join(root, "dump");
     const { catalog, malformedHeaders, unusableCatalogs, scopes } = createCatalogFixture(source);
@@ -700,7 +700,7 @@ it("omits secret tables and reports the restore gap", async () => {
 });
 
 it("redacts secret machine-state keys while retaining ordinary machine state", async () => {
-  const root = await tempRoot();
+  const root = tempRoot();
   const { stateDir, database } = createStateDatabaseFixture(root);
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const nodeSecret = "synthetic-node-host-gateway-secret";

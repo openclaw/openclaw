@@ -45,8 +45,10 @@ function peerFixture(state: OpenClawTestState) {
     lifecycleRevision: `${name}-generation`,
     storePath,
   });
-  const prepare = (target: ReturnType<typeof endpoint>, sourceRunId: string) =>
-    prepareConsumedSessionSendSource({ config: cfg, target, sourceRunId, assertCurrent() {} });
+  const prepare = (
+    target: Parameters<typeof prepareConsumedSessionSendSource>[0]["target"],
+    sourceRunId: string,
+  ) => prepareConsumedSessionSendSource({ config: cfg, target, sourceRunId, assertCurrent() {} });
   const seed = async (
     runId: string,
     options: Partial<Omit<Parameters<typeof seedConsumedPeerRestartInput>[0], "cfg">> = {},

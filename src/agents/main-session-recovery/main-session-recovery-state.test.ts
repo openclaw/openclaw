@@ -397,7 +397,7 @@ describe("main session recovery state", () => {
     expect(entry.abortedLastRun).toBe(false);
   });
 
-  it.each([
+  it.each<[string, ...Parameters<typeof expectApplied>]>([
     [
       "accepts the owning restart interruption",
       interruptedEntry({
@@ -497,15 +497,12 @@ describe("main session recovery state", () => {
       undefined,
       { lifecycleGeneration: "generation-2" },
     ],
-  ] satisfies Array<[string, ...Parameters<typeof expectApplied>]>)(
-    "%s",
-    (_name, entry, runId, patch, snapshotPatch, options) => {
-      const before = structuredClone(entry);
-      expectApplied(entry, runId, patch, snapshotPatch, options);
-      // Projection must not mutate retained owners or reservations.
-      expect(entry).toEqual(before);
-    },
-  );
+  ])("%s", (_name, entry, runId, patch, snapshotPatch, options) => {
+    const before = structuredClone(entry);
+    expectApplied(entry, runId, patch, snapshotPatch, options);
+    // Projection must not mutate retained owners or reservations.
+    expect(entry).toEqual(before);
+  });
 
   it.each([
     [

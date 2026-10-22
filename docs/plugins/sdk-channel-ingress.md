@@ -314,7 +314,7 @@ diagnostic ids.
 ## Verification
 
 ```bash
-pnpm test src/plugin-sdk/channel-ingress-runtime.test.ts
+pnpm test src/channels/message-access/message-access.test.ts src/plugin-sdk/channel-ingress-runtime.test.ts
 pnpm plugin-sdk:api:diff --base "$(git merge-base origin/main HEAD)" --head HEAD
 ```
 

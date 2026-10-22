@@ -99,7 +99,7 @@ function createStore(directory = "") {
           sessionKey,
           incarnation: sessionId,
         }),
-        async admit(overrides: Partial<Parameters<typeof beginSessionEffect>[0]> = {}) {
+        async admit(this: void, overrides: Partial<Parameters<typeof beginSessionEffect>[0]> = {}) {
           const admission = await beginSessionEffect({
             scope: sourceStore,
             identities: [sessionKey, sessionId],
