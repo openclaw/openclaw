@@ -361,7 +361,6 @@ export async function openRowMenu(page: TestSessionsPage, target: GatewaySession
   await settleSessionMenu(menu);
   return menu;
 }
-}
 
 export function withNotifyingAgentSelection(
   context: ApplicationContext,
