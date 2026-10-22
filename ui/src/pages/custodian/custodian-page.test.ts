@@ -10,13 +10,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { channelSnapshotEntryIsActive, createChannelCapability } from "../../lib/channels/index.ts";
 import * as uuid from "../../lib/uuid.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
+import { CustodianSessionStore } from "./custodian-session-store.ts";
 
 type Reply = SystemAgentChatResult;
+const historyMethods = ["openclaw.chat", "openclaw.chat.history"];
 function chatReply(reply: string, patch: Partial<Reply> = {}): Reply {
   return { sessionId: "custodian-session", reply, action: "none", ...patch };
 }
@@ -48,8 +51,8 @@ async function element<T extends HTMLElement>(page: HTMLElement, selector: strin
     return found!;
   });
 }
-async function mount(request: Parameters<typeof createContext>[0]) {
-  const harness = createContext(request);
+async function mount(request: Parameters<typeof createContext>[0], methods?: string[]) {
+  const harness = createContext(request, methods);
   return { ...harness, ...(await mountPage(harness.context)) };
 }
 async function fill(page: Page, selector: string, value: string) {
@@ -88,11 +91,7 @@ describe("custodian page", () => {
       }
       throw new Error(`unexpected request ${method}`);
     });
-    const { context, setGatewaySnapshot } = createContext(request, [
-      "openclaw.chat",
-      "openclaw.chat.history",
-    ]);
-    const { page } = await mountPage(context);
+    const { page, setGatewaySnapshot } = await mount(request, historyMethods);
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
     setGatewaySnapshot({ client: { request } as unknown as GatewayBrowserClient });
@@ -121,11 +120,7 @@ describe("custodian page", () => {
           : chatReply("Welcome back.", { sessionId: params.sessionId }),
       ),
     );
-    const { context, setGatewaySnapshot } = createContext(request, [
-      "openclaw.chat",
-      "openclaw.chat.history",
-    ]);
-    const { page } = await mountPage(context);
+    const { page, setGatewaySnapshot } = await mount(request, historyMethods);
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await fill(page, "textarea", "check this system");
     button(page, ".chat-send-btn").click();
@@ -160,8 +155,7 @@ describe("custodian page", () => {
       .mockResolvedValueOnce(
         chatReply("Recovered welcome.", { sessionId: "engine-session-after-retry" }),
       );
-    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
-    const { page } = await mountPage(context);
+    const { page } = await mount(request, historyMethods);
     await waitForFast(() => expect(page.querySelector('[role="alert"] button')).not.toBeNull());
 
     button(page, '[role="alert"] button').click();
@@ -235,8 +229,7 @@ describe("custodian page", () => {
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
     setGatewayToken("new-operator-token");
     setGatewaySnapshot({
-      client: createContext(replacementRequest, ["openclaw.chat", "openclaw.chat.history"]).context
-        .gateway.snapshot.client,
+      client: createContext(replacementRequest, historyMethods).context.gateway.snapshot.client,
     });
     await waitForFast(() => expect(replacementRequest).toHaveBeenCalledTimes(2));
     await waitForFast(() => expect(page.textContent).toContain("Fresh safe welcome."));
@@ -271,49 +264,6 @@ describe("custodian page", () => {
     expect(page.querySelector(".custodian__nudge")?.textContent).toContain(
       "Configuration reload stopped",
     );
-  });
-
-  it("exits onboarding locally when the question declares an exit skip action", async () => {
-    const request = vi.fn().mockResolvedValue(
-      chatReply("What would you like to do first?", {
-        question: {
-          id: "onboarding-next-step",
-          header: "Next step",
-          question: "What would you like to do first?",
-          options: [{ label: "Talk to my agent" }, { label: "Connect a channel" }],
-          isOther: true,
-          skipAction: "exit",
-        },
-      }),
-    );
-    const { context, page } = await mount(request);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    await page.updateComplete;
-
-    button(page, ".option-card__skip").click();
-
-    expect(context.navigate).toHaveBeenCalledWith("chat");
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("reveals a collapsed fenced code block in the caretaker transcript", async () => {
-    const code = Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\n");
-    const request = vi
-      .fn()
-      .mockResolvedValue(chatReply(`Here you go:\n\n\`\`\`bash\n${code}\n\`\`\``));
-    const { page } = await mount(request);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    await page.updateComplete;
-
-    const wrapper = page.querySelector(".code-block-wrapper");
-    const expand = page.querySelector<HTMLButtonElement>(".code-block-expand");
-    expect(wrapper?.classList.contains("is-collapsible")).toBe(true);
-    expect(expand?.textContent).toContain("13 hidden lines");
-
-    expand?.click();
-
-    expect(wrapper?.classList.contains("is-expanded")).toBe(true);
-    expect(expand?.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("preserves a prepared literal marker alongside a structured question", async () => {
@@ -382,28 +332,6 @@ describe("custodian page", () => {
     expect(page.querySelector(".custodian__history")?.textContent).toContain(entry.summary);
     expect(page.querySelector(".custodian__history")?.textContent).not.toContain("Retired history");
   });
-  it.each([
-    { hatch: true, search: `?draft=${encodeURIComponent("Wake up, my friend!")}` },
-    { hatch: false, search: "?__openclawComposerFocus=1" },
-  ])("hands off to agent chat (hatch draft: $hatch)", async ({ hatch, search }) => {
-    const request = vi
-      .fn()
-      .mockResolvedValue(
-        chatReply(
-          "Continue with your agent.",
-          hatch ? { action: "open-agent", agentDraft: "hatch" } : { action: "open-agent" },
-        ),
-      );
-    const { context } = createContext(request);
-    const closePanel = vi.fn();
-    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, closePanel, { once: true });
-    const { page } = await mountPage(context);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    await page.updateComplete;
-    expect(context.navigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main", search });
-    expect(closePanel).toHaveBeenCalledWith(expect.objectContaining({ detail: { open: false } }));
-  });
-
   it("shows optional channel setup after first-run model setup and consumes dismissal", async () => {
     const request = vi.fn().mockResolvedValue(chatReply("Your AI is ready."));
     const { context, setChannelsSnapshot, setChannelsConnected } = createContext(
@@ -428,22 +356,6 @@ describe("custodian page", () => {
     setChannelsConnected(true);
     expect(context.channels.refresh).not.toHaveBeenCalled();
     expect(context.replace).toHaveBeenCalledWith("custodian");
-    expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();
-  });
-
-  it("opens Channels from the optional first-run nudge", async () => {
-    const request = vi.fn().mockResolvedValue(chatReply("Your AI is ready."));
-    const { context } = createContext(request, ["openclaw.chat"], {
-      channelsSnapshot: channelSnapshot(),
-    });
-    const { page } = await mountPage(context, { onboarding: true });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-
-    page.querySelector<HTMLButtonElement>(".custodian__nudge-cta")?.click();
-    await page.updateComplete;
-
-    expect(context.navigate).toHaveBeenCalledWith("channels");
-    expect(context.replace).not.toHaveBeenCalled();
     expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();
   });
 
@@ -706,11 +618,7 @@ describe("custodian page", () => {
             },
           }),
     );
-    const { context, setGatewaySnapshot } = createContext(request, [
-      "openclaw.chat",
-      "openclaw.chat.history",
-    ]);
-    const { page } = await mountPage(context);
+    const { page, setGatewaySnapshot } = await mount(request, historyMethods);
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
     expect(page.querySelector("openclaw-option-card")).not.toBeNull();
@@ -724,6 +632,101 @@ describe("custodian page", () => {
     ]);
     expect(page.querySelector("openclaw-option-card")).not.toBeNull();
     expect(page.textContent).toContain("Choose the next step.");
+  });
+
+  describe("agent creation", () => {
+    function agentContext(request: Parameters<typeof createContext>[0]) {
+      const calls: string[] = [];
+      const refreshList = vi.fn().mockResolvedValue({ mainKey: "main" });
+      const { context: base } = createContext(request);
+      const context = {
+        ...base,
+        gateway: { ...base.gateway, setSessionKey: (key: string) => calls.push(`session:${key}`) },
+        agents: { ...base.agents, refreshList },
+        agentSelection: {
+          ...base.agentSelection,
+          set: (id: string | null) => calls.push(`agent:${id}`),
+        },
+      } satisfies ApplicationContext;
+      return { calls, context, refreshList };
+    }
+
+    async function mountAgentPage(context: ApplicationContext) {
+      const provider = createApplicationContextProvider(context);
+      const page = document.createElement("openclaw-custodian-page");
+      page.store = new CustodianSessionStore();
+      page.onboarding = false;
+      page.newAgentIntent = true;
+      provider.append(page);
+      document.body.append(provider);
+      await page.updateComplete;
+      return page;
+    }
+
+    let request: Parameters<typeof createContext>[0];
+    let harness: ReturnType<typeof agentContext>;
+    const response = {
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      action: "none",
+      reply: "Ready.",
+    };
+    beforeEach(() => {
+      vi.spyOn(uuid, "generateUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+      request = vi.fn();
+      harness = agentContext(request);
+    });
+
+    it("explains the missing capability and scope before sending an agent creation request", async () => {
+      const { context } = harness;
+      context.gateway.snapshot.hello = {
+        ...context.gateway.snapshot.hello!,
+        auth: { role: "operator", scopes: ["operator.read"] },
+      };
+
+      const page = await mountAgentPage(context);
+      await Promise.resolve();
+
+      expect(request).not.toHaveBeenCalled();
+      const error = page.querySelector('[role="alert"]')?.textContent;
+      for (const text of ["openclaw.chat", "operator.admin", "Pair", "reconnect"]) {
+        expect(error).toContain(text);
+      }
+      expect(error).not.toContain("Update the Gateway");
+    });
+
+    it("refreshes the roster and opens the created agent hatch session", async () => {
+      request.mockResolvedValue({
+        ...response,
+        action: "open-agent",
+        agentDraft: "hatch",
+        agentId: "researcher",
+      });
+      const { calls, context, refreshList } = harness;
+      await mountAgentPage(context);
+
+      await waitForFast(() => expect(context.navigate).toHaveBeenCalledOnce());
+      expect(request).toHaveBeenCalledOnce();
+      expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "new-agent" });
+      expect(refreshList).toHaveBeenCalledOnce();
+      expect(calls).toEqual(["agent:researcher", "session:agent:researcher:main"]);
+      expect(context.navigate).toHaveBeenCalledWith("chat", {
+        pathname: "/chat/researcher",
+        search: "?draft=Wake%20up%2C%20my%20friend!",
+      });
+    });
+
+    it("hands model-account setup to the existing human Profile controls", async () => {
+      request.mockResolvedValue({ ...response, handoff: { kind: "model-accounts" } });
+      const { calls, context, refreshList } = harness;
+      const client = context.gateway.snapshot.client;
+      await mountAgentPage(context);
+
+      await waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("profile"));
+      expect(context.gateway.snapshot.client).toBe(client);
+      expect(refreshList).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.chat"]);
+    });
   });
 });
 

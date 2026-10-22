@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import * as uuid from "../../lib/uuid.ts";
+import { QUICK_ACTIONS_QUESTION } from "../../test-helpers/custodian-quick-actions.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
@@ -169,42 +170,41 @@ describe("custodian page nudges", () => {
   });
 
   it.each([
-    {
-      name: "clean stop",
-      patch: { connected: false, lastStopAt: 1_700_000_000_000, lastError: "old error" },
-      degraded: false,
-    },
-    {
-      name: "failed restart",
-      patch: {
+    [
+      "clean stop",
+      { connected: false, lastStopAt: 1_700_000_000_000, lastError: "old error" },
+      false,
+    ],
+    [
+      "failed restart",
+      {
         lastStopAt: 1_700_000_000_000,
         lastStartAt: 1_700_000_001_000,
         lastError: "failed to initialize transport",
       },
-      degraded: true,
+      true,
+    ],
+    [
+      "failed probe after stopping",
+      { lastStopAt: 1_700_000_001_000, lastStartAt: 1_700_000_000_000, probe: { ok: false } },
+      true,
+    ],
+  ] as const)(
+    "classifies %s without reviving stale channel errors",
+    async (_name, patch, degraded) => {
+      const { page, emitHealth } = await mountCaretaker();
+      await emitHealth({
+        channelLabels: { telegram: "Telegram" },
+        channels: { telegram: { ...stoppedChannel, ...patch } },
+      });
+      const card = nudge(page);
+      if (degraded) {
+        expect(card?.textContent).toContain("Telegram is degraded");
+      } else {
+        expect(card).toBeNull();
+      }
     },
-    {
-      name: "failed probe after stopping",
-      patch: {
-        lastStopAt: 1_700_000_001_000,
-        lastStartAt: 1_700_000_000_000,
-        probe: { ok: false },
-      },
-      degraded: true,
-    },
-  ])("classifies $name without reviving stale channel errors", async ({ patch, degraded }) => {
-    const { page, emitHealth } = await mountCaretaker();
-    await emitHealth({
-      channelLabels: { telegram: "Telegram" },
-      channels: { telegram: { ...stoppedChannel, ...patch } },
-    });
-    const card = nudge(page);
-    if (degraded) {
-      expect(card?.textContent).toContain("Telegram is degraded");
-    } else {
-      expect(card).toBeNull();
-    }
-  });
+  );
 
   it("dismisses event nudges for the rest of the page visit", async () => {
     const { request, page, emitHealth } = await mountCaretaker();
@@ -430,5 +430,202 @@ describe("custodian page nudges", () => {
     await waitForFast(() => expect(alert(page)).not.toBeNull());
     await page.updateComplete;
     expect(nudge(page)).toBeNull();
+  });
+  describe("transcript recovery", () => {
+    const initialCalls = ["openclaw.chat.history", "openclaw.chat"];
+    function historyRequest(
+      read: (call: number, options?: { timeoutMs?: number }) => unknown,
+      chat: (params?: { message?: string }) => unknown = () => chatReply("Ready"),
+    ) {
+      let calls = 0;
+      const request = vi.fn(
+        async (method: string, params?: { message?: string }, options?: { timeoutMs?: number }) =>
+          method === "openclaw.chat.history" ? read(++calls, options) : chat(params),
+      );
+      return { request, historyCalls: () => calls };
+    }
+    function unavailable(message = "Gateway is suspending") {
+      return new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message,
+        retryable: true,
+        details: { reason: "gateway-suspending", phase: "draining" },
+      });
+    }
+    const history = (text: string) => ({ turns: [{ role: "assistant", text, at: 1 }] });
+    function reopen(set: ReturnType<typeof createContext>["setGatewaySnapshot"]) {
+      set({ suspensionPhase: "draining" });
+      set({ suspensionPhase: "accepting" });
+    }
+    async function mountTranscript(request: Parameters<typeof createContext>[0]) {
+      const harness = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
+      return { ...harness, ...(await mountPage(harness.context)) };
+    }
+    const expectNoStatus = (page: Page) =>
+      expect(page.querySelector(".custodian__transcript-status")).toBeNull();
+
+    beforeEach(() => localStorage.clear());
+    afterEach(() => localStorage.clear());
+    it.each([false, true])(
+      "recovers history after welcome (lifecycle=%s)",
+      async (lifecycleFailure) => {
+        const { request } = historyRequest(
+          (call, options) => {
+            expect(options).toEqual({ timeoutMs: 15_000 });
+            if (call === 1) {
+              throw lifecycleFailure ? unavailable() : new Error("history request timed out");
+            }
+            return history("Recovered history.");
+          },
+          () =>
+            chatReply("Welcome without history.", {
+              question: QUICK_ACTIONS_QUESTION,
+            }),
+        );
+        const { page, setGatewaySnapshot } = await mountTranscript(request);
+        await waitForFast(() => expect(page.textContent).toContain("Welcome without history."));
+        const historyAlert = Array.from(page.querySelectorAll<HTMLElement>('[role="alert"]')).find(
+          (node) => node.textContent?.includes("history request timed out"),
+        );
+        if (lifecycleFailure) {
+          expect(page.querySelector(".custodian__transcript-status")).toBeNull();
+        } else {
+          expect(historyAlert).toBeDefined();
+          expect(historyAlert?.querySelector("button")).toBeNull();
+        }
+        reopen(setGatewaySnapshot);
+        setGatewaySnapshot({ suspensionPhase: "accepting" });
+        await waitForFast(() => expect(page.textContent).toContain("Recovered history."));
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          ...initialCalls,
+          "openclaw.chat.history",
+        ]);
+      },
+    );
+
+    it("waits for pending history failure before recovery", async () => {
+      const pending = createDeferred<never>();
+      const { request, historyCalls } = historyRequest((call) => {
+        return call === 2
+          ? pending.promise
+          : history(call === 1 ? "Earlier history" : "Recovered history");
+      });
+      const { page, setGatewaySnapshot } = await mountTranscript(request);
+      await waitForFast(() => expect(page.textContent).toContain("Ready"));
+      const refresh = page.store.refreshTranscriptIfIdle();
+      reopen(setGatewaySnapshot);
+      reopen(setGatewaySnapshot);
+      expect(historyCalls()).toBe(2);
+      pending.reject(unavailable("Gateway was suspending"));
+      await refresh;
+      await waitForFast(() => expect(page.textContent).toContain("Recovered history"));
+      expect(page.querySelector(".custodian__transcript-status")).toBeNull();
+      expect(historyCalls()).toBe(3);
+    });
+
+    it("retries reconnect hydration once per availability edge", async () => {
+      const { request, historyCalls } = historyRequest((call) => {
+        if (call === 2) {
+          throw unavailable();
+        }
+        return history("Recovered reconnect history");
+      });
+      const { page, setGatewaySnapshot } = await mountTranscript(request);
+      await waitForFast(() => expect(page.textContent).toContain("Ready"));
+      setGatewaySnapshot({ phase: "stopped" });
+      setGatewaySnapshot({ phase: "connected" });
+      await waitForFast(() => {
+        expect(page.store.transcript.refreshing).toBe(false);
+        expect(page.store.transcript.status.awaitingGateway).toBe(true);
+      });
+      expect(historyCalls()).toBe(2);
+      reopen(setGatewaySnapshot);
+      await waitForFast(() => expect(page.store.transcript.status.awaitingGateway).toBe(false));
+      expect(historyCalls()).toBe(3);
+      expect(page.textContent).toContain("Recovered reconnect history");
+    });
+
+    it("recovers parked history once after an in-flight send settles", async () => {
+      const reply = createDeferred<SystemAgentChatResult>();
+      const { request, historyCalls } = historyRequest(
+        (call) => {
+          if (call === 1) {
+            throw unavailable();
+          }
+          return history("Recovered after send");
+        },
+        (params) => (params?.message ? reply.promise : chatReply("Ready")),
+      );
+      const { page, setGatewaySnapshot } = await mountTranscript(request);
+      await waitForFast(() => expect(page.store.canSend).toBe(true));
+      expect(page.store.transcript.status.awaitingGateway).toBe(true);
+
+      const sending = page.store.send("Continue");
+      reopen(setGatewaySnapshot);
+      reopen(setGatewaySnapshot);
+      await page.updateComplete;
+      expect(page.store.sending).toBe(true);
+      expect(historyCalls()).toBe(1);
+      expectNoStatus(page);
+
+      reply.resolve(chatReply("Done"));
+      await sending;
+      await waitForFast(() => expect(page.textContent).toContain("Recovered after send"));
+      setGatewaySnapshot({ suspensionPhase: "accepting" });
+      await page.updateComplete;
+      expect(historyCalls()).toBe(2);
+      expectNoStatus(page);
+    });
+
+    it("parks history recovery until welcome and wizard settle", async () => {
+      const welcome = createDeferred<SystemAgentChatResult>();
+      const answer = createDeferred<SystemAgentChatResult>();
+      let chatCalls = 0;
+      const { request, historyCalls } = historyRequest(
+        (call) => {
+          if (call === 1) {
+            throw new Error("history unavailable");
+          }
+          return history("Recovered after wizard");
+        },
+        () => (++chatCalls === 1 ? welcome.promise : answer.promise),
+      );
+      const { page, setGatewaySnapshot } = await mountTranscript(request);
+      await waitForFast(() =>
+        expect(page.querySelector(".custodian__transcript-status")?.textContent).toContain(
+          "history unavailable",
+        ),
+      );
+      expect(page.querySelector(".custodian__transcript-status button")).toBeNull();
+      reopen(setGatewaySnapshot);
+      await page.updateComplete;
+      await waitForFast(() =>
+        expect(request.mock.calls.map(([method]) => method)).toEqual(initialCalls),
+      );
+
+      welcome.resolve(
+        chatReply("Choose one.", {
+          wizardInputPending: true,
+          step: { id: "choice", type: "text", message: "Continue?" },
+        }),
+      );
+      await waitForFast(() => expect(page.querySelector(".custodian__wizard-step")).not.toBeNull());
+
+      reopen(setGatewaySnapshot);
+      await page.updateComplete;
+      expect(page.querySelector(".custodian__transcript-status button")).toBeNull();
+      expect(request.mock.calls.map(([method]) => method)).toEqual(initialCalls);
+
+      const wizardMessage = page.store.messages.find((message) => message.step);
+      expect(wizardMessage).toBeDefined();
+      page.store.answerWizardStep(wizardMessage!, "Continue");
+      await page.updateComplete;
+      expect(page.store.sending).toBe(true);
+      expect(historyCalls()).toBe(1);
+      answer.resolve(chatReply("Wizard complete", { wizardInputPending: false }));
+      await waitForFast(() => expect(page.textContent).toContain("Recovered after wizard"));
+      expect(historyCalls()).toBe(2);
+      expectNoStatus(page);
+    });
   });
 });
