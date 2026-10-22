@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createScenarioEnvironment,
+  polledReply,
+  sentMessage,
+} from "./discord-flow.test-support.js";
 import * as testing from "./discord-live.runtime.js";
 import type { DiscordQaScenarioImplementation } from "./discord-live.runtime.js";
-import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 import { runDiscordScenario } from "./scenario-runtime.js";
 
 describe("Discord QA scenario runtime", () => {
@@ -19,36 +23,15 @@ describe("Discord QA scenario runtime", () => {
         matchText: "pong",
       }),
     } satisfies DiscordQaScenarioImplementation;
-    const environment = {
+    const environment = createScenarioEnvironment({
       configureScenario: vi.fn(async () => ({ cfg: {}, run: implementation.buildRun() })),
-      driverIdentity: { id: "423456789012345678", bot: true },
-      outputDir: "/unused",
-      runtimeEnv: {
-        guildId: "123456789012345678",
-        channelId: "223456789012345678",
-        driverBotToken: "driver-token",
-        sutBotToken: "sut-token",
-        sutApplicationId: "323456789012345678",
-      },
-      scenario: { id: "discord-canary", timeoutMs: 30_000, title: "Discord canary" },
-      sutAccountId: "sut",
-      sutIdentity: { id: "323456789012345678", bot: true },
-    } as unknown as DiscordQaScenarioEnvironment;
-    vi.spyOn(testing, "sendChannelMessage").mockResolvedValue({
-      id: "523456789012345678",
-      channel_id: environment.runtimeEnv.channelId,
-      timestamp: "2026-09-02T12:00:00.000Z",
     });
-    vi.spyOn(testing, "pollChannelMessages").mockResolvedValue({
-      afterSnowflake: "623456789012345678",
-      message: {
-        messageId: "623456789012345678",
-        channelId: environment.runtimeEnv.channelId,
-        senderId: environment.sutIdentity.id,
-        text: "pong",
-        timestamp: "2026-09-02T12:00:01.750Z",
-      },
-    });
+    vi.spyOn(testing, "sendChannelMessage").mockResolvedValue(
+      sentMessage("523456789012345678", "2026-09-02T12:00:00.000Z"),
+    );
+    vi.spyOn(testing, "pollChannelMessages").mockResolvedValue(
+      polledReply("623456789012345678", "pong", "2026-09-02T12:00:01.750Z"),
+    );
 
     await expect(runDiscordScenario(environment, implementation)).resolves.toEqual({
       details: "reply matched",
@@ -74,26 +57,13 @@ describe("Discord QA scenario runtime", () => {
         matchText: "must not appear",
       }),
     } satisfies DiscordQaScenarioImplementation;
-    const environment = {
+    const environment = createScenarioEnvironment({
       configureScenario: vi.fn(async () => ({ cfg: {}, run: implementation.buildRun() })),
-      driverIdentity: { id: "423456789012345678", bot: true },
-      outputDir: "/unused",
-      runtimeEnv: {
-        guildId: "123456789012345678",
-        channelId: "223456789012345678",
-        driverBotToken: "driver-token",
-        sutBotToken: "sut-token",
-        sutApplicationId: "323456789012345678",
-      },
       scenario: { id: "discord-mention-gating", timeoutMs: 8_000, title: "Mention gating" },
-      sutAccountId: "sut",
-      sutIdentity: { id: "323456789012345678", bot: true },
-    } as unknown as DiscordQaScenarioEnvironment;
-    vi.spyOn(testing, "sendChannelMessage").mockResolvedValue({
-      id: "523456789012345678",
-      channel_id: environment.runtimeEnv.channelId,
-      timestamp: "2026-09-02T12:00:00.000Z",
     });
+    vi.spyOn(testing, "sendChannelMessage").mockResolvedValue(
+      sentMessage("523456789012345678", "2026-09-02T12:00:00.000Z"),
+    );
     const poll = vi.spyOn(testing, "pollChannelMessages").mockImplementation(async (params) => {
       throw new Error(`timed out after ${params.timeoutMs}ms waiting for Discord message`);
     });

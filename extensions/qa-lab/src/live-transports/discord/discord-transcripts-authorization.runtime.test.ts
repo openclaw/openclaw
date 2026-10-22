@@ -6,36 +6,39 @@ const { requestDiscordMock } = vi.hoisted(() => ({ requestDiscordMock: vi.fn() }
 
 vi.mock("@openclaw/discord/api.js", () => ({ requestDiscord: requestDiscordMock }));
 
+import {
+  createScenarioEnvironment,
+  polledReply,
+  runtimeEnv,
+  sentMessage,
+} from "./discord-flow.test-support.js";
 import * as testing from "./discord-live.runtime.js";
 import {
   discordQaTranscriptsVoiceAuthorizationScenario,
   runDiscordTranscriptsVoiceAuthorizationScenario,
 } from "./discord-transcripts-authorization.runtime.js";
-import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createEnvironment(outputDir: string) {
-  return {
-    configureScenario: vi.fn<DiscordQaScenarioEnvironment["configureScenario"]>(),
-    driverIdentity: { id: "423456789012345678", bot: true },
+  return createScenarioEnvironment({
     outputDir,
-    runtimeEnv: {
-      guildId: "123456789012345678",
-      channelId: "223456789012345678",
-      voiceChannelId: "523456789012345678",
-      driverBotToken: "driver-token",
-      sutBotToken: "sut-token",
-      sutApplicationId: "323456789012345678",
-    },
+    runtimeEnv: { ...runtimeEnv, voiceChannelId: "523456789012345678" },
     scenario: {
       id: "discord-transcripts-voice-authorization",
       timeoutMs: 60_000,
       title: "Discord transcript capture enforces voice authorization",
     },
-    sutAccountId: "sut",
-    sutIdentity: { id: "323456789012345678", bot: true },
-  } satisfies DiscordQaScenarioEnvironment;
+  });
+}
+
+async function readEvidence(outputDir: string): Promise<Record<string, unknown>> {
+  return JSON.parse(
+    await fs.readFile(
+      path.join(outputDir, "discord-transcripts-voice-authorization-evidence.json"),
+      "utf8",
+    ),
+  );
 }
 
 describe("Discord transcript authorization scenario runner", () => {
@@ -54,49 +57,18 @@ describe("Discord transcript authorization scenario runner", () => {
     const environment = createEnvironment(outputDir);
     const send = vi
       .spyOn(testing, "sendChannelMessage")
-      .mockResolvedValueOnce({
-        id: "623456789012345671",
-        channel_id: environment.runtimeEnv.channelId,
-        timestamp: "2026-08-14T12:00:00.000Z",
-      })
-      .mockResolvedValueOnce({
-        id: "623456789012345673",
-        channel_id: environment.runtimeEnv.channelId,
-        timestamp: "2026-08-14T12:00:01.000Z",
-      })
-      .mockResolvedValueOnce({
-        id: "623456789012345675",
-        channel_id: environment.runtimeEnv.channelId,
-        timestamp: "2026-08-14T12:00:02.000Z",
-      });
+      .mockResolvedValueOnce(sentMessage("623456789012345671", "2026-08-14T12:00:00.000Z"))
+      .mockResolvedValueOnce(sentMessage("623456789012345673", "2026-08-14T12:00:01.000Z"))
+      .mockResolvedValueOnce(sentMessage("623456789012345675", "2026-08-14T12:00:02.000Z"));
     vi.spyOn(testing, "pollChannelMessages")
-      .mockResolvedValueOnce({
-        afterSnowflake: "623456789012345672",
-        message: {
-          messageId: "623456789012345672",
-          channelId: environment.runtimeEnv.channelId,
-          senderId: environment.sutIdentity.id,
-          text: `${run.negativeMarker} You are not authorized to use this command.`,
-        },
-      })
-      .mockResolvedValueOnce({
-        afterSnowflake: "623456789012345674",
-        message: {
-          messageId: "623456789012345674",
-          channelId: environment.runtimeEnv.channelId,
-          senderId: environment.sutIdentity.id,
-          text: run.positiveMarker,
-        },
-      })
-      .mockResolvedValueOnce({
-        afterSnowflake: "623456789012345676",
-        message: {
-          messageId: "623456789012345676",
-          channelId: environment.runtimeEnv.channelId,
-          senderId: environment.sutIdentity.id,
-          text: run.stopMarker,
-        },
-      });
+      .mockResolvedValueOnce(
+        polledReply(
+          "623456789012345672",
+          `${run.negativeMarker} You are not authorized to use this command.`,
+        ),
+      )
+      .mockResolvedValueOnce(polledReply("623456789012345674", run.positiveMarker))
+      .mockResolvedValueOnce(polledReply("623456789012345676", run.stopMarker));
     vi.spyOn(testing, "getCurrentDiscordVoiceState").mockResolvedValue(null);
     vi.spyOn(testing, "waitForDiscordVoiceState").mockResolvedValue({
       channel_id: "523456789012345678",
@@ -126,13 +98,7 @@ describe("Discord transcript authorization scenario runner", () => {
     expect(prompts.join("\n")).not.toContain('"accountId"');
     expect(requestDiscordMock).toHaveBeenCalledTimes(6);
 
-    const evidence = JSON.parse(
-      await fs.readFile(
-        path.join(outputDir, "discord-transcripts-voice-authorization-evidence.json"),
-        "utf8",
-      ),
-    ) as Record<string, unknown>;
-    expect(evidence).toEqual({
+    expect(await readEvidence(outputDir)).toEqual({
       schemaVersion: 1,
       scenarioId: "discord-transcripts-voice-authorization",
       denied: {
@@ -171,12 +137,7 @@ describe("Discord transcript authorization scenario runner", () => {
     const rejected = expect(result).rejects.toThrow("did not leave Discord voice channel");
     await vi.advanceTimersByTimeAsync(20_000);
     await rejected;
-    const evidence = JSON.parse(
-      await fs.readFile(
-        path.join(outputDir, "discord-transcripts-voice-authorization-evidence.json"),
-        "utf8",
-      ),
-    );
+    const evidence = await readEvidence(outputDir);
     expect(evidence.cleanup).toMatchObject({
       emergencyStopAttempted: true,
       voiceDisconnected: false,

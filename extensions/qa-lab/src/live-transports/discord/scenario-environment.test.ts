@@ -11,9 +11,10 @@ const driverId = "423456789012345678";
 const voiceChannelId = "523456789012345678";
 
 function expectChannelUsers(patch: OpenClawConfig | undefined, voiceUser: string) {
-  const channels = patch?.channels?.discord?.accounts?.sut?.guilds?.[guildId]?.channels;
-  expect(channels?.[textChannelId]?.users).toEqual([driverId]);
-  expect(channels?.[voiceChannelId]?.users).toEqual([voiceUser]);
+  expect(patch?.channels?.discord?.accounts?.sut?.guilds?.[guildId]).toMatchObject({
+    users: [driverId],
+    channels: { [textChannelId]: { users: [driverId] }, [voiceChannelId]: { users: [voiceUser] } },
+  });
 }
 
 async function prepareScenario(voiceDestination?: string) {
@@ -68,9 +69,23 @@ describe("Discord QA scenario environment", () => {
   });
 
   it.each([true, false])("configures the voice channel (explicit: %s)", async (explicit) => {
-    const voiceChannel = { id: voiceChannelId, guild_id: guildId, type: 2 };
+    const voiceChannel = {
+      id: voiceChannelId,
+      guild_id: guildId,
+      type: 2,
+      name: "qa-voice",
+      position: 1,
+    };
     const request = vi.fn<typeof fetch>(async () =>
-      Response.json(explicit ? voiceChannel : [{ id: textChannelId, type: 0 }, voiceChannel]),
+      Response.json(
+        explicit
+          ? voiceChannel
+          : [
+              { id: textChannelId, name: "general", position: 0, type: 0 },
+              voiceChannel,
+              { id: "623456789012345678", name: "stage", position: 2, type: 13 },
+            ],
+      ),
     );
     vi.stubGlobal("fetch", request);
     const { configureScenario, patches } = await prepareScenario(

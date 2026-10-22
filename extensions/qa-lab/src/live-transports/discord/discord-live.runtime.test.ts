@@ -14,13 +14,45 @@ import {
 } from "./discord-live.evidence.js";
 import * as testing from "./discord-live.runtime.js";
 
+const guildId = "123456789012345678";
+const channelId = "223456789012345678";
+const sutId = "323456789012345678";
+const driverId = "423456789012345678";
+const voiceChannelId = "523456789012345678";
+const credentials = {
+  guildId,
+  channelId,
+  sutApplicationId: sutId,
+  driverBotToken: "driver",
+  sutBotToken: "sut",
+};
+const configTarget = {
+  guildId,
+  channelId,
+  driverBotId: driverId,
+  sutAccountId: "sut",
+  sutBotToken: "sut-token",
+};
 const runtimeEnv = {
-  OPENCLAW_QA_DISCORD_GUILD_ID: "123456789012345678",
-  OPENCLAW_QA_DISCORD_CHANNEL_ID: "223456789012345678",
+  OPENCLAW_QA_DISCORD_GUILD_ID: guildId,
+  OPENCLAW_QA_DISCORD_CHANNEL_ID: channelId,
   OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN: "driver",
   OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN: "sut",
-  OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID: "323456789012345678",
+  OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID: sutId,
 };
+
+function reactionSnapshot(elapsedMs: number, emojis: string[]) {
+  return {
+    elapsedMs,
+    observedAt: new Date(Date.parse("2026-05-03T12:00:00.000Z") + elapsedMs).toISOString(),
+    reactions: emojis.map((emoji) => ({ emoji, count: 1 })),
+  };
+}
+const discordStatus = (connected: boolean, extra = {}) => ({
+  channelAccounts: {
+    discord: [{ accountId: "sut", running: true, connected, restartPending: false, ...extra }],
+  },
+});
 
 describe("discord live qa runtime", () => {
   afterEach(() => {
@@ -102,16 +134,9 @@ describe("discord live qa runtime", () => {
     expect(
       testing.resolveDiscordQaRuntimeEnv({
         ...runtimeEnv,
-        OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID: "523456789012345678",
+        OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID: voiceChannelId,
       }),
-    ).toEqual({
-      guildId: "123456789012345678",
-      channelId: "223456789012345678",
-      voiceChannelId: "523456789012345678",
-      driverBotToken: "driver",
-      sutBotToken: "sut",
-      sutApplicationId: "323456789012345678",
-    });
+    ).toEqual({ ...credentials, voiceChannelId });
   });
 
   it("fails when a required Discord QA env var is missing", () => {
@@ -133,34 +158,15 @@ describe("discord live qa runtime", () => {
   });
 
   it("parses Discord pooled credential payloads", () => {
-    expect(
-      testing.parseDiscordQaCredentialPayload({
-        guildId: "123456789012345678",
-        channelId: "223456789012345678",
-        voiceChannelId: "523456789012345678",
-        driverBotToken: "driver",
-        sutBotToken: "sut",
-        sutApplicationId: "323456789012345678",
-      }),
-    ).toEqual({
-      guildId: "123456789012345678",
-      channelId: "223456789012345678",
-      voiceChannelId: "523456789012345678",
-      driverBotToken: "driver",
-      sutBotToken: "sut",
-      sutApplicationId: "323456789012345678",
+    expect(testing.parseDiscordQaCredentialPayload({ ...credentials, voiceChannelId })).toEqual({
+      ...credentials,
+      voiceChannelId,
     });
   });
 
   it("rejects Discord pooled credential payloads with bad snowflakes", () => {
     expect(() =>
-      testing.parseDiscordQaCredentialPayload({
-        guildId: "123456789012345678",
-        channelId: "channel",
-        driverBotToken: "driver",
-        sutBotToken: "sut",
-        sutApplicationId: "323456789012345678",
-      }),
+      testing.parseDiscordQaCredentialPayload({ ...credentials, channelId: "channel" }),
     ).toThrow("Discord credential payload_CHANNEL_ID must be a Discord snowflake.");
   });
 
@@ -184,13 +190,7 @@ describe("discord live qa runtime", () => {
       },
     };
 
-    const next = testing.buildDiscordQaConfig(baseCfg, {
-      guildId: "123456789012345678",
-      channelId: "223456789012345678",
-      driverBotId: "423456789012345678",
-      sutAccountId: "sut",
-      sutBotToken: "sut-token",
-    });
+    const next = testing.buildDiscordQaConfig(baseCfg, configTarget);
 
     expect(next.plugins?.allow).toContain("discord");
     expect(next.plugins?.entries?.discord).toEqual({ enabled: true });
@@ -205,14 +205,14 @@ describe("discord live qa runtime", () => {
           allowBots: "mentions",
           groupPolicy: "allowlist",
           guilds: {
-            "123456789012345678": {
+            [guildId]: {
               requireMention: true,
-              users: ["423456789012345678"],
+              users: [driverId],
               channels: {
-                "223456789012345678": {
+                [channelId]: {
                   enabled: true,
                   requireMention: true,
-                  users: ["423456789012345678"],
+                  users: [driverId],
                 },
               },
             },
@@ -222,118 +222,62 @@ describe("discord live qa runtime", () => {
     });
   });
 
-  it("separates text ingress from target voice authorization", () => {
-    const next = testing.buildDiscordQaConfig(
-      {},
-      {
-        guildId: "123456789012345678",
-        channelId: "223456789012345678",
-        driverBotId: "423456789012345678",
-        sutAccountId: "sut",
-        sutBotToken: "sut-token",
-      },
-      {
-        voiceChannelAccess: {
-          channelId: "523456789012345678",
-          users: ["323456789012345678"],
-        },
-      },
-    );
-
-    const account = next.channels?.discord?.accounts?.sut;
-    expect(next.channels?.discord?.voice).toEqual({
-      enabled: true,
-      mode: "stt-tts",
-      autoJoin: [],
-    });
-    expect(
-      account?.guilds?.["123456789012345678"]?.channels?.["223456789012345678"]?.users,
-    ).toEqual(["423456789012345678"]);
-    expect(
-      account?.guilds?.["123456789012345678"]?.channels?.["523456789012345678"]?.users,
-    ).toEqual(["323456789012345678"]);
-    expect(account?.guilds?.["123456789012345678"]?.users).toEqual(["423456789012345678"]);
-    expect(next.tools?.alsoAllow).toContain("transcripts");
-    expect(next.agents?.entries?.qa?.tools?.alsoAllow).toContain("transcripts");
-  });
-
   it("injects tool-only Discord status reaction config for the Mantis scenario", () => {
-    const next = testing.buildDiscordQaConfig(
-      {},
-      {
-        guildId: "123456789012345678",
-        channelId: "223456789012345678",
-        driverBotId: "423456789012345678",
-        sutAccountId: "sut",
-        sutBotToken: "sut-token",
-      },
-      { statusReactionsToolOnly: true },
-    );
+    const next = testing.buildDiscordQaConfig({}, configTarget, { statusReactionsToolOnly: true });
 
-    expect(next.messages?.ackReaction).toBe("👀");
-    expect(next.messages?.ackReactionScope).toBe("all");
-    expect(next.messages?.groupChat?.visibleReplies).toBe("message_tool");
-    expect(next.messages?.statusReactions?.enabled).toBe(true);
+    expect(next.messages).toMatchObject({
+      ackReaction: "👀",
+      ackReactionScope: "all",
+      groupChat: { visibleReplies: "message_tool" },
+      statusReactions: { enabled: true },
+    });
     const discordAccount = next.channels?.discord?.accounts?.sut;
     expect(discordAccount?.allowBots).toBe(true);
-    expect(discordAccount?.guilds?.["123456789012345678"]?.requireMention).toBe(false);
-    expect(
-      discordAccount?.guilds?.["123456789012345678"]?.channels?.["223456789012345678"]
-        ?.requireMention,
-    ).toBe(false);
+    expect(discordAccount?.guilds?.[guildId]).toMatchObject({
+      requireMention: false,
+      channels: { [channelId]: { requireMention: false } },
+    });
   });
 
   it("normalizes observed Discord messages", () => {
     expect(
       normalizeDiscordObservedMessage({
-        id: "523456789012345678",
-        channel_id: "223456789012345678",
-        guild_id: "123456789012345678",
+        id: voiceChannelId,
+        channel_id: channelId,
+        guild_id: guildId,
         content: "hello",
         timestamp: "2026-04-22T12:00:00.000Z",
         author: {
-          id: "423456789012345678",
+          id: driverId,
           username: "driver",
           bot: true,
         },
-        referenced_message: { id: "323456789012345678" },
+        referenced_message: { id: sutId },
       }),
     ).toEqual({
-      messageId: "523456789012345678",
-      channelId: "223456789012345678",
-      senderId: "423456789012345678",
+      messageId: voiceChannelId,
+      channelId,
+      senderId: driverId,
       text: "hello",
       timestamp: "2026-04-22T12:00:00.000Z",
     });
   });
 
   it("matches Discord scenario replies by SUT id and marker", () => {
-    expect(
+    const matches = (senderId: string) =>
       testing.matchesDiscordScenarioReply({
-        channelId: "223456789012345678",
-        sutBotId: "323456789012345678",
+        channelId,
+        sutBotId: sutId,
         matchText: "DISCORD_QA_ECHO_TOKEN",
         message: {
-          messageId: "523456789012345678",
-          channelId: "223456789012345678",
-          senderId: "323456789012345678",
+          messageId: voiceChannelId,
+          channelId,
+          senderId,
           text: "reply DISCORD_QA_ECHO_TOKEN",
         },
-      }),
-    ).toBe(true);
-    expect(
-      testing.matchesDiscordScenarioReply({
-        channelId: "223456789012345678",
-        sutBotId: "323456789012345678",
-        matchText: "DISCORD_QA_ECHO_TOKEN",
-        message: {
-          messageId: "523456789012345679",
-          channelId: "223456789012345678",
-          senderId: "423456789012345678",
-          text: "reply DISCORD_QA_ECHO_TOKEN",
-        },
-      }),
-    ).toBe(false);
+      });
+    expect(matches(sutId)).toBe(true);
+    expect(matches(driverId)).toBe(false);
   });
 
   it("computes Discord RTT from trigger and reply timestamps", () => {
@@ -347,24 +291,9 @@ describe("discord live qa runtime", () => {
     expect(
       collectSeenReactionSequence(
         [
-          {
-            elapsedMs: 0,
-            observedAt: "2026-05-03T12:00:00.000Z",
-            reactions: [{ emoji: "👀", count: 1 }],
-          },
-          {
-            elapsedMs: 250,
-            observedAt: "2026-05-03T12:00:00.250Z",
-            reactions: [
-              { emoji: "👀", count: 1 },
-              { emoji: "🤔", count: 1 },
-            ],
-          },
-          {
-            elapsedMs: 500,
-            observedAt: "2026-05-03T12:00:00.500Z",
-            reactions: [{ emoji: "👍", count: 1 }],
-          },
+          reactionSnapshot(0, ["👀"]),
+          reactionSnapshot(250, ["👀", "🤔"]),
+          reactionSnapshot(500, ["👍"]),
         ],
         ["👀", "🤔", "👍"],
       ),
@@ -377,8 +306,8 @@ describe("discord live qa runtime", () => {
         startedAtMs: new Date("2026-05-03T12:00:00.000Z").getTime(),
         observedAt: new Date("2026-05-03T12:00:01.000Z"),
         message: {
-          id: "523456789012345678",
-          channel_id: "223456789012345678",
+          id: voiceChannelId,
+          channel_id: channelId,
           reactions: [
             { count: 1, emoji: { name: "🤔" }, me: true },
             { count: 2, emoji: { name: "👀" }, me: false },
@@ -400,13 +329,7 @@ describe("discord live qa runtime", () => {
       scenarioTitle: "Discord's status reactions",
       expectedSequence: ["👀", "🤔", "👍"],
       seenSequence: ["👀", "🤔"],
-      snapshots: [
-        {
-          elapsedMs: 0,
-          observedAt: "2026-05-03T12:00:00.000Z",
-          reactions: [{ emoji: "👀", count: 1 }],
-        },
-      ],
+      snapshots: [reactionSnapshot(0, ["👀"])],
     });
 
     expect(html).toContain("Discord&#39;s status reactions");
@@ -445,16 +368,8 @@ describe("discord live qa runtime", () => {
     const gateway = {
       call: vi
         .fn()
-        .mockResolvedValueOnce({
-          channelAccounts: {
-            discord: [{ accountId: "sut", running: true, connected: false, restartPending: false }],
-          },
-        })
-        .mockResolvedValueOnce({
-          channelAccounts: {
-            discord: [{ accountId: "sut", running: true, connected: true, restartPending: false }],
-          },
-        }),
+        .mockResolvedValueOnce(discordStatus(false))
+        .mockResolvedValueOnce(discordStatus(true)),
     } as unknown as Parameters<typeof testing.waitForDiscordChannelRunning>[0];
 
     const readyPromise = testing.waitForDiscordChannelRunning(gateway, "sut");
@@ -467,20 +382,12 @@ describe("discord live qa runtime", () => {
   it("reports the last Discord status when connection readiness times out", async () => {
     vi.useFakeTimers();
     const gateway = {
-      call: vi.fn().mockResolvedValue({
-        channelAccounts: {
-          discord: [
-            {
-              accountId: "sut",
-              running: true,
-              connected: false,
-              restartPending: false,
-              lastError: null,
-              lastDisconnect: { error: "runtime-not-ready" },
-            },
-          ],
-        },
-      }),
+      call: vi.fn().mockResolvedValue(
+        discordStatus(false, {
+          lastError: null,
+          lastDisconnect: { error: "runtime-not-ready" },
+        }),
+      ),
     } as unknown as Parameters<typeof testing.waitForDiscordChannelRunning>[0];
 
     const readyPromise = testing.waitForDiscordChannelRunning(gateway, "sut");
@@ -489,26 +396,6 @@ describe("discord live qa runtime", () => {
     );
     await vi.advanceTimersByTimeAsync(45_500);
     await assertion;
-  });
-
-  it("discovers the first visible Discord voice channel for the voice smoke", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json([
-          { id: "123456789012345678", name: "general", position: 0, type: 0 },
-          { id: "523456789012345678", name: "qa-voice", position: 1, type: 2 },
-          { id: "623456789012345678", name: "stage", position: 2, type: 13 },
-        ]),
-      ),
-    );
-
-    const voiceChannel = await testing.resolveDiscordQaVoiceChannel({
-      token: "token",
-      guildId: "123456789012345678",
-    });
-    expect(voiceChannel.id).toBe("523456789012345678");
-    expect(voiceChannel.name).toBe("qa-voice");
   });
 
   it("normalizes missing current Discord voice state to null", async () => {
@@ -520,7 +407,7 @@ describe("discord live qa runtime", () => {
     await expect(
       testing.getCurrentDiscordVoiceState({
         token: "token",
-        guildId: "123456789012345678",
+        guildId,
       }),
     ).resolves.toBeNull();
   });
@@ -542,7 +429,7 @@ describe("discord live qa runtime", () => {
 
     const registeredPromise = testing.assertDiscordApplicationCommandsRegistered({
       token: "token",
-      applicationId: "323456789012345678",
+      applicationId: sutId,
       expectedCommandNames: ["help", "commands"],
       timeoutMs: 5_000,
     });
@@ -591,11 +478,11 @@ describe("discord live qa runtime", () => {
             { status: 429 },
           ),
         )
-        .mockResolvedValueOnce(Response.json({ id: "423456789012345678" })),
+        .mockResolvedValueOnce(Response.json({ id: driverId })),
     );
 
     await expect(testing.getCurrentDiscordUser("token")).resolves.toEqual({
-      id: "423456789012345678",
+      id: driverId,
     });
     expect(fetch).toHaveBeenCalledTimes(2);
   });
