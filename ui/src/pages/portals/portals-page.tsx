@@ -43,7 +43,11 @@ function PortalsPageContent(props: PortalsPageProps, host: PortalsPageElement) {
   const model = createPortals(useApplication(), () => host);
   owners.set(host, model);
   onCleanup(() => owners.delete(host));
-  return <PortalContent model={model} mobile={props.mobile} />;
+  return (
+    <Show when={model.state().previewEpoch} keyed>
+      {(_previewEpoch) => <PortalContent model={model} mobile={props.mobile} />}
+    </Show>
+  );
 }
 
 function EmptyState(props: { model: PortalsModel; mobile?: boolean }) {

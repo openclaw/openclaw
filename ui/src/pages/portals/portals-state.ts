@@ -57,6 +57,7 @@ export function createPortals(
     selectedPortalId: string | null;
     loading: boolean;
     loaded: boolean;
+    previewEpoch: number;
     listReady: boolean;
     listRead: { result: Promise<void> };
     error: string | null;
@@ -74,6 +75,7 @@ export function createPortals(
     selectedPortalId: null,
     loading: false,
     loaded: false,
+    previewEpoch: 1,
     listReady: false,
     listRead: { result: Promise.resolve() },
     error: null,
@@ -283,6 +285,7 @@ export function createPortals(
   function resetGatewayState() {
     retireGatewayRequests();
     resetPendingEnvironment();
+    state.previewEpoch += 1;
     state.portals = [];
     state.selectedPortalId = null;
     state.loaded = false;
