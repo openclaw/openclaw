@@ -358,6 +358,29 @@ describe("installPackageDir", () => {
     await expectText(targetDir, "new");
   });
 
+  it("rechecks synchronous publication authority immediately before each forward rename", async () => {
+    const { sourceDir, targetDir } = await createFixture("publication-rename-authority");
+    let publicationChecks = 0;
+
+    const result = await installPackageDir({
+      ...updateOptions(sourceDir, targetDir),
+      depsLogMessage: "Installing deps…",
+      assertPublicationAuthority: () => {
+        publicationChecks += 1;
+        if (publicationChecks === 2) {
+          throw new Error("upload install lease is no longer active");
+        }
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("upload install lease is no longer active");
+    }
+    expect(publicationChecks).toBe(2);
+    await expectText(targetDir, "old");
+  });
+
   it.runIf(process.platform !== "win32").each([true, false])(
     "requires explicit package-manager hardlink allowance (allowed=%s)",
     async (allowed) => {

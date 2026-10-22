@@ -93,6 +93,17 @@ it("publishes, tracks, updates and removes Skills on the paired host with Gatewa
   });
   expect(denied).toMatchObject({ ok: false, error: "Policy denies this source" });
   await expectMissing(targetDir);
+  const deniedAuthority = await access.applySkillRoot!({
+    ...install,
+    assertPublicationAuthority: () => {
+      throw new Error("upload install lease is no longer active");
+    },
+  });
+  expect(deniedAuthority).toMatchObject({
+    ok: false,
+    error: expect.stringContaining("upload install lease is no longer active"),
+  });
+  await expectMissing(targetDir);
   const approved = vi.fn(async () => undefined);
   const installed = await access.applySkillRoot!({ ...install, beforeInstall: approved });
   expect(installed).toMatchObject({ ok: true, mode: "install", targetDir });

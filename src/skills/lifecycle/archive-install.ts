@@ -120,10 +120,11 @@ export async function installExtractedSkillRoot(
       );
     }
     const remoteApplyRoot = access?.applySkillRoot;
-    const { policy: _policy, authorizeMutation, ...files } = params;
+    const { policy: _policy, authorizeMutation, assertPublicationAuthority, ...files } = params;
     params.beforePersistentApply?.();
     const applyParams = {
       ...files,
+      ...(assertPublicationAuthority ? { assertPublicationAuthority } : {}),
       ...(captureChanges ? { changes: { source: changeSource, sourceVersion } } : {}),
       beforeInstall: async (
         mode: "install" | "update",
@@ -270,6 +271,7 @@ export async function applyExtractedSkillRoot(
       copyErrorPrefix: "failed to install skill",
       beforePersistentApply: params.beforePersistentApply,
       authorizeMutation: params.authorizeMutation,
+      assertPublicationAuthority: params.assertPublicationAuthority,
       requireExistingTarget: Boolean(params.deferCommit && expectedClawHubState),
       hasDeps: false,
       depsLogMessage: "",
@@ -338,6 +340,7 @@ export async function installSkillArchiveFromPath(params: {
   policy?: SkillArchiveInstallPolicy;
   beforePersistentApply?: () => void;
   authorizeMutation?: () => Promise<void>;
+  assertPublicationAuthority?: () => void;
 }): Promise<SkillArchiveInstallResult> {
   const result = await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -356,6 +359,7 @@ export async function installSkillArchiveFromPath(params: {
         policy: params.policy,
         beforePersistentApply: params.beforePersistentApply,
         authorizeMutation: params.authorizeMutation,
+        assertPublicationAuthority: params.assertPublicationAuthority,
       }),
   });
   if (!result.ok) {

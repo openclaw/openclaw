@@ -268,6 +268,8 @@ export async function installPackageDir<
   beforePersistentApply?: () => void;
   /** Remote owners answer before displacement/publication; local checks still run at the mutation. */
   authorizeMutation?: () => Promise<void>;
+  /** Synchronous owner check run immediately before each forward rename. */
+  assertPublicationAuthority?: () => void;
   requireExistingTarget?: boolean;
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   const transactionRequest = resolvePackageDirInstallTransactionRequest(params);
@@ -329,6 +331,10 @@ export async function installPackageDir<
   const assertPersistentApply = retainMutationAuthority(() => {
     assertRollbackOwned();
     return params.beforePersistentApply?.();
+  });
+  const assertRenameAuthority = retainMutationAuthority(() => {
+    assertPersistentApply();
+    params.assertPublicationAuthority?.();
   });
   const removeInstallTree = async (removal: {
     directory: string;
@@ -618,7 +624,7 @@ export async function installPackageDir<
         await params.authorizeMutation();
       }
       await movePathWithCopyFallback({
-        assertBeforeRename: assertPersistentApply,
+        assertBeforeRename: assertRenameAuthority,
         assertBeforeMutation: assertPersistentApply,
         onDestinationPublished: (receipt) => {
           published.backup = receipt;
@@ -655,7 +661,7 @@ export async function installPackageDir<
       await params.authorizeMutation();
     }
     await movePathWithCopyFallback({
-      assertBeforeRename: assertPersistentApply,
+      assertBeforeRename: assertRenameAuthority,
       assertBeforeMutation: assertPersistentApply,
       onDestinationPublished: (receipt) => {
         published.install = receipt;

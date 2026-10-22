@@ -170,6 +170,7 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
       );
       const {
         beforeInstall,
+        assertPublicationAuthority,
         beforePersistentApply: _guard,
         logger: _logger,
         extractedRoot: _source,
@@ -181,6 +182,7 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
         async (event) => {
           if (event.phase === "apply") {
             assertCurrent();
+            assertPublicationAuthority?.();
             return null;
           }
           if (event.mode !== "install" && event.mode !== "update") {
