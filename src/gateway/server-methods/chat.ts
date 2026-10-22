@@ -191,6 +191,9 @@ async function injectChat(
 
   const message = projectChatDisplayMessage(appended.message, {
     maxChars: resolveEffectiveChatHistoryMaxChars(),
+    // Gateway-authored injects carry no forwarded provenance; the history read
+    // owns forwarded labels for anything the transcript may hold later.
+    resolveCronJobName: () => undefined,
   });
   const chatPayload = {
     runId: `inject-${appended.messageId}`,

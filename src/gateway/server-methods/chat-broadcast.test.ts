@@ -127,3 +127,33 @@ it("keeps the bare global subscription for its persisted fixed-store owner", () 
     ["agent:ops:global", "chat", broadcast.mock.calls[0]?.[1], opts],
   ]);
 });
+
+it("projects a forwarded cron terminal message without prepared cron job names", () => {
+  const { context } = createContext();
+
+  expect(() =>
+    broadcastChatFinal({
+      terminalEntry: undefined,
+      context,
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "cron output" }],
+        provenance: {
+          kind: "internal_system",
+          sourceTool: "cron",
+          jobId: "daily-report",
+          runId: "cron-run-1",
+          sourceSessionKey: "agent:main:cron:daily-report:run:cron-run-1",
+        },
+      },
+    }),
+  ).not.toThrow();
+
+  const frame = context.broadcast.mock.calls[0]?.[1] as {
+    message?: { senderLabel?: string };
+  };
+  expect(frame?.message?.senderLabel).toBe("Forwarded from Automation");
+});
