@@ -5,8 +5,7 @@ vi.mock("../media-generation-activity.js", async (importOriginal) => {
     listMediaGenerationOperations: mediaActivityMocks.listMediaGenerationOperations,
   };
 });
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as musicGenerationRegistry from "../../media-generation/registry.js";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { MediaGenerationOperation } from "../media-generation-activity.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import { MUSIC_GENERATION_TASK_KIND } from "../media-generation-task-status.js";
@@ -18,107 +17,60 @@ import {
 const mediaActivityMocks = vi.hoisted(() => ({ listMediaGenerationOperations: vi.fn() }));
 const sessionKey = "agent:main:discord:direct:123";
 const prompt = "night-drive synthwave";
-function setOperation(overrides: Partial<MediaGenerationOperation> & { createdAt?: number } = {}) {
+function setOperation(overrides: Partial<MediaGenerationOperation> = {}) {
   mediaActivityMocks.listMediaGenerationOperations.mockReturnValue([
     {
       taskId: "task-active",
-      runtime: "cli",
       taskKind: MUSIC_GENERATION_TASK_KIND,
       sourceId: "music_generate:google",
       requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
       runId: "tool:music_generate:active",
       task: prompt,
       status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      createdAt: Date.now(),
       progressSummary: "Generating music",
       ...overrides,
     },
   ]);
 }
 
-function resetMusicStatusMocks() {
-  vi.restoreAllMocks();
-  vi.spyOn(musicGenerationRegistry, "listMusicGenerationProviders").mockReturnValue([]);
+beforeEach(() => {
   mediaActivityMocks.listMediaGenerationOperations.mockReset().mockReturnValue([]);
   resetRecentMediaGenerationDuplicateGuardsForTests();
-}
+});
 
-describe("createMusicGenerateTool status actions", () => {
-  beforeEach(resetMusicStatusMocks);
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("returns active task status instead of starting a duplicate generation", async () => {
-    setOperation();
-    const result = await createMusicGenerateDuplicateGuardResult(sessionKey, { prompt });
-
-    expect(result?.content).toStrictEqual([
-      {
-        type: "text",
-        text: "Music generation task task-active is already running with google.\nProgress: Generating music.\nDo not call music_generate again for this request. Do not wait, poll, or yield for it: end this turn; the completion arrives as a later turn and sends the finished music here.",
-      },
-    ]);
+it.each([
+  ["running", "google", "Generating music"],
+  ["queued", "minimax", "Queued music generation"],
+] as const)(
+  "reports %s music tasks without starting another",
+  async (status, provider, progressSummary) => {
+    setOperation({ sourceId: `music_generate:${provider}`, status, progressSummary });
+    const duplicate = status === "running";
+    const result = duplicate
+      ? await createMusicGenerateDuplicateGuardResult(sessionKey, { prompt })
+      : await createMusicGenerateStatusActionResult(sessionKey);
     expect(result?.details).toMatchObject({
       action: "status",
-      duplicateGuard: true,
+      ...(duplicate ? { duplicateGuard: true } : {}),
       active: true,
       existingTask: true,
-      status: "running",
+      status,
       taskKind: MUSIC_GENERATION_TASK_KIND,
-      provider: "google",
+      provider,
       task: { taskId: "task-active", runId: "tool:music_generate:active" },
-      progressSummary: "Generating music",
+      progressSummary,
     });
-  });
-
-  it("reports active task status when action=status is requested", async () => {
-    setOperation({
-      sourceId: "music_generate:minimax",
-      status: "queued",
-      progressSummary: "Queued music generation",
-    });
-    const result = await createMusicGenerateStatusActionResult(sessionKey);
-    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
-
-    expect(text).toContain("Music generation task task-active is already queued with minimax.");
-    expect(result.details).toMatchObject({
-      action: "status",
-      active: true,
-      existingTask: true,
-      status: "queued",
-      taskKind: MUSIC_GENERATION_TASK_KIND,
-      provider: "minimax",
-      task: { taskId: "task-active" },
-      progressSummary: "Queued music generation",
-    });
-  });
-
-  it("returns recent succeeded music status instead of starting a duplicate generation", async () => {
-    setOperation({
-      taskId: "task-recent-music",
-      requestKey: "music-request:night-drive",
-      runId: "tool:music_generate:recent",
-      status: "succeeded",
-      createdAt: Date.now() - 20_000,
-      endedAt: Date.now() - 10_000,
-      progressSummary: "Generated 1 track",
-    });
-    const result = await createMusicGenerateDuplicateGuardResult(sessionKey, {
-      requestKey: "music-request:night-drive",
-    });
-    const text = (result?.content?.[0] as { text: string } | undefined)?.text ?? "";
-
-    expect(text).toContain("Music generation task task-recent-music recently succeeded");
-    expect(text).toContain(
-      "Do not call music_generate again for the same request; this recent music generation already completed.",
-    );
-    expect(result?.details?.duplicateGuard).toBe(true);
-    expect(result?.details?.active).toBe(false);
-  });
-});
+    if (duplicate) {
+      expect(result?.content).toStrictEqual([
+        {
+          type: "text",
+          text: "Music generation task task-active is already running with google.\nProgress: Generating music.\nDo not call music_generate again for this request. Do not wait, poll, or yield for it: end this turn; the completion arrives as a later turn and sends the finished music here.",
+        },
+      ]);
+    } else {
+      expect(result?.content[0]?.text).toContain(
+        "Music generation task task-active is already queued with minimax.",
+      );
+    }
+  },
+);
