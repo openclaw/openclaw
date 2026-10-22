@@ -403,14 +403,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("rejects summaries with an older pending fallback marker", () => {
     const quality = auditSummaryQuality({
-      summary: [
-        '## Latest user request context\n"report whether the deployment is ready"',
-        "## Decisions\n\nThe deployment readiness report was delivered.",
-        "## Open TODOs\n\nNone.",
-        "## Constraints/Rules\n\nPreserve exact context.",
-        "## Pending user asks\n\nLatest user request context:\narchive the previous release notes",
-        "## Exact identifiers\n\nNone.",
-      ].join("\n\n"),
+      summary:
+        '## Latest user request context\n"report whether the deployment is ready"\n\n' +
+        structuredSummary({
+          decisions: "The deployment readiness report was delivered.",
+          asks: "Latest user request context:\narchive the previous release notes",
+        }),
       identifiers: [],
       latestAsk: "report whether the deployment is ready",
       latestUnresolvedUserRequest: "report whether the deployment is ready",
@@ -936,12 +934,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
     "handles provider AbortError according to caller cancellation (aborted=%s)",
     async (aborted) => {
       summarizeHistory.mockResolvedValue("llm fallback summary");
-      const providerAbortErr = Object.assign(
-        new Error("This operation was aborted: synthetic-private-provider"),
-        {
-          name: "AbortError",
-        },
-      );
+      const providerAbortErr = Object.assign(new Error("synthetic-private-provider"), {
+        name: "AbortError",
+      });
       installCompactionProviderForTest(
         "aborting-provider",
         vi.fn().mockRejectedValue(providerAbortErr),
@@ -950,18 +945,18 @@ describe("compaction-safeguard recent-turn preservation", () => {
       if (aborted) {
         controller.abort();
       }
-      const sessionManager = aborted
-        ? configuredSession({ provider: "aborting-provider" })
-        : modelSession({ provider: "aborting-provider", recentTurnsPreserve: 0 });
+      const sessionManager = (aborted ? configuredSession : modelSession)({
+        provider: "aborting-provider",
+        recentTurnsPreserve: 0,
+      });
+      const messages = [userMessage("older context", 1)];
+      if (!aborted) {
+        messages.push(
+          castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
+        );
+      }
       const event = compactionEvent({
-        preparation: {
-          messagesToSummarize: [
-            userMessage("older context", 1),
-            ...(aborted
-              ? []
-              : [castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 })]),
-          ],
-        },
+        preparation: { messagesToSummarize: messages },
         signal: controller.signal,
       });
       if (aborted) {
