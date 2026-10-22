@@ -7,6 +7,7 @@ import {
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
+  buildQualifiedChatModelValue,
   formatCatalogChatModelDisplayFromLookup,
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue as resolve,
@@ -36,6 +37,10 @@ describe("chat-model-ref helpers", () => {
 
   it("keeps ambiguous raw overrides unchanged", () => {
     expect(normalizeChatModelOverrideValue("gpt-5-mini", ambiguous)).toBe("gpt-5-mini");
+  });
+
+  it("does not double-prefix provider-native catalog ids", () => {
+    expect(buildQualifiedChatModelValue("openrouter/auto", "openrouter")).toBe("openrouter/auto");
   });
 
   it.each([

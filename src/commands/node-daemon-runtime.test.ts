@@ -91,15 +91,6 @@ beforeEach(() => {
   loadDeviceIdentityIfPresentAsync.mockResolvedValue(null);
   loadDeviceAuthTokenReadOnly.mockResolvedValue(null);
   serviceInstall.mockResolvedValue(undefined);
-  runExec.mockResolvedValue({
-    stdout: JSON.stringify({
-      nodeVersion: "26.8.1",
-      sqliteVersion: "3.53.4",
-      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-      nodeSharedSqlite: false,
-    }),
-    stderr: "",
-  });
 });
 afterEach(() => {
   process.execPath = originalExecPath;
@@ -126,9 +117,41 @@ async function install(env: Record<string, string | undefined> = {}, authFromEnv
 }
 
 describe.skipIf(process.platform === "win32")("node-host runtime install boundary", () => {
+  it("accepts a Node 26 system runtime with safe embedded SQLite", async () => {
+    runExec.mockResolvedValue({
+      stdout: JSON.stringify({
+        nodeVersion: "26.12.1",
+        sqliteVersion: "3.53.4",
+        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+        nodeSharedSqlite: false,
+      }),
+      stderr: "",
+    });
+    const plan = await install();
+    expect(plan.programArguments).toEqual([
+      "/usr/bin/node",
+      "/opt/openclaw/openclaw.mjs",
+      "node",
+      "run",
+      "--host",
+      "gateway.example",
+      "--port",
+      "18789",
+      "--no-tls",
+    ]);
+  });
+
   it.each([false, true])(
     "persists ambient auth only when explicitly selected for a paired node (explicit=%s)",
     async (explicit) => {
+      runExec.mockResolvedValue({
+        stdout: JSON.stringify({
+          nodeVersion: "26.12.1",
+          sqliteVersion: "3.53.4",
+          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+        }),
+        stderr: "",
+      });
       loadNodeHostConfig.mockResolvedValue({
         version: 1,
         nodeId: "paired-node",
@@ -143,14 +166,20 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
         },
         explicit,
       );
-      for (const key of ["TOKEN", "PASSWORD"]) {
-        expect(plan.environment?.[`OPENCLAW_GATEWAY_${key}`]).toBe(
-          explicit ? `unrelated-gateway-${key.toLowerCase()}` : undefined,
-        );
-      }
+      expect(plan.environment?.OPENCLAW_GATEWAY_TOKEN).toBe(
+        explicit ? "unrelated-gateway-token" : undefined,
+      );
+      expect(plan.environment?.OPENCLAW_GATEWAY_PASSWORD).toBe(
+        explicit ? "unrelated-gateway-password" : undefined,
+      );
       expect(plan.programArguments.includes("--auth-from-env")).toBe(explicit);
     },
   );
+
+  it("surfaces an exec failure through the install plan without Node upgrade advice", async () => {
+    runExec.mockRejectedValue(new Error("spawn EACCES"));
+    await expect(install()).rejects.toThrow(/Node runtime check failed.*\/usr\/bin\/node.*EACCES/s);
+  });
 
   it("uses OPENCLAW_WRAPPER even when native runtime probes cannot execute", async () => {
     runExec.mockRejectedValue(new Error("spawn EACCES"));
@@ -165,5 +194,12 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
       "18789",
       "--no-tls",
     ]);
+  });
+
+  it("rejects a node-host wrapper without execute permission", async () => {
+    access.mockRejectedValue(new Error("EACCES"));
+    await expect(install({ OPENCLAW_WRAPPER: "/opt/openclaw-wrapper" })).rejects.toThrow(
+      "OPENCLAW_WRAPPER must point to an executable file",
+    );
   });
 });

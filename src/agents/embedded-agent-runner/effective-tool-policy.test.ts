@@ -5,13 +5,22 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
-import { createStubTool as makeTool } from "../test-helpers/agent-tool-stubs.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 
 type ConversationCapabilityProfileParams = Parameters<
   typeof prepareConversationCapabilityProfile
 >[0];
+
+function makeTool(name: string): AnyAgentTool {
+  return {
+    name,
+    label: name,
+    description: name,
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+  };
+}
 
 async function applyFinalPolicy(
   params: {
@@ -35,7 +44,7 @@ async function applyFinalPolicy(
   });
 }
 
-function pluginTool(name: string) {
+function pluginTool(name = "bundleProbe__bundle_probe") {
   const tool = makeTool(name);
   setPluginToolMeta(tool, { pluginId: "bundle-mcp", optional: false });
   return tool;
@@ -129,13 +138,31 @@ describe("applyFinalEffectiveToolPolicy", () => {
     },
   );
 
-  it.each([
-    [["read", "exec", "mcp__bundle__read"], "unknown entries", 0],
-    [["mcp__bundle__read", "totally-made-up-tool"], "totally-made-up-tool", 1],
-  ] as const)("reports only unknown bundled allow entries: %j", async (allow, text, count) => {
+  it("does not emit unknown-entry warnings for core tool allowlists in the bundled pass", async () => {
     const warnings = await warningsFor({
-      config: { tools: { allow: [...allow] } },
+      config: { tools: { allow: ["read", "exec", "mcp__bundle__read"] } },
     });
-    expect(warnings.filter((message) => message.includes(text))).toHaveLength(count);
+
+    expect(warnings.filter((message) => message.includes("unknown entries"))).toStrictEqual([]);
+  });
+
+  it("still warns on genuinely unknown entries in the bundled pass", async () => {
+    const warnings = await warningsFor({
+      config: { tools: { allow: ["mcp__bundle__read", "totally-made-up-tool"] } },
+    });
+
+    expect(warnings.filter((message) => message.includes("totally-made-up-tool"))).toHaveLength(1);
+  });
+
+  it.each([
+    { deny: undefined, expected: ["bundleProbe__bundle_probe"] },
+    { deny: ["bundle-mcp"], expected: [] },
+  ])("applies the coding profile plugin allowlist with deny=$deny", async ({ deny, expected }) => {
+    const filtered = await applyFinalPolicy({
+      bundledTools: [pluginTool()],
+      config: { tools: { profile: "coding", deny } },
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(expected);
   });
 });

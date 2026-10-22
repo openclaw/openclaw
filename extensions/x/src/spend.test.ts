@@ -213,6 +213,16 @@ describe("X spend", () => {
     await expect(spend.reserve(1_000_000)).resolves.toHaveProperty("settle");
   });
 
+  it("holds in-flight reservations across midnight and settles against both periods", async () => {
+    const { spend } = fixture({ dailyUsd: 1, monthlyUsd: 1, cycleStartDay: 20 });
+    const reservation = await spend.reserve(800_000);
+    vi.setSystemTime("2026-10-20T00:00:00Z");
+    await expect(spend.reserve(300_000)).rejects.toBeInstanceOf(XBudgetExceededError);
+    await reservation.settle(200_000);
+    expect(await spend.status()).toMatchObject({ dayUsd: 0.2, cycleUsd: 0.2 });
+    await expect(spend.reserve(800_000)).resolves.toHaveProperty("settle");
+  });
+
   it("preserves the settled cycle spend across a restart after a request crosses midnight", async () => {
     const test = fixture({ monthlyUsd: 0.15 });
     const reservation = await test.spend.reserve(100_000);

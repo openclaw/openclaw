@@ -198,7 +198,9 @@ export async function installFakePiFixture(
 }
 
 export function capturePiContinuationCatalog() {
-  const entries: Array<{ sessionKey: string; entry: Record<string, unknown> }> = [];
+  const entries: ReturnType<
+    NonNullable<OpenClawPluginApi["runtime"]["agent"]["session"]["listSessionEntries"]>
+  > = [];
   const createSessionEntry = vi.fn(
     async (
       params: Parameters<OpenClawPluginApi["runtime"]["agent"]["session"]["createSessionEntry"]>[0],

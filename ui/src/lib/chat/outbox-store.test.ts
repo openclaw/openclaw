@@ -7,9 +7,10 @@ import {
   captureChatOutboxRecoveryDestination,
   discardChatOutboxRecovery,
   readChatOutboxRecovery,
+  restoreChatOutboxRecovery,
 } from "./outbox-recovery.ts";
 import type { StoredComposerState } from "./outbox-store-codec.ts";
-import { createStoredChatOutboxReader } from "./outbox-store-projection.ts";
+import { createStoredChatOutboxReader, listStoredChatOutboxes } from "./outbox-store-projection.ts";
 import { retireStoredComposerDrafts } from "./outbox-store-retirement.ts";
 import {
   readProjectedOutboxStore,
@@ -718,4 +719,54 @@ it("projects metadata-only badges and counts distinct operator-review rows", () 
   expect(summary.attentionCountForSession("agent:work:b")).toBe(4);
   expect(summary.attentionCountForSession("thread-b")).toBe(1);
   expect(summary.attentionCountForSession("absent")).toBe(0);
+});
+
+it("derives badges and replay from the same migrated durable queue", () => {
+  const legacyKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`;
+  seedSource(storageTargetForGateway(gatewayUrl), 1, {
+    "main\u0000agent:previous": {
+      queue: [queued("removed"), queued("shared", { text: "older", createdAt: 2 })],
+      removedQueueItemIds: ["removed"],
+      updatedAt: 2,
+    },
+    "global\u0000agent:work": {
+      queue: [queued("shared", { text: "newer", createdAt: 3 })],
+      updatedAt: 3,
+    },
+  });
+  const state = {
+    ...ownedState(gatewayUrl),
+    assistantAgentId: "work",
+    agentsList: { defaultId: "work", mainKey: "main" },
+  };
+  // Legacy migration retains unowned bytes; explicit review admits the selected row.
+  expect(createStoredChatOutboxReader().read(state).total).toBe(0);
+  const recovery = readChatOutboxRecovery(state);
+  expect(
+    recovery.entries.find((entry) => entry.sourceScopeKey === "main\u0000agent:previous")?.session
+      .queue,
+  ).toMatchObject([{ id: "shared", text: "older" }]);
+  const entry = recovery.entries.find(
+    (candidate) => candidate.sourceScopeKey === "global\u0000agent:work",
+  )!;
+  const destination = captureChatOutboxRecoveryDestination(state, {
+    sessionKey: "global",
+    agentId: "work",
+  })!;
+  expect(restoreChatOutboxRecovery(state, entry, destination)).toBe("restored");
+  const summary = createStoredChatOutboxReader().read(state);
+  const outboxes = listStoredChatOutboxes(state);
+  expect(summary.total).toBe(1);
+  expect(outboxes[0]?.queue).toEqual([
+    queued("shared", {
+      text: "newer",
+      createdAt: 3,
+      sessionKey: "global",
+      agentId: "work",
+      storageScope: outboxStorageScope(state),
+      sendState: "failed",
+      sendError: "Recovered message. Review this destination and retry only if it did not arrive.",
+    }),
+  ]);
+  expect(sessionStorage.getItem(legacyKey)).toBeNull();
 });

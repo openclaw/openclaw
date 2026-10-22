@@ -3,6 +3,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 
 const resolveSessionStoreTargetsMock = vi.hoisted(() => vi.fn());
@@ -13,7 +15,20 @@ vi.mock("../config/sessions.js", () => ({
 
 function createDatabase(pathname: string, table: string): void {
   const database = new DatabaseSync(pathname);
-  database.exec(`CREATE TABLE ${table} (meta_key TEXT PRIMARY KEY)`);
+  if (table === "schema_meta") {
+    database.exec(`
+      CREATE TABLE schema_meta (
+        meta_key TEXT PRIMARY KEY,
+        role TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        agent_id TEXT
+      );
+      INSERT INTO schema_meta (meta_key, role, schema_version, agent_id)
+      VALUES ('primary', 'agent', 0, 'main');
+    `);
+  } else {
+    database.exec(`CREATE TABLE ${table} (meta_key TEXT PRIMARY KEY)`);
+  }
   database.close();
 }
 
@@ -24,6 +39,33 @@ const resolve = (opts: Parameters<typeof resolveCommandSessionStoreTargets>[0]["
   resolveCommandSessionStoreTargets({ cfg: {}, opts });
 const mockTarget = (storePath: string) =>
   resolveSessionStoreTargetsMock.mockReturnValue([{ agentId: "main", storePath }]);
+
+it("returns targets from the shared config helper", () => {
+  mockTarget("/tmp/main-sessions.json");
+  expect(resolve()).toEqual([{ agentId: "main", storePath: "/tmp/main-sessions.json" }]);
+  expect(resolveSessionStoreTargetsMock).toHaveBeenCalledWith({}, {});
+});
+
+it.each([
+  new AgentSelectionRequiredError(["main", "analyst"]),
+  new Error("Unknown agent id: ghost"),
+])("routes $message through its CLI failure owner", (error) => {
+  resolveSessionStoreTargetsMock.mockImplementation(() => {
+    throw error;
+  });
+  const selectionRequired = error instanceof AgentSelectionRequiredError;
+  expect(() => resolve(selectionRequired ? {} : { agent: "ghost" })).toThrow(
+    selectionRequired
+      ? expect.objectContaining({
+          name: "AgentSelectionRequiredError",
+          agentIds: ["main", "analyst"],
+          message: expect.stringContaining(
+            "session-store selection has no explicit owner. Pass --agent <id> to select one agent, or --all-agents",
+          ),
+        })
+      : ExpectedCliError,
+  );
+});
 
 it.each(["missing", "suffixless", "directory", "non-database", "foreign-database"] as const)(
   "rejects a %s explicit store through the CLI failure owner",

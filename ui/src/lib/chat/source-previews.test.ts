@@ -266,19 +266,20 @@ it("reuses Markdown work across recreated frame wrappers", () => {
   expect(parse).toHaveBeenCalledTimes(parsed);
 
   none([], final);
+  none([message], answer("A completed answer without source links."));
 });
 
 it("caches answers without citations and updates when live result ownership is replaced", () => {
   const parse = vi.spyOn(MarkdownIt.prototype, "parse");
   const uncited = answer("No citations in this answer.");
-  const message = searchTool();
-  expect(previews([message], uncited)).toEqual([]);
+  previews([], uncited);
   const parsed = parse.mock.calls.length;
-  previews([message], uncited);
+  previews([], uncited);
   expect(parse).toHaveBeenCalledTimes(parsed);
 
   const final = answer();
   const pending = { ...assistant([call("pending")]), ...live };
   none([pending], final);
   expect(previews([tool(search(), "web_search", "pending")], final)).toHaveLength(1);
+  none([tool(search(), "web_search", "pending")], { ...final, runId: "another-run" });
 });

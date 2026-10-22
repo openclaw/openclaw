@@ -41,7 +41,7 @@ async function exists(filePath: string): Promise<boolean> {
 }
 
 const fixture = useLoadingFixture("openclaw-skills-sync-suite-");
-const newDir = fixture.createDir;
+const newDir = (label?: string) => fixture.createDir(label);
 
 function sync(
   source: string,

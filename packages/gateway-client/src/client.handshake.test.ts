@@ -392,7 +392,7 @@ function syntheticClient(options: GatewayClientOptions) {
     close,
     receive: (frame: unknown) =>
       protocol.handleMessage(socket, protocol.generation, JSON.stringify(frame)),
-    async stop() {
+    stop: async () => {
       client.stop();
       await vi.advanceTimersByTimeAsync(250);
     },

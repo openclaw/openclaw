@@ -6,6 +6,7 @@ import {
   resolveChatThinkingSelectState,
   resolveCurrentThinkingLevel,
   resolveThinkingCommandArgOptionsForSession,
+  resolveThinkingLevelInput,
 } from "./thinking.ts";
 
 type SelectParams = Parameters<typeof resolveChatThinkingSelectState>[0];
@@ -46,29 +47,72 @@ const roster = (
 });
 
 it("keeps an explicitly empty session profile and its saved override", () => {
-  const entry = model(highProfile);
-  const session = {
-    ...sessionFor(entry),
-    thinkingLevels: [],
-    thinkingLevel: "off",
-  };
-  const defaults = { ...sessionFor(entry), ...highProfile, contextTokens: null };
   const state = select({
-    catalog: [entry],
-    session,
-    defaults,
+    sessionKey: "main",
+    catalog: [
+      {
+        id: "model",
+        provider: "openai",
+        name: "Model",
+        ...highProfile,
+      },
+    ],
+    session: {
+      model: "model",
+      modelProvider: "openai",
+      thinkingLevels: [],
+      thinkingLevel: "off",
+    },
   });
   expect(state).toMatchObject({
     options: [],
     inherited: { value: "" },
     selection: { source: "override", value: "off" },
   });
-  expect(
-    resolveCurrentThinkingLevel({ ...session, thinkingLevel: undefined }, defaults, [entry]),
-  ).toBe("Unknown");
-  expect(isThinkingLevelOptionForSession(session, defaults, "high", [entry])).toBe(false);
-  expect(formatThinkingCommandOptionsForSession(session, defaults, [entry])).toBe("none");
-  expect(resolveThinkingCommandArgOptionsForSession(session, defaults, [entry])).toEqual([]);
+});
+
+const emptySession = { modelProvider: "thinking-fixture", model: "no-effort", thinkingLevels: [] };
+it.each([
+  {
+    name: "unknown",
+    session: { modelProvider: "thinking-fixture", model: "unpublished" },
+    defaults: undefined,
+    label: "Unknown",
+    high: undefined,
+  },
+  {
+    name: "explicitly empty",
+    session: emptySession,
+    defaults: { ...emptySession, ...highProfile, contextTokens: null },
+    label: "none",
+    high: false,
+  },
+])(
+  "keeps $name capability distinct from inherited choices",
+  ({ session, defaults, label, high }) => {
+    expect(select({ defaults, session })).toMatchObject({ options: [], inherited: { value: "" } });
+    expect(resolveCurrentThinkingLevel(session, defaults, [])).toBe("Unknown");
+    expect(formatThinkingCommandOptionsForSession(session, defaults, [])).toBe(label);
+    expect(isThinkingLevelOptionForSession(session, defaults, "high")).toBe(high);
+  },
+);
+
+it("keeps a ready empty thinking profile empty for the selected model", () => {
+  const entry = model({ thinkingLevels: [] });
+  const session = {
+    ...sessionFor(entry),
+    thinkingLevels: entry.thinkingLevels,
+    thinkingOptions: [],
+  };
+  const state = select({ catalog: [entry], session });
+
+  expect({
+    options: state.options.map((option) => option.value),
+    acceptsHigh: isThinkingLevelOptionForSession(session, undefined, "high", [entry]),
+    inherited: state.inherited.value,
+  }).toEqual({ options: [], acceptsHigh: false, inherited: "" });
+  expect(formatThinkingCommandOptionsForSession(session, undefined, [entry])).toBe("none");
+  expect(resolveThinkingCommandArgOptionsForSession(session, undefined, [entry])).toEqual([]);
 });
 
 it("preserves explicitly empty default labels metadata", () => {
@@ -125,6 +169,11 @@ const lunaModel = model({
     { id: "ultra", label: "ultra" },
   ],
   thinkingDefault: "ultra",
+});
+
+it("normalizes canonical Ultra command input", () => {
+  const session = { thinkingLevels: [{ id: "ultra", label: "Ultra" }] };
+  expect(resolveThinkingLevelInput("ultra", session, undefined)).toBe("ultra");
 });
 
 it("does not promote an unsupported persisted Ultra override into a slider stop", () => {
