@@ -123,6 +123,11 @@ it("preserves prepared avatar state and image errors", () => {
   flush();
   expect(failed).toHaveBeenCalledOnce();
   expect(face?.dataset.avatarState).toBe("failed");
+  expect(face?.classList.contains("is-fallback")).toBe(true);
+  setAgent((current) => ({ ...current, avatar: undefined }));
+  flush();
+  expect(view.container.querySelector("img")).toBeNull();
+  expect(view.container.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦀");
 });
 
 it.each(["emoji", "dispose"] as const)("retires pending face artwork on %s", async (mode) => {

@@ -13,6 +13,7 @@ import {
   settleDurableDelivery,
   settlePendingFinalDelivery,
 } from "../../infra/outbound/delivery-completion.js";
+import { createPendingFinalFixture } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -51,16 +52,10 @@ describe("pending delivery notice end to end", () => {
   const sessionKey = "agent:main:telegram:direct:chat-1";
   const route = { channel: "telegram", accountId: "default" };
   const context = { ...route, to: "chat-1" };
-  let completion = {
-    deliveryId: "delivery-e2e",
-    intentId: "intent-e2e",
-    sessionId: "session-e2e",
-    sessionKey,
-    storePath: "",
-  };
+  let completion: ReturnType<typeof createPendingFinalFixture>["completion"];
   const locator = () => ({ sessionKey, storePath });
   const entry = () => loadSessionEntry(locator());
-  const settlementRef = () => ({ kind: "pending-final" as const, ...completion });
+  const settlementRef = () => completion;
   const settle = (state: "queued" | "unknown") =>
     settlePendingFinalDelivery(settlementRef(), state, ["prepared"]);
   const visible = async () => ({ visibleReplySent: true });
@@ -91,20 +86,16 @@ describe("pending delivery notice end to end", () => {
     sendRecoveryNotice.mockResolvedValue({ suppressed: false });
     appendAssistantMessageToSessionTranscript.mockResolvedValue({ ok: true });
     storePath = path.join(sessionDirs.make(), "sessions.json");
-    completion = { ...completion, storePath };
+    const fixture = createPendingFinalFixture(storePath, "delivery-e2e", sessionKey, {
+      text: "the final answer",
+      context,
+      now: Date.now(),
+    });
+    completion = fixture.completion;
     await replaceSessionEntry(locator(), {
-      sessionId: completion.sessionId,
+      ...fixture.entry,
       status: "done",
-      updatedAt: Date.now(),
       delivery: { kind: "external", route, context, origin: {} },
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text: "the final answer",
-        createdAt: Date.now(),
-        context,
-        intentId: completion.intentId,
-        deliveries: [{ id: completion.deliveryId, state: "prepared" }],
-      },
     });
   });
 
@@ -264,6 +255,9 @@ describe("pending delivery notice end to end", () => {
       }),
     );
     expectNoticeState(suppressed);
+    if (suppressed) {
+      expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    }
 
     await closeOpenClawAgentDatabasesAsync(path.dirname(storePath));
     closeOpenClawAgentDatabasesForTest(path.dirname(storePath));

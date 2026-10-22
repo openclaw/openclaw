@@ -348,8 +348,8 @@ it("records Code Mode skills.read of a workshop skill as run usage and skill.use
   const codeModeSkills = resolveCodeModeSkills({
     skillsPrompt: await resolveSkillsPrompt({ entries: [learned], workspaceDir: "/workspace" }),
     candidates: [learned.skill],
-    reader: async () => "# Learned instructions\n",
   });
+  codeModeSkills[0]!.reader = async () => "# Learned instructions\n";
   const used: Array<{ event: DiagnosticEventPayload; skillFile?: string }> = [];
   const stop = onTrustedInternalDiagnosticEvent(
     (event, _metadata, privateData) => {

@@ -1,4 +1,4 @@
-import { Show, Switch, Match, createMemo } from "solid-js";
+import { action, createMemo, createOptimistic, Match, onSettled, Show, Switch } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { ConfigError } from "../../components/config-error.tsx";
@@ -68,6 +68,21 @@ export function AgentsPageHeader() {
 }
 
 export function Agents(props: AgentsProps) {
+  const [defaultPending, setSettingDefault] = createOptimistic(false);
+  const settingDefault = () => defaultPending() || props.config.configSaving;
+  const defaultAction = action(function* (completion: Promise<void>, retired: Promise<void>) {
+    if (retired === props.presentationRetired()) {
+      setSettingDefault(true);
+    }
+    yield Promise.race([completion, retired]);
+  });
+  const setDefault = (agentId: string) => {
+    const retired = props.presentationRetired();
+    const completion = props.onSetDefault(agentId);
+    onSettled(() => {
+      void defaultAction(completion, retired);
+    });
+  };
   const rosterPending = createAgentReadPending(() => props.listRead);
   const config = () => currentConfigObject(props.config);
   const defaultId = () =>
@@ -148,10 +163,18 @@ export function Agents(props: AgentsProps) {
                   <button
                     type="button"
                     class="btn btn--sm btn--ghost"
-                    disabled={!props.access.canUpdateConfig || agent().id === defaultId()}
-                    onClick={() => props.onSetDefault(agent().id)}
+                    disabled={
+                      !props.access.canUpdateConfig ||
+                      settingDefault() ||
+                      agent().id === defaultId()
+                    }
+                    onClick={() => setDefault(agent().id)}
                   >
-                    {agent().id === defaultId() ? t("agents.default") : t("agents.setDefault")}
+                    {settingDefault()
+                      ? t("common.saving")
+                      : agent().id === defaultId()
+                        ? t("agents.default")
+                        : t("agents.setDefault")}
                   </button>
                   <button
                     type="button"
@@ -253,6 +276,7 @@ export function Agents(props: AgentsProps) {
                     <AgentFiles
                       {...props.agentFiles}
                       readData={props.readData}
+                      presentationRetired={props.presentationRetired}
                       agentId={agent().id}
                       canWrite={props.access.canWriteFiles}
                     />

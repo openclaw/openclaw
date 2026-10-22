@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import postcss, { type Rule } from "postcss";
 import { describe, expect, it } from "vitest";
+import { readThemeBlocks } from "./theme-palette.test-support.ts";
 
 const stylesDir = path.dirname(fileURLToPath(import.meta.url));
 const readStyle = (name: string) => fs.readFileSync(path.join(stylesDir, name), "utf8");
@@ -59,40 +60,6 @@ const LIGHT_SENDER_TINT_BUBBLE_RULE =
 type TokenMap = Map<string, string>;
 type RGB = readonly [red: number, green: number, blue: number];
 type Color = { rgb: RGB; alpha: number };
-
-// Include lazy palettes as well as the startup stylesheet.
-function readPaletteSources(stylesRoot: string): string {
-  const themesDir = path.join(stylesRoot, "..", "..", "public", "themes");
-  const palettes = fs
-    .readdirSync(themesDir)
-    .filter((entry) => entry.endsWith(".css"))
-    .toSorted()
-    .map((entry) => fs.readFileSync(path.join(themesDir, entry), "utf8"));
-  return [fs.readFileSync(path.join(stylesRoot, "base.css"), "utf8"), ...palettes].join("\n");
-}
-
-function parseThemeBlocks(baseCss: string): Map<string, TokenMap> {
-  const blocks = new Map<string, TokenMap>();
-  for (const rule of cssRules(baseCss)) {
-    const selector = rule.selector;
-    if (
-      !/^:root(?::where\(\[data-theme-mode="light"\]\)|\[data-theme(?:-mode)?="[^"]+"\])?$/u.test(
-        selector,
-      )
-    ) {
-      continue;
-    }
-    // Merge repeated :root blocks so cursor rules cannot erase the palette.
-    const tokens: TokenMap = blocks.get(selector) ?? new Map();
-    for (const [name, value] of declarations(rule)) {
-      if (name.startsWith("--")) {
-        tokens.set(name, value.trim());
-      }
-    }
-    blocks.set(selector, tokens);
-  }
-  return blocks;
-}
 
 /** Compose each selectable theme the way theme.ts layers blocks over :root. */
 function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
@@ -317,9 +284,10 @@ function readBubbleBackgrounds(rules: Rule[]) {
   };
 }
 
+const themeBlocks = readThemeBlocks(stylesDir);
+
 describe("Control UI theme contrast", () => {
-  const baseCss = readPaletteSources(stylesDir);
-  const themes = resolveThemes(parseThemeBlocks(baseCss));
+  const themes = resolveThemes(themeBlocks);
   const textCss = readStyle("chat/text.css");
   const textRules = cssRules(textCss);
   const groupedRules = cssRules(readStyle("chat/grouped.css"));
@@ -424,7 +392,7 @@ describe("Control UI theme contrast", () => {
   });
 
   it("preserves imported fill/ink contrast when no hover pair is supplied", () => {
-    const defaults = parseThemeBlocks(baseCss).get(":root") ?? new Map<string, string>();
+    const defaults = themeBlocks.get(":root") ?? new Map<string, string>();
     for (const text of ["#fafafa", "#211e1a"]) {
       for (const [primary, destructive, foreground] of [
         ["#d92a3f", "#d32f2f", "#fafafa"],

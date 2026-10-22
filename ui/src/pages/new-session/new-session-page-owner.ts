@@ -253,6 +253,7 @@ export class NewSessionPageOwner {
           if (state.location !== location) {
             location = state.location;
             this.retireSubmissionPresentation();
+            this.browser.close();
           }
         }),
       );
@@ -268,6 +269,7 @@ export class NewSessionPageOwner {
     if (!this.isConnected) {
       return;
     }
+    this.browser.close();
     for (const stop of this.contextSubscriptions.splice(0)) {
       stop();
     }

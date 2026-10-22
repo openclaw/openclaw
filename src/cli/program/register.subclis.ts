@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { shouldEagerRegisterSubcommands } from "../command-registration-policy.js";
-import { buildCommandGroupEntries } from "./command-group-descriptors.js";
+import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 import { removeCommandByName } from "./command-tree.js";
 import {
   findCommandGroupEntry,
@@ -27,7 +27,23 @@ function resolveSubCliCommandGroups(
   argv: string[],
   context: SubCliRegistrationContext = {},
 ): CommandGroupEntry[] {
-  return buildCommandGroupEntries(getSubCliEntriesCore(), argv, context);
+  const descriptors = getSubCliEntriesCore();
+  const groups = new Map<
+    (typeof descriptors)[number]["register"],
+    { placeholders: NamedCommandDescriptor[]; register: (program: Command) => Promise<void> | void }
+  >();
+  for (const descriptor of descriptors) {
+    const group = groups.get(descriptor.register);
+    if (group) {
+      group.placeholders.push(descriptor);
+    } else {
+      groups.set(descriptor.register, {
+        placeholders: [descriptor],
+        register: (program: Command) => descriptor.register(program, argv, context),
+      });
+    }
+  }
+  return [...groups.values()];
 }
 
 export function getSubCliCompletionGroups(argv: string[] = process.argv) {

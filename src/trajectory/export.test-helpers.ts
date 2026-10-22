@@ -25,6 +25,8 @@ export function assistantMessage(
   };
 }
 
+export const assistantText = (text: string) => assistantMessage(textContent(text));
+
 function toolResultMessage(text: string): Message {
   return {
     role: "toolResult",
@@ -36,21 +38,26 @@ function toolResultMessage(text: string): Message {
   };
 }
 
-function sessionHeader(workspaceDir: string) {
+export function sessionHeader(workspaceDir: string, id = "session-1") {
   return {
     type: "session",
     version: 3,
-    id: "session-1",
+    id,
     timestamp: "2026-04-01T05:46:39.000Z",
     cwd: workspaceDir,
   };
 }
 
-function messageEntry(id: string, parentId: string | null, message: Message, second = 41) {
+export function messageEntry(
+  id: string,
+  parentId: string | null | undefined,
+  message: Message,
+  second = 41,
+) {
   return { type: "message", id, parentId, timestamp: `2026-04-01T05:46:${second}.000Z`, message };
 }
 
-function writeEntries(sessionFile: string, entries: readonly unknown[]): void {
+export function writeEntries(sessionFile: string, entries: readonly unknown[]): void {
   fs.writeFileSync(
     sessionFile,
     `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,

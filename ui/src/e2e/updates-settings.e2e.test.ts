@@ -270,7 +270,7 @@ suite.define(() => {
       expect(typeof raw).toBe("string");
       expect(JSON.parse(String(raw))).toMatchObject({ update: { channel: "beta" } });
 
-      await content.getByRole("button", { name: "Update now", exact: true }).click();
+      await content.getByRole("button", { name: "Update Gateway…", exact: true }).click();
       await page.getByRole("button", { name: "Update and restart", exact: true }).click();
       await gateway.waitForRequest("update.run");
     });
@@ -297,7 +297,7 @@ suite.define(() => {
       await expectRadiosDisabled(page);
       expect(await page.getByRole("switch", { name: "Automatic updates" }).isDisabled()).toBe(true);
       expect(await page.getByRole("switch", { name: "Check for updates" }).isDisabled()).toBe(true);
-      expect(await page.getByRole("button", { name: "Update now" }).isDisabled()).toBe(true);
+      expect(await page.getByRole("button", { name: "Update Gateway…" }).isDisabled()).toBe(true);
       expect(await gateway.getRequests("config.schema")).toHaveLength(0);
     });
   });

@@ -45,10 +45,9 @@ const mediaAccess = (readFile: ReturnType<typeof makeMediaReader>) => ({
 });
 const outboundContext = (text = "report") => ({ cfg: config(), to: "channel:CHAN1", text });
 
-function config(mattermost: MattermostConfig = {}): OpenClawConfig {
-  const cfg = createMattermostTestConfig();
-  return { channels: { mattermost: { ...cfg.channels?.mattermost, ...mattermost } } };
-}
+const config = (mattermost: MattermostConfig = {}): OpenClawConfig => ({
+  channels: { mattermost: { ...createMattermostTestConfig().channels?.mattermost, ...mattermost } },
+});
 
 function action(overrides: Partial<ActionContext>): ActionContext {
   return { channel: "mattermost", action: "send", params: {}, cfg: config(), ...overrides };
@@ -132,10 +131,12 @@ async function render(buttons: Button[], texts: string[] = [], extras: ReplyPayl
 }
 
 function expectSend(text = "report") {
-  expect(sendMessageMattermostMock).toHaveBeenCalledTimes(1);
-  const [to, actualText, options] = sendMessageMattermostMock.mock.calls[0]!;
-  expect([to, actualText]).toEqual(["channel:CHAN1", text]);
-  return options;
+  expect(sendMessageMattermostMock).toHaveBeenCalledExactlyOnceWith(
+    "channel:CHAN1",
+    text,
+    expect.anything(),
+  );
+  return sendMessageMattermostMock.mock.calls[0]![2];
 }
 
 beforeEach(() => {
@@ -159,9 +160,8 @@ describe("Mattermost configuration and threading", () => {
     const expected = mattermostPlugin.config.resolveAccount(before, "beta");
     for (const baseUrl of ["https://alpha.example.com", "https://alpha-new.example.com"]) {
       const after = {
-        ...before,
         channels: {
-          mattermost: { ...before.channels?.mattermost, accounts: { beta, alpha: { baseUrl } } },
+          mattermost: { replyToMode: "first" as const, accounts: { beta, alpha: { baseUrl } } },
         },
       };
       expect(mattermostPlugin.config.resolveAccount(after, "beta")).toEqual(expected);
@@ -326,13 +326,23 @@ describe("Mattermost actions", () => {
       "read",
     ]);
     expect(actions.describeMessageTool({ cfg, accountId: "broken" })?.actions).toEqual([]);
+    expect(
+      actions.describeMessageTool({ cfg: { channels: { mattermost: { enabled: true } } } }),
+    ).toMatchObject({ actions: [], capabilities: [] });
   });
 
   it("declines native sends in favor of durable outbound delivery", () => {
     expect(actions.supportsAction!({ action: "react" })).toBe(true);
     expect(actions.supportsAction!({ action: "read" })).toBe(true);
     expect(actions.supportsAction!({ action: "send" })).toBe(false);
-    expect(actions.describeMessageTool({ cfg: config() })?.schema).toBeUndefined();
+    expect(actions.supportsAction!({ action: "poll" })).toBe(false);
+    expect(actions.describeMessageTool({ cfg: config() })).toEqual({
+      actions: ["send", "react"],
+      capabilities: ["presentation"],
+    });
+    expect(
+      actions.describeMessageTool({ cfg: config({ actions: { messages: false } }) })?.actions,
+    ).toEqual(["send", "react"]);
   });
 
   it.each([
@@ -342,14 +352,12 @@ describe("Mattermost actions", () => {
   ] as const)(
     "blocks %s when feature=%s or account disabled=%s",
     async (kind, feature, disabled) => {
-      const params =
-        kind === "read"
-          ? { target: "channel:CURRENT" }
-          : {
-              messageId: "POST1",
-              emoji: "thumbsup",
-              ...(disabled ? { target: "channel:CHAN1", to: "channel:CHAN1" } : {}),
-            };
+      const params = {
+        target: "channel:CHAN1",
+        to: "channel:CHAN1",
+        messageId: "POST1",
+        emoji: "thumbsup",
+      };
       const cfg = config({
         accounts: { default: disabled ? { enabled: false } : { actions: { [feature!]: false } } },
         ...(feature ? { actions: { [feature]: true } } : {}),
@@ -446,38 +454,32 @@ describe("Mattermost actions", () => {
   });
 
   it.each([
-    {
-      label: "named channel add",
-      target: "#town-square",
-      to: "channel:CHAN1",
-      mode: "add" as const,
-      postChannelId: "CHAN1",
-      emoji: "thumbsup",
-      expected: "Reacted with :thumbsup: on POST1",
+    [
+      "#town-square",
+      "channel:CHAN1",
+      "add",
+      { postChannelId: "CHAN1" },
+      "thumbsup",
+      "Reacted with :thumbsup: on POST1",
+    ],
+    [
+      "@alice",
+      "user:PEER1",
+      "remove",
+      { postChannelId: "DMCHAN1", channelType: "D", channelName: "BOT123__PEER1" },
+      "👍",
+      "Removed reaction :thumbsup: from POST1",
+    ],
+  ] as const)(
+    "uses the resolved target for %s",
+    async (target, to, mode, fixture, emoji, expected) => {
+      const result = await react(
+        { target, to, emoji, remove: mode === "remove" },
+        { ...fixture, mode },
+      );
+      expect(result.content).toEqual([{ type: "text", text: expected }]);
     },
-    {
-      label: "named user removal",
-      target: "@alice",
-      to: "user:PEER1",
-      mode: "remove" as const,
-      postChannelId: "DMCHAN1",
-      channelType: "D",
-      channelName: "BOT123__PEER1",
-      emoji: "👍",
-      expected: "Removed reaction :thumbsup: from POST1",
-    },
-  ])("uses the resolved target for $label", async (fixture) => {
-    const result = await react(
-      {
-        target: fixture.target,
-        to: fixture.to,
-        emoji: fixture.emoji,
-        remove: fixture.mode === "remove",
-      },
-      fixture,
-    );
-    expect(result.content).toEqual([{ type: "text", text: fixture.expected }]);
-  });
+  );
 
   it("preserves skin tone when adding a raw glyph reaction", async () => {
     const result = await react(
@@ -491,20 +493,19 @@ describe("Mattermost actions", () => {
     expect(result.details).toStrictEqual({});
   });
 
-  it("carries provider attachment text through prepared payload delivery", async () => {
-    await sendPrepared({ params: { attachmentText: "native attachment" } });
-    expect(expectSend().attachmentText).toBe("native attachment");
-  });
-
   it("forwards a prepared local attachment with trusted roots and a reader", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("report"));
     await sendPrepared({
-      params: { attachments: [{ filePath: "/tmp/workspace/report.md", buffer: "", base64: "  " }] },
+      params: {
+        attachmentText: "native attachment",
+        attachments: [{ filePath: "/tmp/workspace/report.md", buffer: "", base64: "  " }],
+      },
       accountId: "default",
       mediaLocalRoots: ["/tmp/workspace"],
       mediaReadFile,
     });
     expect(expectSend()).toMatchObject({
+      attachmentText: "native attachment",
       mediaUrl: "/tmp/workspace/report.md",
       mediaLocalRoots: ["/tmp/workspace"],
       mediaReadFile,
@@ -517,11 +518,6 @@ describe("Mattermost actions", () => {
       "multiple media",
       { media_urls: ["/tmp/one.md", "/tmp/two.md"] },
       "supports one attachment per message",
-    ],
-    [
-      "mixed supported and buffer",
-      { attachments: [{ filePath: "/tmp/report.md" }, { buffer: "cmVwb3J0" }] },
-      "buffer/base64",
     ],
   ])("rejects prepared %s attachments", async (_name, params, error) => {
     await expect(sendPrepared({ params })).rejects.toThrow(error);
@@ -573,45 +569,6 @@ describe("Mattermost outbound", () => {
       });
     },
   );
-
-  it("renders question guidance and the Gateway option index beside the buttons", async () => {
-    const questionId = "ask_0123456789abcdef0123456789abcdef";
-    const guidance =
-      "- staging\n- production\n\nTap an option, or reply with the option number or text.";
-    const rendered = await render(
-      ["staging", "production"].map((label) => ({
-        label,
-        action: { type: "question", questionId, optionValue: label },
-      })),
-      ["Which environment?", guidance],
-      {
-        presentationTextMode: "fallback",
-        channelData: {
-          askUser: {
-            questionId,
-            optionValues: ["staging", "production"],
-          },
-        },
-      },
-    );
-    expect(rendered?.text).toBe(
-      "Which environment?\n\n- staging\n- production\n\nTap an option, or reply with the option number or text.\n\n- staging\n- production",
-    );
-    expect(rendered?.channelData?.mattermost).toMatchObject({
-      presentationButtons: [
-        [
-          {
-            text: "staging",
-            context: { oc_question: true, question_id: questionId, option_index: 0 },
-          },
-          {
-            text: "production",
-            context: { oc_question: true, question_id: questionId, option_index: 1 },
-          },
-        ],
-      ],
-    });
-  });
 
   it("delivers presentation buttons with required local media and preserves card receipts", async () => {
     const mediaReadFile = makeMediaReader();

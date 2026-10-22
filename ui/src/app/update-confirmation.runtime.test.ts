@@ -92,6 +92,25 @@ beforeEach(() => {
   originalWebkit = Object.getOwnPropertyDescriptor(window, "webkit");
 });
 
+it.each(["current", "unknown"] as const)(
+  "warns that a %s Gateway may be reinstalled before confirmation",
+  async (status) => {
+    const { settled, startGatewayUpdate } = startUpdate({
+      updateAvailable: null,
+      updateSchedule:
+        status === "current"
+          ? { channel: "stable", autoEnabled: false, install: { kind: "package" } }
+          : null,
+    });
+    const { dialog } = await getRenderedModalDialog(document.body);
+    expect(dialog.textContent).toContain("The current version may be reinstalled.");
+    expect(dialog.textContent).not.toContain("Installs the available update");
+    findButton("Cancel").click();
+    await settled;
+    expect(startGatewayUpdate).not.toHaveBeenCalled();
+  },
+);
+
 afterEach(() => {
   document.body.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
   document.body.replaceChildren();

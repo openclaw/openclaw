@@ -20,7 +20,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { hasNativeUpdateBridge, postNativeUpdate } from "./native-link-routing.ts";
 import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
-import { formatUpdateTargetLabel } from "./update-schedule-projection.ts";
+import { formatUpdateTargetLabel, getUpdateGitComparison } from "./update-schedule-projection.ts";
 
 registerEnglishCatalog(registerUpdateActionsEnglish);
 
@@ -49,24 +49,13 @@ function formatInstalledAndAvailable(
   if (installed && available) {
     // A commit count already reads as a distance, so "Available 246 commits
     // behind" would double the framing; only a version needs the label.
-    const git = updateSchedule?.install?.git;
-    const behind =
-      git?.status === "behind" ||
-      git?.status === "diverged" ||
-      updateSchedule?.target?.kind === "git" ||
-      updateAvailable?.commitsBehind !== undefined;
+    const behind = getUpdateGitComparison(updateSchedule, updateAvailable) !== null;
     return t(behind ? "updates.confirm.versionsBehind" : "updates.confirm.versions", {
       available,
       installed,
     });
   }
   return installed ?? available ?? undefined;
-}
-
-function workingMessage(connected: boolean): string {
-  // A disconnect alone does not prove a restart. Keep update recovery guidance
-  // separate from flows that have an explicit restart result.
-  return connected ? t("updates.dialog.installing") : t("updates.dialog.disconnected");
 }
 
 export async function confirmAndStartUpdateRuntime(
@@ -163,7 +152,11 @@ export async function confirmAndStartUpdateRuntime(
           }
         : {
             confirmLabel: t("updates.confirm.action"),
-            message: t("updates.confirm.message"),
+            message: t(
+              formatUpdateTargetLabel(updateSchedule, updateAvailable)
+                ? "updates.confirm.message"
+                : "updates.confirm.noKnownUpdateMessage",
+            ),
             title: t("chat.sidebar.updateGateway"),
           };
 
@@ -182,7 +175,7 @@ export async function confirmAndStartUpdateRuntime(
           : current.kind === "failed"
             ? current.message
             : current.kind === "working"
-              ? workingMessage(!disconnected)
+              ? t(disconnected ? "updates.dialog.disconnected" : "updates.dialog.installing")
               : `${route.message} ${t("updates.confirm.impact")}`;
       return {
         route,

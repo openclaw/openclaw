@@ -3,9 +3,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import {
   anthropicModel,
+  assistantMessage,
   captureAnthropicRequest,
   context,
   registerParityHostLifecycle,
+  textBlock,
 } from "./provider-transport-parity.test-support.js";
 import { createZeroUsage } from "./usage.test-support.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./utils/system-prompt-cache-boundary.js";
@@ -36,8 +38,6 @@ function expectControls(actual: ReturnType<typeof markers>, long: boolean) {
   }
 }
 
-const textBlock = (text: string) => ({ type: "text" as const, text });
-
 type CaptureOptions = NonNullable<Parameters<typeof captureAnthropicRequest>[1]>;
 async function capture(
   implementation: "provider" | "transport",
@@ -55,18 +55,15 @@ async function capture(
 function appendToolTurn(messages: Context["messages"], turn: number): Context["messages"] {
   return [
     ...messages,
-    {
-      role: "assistant",
-      api: anthropicModel.api,
-      provider: anthropicModel.provider,
-      model: anthropicModel.id,
-      timestamp: turn * 2,
-      stopReason: "toolUse",
-      usage: { ...createZeroUsage(), input: 1, output: 1, totalTokens: 2 },
-      content: [
-        { type: "toolCall", id: `call_${turn}`, name: "lookup", arguments: { query: "value" } },
-      ],
-    },
+    assistantMessage(
+      anthropicModel,
+      [{ type: "toolCall", id: `call_${turn}`, name: "lookup", arguments: { query: "value" } }],
+      {
+        timestamp: turn * 2,
+        stopReason: "toolUse",
+        usage: { ...createZeroUsage(), input: 1, output: 1, totalTokens: 2 },
+      },
+    ),
     {
       role: "toolResult",
       toolCallId: `call_${turn}`,

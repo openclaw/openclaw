@@ -33,8 +33,13 @@ vi.mock("./gateway-child.js", () => ({
 // mock-isolation: Provider startup and failure are controlled by the lifecycle fixture.
 vi.mock("./providers/server-runtime.js", () => ({ startQaProviderServer }));
 
-// mock-isolation: Synthetic transport cleanup is observed without loading live adapters.
+// mock-isolation: Synthetic cleanup and settle waits need neither live adapters nor real timers.
 vi.mock("./qa-transport-registry.js", () => ({ createQaTransportAdapter }));
+
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: async () => {},
+}));
 
 import { runQaManualLane } from "./manual-lane.runtime.js";
 
@@ -45,7 +50,6 @@ function runLane(overrides: Partial<Parameters<typeof runQaManualLane>[0]> = {})
     primaryModel: "mock-openai/gpt-5.6-luna",
     alternateModel: "mock-openai/gpt-5.6-luna-alt",
     message: "check the kickoff file",
-    replySettleMs: 0,
     ...overrides,
   });
 }

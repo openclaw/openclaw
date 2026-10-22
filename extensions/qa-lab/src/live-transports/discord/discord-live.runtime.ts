@@ -905,8 +905,6 @@ export async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
       outputDir: params.outputDir,
     });
     return {
-      id: params.scenario.id,
-      title: params.scenario.title,
       status,
       details:
         status === "pass"

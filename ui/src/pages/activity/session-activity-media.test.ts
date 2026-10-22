@@ -146,37 +146,48 @@ function seededRequest(initial: ArtifactsListResult) {
   return { pending, request };
 }
 
-it("waits for the viewport, limits concurrent discovery, and opens four thumbnails in the shared viewer", async () => {
-  const pending = Array.from({ length: 4 }, deferredResult);
+it("gates and coalesces discovery in FIFO order, retaining thumbnails in the shared viewer", async () => {
+  const pending = Array.from({ length: 5 }, deferredResult);
   const request = vi.fn(async () => pending[request.mock.calls.length - 1]!.promise);
-  const { rows, update, view } = mountMedia(
+  const { rows, updates, update, view } = mountMedia(
     request,
-    [0, 1, 2, 3].map((index) => ({ sessionKey: `agent:main:images-${index}` })),
+    [0, 1, 2, 3, 4].map((index) => ({
+      sessionKey: `agent:main:images-${index}`,
+      revision: index === 2 ? 1 : 0,
+    })),
   );
   const first = rows[0]!;
   const originalUrl = "https://images.example.test/first-0.png";
-  await waitForSolid(() => expect(observers.size).toBe(4));
+  await waitForSolid(() => expect(observers.size).toBe(5));
   expect(request).not.toHaveBeenCalled();
   for (const row of rows.slice(0, 3)) {
     observers.get(row)?.(true);
   }
   await waitCalls(request, 2);
   expect(request).toHaveBeenCalledWith(...listArgs("agent:main:images-0"));
+  expect(rows[3]!.querySelectorAll("img")).toHaveLength(0);
+  observers.get(rows[3]!)?.(true);
+  updates[2]!({ revision: 2 });
+  flush();
   pending[0]!.resolve(images("first"));
   await waitCalls(request, 3);
+  expect(request.mock.calls[2]).toEqual(listArgs("agent:main:images-2"));
   pending[1]!.resolve(images("second"));
   pending[2]!.resolve(images("third"));
+  await waitCalls(request, 4);
+  pending[3]!.resolve(images("fourth"));
+  await waitForSolid(() => expect(container.querySelectorAll("img")).toHaveLength(16));
+  expect(rows[4]!.querySelectorAll("img")).toHaveLength(0);
   await waitForSolid(() => expect(first.querySelectorAll(".chat-message-image")).toHaveLength(4));
-  expect(rows[3]!.querySelectorAll("img")).toHaveLength(0);
   thumbnail(first).click();
   await waitForSolid(() => expect(imageUrl(lightbox(first))).toBe(originalUrl));
   const opened = lightbox(first);
   update({ revision: 1 });
-  await waitCalls(request, 4);
+  await waitCalls(request, 5);
   expect(first.querySelectorAll(".chat-message-image")).toHaveLength(4);
   expect(imageAlt(first)).toBe("first-0");
   expect(lightbox(first)).toBe(opened);
-  pending[3]!.resolve(images("refreshed"));
+  pending[4]!.resolve(images("refreshed"));
   await waitImage(first, "refreshed-0");
   expect(lightbox(first)).toBe(opened);
   expect(imageUrl(opened)).toBe(originalUrl);
@@ -273,33 +284,6 @@ it.each(["session", "agent", "connection"] as const)(
     }
   },
 );
-
-it("coalesces queued revisions without moving the session behind later arrivals", async () => {
-  const pending = Array.from({ length: 4 }, deferredResult);
-  const request = vi.fn(async () => pending[request.mock.calls.length - 1]!.promise);
-  const { updates } = mountMedia(
-    request,
-    [0, 1, 2, 3].map((index) => ({
-      sessionKey: `agent:main:queue-${index}`,
-      revision: index === 2 ? 1 : 0,
-    })),
-  );
-  await waitForSolid(() => expect(observers.size).toBe(4));
-  for (const notify of observers.values()) {
-    notify(true);
-  }
-  await waitCalls(request, 2);
-  updates[2]!({ revision: 2 });
-  flush();
-  pending[0]!.resolve(images("queue-0"));
-  await waitCalls(request, 3);
-  expect(request.mock.calls[2]).toEqual(listArgs("agent:main:queue-2"));
-  pending[1]!.resolve(images("queue-1"));
-  pending[2]!.resolve(images("queue-2"));
-  await waitCalls(request, 4);
-  pending[3]!.resolve(images("queue-3"));
-  await waitForSolid(() => expect(container.querySelectorAll("img")).toHaveLength(16));
-});
 
 it.each([
   { count: 3, cursor: true, omitted: false, error: false, revalidate: false },

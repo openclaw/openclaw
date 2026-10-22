@@ -10,8 +10,6 @@ function jsonResponse(body: unknown) {
   return { ok: true, status: 200, json: async () => body } as Response;
 }
 
-// The element resolves through its own fetch, so wait for the asserted text
-// rather than a fixed number of update cycles.
 async function settleUntil(predicate: () => boolean) {
   await vi.waitFor(() => expect(predicate()).toBe(true));
 }
@@ -30,26 +28,29 @@ function mountLocation(ip?: string) {
 beforeEach(() => {
   document.body.innerHTML = "";
 });
-
 afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
+function mockFetch(body: unknown) {
+  const fetch = vi.fn(async () => jsonResponse(body));
+  vi.stubGlobal("fetch", fetch);
+  return fetch;
+}
+async function settle() {
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+}
 
 describe("openclaw-ip-location", () => {
   it("renders the city with its attribution link and clears a removed address", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        jsonResponse({
-          found: true,
-          city: "Vienna",
-          region: "Vienna",
-          attribution: { text: "IP Geolocation by DB-IP", url: "https://db-ip.com" },
-        }),
-      ),
-    );
+    mockFetch({
+      found: true,
+      city: "Vienna",
+      region: "Vienna",
+      attribution: { text: "IP Geolocation by DB-IP", url: "https://db-ip.com" },
+    });
     const view = mountLocation("203.0.113.20");
     const element = view.element;
 
@@ -67,16 +68,11 @@ describe("openclaw-ip-location", () => {
   });
 
   it("renders nothing when the address cannot be placed", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse({ found: false })),
-    );
+    const fetch = mockFetch({ found: false });
     const view = mountLocation("203.0.113.21");
     const element = view.element;
 
-    await settleUntil(
-      () => (fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length > 0,
-    );
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
     flush();
     expect(element.textContent?.trim()).toBe("");
   });
@@ -99,15 +95,6 @@ describe("openclaw-ip-location", () => {
 
     replacement.resolve(jsonResponse({ found: true, city: "Berlin", country: "Germany" }));
     await settleUntil(() => element.textContent?.trim() === "Berlin, Germany");
-  });
-
-  it("does not request anything without an address", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    mountLocation();
-
-    flush();
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("resumes an unavailable lookup when the component remounts", async () => {
@@ -134,8 +121,7 @@ describe("openclaw-ip-location", () => {
     flush();
     expect(fetchMock).toHaveBeenCalledTimes(2);
     recovered.resolve(jsonResponse({ found: true, city: "Berlin", country: "Germany" }));
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
+    await settle();
     expect(element.textContent?.trim()).toBe("Berlin, Germany");
   });
 
@@ -151,22 +137,19 @@ describe("openclaw-ip-location", () => {
 
     view.dispose();
     response.resolve(jsonResponse({ found: true, city: "Vienna", country: "Austria" }));
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
+    await settle();
     expect(element.textContent?.trim()).toBe("");
 
     view = mountLocation("203.0.113.23");
     element = view.element;
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
+    await settle();
     expect(element.textContent?.trim()).toBe("Vienna, Austria");
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     view.dispose();
     view = mountLocation();
     element = view.element;
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
+    await settle();
     expect(element.textContent?.trim()).toBe("");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

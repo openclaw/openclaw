@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, Loading, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
@@ -12,13 +12,18 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
-import { loadSecretsStore } from "../../lib/secrets-store/index.ts";
+import type { SecretsStoreState } from "../../lib/secrets-store/index.ts";
 import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import "../../styles/secrets-store.css";
 import type { SecretsPageState } from "./state.ts";
 
 type SecretsStoreViewProps = {
   state: SecretsPageState;
+  scope: SecretsStoreState;
+  read: () => readonly SecretStoreEntry[];
+  busy: boolean;
+  onSubmit: (bulk: boolean) => void;
+  onRemove: (entry: SecretStoreEntry) => void;
   bulkSecretCount: number;
   bulkEntryCount: number;
   bulkInvalidNames: readonly string[];
@@ -69,7 +74,7 @@ function TextAreaField(props: {
         placeholder={
           props.field === "hosts" ? t("secretsStore.allowedHostsPlaceholder") : undefined
         }
-        disabled={props.view.state.store.busy}
+        disabled={props.view.busy}
         value={value()}
         onInput={(event) => input(event.currentTarget.value)}
       />
@@ -103,7 +108,7 @@ function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry
         triggerClass="btn btn--sm btn--ghost secrets-store__menu-trigger"
         triggerAttributes={{ title: t("secretsStore.actions") }}
         trigger={<Icon name="moreHorizontal" />}
-        disabled={props.view.state.store.busy}
+        disabled={props.view.busy}
         items={[
           ...(props.view.state.canCall("secrets.store.set")
             ? [{ id: "edit", label: t("secretsStore.edit") }]
@@ -117,7 +122,7 @@ function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry
             const entry = props.entry;
             props.view.state.act((state) => state.openEntry(entry));
           } else if (item.id === "delete" && props.view.state.canCall("secrets.store.delete")) {
-            void props.view.state.removeEntry(props.entry);
+            props.view.onRemove(props.entry);
           }
         }}
       />
@@ -131,12 +136,9 @@ function SecretsTable(props: SecretsStoreViewProps) {
       when={props.state.canCall("secrets.store.list")}
       fallback={<SettingsEmpty message={t("secretsStore.unavail")} />}
     >
-      <Show
-        when={!props.state.store.loading || props.state.store.entries.length > 0}
-        fallback={<SettingsLoadingSkeleton />}
-      >
+      <Loading on={props.scope} fallback={<SettingsLoadingSkeleton />}>
         <Show
-          when={props.state.store.entries.length > 0}
+          when={props.read().length > 0}
           fallback={
             <div class="secrets-store__empty">
               <SettingsEmpty message={t("tabs.secrets")} />
@@ -159,7 +161,7 @@ function SecretsTable(props: SecretsStoreViewProps) {
                 </tr>
               </thead>
               <tbody>
-                <For each={props.state.store.entries} keyed={(entry) => entry.name}>
+                <For each={props.read()} keyed={(entry) => entry.name}>
                   {(entry) => {
                     const value = () => {
                       const item = entry();
@@ -229,7 +231,7 @@ function SecretsTable(props: SecretsStoreViewProps) {
             </table>
           </div>
         </Show>
-      </Show>
+      </Loading>
     </Show>
   );
 }
@@ -261,14 +263,10 @@ function SecretDialog(props: {
     >
       <form
         class="secrets-store-dialog"
-        aria-busy={props.view.state.store.busy ? "true" : "false"}
+        aria-busy={props.view.busy ? "true" : "false"}
         onSubmit={(event) => {
           event.preventDefault();
-          if (props.bulk) {
-            props.view.state.act((state) => state.submitBulk());
-          } else {
-            props.view.state.act((state) => state.submitDraft());
-          }
+          props.view.onSubmit(Boolean(props.bulk));
         }}
       >
         <div class="secrets-store-dialog__header">
@@ -281,21 +279,21 @@ function SecretDialog(props: {
           </div>
         </Show>
         <openclaw-modal-actions class="secrets-store-dialog__actions">
-          <button class="btn" type="button" disabled={props.view.state.store.busy} onClick={close}>
+          <button class="btn" type="button" disabled={props.view.busy} onClick={close}>
             {t("common.cancel")}
           </button>
           <button
             class="btn primary"
             type="submit"
             disabled={
-              props.view.state.store.busy ||
+              props.view.busy ||
               Boolean(
                 props.bulk &&
                 (!props.view.bulkEntryCount || props.view.bulkInvalidNames.length > 0),
               )
             }
           >
-            {props.view.state.store.busy ? t("common.saving") : t("common.save")}
+            {props.view.busy ? t("common.saving") : t("common.save")}
           </button>
         </openclaw-modal-actions>
       </form>
@@ -320,7 +318,7 @@ function EntryDialog(props: SecretsStoreViewProps) {
             spellcheck="false"
             autofocus
             readonly={props.state.dialogMode === "edit"}
-            disabled={props.state.store.busy}
+            disabled={props.busy}
             value={props.state.draft.name}
             onInput={(event) =>
               props.state.act((state) => state.patchDraft({ name: event.currentTarget.value }))
@@ -347,7 +345,7 @@ function EntryDialog(props: SecretsStoreViewProps) {
                   name="access-mode"
                   value={kind()}
                   checked={props.state.draft.kind === kind()}
-                  disabled={props.state.store.busy}
+                  disabled={props.busy}
                   onChange={() => {
                     const selectedKind = kind();
                     props.state.act((state) => state.patchDraft({ kind: selectedKind }));
@@ -402,7 +400,7 @@ function BulkDialog(props: SecretsStoreViewProps) {
           <input
             type="checkbox"
             checked={props.state.bulkAutoDetect}
-            disabled={props.state.store.busy}
+            disabled={props.busy}
             onChange={(event) =>
               props.state.act((state) => {
                 state.bulkAutoDetect = event.currentTarget.checked;
@@ -437,7 +435,7 @@ export function SecretsStore(props: SecretsStoreViewProps) {
                 type="button"
                 onClick={() => {
                   if (props.state.canCall("secrets.store.list")) {
-                    void props.state.runStoreTask(loadSecretsStore);
+                    props.state.reload();
                   }
                 }}
               >
@@ -460,7 +458,7 @@ export function SecretsStore(props: SecretsStoreViewProps) {
                 <button
                   class="btn btn--sm"
                   type="button"
-                  disabled={props.state.store.busy}
+                  disabled={props.busy}
                   onClick={() => props.state.act((state) => state.openBulk())}
                 >
                   {t("secretsStore.bulk")}
@@ -468,7 +466,7 @@ export function SecretsStore(props: SecretsStoreViewProps) {
                 <button
                   class="btn btn--sm primary"
                   type="button"
-                  disabled={props.state.store.busy}
+                  disabled={props.busy}
                   onClick={() => props.state.act((state) => state.openEntry())}
                 >
                   <Icon name="plus" /> {t("secretsStore.add")}
