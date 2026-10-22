@@ -28,6 +28,7 @@ import {
 import { runMessageAction } from "../../src/infra/outbound/message-action-runner.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
+import { readRequestText, respondJson } from "../helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../helpers/promise.js";
 
 // Keep the declared public artifact in the host's module graph so error classes
@@ -62,14 +63,6 @@ type CapturedRequest = {
   jsonBody?: unknown;
 };
 
-async function readRequestBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 function createMattermostHttpHandler(params: {
   requests: CapturedRequest[];
   sequence?: string[];
@@ -78,10 +71,9 @@ function createMattermostHttpHandler(params: {
 }): RequestListener {
   const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
     const reply = (status: number, body: unknown) => {
-      response.writeHead(status, { "content-type": "application/json" });
-      response.end(JSON.stringify(body));
+      respondJson(response, body, status);
     };
-    const rawBody = await readRequestBody(request);
+    const rawBody = await readRequestText(request);
     const contentType = request.headers["content-type"] ?? "";
     const requestPath = request.url ?? "";
     const jsonBody =
@@ -103,8 +95,7 @@ function createMattermostHttpHandler(params: {
       return;
     }
     if (requestPath === "/api/v4/users/username/alice") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ id: USER_ID }));
+      reply(200, { id: USER_ID });
       return;
     }
     if (requestPath === "/api/v4/channels/direct") {
@@ -188,6 +179,37 @@ function reopenState(stateDir: string) {
   );
 }
 
+type SendOptions = Parameters<typeof runMessageAction>[0];
+function send(
+  cfg: OpenClawConfig,
+  params: SendOptions["params"],
+  options: Omit<SendOptions, "cfg" | "params" | "action" | "conversationReadOrigin">,
+) {
+  return runMessageAction({
+    cfg,
+    action: "send",
+    params: { channel: "mattermost", target: `channel:${CHANNEL_ID}`, ...params },
+    conversationReadOrigin: "direct-operator",
+    ...options,
+  });
+}
+
+const sentResult = {
+  kind: "send",
+  handledBy: "core",
+  sendResult: { deliveryStatus: "sent", result: { messageId: "post-1" } },
+};
+
+function expectProgress(onDeliveryResult: ReturnType<typeof vi.fn>) {
+  expect(onDeliveryResult).toHaveBeenCalledWith(
+    expect.objectContaining({
+      channel: "mattermost",
+      messageId: "post-1",
+      receipt: expect.objectContaining({ parts: expect.any(Array) }),
+    }),
+  );
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   runtimeStore.clearRuntime();
@@ -230,24 +252,20 @@ describe("Mattermost canonical message action delivery", () => {
               },
             },
           };
-          const delivery = runMessageAction({
+          const delivery = send(
             cfg,
-            action: "send",
-            params: {
-              channel: "mattermost",
-              target: `user:${USER_ID}`,
-              message: "queued DM proof",
+            { target: `user:${USER_ID}`, message: "queued DM proof" },
+            {
+              requireQueuePersistence: true,
+              deliveryIntentId: queueId,
+              abortSignal: signal,
+              assertDirectAdapterHandoff: () => {
+                if (!senderCurrent) {
+                  throw retirement;
+                }
+              },
             },
-            conversationReadOrigin: "direct-operator",
-            requireQueuePersistence: true,
-            deliveryIntentId: queueId,
-            abortSignal: signal,
-            assertDirectAdapterHandoff: () => {
-              if (!senderCurrent) {
-                throw retirement;
-              }
-            },
-          });
+          );
           const outcome = delivery.then(
             (result) => ({ result }),
             (error: unknown) => ({ error }),
@@ -284,13 +302,7 @@ describe("Mattermost canonical message action delivery", () => {
                 "failed",
               ]);
             } else {
-              expect(settled).toMatchObject({
-                result: {
-                  kind: "send",
-                  handledBy: "core",
-                  sendResult: { deliveryStatus: "sent", result: { messageId: "post-1" } },
-                },
-              });
+              expect(settled).toMatchObject({ result: sentResult });
             }
             expect(await loadPendingDeliveries(stateDir)).toEqual([]);
             expect(dmRequests).toBe(senderState === "current" ? 2 : 1);
@@ -328,23 +340,19 @@ describe("Mattermost canonical message action delivery", () => {
         registerMattermostRuntime({});
         const cfg = createMattermostConfig(baseUrl);
         await expect(
-          runMessageAction({
+          send(
             cfg,
-            action: "send",
-            params: {
-              channel: "mattermost",
-              target: `channel:${CHANNEL_ID}`,
-              message: "redirect ambiguity proof",
+            { message: "redirect ambiguity proof" },
+            {
+              requireQueuePersistence: true,
+              deliveryIntentId: queueId,
+              assertDirectAdapterHandoff: () => {
+                if (!senderCurrent) {
+                  throw retirement;
+                }
+              },
             },
-            conversationReadOrigin: "direct-operator",
-            requireQueuePersistence: true,
-            deliveryIntentId: queueId,
-            assertDirectAdapterHandoff: () => {
-              if (!senderCurrent) {
-                throw retirement;
-              }
-            },
-          }),
+          ),
         ).rejects.toThrow("Mattermost sender retired");
 
         const ambiguousEntry = {
@@ -378,27 +386,12 @@ describe("Mattermost canonical message action delivery", () => {
 
     await withServer(createMattermostHttpHandler({ requests }), async (baseUrl) => {
       registerMattermostRuntime({});
-      const result = await runMessageAction({
-        cfg: createMattermostConfig(baseUrl),
-        action: "send",
-        params: {
-          channel: "mattermost",
-          target,
-          message: "target proof",
-        },
-        conversationReadOrigin: "direct-operator",
-        skipQueue: true,
-      });
-
-      expect(result).toMatchObject({
-        kind: "send",
-        handledBy: "core",
-        to: target,
-        sendResult: {
-          deliveryStatus: "sent",
-          result: { messageId: "post-1" },
-        },
-      });
+      const result = await send(
+        createMattermostConfig(baseUrl),
+        { target, message: "target proof" },
+        { skipQueue: true },
+      );
+      expect(result).toMatchObject({ ...sentResult, to: target });
     });
 
     expect(requests.at(-1)).toMatchObject({
@@ -413,24 +406,12 @@ describe("Mattermost canonical message action delivery", () => {
 
     await withServer(createMattermostHttpHandler({ requests }), async (baseUrl) => {
       registerMattermostRuntime({});
-      const result = await runMessageAction({
-        cfg: createMattermostConfig(baseUrl),
-        action: "send",
-        params: {
-          channel: "mattermost",
-          target: `channel:${CHANNEL_ID}`,
-          message: "reply proof",
-          replyTo: "reply-root",
-        },
-        conversationReadOrigin: "direct-operator",
-        skipQueue: true,
-      });
-
-      expect(result).toMatchObject({
-        kind: "send",
-        handledBy: "core",
-        sendResult: { deliveryStatus: "sent", result: { messageId: "post-1" } },
-      });
+      const result = await send(
+        createMattermostConfig(baseUrl),
+        { message: "reply proof", replyTo: "reply-root" },
+        { skipQueue: true },
+      );
+      expect(result).toMatchObject(sentResult);
     });
 
     expect(requests.at(-1)?.jsonBody).toMatchObject({
@@ -453,12 +434,9 @@ describe("Mattermost canonical message action delivery", () => {
     try {
       await withServer(createMattermostHttpHandler({ requests, sequence }), async (baseUrl) => {
         registerMattermostRuntime({ sequence });
-        const result = await runMessageAction({
-          cfg: createMattermostConfig(baseUrl),
-          action: "send",
-          params: {
-            channel: "mattermost",
-            target: `channel:${CHANNEL_ID}`,
+        const result = await send(
+          createMattermostConfig(baseUrl),
+          {
             message: "Deploy finished",
             filePath: file,
             attachmentText: "Attachment context",
@@ -476,25 +454,18 @@ describe("Mattermost canonical message action delivery", () => {
               ],
             },
           },
-          mediaAccess: {
-            localRoots: [directory],
-            readFile,
-            workspaceDir: directory,
+          {
+            mediaAccess: {
+              localRoots: [directory],
+              readFile,
+              workspaceDir: directory,
+            },
+            onDeliveryResult,
+            skipQueue: true,
           },
-          conversationReadOrigin: "direct-operator",
-          onDeliveryResult,
-          skipQueue: true,
-        });
+        );
 
-        expect(result).toMatchObject({
-          kind: "send",
-          handledBy: "core",
-          to: `channel:${CHANNEL_ID}`,
-          sendResult: {
-            deliveryStatus: "sent",
-            result: { messageId: "post-1" },
-          },
-        });
+        expect(result).toMatchObject({ ...sentResult, to: `channel:${CHANNEL_ID}` });
       });
 
       const upload = requests.find((request) => request.path === "/api/v4/files");
@@ -510,13 +481,7 @@ describe("Mattermost canonical message action delivery", () => {
       });
       expect(JSON.stringify(post?.jsonBody)).toContain("Attachment context");
       expect(JSON.stringify(post?.jsonBody)).toContain('"name":"Open"');
-      expect(onDeliveryResult).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "mattermost",
-          messageId: "post-1",
-          receipt: expect.objectContaining({ parts: expect.any(Array) }),
-        }),
-      );
+      expectProgress(onDeliveryResult);
       expect(sequence).toEqual([
         "http:upload",
         "http:post",
@@ -541,28 +506,18 @@ describe("Mattermost canonical message action delivery", () => {
         activityError: new Error("activity store unavailable"),
       });
       await expect(
-        runMessageAction({
-          cfg: createMattermostConfig(baseUrl),
-          action: "send",
-          params: {
-            channel: "mattermost",
-            target: `channel:${CHANNEL_ID}`,
-            message: "partial proof",
+        send(
+          createMattermostConfig(baseUrl),
+          { message: "partial proof" },
+          {
+            onDeliveryResult,
+            skipQueue: true,
           },
-          conversationReadOrigin: "direct-operator",
-          onDeliveryResult,
-          skipQueue: true,
-        }),
+        ),
       ).rejects.toThrow("activity store unavailable");
     });
 
-    expect(onDeliveryResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "mattermost",
-        messageId: "post-1",
-        receipt: expect.objectContaining({ parts: expect.any(Array) }),
-      }),
-    );
+    expectProgress(onDeliveryResult);
     expect(requests.filter((request) => request.path === "/api/v4/posts")).toHaveLength(1);
     expect(sequence).toEqual(["http:post", "progress:post-1", "bookkeeping:activity"]);
   });
