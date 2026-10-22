@@ -18,16 +18,6 @@ import {
   writeWorkspaceFiles as writeFiles,
 } from "./workspace-sync-scripts.test-support.js";
 
-async function expectFile(root: string, relative: string, content: string) {
-  await expect(fs.readFile(path.join(root, relative), "utf8")).resolves.toBe(content);
-}
-
-async function expectAbsent(root: string, ...paths: string[]) {
-  for (const relative of paths) {
-    await expect(fs.access(path.join(root, relative))).rejects.toThrow();
-  }
-}
-
 it("materializes a large dirty git workspace as a credential-free commit-capable clone", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-git-sync-"));
   const localPath = path.join(root, "local");
@@ -131,10 +121,12 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
       [largeFiles.at(-1) ?? ""]: "1799\n",
       "rename-new.txt": "rename me\n",
       "cache/allowed.txt": "allowed\n",
+      "gone.txt": null,
+      "private/ignored.txt": null,
+      "vendor/sub/.git/secret": null,
     });
     await fs.writeFile(path.join(remote, privateInput), "edited input bytes");
     expect(result.manifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
-    await expectAbsent(remote, "gone.txt", "private/ignored.txt", "vendor/sub/.git/secret");
     expect(await git(remote, "rev-parse", "HEAD")).toBe(baseCommit);
     expect(await git(remote, "rev-list", "--count", "HEAD")).toBe("1");
     expect(await git(remote, "remote")).toBe("");
@@ -182,24 +174,24 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
     await verifyReconciledWorkspaceFinal(reconciled, quiescence);
     expect(reconciled).toMatchObject({ changed: true });
     expect(checkedPartialManifest).toBe(true);
-    for (const relative of ownership.unownedFiles) {
-      await expectFile(localPath, relative, `fixture bytes: ${relative}\n`);
-    }
-    await expectFile(localPath, privateInput, "edited input bytes");
     expect(reconciled.manifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
     await reconciled.verifyStable();
     await reconciled.verifyLocalStable();
     await expectFiles(localPath, {
+      ...Object.fromEntries(
+        ownership.unownedFiles.map((file) => [file, `fixture bytes: ${file}\n`]),
+      ),
+      [privateInput]: "edited input bytes",
       "modified.txt": "worker result\n",
       "worker-untracked.txt": "artifact\n",
       "ordinary-untracked.txt": "still present after ignore\n",
       "cache/worker-allowed.txt": "allowed\n",
       "conflict.txt": "local result\n",
+      "private/worker-secret.txt": null,
+      "rename-new.txt": null,
     });
     await expect(fs.readlink(path.join(localPath, "worker-link"))).resolves.toBe("modified.txt");
-    await expectAbsent(localPath, "private/worker-secret.txt", "rename-new.txt");
-    await expectFile(remote, "conflict.txt", "local result\n");
-    await expectAbsent(remote, "private/ignored.txt");
+    await expectFiles(remote, { "conflict.txt": "local result\n", "private/ignored.txt": null });
     expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
     const unchanged = await reconcile("git-unchanged", acceptedManifestRef);
     await verifyReconciledWorkspaceFinal(unchanged, quiescence);

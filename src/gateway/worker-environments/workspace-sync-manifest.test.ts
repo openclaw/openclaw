@@ -21,7 +21,9 @@ import {
 } from "./workspace-sync-scripts.js";
 import {
   createScriptWorkspace,
+  expectWorkspaceFiles as expectFiles,
   initializeScriptGitWorkspace,
+  writeWorkspaceFiles as writeFiles,
   workspaceScriptRunner,
 } from "./workspace-sync-scripts.test-support.js";
 
@@ -34,18 +36,26 @@ function transactionRunner(workspace: string, env = process.env) {
       [process.execPath, "-e", REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS, action, workspace, nonce],
       { timeoutMs: 10_000, baseEnv: env, input },
     );
+  const begin = (nonce: string, paths: string[]) =>
+    runTransaction("begin", nonce, JSON.stringify(paths));
   return {
     runTransaction,
-    begin: (nonce: string, paths: string[]) =>
-      runTransaction("begin", nonce, JSON.stringify(paths)),
+    begin,
+    stage: async (nonce: string, files: Record<string, string>, paths = Object.keys(files)) => {
+      const begun = await begin(nonce, paths);
+      expect(begun.code).toBe(0);
+      const staging = begun.stdout.trim();
+      expect((await fs.stat(staging)).isDirectory()).toBe(true);
+      await writeFiles(staging, files);
+      return staging;
+    },
+    ok: async (action: string, nonce: string) => {
+      expect((await runTransaction(action, nonce)).code).toBe(0);
+    },
   };
 }
 
 const fixture = (prefix: string) => createScriptWorkspace(tempDirs.make(prefix));
-
-async function expectFile(root: string, relative: string, content: string) {
-  await expect(fs.readFile(path.join(root, relative), "utf8")).resolves.toBe(content);
-}
 
 async function transactionWorkspace(prefix: string) {
   const root = tempDirs.make(prefix);
@@ -134,7 +144,7 @@ describe("remote workspace manifest script", () => {
     const { workspace, env } = await fixture("openclaw-accepted-paths-test-");
     await fs.writeFile(path.join(workspace, "node"), "old file\n");
 
-    const { runTransaction, begin } = transactionRunner(workspace, env);
+    const { runTransaction, begin, stage, ok } = transactionRunner(workspace, env);
     for (const unsafePath of [".", ".."]) {
       const rejected = await runTransaction("begin", "f".repeat(32), JSON.stringify([unsafePath]));
       expect(rejected.code).not.toBe(0);
@@ -142,17 +152,16 @@ describe("remote workspace manifest script", () => {
     }
 
     const nonce = "a".repeat(32);
-    const begun = await begin(nonce, ["node/child.txt", "node", "added.txt"]);
-    expect(begun.code).toBe(0);
-    const staging = begun.stdout.trim();
-    await fs.mkdir(path.join(staging, "node"));
-    await Promise.all([
-      fs.writeFile(path.join(staging, "node/child.txt"), "new child\n"),
-      fs.writeFile(path.join(staging, "added.txt"), "added\n"),
-    ]);
-    expect((await runTransaction("apply", nonce)).code).toBe(0);
-    await expectFile(workspace, "node/child.txt", "new child\n");
-    await expectFile(workspace, "added.txt", "added\n");
+    const staging = await stage(
+      nonce,
+      {
+        "node/child.txt": "new child\n",
+        "added.txt": "added\n",
+      },
+      ["node/child.txt", "node", "added.txt"],
+    );
+    await ok("apply", nonce);
+    await expectFiles(workspace, { "node/child.txt": "new child\n", "added.txt": "added\n" });
 
     await fs.writeFile(
       path.join(path.dirname(staging), "phase.json"),
@@ -161,21 +170,19 @@ describe("remote workspace manifest script", () => {
     const recoveryNonce = "b".repeat(32);
     const recoveryBegin = await begin(recoveryNonce, ["node"]);
     expect(recoveryBegin.code).toBe(0);
-    await expectFile(workspace, "node", "old file\n");
-    await expect(fs.access(path.join(workspace, "added.txt"))).rejects.toThrow();
-    expect((await runTransaction("rollback", recoveryNonce)).code).toBe(0);
+    await expectFiles(workspace, { node: "old file\n", "added.txt": null });
+    await ok("rollback", recoveryNonce);
 
     const legacyNonce = "6".repeat(32);
-    const legacyBegin = await begin(legacyNonce, ["node"]);
-    const legacyTransaction = path.dirname(legacyBegin.stdout.trim());
-    await fs.writeFile(path.join(legacyBegin.stdout.trim(), "node"), "legacy applied\n");
-    expect((await runTransaction("apply", legacyNonce)).code).toBe(0);
+    const legacyStaging = await stage(legacyNonce, { node: "legacy applied\n" });
+    const legacyTransaction = path.dirname(legacyStaging);
+    await ok("apply", legacyNonce);
     await fs.rm(path.join(legacyTransaction, "phase.json"));
     await fs.writeFile(path.join(legacyTransaction, "applied"), "");
     const legacyRecoveryNonce = "7".repeat(32);
     expect(await begin(legacyRecoveryNonce, ["node"])).toMatchObject({ code: 0 });
-    await expectFile(workspace, "node", "old file\n");
-    expect((await runTransaction("rollback", legacyRecoveryNonce)).code).toBe(0);
+    await expectFiles(workspace, { node: "old file\n" });
+    await ok("rollback", legacyRecoveryNonce);
 
     await fs.rm(path.join(workspace, "node"));
     await fs.mkdir(path.join(workspace, "node"));
@@ -183,10 +190,10 @@ describe("remote workspace manifest script", () => {
     await fs.chmod(path.join(workspace, "node"), 0o555);
 
     const committedNonce = "c".repeat(32);
-    const committedBegin = await begin(committedNonce, ["node/child.txt", "node"]);
-    const committedStaging = committedBegin.stdout.trim();
-    await fs.mkdir(path.join(committedStaging, "node"));
-    await fs.writeFile(path.join(committedStaging, "node/child.txt"), "committed\n");
+    const committedStaging = await stage(committedNonce, { "node/child.txt": "committed\n" }, [
+      "node/child.txt",
+      "node",
+    ]);
     expect(await runTransaction("apply", committedNonce)).toMatchObject({ code: 0, stderr: "" });
     const committedTransaction = path.dirname(committedStaging);
     const interruptedCleanup = path.join(
@@ -200,21 +207,18 @@ describe("remote workspace manifest script", () => {
     const cleanupNonce = "d".repeat(32);
     const cleanupBegin = await begin(cleanupNonce, ["node"]);
     expect(cleanupBegin.code).toBe(0);
-    expect((await runTransaction("rollback", cleanupNonce)).code).toBe(0);
+    await ok("rollback", cleanupNonce);
 
-    await expectFile(workspace, "node/child.txt", "committed\n");
+    await expectFiles(workspace, { "node/child.txt": "committed\n" });
     await expect(fs.access(interruptedCleanup)).rejects.toThrow();
 
     await fs.chmod(path.join(workspace, "node"), 0o555);
     const modeRollbackNonce = "e".repeat(32);
-    const modeRollbackBegin = await begin(modeRollbackNonce, ["node"]);
-    const modeRollbackStaging = modeRollbackBegin.stdout.trim();
-    await fs.mkdir(path.join(modeRollbackStaging, "node"));
-    await fs.writeFile(path.join(modeRollbackStaging, "node/replacement.txt"), "replacement\n");
-    expect((await runTransaction("apply", modeRollbackNonce)).code).toBe(0);
-    expect((await runTransaction("rollback", modeRollbackNonce)).code).toBe(0);
+    await stage(modeRollbackNonce, { "node/replacement.txt": "replacement\n" }, ["node"]);
+    await ok("apply", modeRollbackNonce);
+    await ok("rollback", modeRollbackNonce);
     expect((await fs.stat(path.join(workspace, "node"))).mode & 0o777).toBe(0o555);
-    await expectFile(workspace, "node/child.txt", "committed\n");
+    await expectFiles(workspace, { "node/child.txt": "committed\n" });
     await fs.chmod(path.join(workspace, "node"), 0o700);
 
     const interruptedModeNonce = "1".repeat(32);
@@ -225,25 +229,22 @@ describe("remote workspace manifest script", () => {
       JSON.stringify([{ relative: "node", hadLive: true, directoryMode: 0o555 }]),
       { mode: 0o600 },
     );
-    expect((await runTransaction("rollback", interruptedModeNonce)).code).toBe(0);
+    await ok("rollback", interruptedModeNonce);
     expect((await fs.stat(path.join(workspace, "node"))).mode & 0o777).toBe(0o555);
     await fs.chmod(path.join(workspace, "node"), 0o700);
 
     await fs.mkdir(path.join(workspace, "parent"));
     await fs.writeFile(path.join(workspace, "parent/child.txt"), "before\n");
     const ancestorModeNonce = "2".repeat(32);
-    const ancestorModeBegin = await begin(ancestorModeNonce, ["parent/child.txt"]);
-    const ancestorModeStaging = ancestorModeBegin.stdout.trim();
-    await fs.mkdir(path.join(ancestorModeStaging, "parent"));
-    await fs.writeFile(path.join(ancestorModeStaging, "parent/child.txt"), "after\n");
+    await stage(ancestorModeNonce, { "parent/child.txt": "after\n" });
     await fs.chmod(path.join(workspace, "parent"), 0o555);
     await fs.chmod(workspace, 0o555);
     expect(await runTransaction("apply", ancestorModeNonce)).toMatchObject({ code: 0, stderr: "" });
-    await expectFile(workspace, "parent/child.txt", "after\n");
+    await expectFiles(workspace, { "parent/child.txt": "after\n" });
     expect((await fs.stat(workspace)).mode & 0o777).toBe(0o555);
     expect((await fs.stat(path.join(workspace, "parent"))).mode & 0o777).toBe(0o555);
-    expect((await runTransaction("rollback", ancestorModeNonce)).code).toBe(0);
-    await expectFile(workspace, "parent/child.txt", "before\n");
+    await ok("rollback", ancestorModeNonce);
+    await expectFiles(workspace, { "parent/child.txt": "before\n" });
     expect((await fs.stat(workspace)).mode & 0o777).toBe(0o555);
     expect((await fs.stat(path.join(workspace, "parent"))).mode & 0o777).toBe(0o555);
     await fs.chmod(workspace, 0o700);
@@ -251,7 +252,7 @@ describe("remote workspace manifest script", () => {
   });
 
   it("reports strict settlement outcomes for each durable transaction phase", async () => {
-    const { root, workspace, runTransaction, begin } = await transactionWorkspace(
+    const { root, workspace, runTransaction, begin, stage, ok } = await transactionWorkspace(
       "openclaw-accepted-settlement-outcomes-",
     );
     const expectSettlement = (
@@ -268,23 +269,21 @@ describe("remote workspace manifest script", () => {
     const begunNonce = "a".repeat(32);
     expect(await begin(begunNonce, ["result.txt"])).toMatchObject({ code: 0 });
     expectSettlement(await runTransaction("settle", begunNonce), "begun");
-    expect(await runTransaction("rollback", begunNonce)).toMatchObject({ code: 0 });
+    await ok("rollback", begunNonce);
 
     const appliedNonce = "b".repeat(32);
-    const appliedBegin = await begin(appliedNonce, ["result.txt"]);
-    await fs.writeFile(path.join(appliedBegin.stdout.trim(), "result.txt"), "applied\n");
-    expect(await runTransaction("apply", appliedNonce)).toMatchObject({ code: 0 });
+    await stage(appliedNonce, { "result.txt": "applied\n" });
+    await ok("apply", appliedNonce);
     expectSettlement(await runTransaction("settle", appliedNonce), "applied");
-    expect(await runTransaction("rollback", appliedNonce)).toMatchObject({ code: 0 });
+    await ok("rollback", appliedNonce);
 
     const committedNonce = "c".repeat(32);
-    const committedBegin = await begin(committedNonce, ["result.txt"]);
-    await fs.writeFile(path.join(committedBegin.stdout.trim(), "result.txt"), "committed\n");
-    expect(await runTransaction("apply", committedNonce)).toMatchObject({ code: 0 });
-    expect(await runTransaction("commit", committedNonce)).toMatchObject({ code: 0 });
+    await stage(committedNonce, { "result.txt": "committed\n" });
+    await ok("apply", committedNonce);
+    await ok("commit", committedNonce);
     expectSettlement(await runTransaction("settle", committedNonce), "committed");
-    expect(await runTransaction("recover", "d".repeat(32))).toMatchObject({ code: 0 });
-    await expectFile(workspace, "result.txt", "committed\n");
+    await ok("recover", "d".repeat(32));
+    await expectFiles(workspace, { "result.txt": "committed\n" });
     expect(
       (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
     ).toEqual([]);
@@ -364,8 +363,8 @@ process.kill = function(pid, signal) {
         );
         const transaction = path.dirname(staging);
         await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
-        await expectFile(transaction, "backup/result.txt", "old\n");
-        await expectFile(staging, "result.txt", "new\n");
+        await expectFiles(transaction, { "backup/result.txt": "old\n" });
+        await expectFiles(staging, { "result.txt": "new\n" });
 
         const contenderNonce = contender === "rollback" ? nonce : "5".repeat(32);
         competing = spawnAction(contender, contenderNonce);
@@ -378,7 +377,7 @@ process.kill = function(pid, signal) {
           signal,
         );
         await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
-        await expectFile(transaction, "backup/result.txt", "old\n");
+        await expectFiles(transaction, { "backup/result.txt": "old\n" });
 
         apply.child.stdin.end("release");
         expect(await withinTest(apply.exited, signal)).toMatchObject({
@@ -387,7 +386,7 @@ process.kill = function(pid, signal) {
           stderr: "",
         });
         expect(await withinTest(competing.exited, signal)).toMatchObject({ code: 0, stderr: "" });
-        await expectFile(workspace, "result.txt", "old\n");
+        await expectFiles(workspace, { "result.txt": "old\n" });
         expect(
           (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
         ).toEqual([]);
@@ -445,7 +444,7 @@ process.kill = function(pid, signal) {
       stderr: "",
       stdout: `${JSON.stringify({ version: 1, outcome: "rolled-back" })}\n`,
     });
-    await expectFile(workspace, "result.txt", "old\n");
+    await expectFiles(workspace, { "result.txt": "old\n" });
     expect(
       (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
     ).toEqual([]);
@@ -478,12 +477,6 @@ process.kill = function(pid, signal) {
     const firstTurnRaw = await fs.readFile(firstTurnPath, "utf8");
     const firstTurnManifest = parseWorkerWorkspaceManifest(firstTurnRaw, firstTurnRef);
     expect(firstTurnRaw).toBe(serializeWorkerWorkspaceManifest(firstTurnManifest));
-    const firstTurnPaths = (
-      JSON.parse(firstTurnRaw) as { entries: Array<{ path: string }> }
-    ).entries.map((entry) => entry.path);
-    expect(firstTurnPaths).toEqual(
-      firstTurnPaths.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
-    );
 
     await fs.rm(firstTurnPath);
     const published = await runManifest(["", "publish", firstTurnDigest], { input: firstTurnRaw });

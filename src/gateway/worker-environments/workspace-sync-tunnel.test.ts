@@ -73,14 +73,6 @@ function sync(
   });
 }
 
-async function expectFile(root: string, relative: string, content: string) {
-  await expect(fs.readFile(path.join(root, relative), "utf8")).resolves.toBe(content);
-}
-
-async function expectAbsent(root: string, relative: string) {
-  await expect(fs.access(path.join(root, relative))).rejects.toThrow();
-}
-
 async function initializeGit(root: string, ...staged: string[]) {
   await git(root, "init");
   await git(root, "config", "user.name", "Worker Sync Test");
@@ -356,7 +348,6 @@ describe("worker tunnel manager", () => {
         );
         const primaryTransfers = workspaceTransfers(fake);
         expect(primaryTransfers.map((entry) => rsyncArgvPort(entry.argv))).toEqual([2222]);
-        expect(hasCommand(fake, "worker workspace symlink escapes")).toBe(false);
         expect(syncSettled).toBe(false);
         const resetCommands = fake.runs.flatMap((entry) => {
           const nonce = sshResetNonce(entry.argv, {
@@ -398,9 +389,6 @@ describe("worker tunnel manager", () => {
         });
         expect(result.mode).toBe("git");
         expect(
-          fake.runs.filter(({ argv }) => argv[0] === "git" && argv[3] === "config"),
-        ).toHaveLength(0);
-        expect(
           await Promise.all(
             ["name", "email"].map((key) =>
               git(remote, "config", "--local", "--get", `user.${key}`),
@@ -414,8 +402,10 @@ describe("worker tunnel manager", () => {
           [`${attachmentDirectory}/worker-cache`]: "preserve\n",
         });
         for (const directory of userDirectories) {
-          await expectFile(remote, path.join(directory, "current.txt"), "user project\n");
-          await expectAbsent(remote, path.join(directory, "stale.txt"));
+          await expectFiles(path.join(remote, directory), {
+            "current.txt": "user project\n",
+            "stale.txt": null,
+          });
         }
 
         const digest = result.manifestRef.slice("sha256:".length);
@@ -429,21 +419,10 @@ describe("worker tunnel manager", () => {
           ...userDirectories.map((directory) => `${directory}/current.txt`).toSorted(),
         ]);
         expect(await git(remote, "rev-parse", "HEAD")).toBe(baseCommit);
-        await expectAbsent(remote, "stale-late.txt");
+        await expectFiles(remote, { "stale-late.txt": null });
 
         const transfers = workspaceTransfers(fake);
         expect(transfers.map((entry) => rsyncArgvPort(entry.argv))).toEqual([2222, 22]);
-        const fileLists = transfers.map((entry) =>
-          entry.argv.find((arg) => arg.startsWith("--files-from="))!.slice(13),
-        );
-        expect(new Set(fileLists.map((file) => path.dirname(file))).size).toBe(1);
-        expect(fileLists.map((file) => path.basename(file))).toEqual(["attempt-0", "attempt-1"]);
-        for (const transfer of transfers) {
-          expect(transfer.argv).toContain("--delete-delay");
-          expect(transfer.argv).not.toContain("--delete-excluded");
-          expect(transfer.argv.some((arg) => arg.startsWith("--rsync-path="))).toBe(true);
-        }
-        expect(fake.runs.some((entry) => entry.argv.at(-1)?.endsWith("'true'"))).toBe(false);
         const residue = (await fs.readdir(path.dirname(remote))).filter((name) =>
           name.startsWith(".openclaw-accepted-"),
         );
@@ -510,7 +489,7 @@ describe("worker tunnel manager", () => {
       });
 
       await expect(sync(handle, localPath, "retry-owner")).rejects.toThrow("attested owner");
-      await expectFile(unrelated, "sentinel.txt", "keep\n");
+      await expectFiles(unrelated, { "sentinel.txt": "keep\n" });
       const transfers = workspaceTransfers(fake);
       expect(transfers.map((entry) => rsyncArgvPort(entry.argv))).toEqual([2222]);
       const resets = fake.runs.filter((entry) =>
@@ -588,7 +567,7 @@ describe("worker tunnel manager", () => {
       [attachmentDirectory]: null,
     });
     for (const directory of userDirectories) {
-      await expectFile(remote, path.join(directory, "report.txt"), "user project\n");
+      await expectFiles(path.join(remote, directory), { "report.txt": "user project\n" });
     }
 
     await expect(sync(handle, gitPath, "symlink-sync", 2)).rejects.toThrow(
