@@ -1,4 +1,4 @@
-import { createMemo, createSignal, Show } from "solid-js";
+import { createMemo, createSignal, Errored, isPending, latest, Loading, Show } from "solid-js";
 import type { PluginsSkillsReadParams } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
 import {
   pathForPluginCatalogEntry,
@@ -10,6 +10,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { WizardLogin } from "../../components/wizard-login-controller.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCatalogDetail as PluginCatalogDetail } from "./catalog-detail.tsx";
@@ -42,6 +43,11 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   const page = () => {
     props.page.read();
     return props.page;
+  };
+  const catalogRead = createMemo(() => props.page.catalogRead());
+  const readCatalog = () => {
+    latest(catalogRead);
+    return null;
   };
   // The owner mutates in place; publish fresh props for each page revision.
   const discovery = createMemo(() => ({
@@ -154,6 +160,22 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     onAskPlugin: onAskPlugin(),
     onAskSetting: ask(),
   }));
+
+  function Inventory(inventoryProps: { loading: boolean }) {
+    return (
+      <PluginSettingsInventory
+        {...shared()}
+        loading={inventoryProps.loading}
+        tab={page().settingsTab()}
+        query={query()}
+        advancedSchema={pluginAdvancedSchema(configAnalysis().schema)}
+        onTabChange={actions.selectSettingsTab}
+        onQueryChange={setQuery}
+        pluginHref={(pluginId) => pathForPluginSettings(pluginId, page().context.basePath)}
+        onOpenPlugin={(pluginId) => actions.openPluginSettings(pluginId)}
+      />
+    );
+  }
 
   function InstalledDetail(detailProps: { pluginId: string }) {
     const components = () => page().state.detail?.inspection?.components;
@@ -333,16 +355,31 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         ) : detailPluginId() ? (
           <InstalledDetail pluginId={detailPluginId()!} />
         ) : (
-          <PluginSettingsInventory
-            {...shared()}
-            tab={page().settingsTab()}
-            query={query()}
-            advancedSchema={pluginAdvancedSchema(configAnalysis().schema)}
-            onTabChange={actions.selectSettingsTab}
-            onQueryChange={setQuery}
-            pluginHref={(pluginId) => pathForPluginSettings(pluginId, page().context.basePath)}
-            onOpenPlugin={(pluginId) => actions.openPluginSettings(pluginId)}
-          />
+          <Errored
+            fallback={(error, reset) => (
+              <div
+                class="callout danger plugins-settings-error oc-banner oc-banner-error"
+                role="alert"
+              >
+                <span>{formatUiError(error())}</span>
+                <button
+                  type="button"
+                  class="btn btn--sm oc-action oc-action-secondary"
+                  onClick={() => {
+                    void page().refreshCatalog();
+                    reset();
+                  }}
+                >
+                  {t("pluginsPage.tryAgain")}
+                </button>
+              </div>
+            )}
+          >
+            <Loading fallback={<Inventory loading={true} />}>
+              {readCatalog()}
+              <Inventory loading={page().routeLoading() || isPending(catalogRead)} />
+            </Loading>
+          </Errored>
         )}
       </SettingsWorkspace>
       <PluginSkillPreview preview={page().skillPreview} state={page().skillPreview.state} />
