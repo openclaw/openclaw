@@ -326,6 +326,36 @@ describe("memory actor metadata storage", () => {
       ["current", 2],
       ["assistant", 3],
     ]);
+    // Maintenance rewrites re-append copies; an original-file copy keeps its side.
+    const trimmed = await hydrate(storage);
+    const source = (id: string) => {
+      const event = trimmed.events.find((item) => isIndexedSessionEntry(item) && item.id === id);
+      assert(isIndexedSessionEntry(event) && event.type === "message", `Expected ${id}`);
+      return event;
+    };
+    const copies = [
+      { ...source("old-kept"), id: "copied-old", parentId: null },
+      { ...source("current"), id: "copied-current", parentId: "copied-old" },
+    ];
+    await commitMemory(storage, "session.transcript.rewrite", {
+      scope,
+      appendParentId: "assistant",
+      version: trimmed.version,
+      entries: copies,
+      sources: [
+        ["copied-old", source("old-kept")],
+        ["copied-current", source("current")],
+      ],
+    });
+    const branched = actor.snapshot(authority)!;
+    expect(branched.transcript.anchors.map(({ entryId, rawSeq }) => [entryId, rawSeq])).toEqual([
+      ["copied-old", 4],
+      ["copied-current", 5],
+    ]);
+    expect(branched.entry?.priorWorkspace?.through).toEqual({
+      generation: compacted.transcript.watermark.generation,
+      maxSeq: 4,
+    });
   });
 
   it("retains an old window across branch replacement and commits compaction accounting atomically", async () => {

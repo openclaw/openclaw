@@ -14,10 +14,7 @@ import {
   setDiscordPolicyBindings,
   type DiscordChannelPolicyBinding,
 } from "../channel-policy-state.js";
-import {
-  resolveDiscordChannelAllowlist,
-  type DiscordChannelResolution,
-} from "../resolve-channels.js";
+import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
 import { resolveDiscordUserAllowlist, type DiscordUserResolution } from "../resolve-users.js";
 
 type GuildEntries = Record<string, DiscordGuildEntry>;
@@ -35,72 +32,6 @@ function formatResolutionLogDetails(base: string, details: Array<string | undefi
     .map((value) => value?.trim())
     .filter((value): value is string => Boolean(value));
   return nonEmpty.length > 0 ? `${base} (${nonEmpty.join("; ")})` : base;
-}
-
-function formatAliasSummary(aliases: string[]): string | undefined {
-  if (aliases.length === 0) {
-    return undefined;
-  }
-  const preview = aliases.slice(0, 3).join(", ");
-  if (aliases.length <= 3) {
-    return preview;
-  }
-  return `${preview}, +${aliases.length - 3} more`;
-}
-
-function formatDiscordChannelResolvedGroup(entry: DiscordChannelResolvedGroup): string {
-  const aliasSummary = formatAliasSummary(entry.aliases);
-  return formatResolutionLogDetails(entry.target, [
-    entry.guildName ? `guild:${entry.guildName}` : undefined,
-    entry.channelName ? `channel:${entry.channelName}` : undefined,
-    entry.note,
-    aliasSummary ? `aliases:${aliasSummary}` : undefined,
-  ]);
-}
-
-function formatDiscordChannelUnresolved(entry: DiscordChannelResolution): string {
-  return formatResolutionLogDetails(entry.input, [
-    entry.guildName
-      ? `guild:${entry.guildName}`
-      : entry.guildId
-        ? `guildId:${entry.guildId}`
-        : undefined,
-    entry.channelName
-      ? `channel:${entry.channelName}`
-      : entry.channelId
-        ? `channelId:${entry.channelId}`
-        : undefined,
-    entry.note,
-  ]);
-}
-
-function formatDiscordUserResolved(entry: DiscordUserResolution): string | null {
-  const displayName = entry.name?.trim();
-  const target = displayName || entry.id;
-  const base = !target || entry.input === target ? entry.input : `${entry.input}→${target}`;
-  const formatted = formatResolutionLogDetails(base, [
-    // Repeating the id is only useful when the input was not already that id.
-    displayName && entry.id && entry.id !== entry.input ? `id:${entry.id}` : undefined,
-    entry.guildName ? `guild:${entry.guildName}` : undefined,
-    entry.note,
-  ]);
-  // An id that resolved to itself with no metadata carries no information.
-  return formatted === entry.input ? null : formatted;
-}
-
-function formatDiscordUserUnresolved(entry: DiscordUserResolution): string {
-  return formatResolutionLogDetails(entry.input, [
-    entry.name ? `name:${entry.name}` : undefined,
-    entry.guildName ? `guild:${entry.guildName}` : undefined,
-    entry.note,
-  ]);
-}
-
-function toAllowlistEntries(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  return normalizeStringEntries(value);
 }
 
 function hasGuildEntries(value: GuildEntries): boolean {
@@ -154,8 +85,25 @@ async function resolveUserAllowlist<T>(
       fetcher,
     });
     const { resolvedMap, mapping, unresolved } = buildAllowlistResolutionSummary(resolvedUsers, {
-      formatResolved: formatDiscordUserResolved,
-      formatUnresolved: formatDiscordUserUnresolved,
+      formatResolved: (entry) => {
+        const displayName = entry.name?.trim();
+        const target = displayName || entry.id;
+        const base = !target || entry.input === target ? entry.input : `${entry.input}→${target}`;
+        const formatted = formatResolutionLogDetails(base, [
+          // Repeating the id is only useful when the input was not already that id.
+          displayName && entry.id && entry.id !== entry.input ? `id:${entry.id}` : undefined,
+          entry.guildName ? `guild:${entry.guildName}` : undefined,
+          entry.note,
+        ]);
+        // An id that resolved to itself with no metadata carries no information.
+        return formatted === entry.input ? null : formatted;
+      },
+      formatUnresolved: (entry) =>
+        formatResolutionLogDetails(entry.input, [
+          entry.name ? `name:${entry.name}` : undefined,
+          entry.guildName ? `guild:${entry.guildName}` : undefined,
+          entry.note,
+        ]),
     });
     const next = transform(existing, resolvedMap);
     summarizeMapping(`discord ${scope}s`, mapping, unresolved, runtime);
@@ -189,7 +137,9 @@ export async function resolveDiscordAllowlistConfig(params: {
   runtime: RuntimeEnv;
 }): Promise<{ guildEntries: GuildEntries | undefined; allowFrom: string[] | undefined }> {
   let guildEntries = params.guildEntries ?? {};
-  let allowFrom = toAllowlistEntries(params.allowFrom);
+  let allowFrom = Array.isArray(params.allowFrom)
+    ? normalizeStringEntries(params.allowFrom)
+    : undefined;
   const channelPolicyBindings: DiscordChannelPolicyBinding[] = [];
   const guildPolicyBindings = new Map<string, string>();
 
@@ -218,7 +168,21 @@ export async function resolveDiscordAllowlistConfig(params: {
           }
           const sourceGuild = sourceGuildEntries[source.guildKey] ?? {};
           if (!entry.resolved || !entry.guildId) {
-            unresolved.push(formatDiscordChannelUnresolved(entry));
+            unresolved.push(
+              formatResolutionLogDetails(entry.input, [
+                entry.guildName
+                  ? `guild:${entry.guildName}`
+                  : entry.guildId
+                    ? `guildId:${entry.guildId}`
+                    : undefined,
+                entry.channelName
+                  ? `channel:${entry.channelName}`
+                  : entry.channelId
+                    ? `channelId:${entry.channelId}`
+                    : undefined,
+                entry.note,
+              ]),
+            );
             continue;
           }
           // The first resolved alias owns the same precedence as nextGuilds below.
@@ -271,9 +235,22 @@ export async function resolveDiscordAllowlistConfig(params: {
             channels: mergedChannels,
           };
         }
-        const mapping = [...mappingByTarget.values()].map((group) =>
-          formatDiscordChannelResolvedGroup(group),
-        );
+        const mapping = [...mappingByTarget.values()].map((group) => {
+          const aliases = group.aliases;
+          const preview = aliases.slice(0, 3).join(", ");
+          const aliasSummary =
+            aliases.length === 0
+              ? undefined
+              : aliases.length <= 3
+                ? preview
+                : `${preview}, +${aliases.length - 3} more`;
+          return formatResolutionLogDetails(group.target, [
+            group.guildName ? `guild:${group.guildName}` : undefined,
+            group.channelName ? `channel:${group.channelName}` : undefined,
+            group.note,
+            aliasSummary ? `aliases:${aliasSummary}` : undefined,
+          ]);
+        });
         summarizeMapping("discord channels", mapping, unresolved, runtime);
         return nextGuilds;
       } catch (err) {

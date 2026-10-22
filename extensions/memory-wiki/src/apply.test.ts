@@ -2,34 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
-import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
+import { parseWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
-async function writeEntity(
-  rootDir: string,
-  name: string,
-  metadata: Record<string, unknown> = {},
-  body = `# ${name}\n`,
-) {
-  const targetPath = path.join(rootDir, "entities", `${name.toLowerCase()}.md`);
-  await fs.mkdir(path.dirname(targetPath), { recursive: true });
-  await fs.writeFile(
-    targetPath,
-    renderWikiMarkdown({
-      frontmatter: {
-        pageType: "entity",
-        id: `entity.${name.toLowerCase()}`,
-        title: name,
-        ...metadata,
-      },
-      body,
-    }),
-    "utf8",
-  );
-  return targetPath;
-}
 const synthesisInput = {
   title: "Alpha Synthesis",
   body: "Alpha summary body.",
@@ -125,11 +102,10 @@ describe("applyMemoryWikiMutation", () => {
   ])(
     "rejects a malformed write target without replacing its metadata ($name) (#96125)",
     async ({ frontmatterLines, error }) => {
-      const { rootDir, config } = await createVault();
-      await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });
-      const targetPath = path.join(rootDir, "syntheses", "conflicted.md");
+      const { config, write, read } = await createVault();
+      const target = "syntheses/conflicted.md";
       const original = `---\n${frontmatterLines.join("\n")}\n---\n\n# Conflicted\n\nKeep this body.`;
-      await fs.writeFile(targetPath, original, "utf8");
+      await write(target, original);
 
       await expect(
         applyMemoryWikiMutation({
@@ -142,17 +118,20 @@ describe("applyMemoryWikiMutation", () => {
           },
         }),
       ).rejects.toThrow(error);
-      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(original);
+      await expect(read(target)).resolves.toBe(original);
     },
   );
 
   it("updates page metadata without overwriting existing human notes", async () => {
-    const { rootDir, config } = await createVault();
+    const { config, page, read } = await createVault();
 
-    const targetPath = await writeEntity(
-      rootDir,
-      "Alpha",
+    const target = "entities/alpha.md";
+    await page(
+      target,
       {
+        pageType: "entity",
+        id: "entity.alpha",
+        title: "Alpha",
         sourceIds: ["source.old"],
         confidence: 0.3,
       },
@@ -189,8 +168,7 @@ describe("applyMemoryWikiMutation", () => {
       compile: { pageCounts: { entity: 1 } },
     });
 
-    const updated = await fs.readFile(targetPath, "utf8");
-    const parsed = parseWikiMarkdown(updated);
+    const parsed = parseWikiMarkdown(await read(target));
 
     expect(parsed.frontmatter).toMatchObject({
       pageType: "entity",
@@ -203,14 +181,13 @@ describe("applyMemoryWikiMutation", () => {
     expect(parsed.frontmatter).not.toHaveProperty("confidence");
     expect(parsed.body).toContain("keep this note");
     expect(parsed.body).toContain("<!-- openclaw:human:start -->");
-    await expect(
-      fs.readFile(path.join(rootDir, "entities", "index.md"), "utf8"),
-    ).resolves.toContain("[Alpha](alpha.md)");
+    await expect(read("entities/index.md")).resolves.toContain("[Alpha](alpha.md)");
   });
 
   it("preserves disjoint metadata updates from concurrent agent turns", async () => {
-    const { rootDir, config } = await createVault();
-    const targetPath = await writeEntity(rootDir, "Shared");
+    const { config, page, read } = await createVault();
+    const target = "entities/shared.md";
+    await page(target, { pageType: "entity", id: "entity.shared", title: "Shared" });
 
     await Promise.all(
       [
@@ -226,7 +203,7 @@ describe("applyMemoryWikiMutation", () => {
       ),
     );
 
-    const parsed = parseWikiMarkdown(await fs.readFile(targetPath, "utf8"));
+    const parsed = parseWikiMarkdown(await read(target));
     expect(parsed.frontmatter).toMatchObject({
       sourceIds: ["source.concurrent"],
       questions: ["Which agent owns the next action?"],

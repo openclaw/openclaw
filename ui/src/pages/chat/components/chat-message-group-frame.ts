@@ -15,7 +15,7 @@ import {
   isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "../chat-assistant-reply.ts";
-import { readPendingSendStatus } from "../chat-thread.ts";
+import { readPendingSendStatus } from "../chat-thread-items.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";

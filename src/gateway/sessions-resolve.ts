@@ -268,7 +268,7 @@ export function resolveSessionKeyFromResolveParams(params: {
   };
   const configuredAgentIds = new Set(listAgentIds(cfg));
   const prepareAgentChecks = (
-    entries: readonly (readonly [string, SessionEntry, ...unknown[]])[],
+    entries: Array<[string, SessionEntry]>,
     getTarget: ReturnType<typeof prepare>["getTarget"],
   ) => {
     const facts = new Map<SessionEntry, SessionEntry["acp"]>();

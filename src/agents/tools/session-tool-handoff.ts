@@ -15,6 +15,7 @@ import {
   type ExecRequestOwner,
 } from "../../infra/exec-request-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runOutsidePluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { registerReplyOperationSuccessorBarrier } from "../../sessions/session-controller.barriers.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
@@ -176,22 +177,29 @@ export async function handoffSessionTool(params: {
               if (signal.aborted) {
                 return;
               }
-              const receipt = enqueueSessionEventForHost(
+              const eventText =
                 params.name +
-                  " result: " +
-                  params.formatResult(result) +
-                  "\nContinue the original task in this conversation. Do not repeat a completed operation.",
-                withExecRequestOwners(
-                  {
-                    agentId: caller.agentId,
-                    sessionKey: caller.sessionKey,
-                    source: "plugin",
-                    contextKey,
-                    expectedTarget: target,
-                    assertCurrent: retained.assertCurrent,
-                    abortSignal: signal,
-                  },
-                  params.requestOwners,
+                " result: " +
+                params.formatResult(result) +
+                "\nContinue the original task in this conversation. Do not repeat a completed operation.";
+              // Retain the admitted Gateway, but let resume select the replacement plugin registry.
+              const receipt = retained.run(() =>
+                runOutsidePluginRuntimeRegistryScope(() =>
+                  enqueueSessionEventForHost(
+                    eventText,
+                    withExecRequestOwners(
+                      {
+                        agentId: caller.agentId,
+                        sessionKey: caller.sessionKey,
+                        source: "plugin",
+                        contextKey,
+                        expectedTarget: target,
+                        assertCurrent: retained.assertCurrent,
+                        abortSignal: signal,
+                      },
+                      params.requestOwners,
+                    ),
+                  ),
                 ),
               );
               const accepted = await receipt.accepted;

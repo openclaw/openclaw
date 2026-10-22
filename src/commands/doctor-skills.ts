@@ -35,54 +35,6 @@ function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
   return formatGhConfigDirMismatchHint(result);
 }
 
-function formatUnavailableSkillDoctorLines(
-  skills: SkillStatusEntry[],
-  includeDisableHint: boolean,
-): string[] {
-  const count = skills.length;
-  const lines = [
-    `${count} allowed skill${count === 1 ? " is" : "s are"} not usable in this environment (missing binaries, env vars, or config).`,
-    `- ${skills
-      .map((skill) => skill.name)
-      .toSorted((a, b) => a.localeCompare(b))
-      .join(", ")}`,
-  ];
-  if (skills.some((skill) => skill.missing.bins.length > 0 || skill.missing.anyBins.length > 0)) {
-    lines.push("Missing local binaries may exist on paired nodes; these skills remain enabled.");
-  }
-  if (includeDisableHint) {
-    lines.push(`Disable unused skills: ${formatCliCommand("openclaw doctor --fix")}`);
-  }
-  lines.push(
-    `Inspect details: ${formatCliCommand("openclaw skills check --agent <id>")} or ${formatCliCommand("openclaw skills info <name> --agent <id>")}`,
-  );
-  return lines;
-}
-
-function collectFleetUnavailableSkills(
-  reports: Array<{ unavailable: SkillStatusEntry[]; skills: SkillStatusEntry[] }>,
-): SkillStatusEntry[] {
-  // A locally missing binary may be provided by a paired node for this agent.
-  const preservedKeys = new Set(
-    reports.flatMap(({ skills }) =>
-      skills
-        .filter(
-          (skill) =>
-            !skill.blockedByAgentFilter &&
-            (skill.eligible || skill.missing.bins.length > 0 || skill.missing.anyBins.length > 0),
-        )
-        .map((skill) => skill.skillKey),
-    ),
-  );
-  const candidates = new Map<string, SkillStatusEntry>();
-  for (const skill of reports.flatMap(({ unavailable }) => unavailable)) {
-    if (!preservedKeys.has(skill.skillKey)) {
-      candidates.set(skill.skillKey, skill);
-    }
-  }
-  return [...candidates.values()];
-}
-
 /** Checks every agent's skill readiness without disabling skills for missing local binaries. */
 export async function maybeRepairSkillReadiness(params: {
   cfg: OpenClawConfig;
@@ -106,7 +58,25 @@ export async function maybeRepairSkillReadiness(params: {
       ? params.runWithPluginMetadataSnapshot({ config: params.cfg, workspaceDir }, buildReport)
       : buildReport();
   });
-  const fleetUnavailable = collectFleetUnavailableSkills(reports);
+  // A locally missing binary may be provided by a paired node for this agent.
+  const preservedKeys = new Set(
+    reports.flatMap(({ skills }) =>
+      skills
+        .filter(
+          (skill) =>
+            !skill.blockedByAgentFilter &&
+            (skill.eligible || skill.missing.bins.length > 0 || skill.missing.anyBins.length > 0),
+        )
+        .map((skill) => skill.skillKey),
+    ),
+  );
+  const candidates = new Map<string, SkillStatusEntry>();
+  for (const skill of reports.flatMap(({ unavailable }) => unavailable)) {
+    if (!preservedKeys.has(skill.skillKey)) {
+      candidates.set(skill.skillKey, skill);
+    }
+  }
+  const fleetUnavailable = [...candidates.values()];
   const globallyUnavailableKeys = new Set(fleetUnavailable.map((skill) => skill.skillKey));
   const willRepair = shouldAutoApproveDoctorFix(params.prompter.repairMode, {
     blockDuringUpdate: true,
@@ -121,10 +91,30 @@ export async function maybeRepairSkillReadiness(params: {
       const includesGlobalCandidate = unavailableForAgent.some((skill) =>
         globallyUnavailableKeys.has(skill.skillKey),
       );
-      note(
-        `${prefix}${formatUnavailableSkillDoctorLines(unavailableForAgent, includesGlobalCandidate && !willRepair).join("\n")}`,
-        "Skills",
+      const count = unavailableForAgent.length;
+      const lines = [
+        `${count} allowed skill${count === 1 ? " is" : "s are"} not usable in this environment (missing binaries, env vars, or config).`,
+        `- ${unavailableForAgent
+          .map((skill) => skill.name)
+          .toSorted((a, b) => a.localeCompare(b))
+          .join(", ")}`,
+      ];
+      if (
+        unavailableForAgent.some(
+          (skill) => skill.missing.bins.length > 0 || skill.missing.anyBins.length > 0,
+        )
+      ) {
+        lines.push(
+          "Missing local binaries may exist on paired nodes; these skills remain enabled.",
+        );
+      }
+      if (includesGlobalCandidate && !willRepair) {
+        lines.push(`Disable unused skills: ${formatCliCommand("openclaw doctor --fix")}`);
+      }
+      lines.push(
+        `Inspect details: ${formatCliCommand("openclaw skills check --agent <id>")} or ${formatCliCommand("openclaw skills info <name> --agent <id>")}`,
       );
+      note(`${prefix}${lines.join("\n")}`, "Skills");
     }
   }
   if (fleetUnavailable.length === 0) {

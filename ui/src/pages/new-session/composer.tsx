@@ -13,6 +13,7 @@ import {
 import { createBackgroundLayoutRef } from "../../components/session-background-layout-context.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/browser-platform.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -160,6 +161,7 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
   };
   const handleComposerKeydown = (event: KeyboardEvent) => {
     if (
+      keepMobileReturnNative(event) ||
       options.dictationActive ||
       options.submitting ||
       options.messageLocked ||
@@ -532,7 +534,8 @@ export function NewSessionComposer(props: {
               readonly={options().dictationActive}
               placeholder={placeholder()}
               aria-label={frame().messagePlaceholder}
-              aria-keyshortcuts={frame().keyShortcuts}
+              enterkeyhint="enter"
+              aria-keyshortcuts={isMobileBrowserPlatform() ? undefined : frame().keyShortcuts}
               aria-autocomplete="list"
               aria-controls={frame().menuVisible ? frame().menuListboxId : undefined}
               aria-haspopup={frame().menuVisible ? "listbox" : undefined}

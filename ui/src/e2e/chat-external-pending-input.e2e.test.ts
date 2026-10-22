@@ -184,9 +184,7 @@ suite.define(() => {
         hasActiveRun: true,
         activeRunIds: [runId],
       });
-      await expect
-        .poll(async () => (await gateway.getRequests("chat.history")).length)
-        .toBeGreaterThan(readsBefore);
+      await gateway.waitForRequest("chat.history", { after: readsBefore });
       await expect.poll(() => page.getByText(followup, { exact: true }).count()).toBe(1);
       const externalGroup = page.locator(".chat-group.user", { hasText: followup });
       await externalGroup.getByText("via CLI (Release helper)", { exact: true }).waitFor();
@@ -220,9 +218,7 @@ suite.define(() => {
         messageId: "external-input",
         messageSeq: 2,
       });
-      await expect
-        .poll(async () => (await gateway.getRequests("chat.history")).length)
-        .toBeGreaterThan(promotionReadsBefore);
+      await gateway.waitForRequest("chat.history", { after: promotionReadsBefore });
       await expect.poll(() => page.getByText(followup, { exact: true }).count()).toBe(1);
       expect(await externalGroup.locator(".chat-message-source").textContent()).toBe(
         "via CLI (Release helper)",

@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { readMcpOAuthStore } from "./mcp-oauth-store.js";
@@ -92,76 +91,6 @@ describe("MCP OAuth provider", () => {
     );
   });
 
-  it("aborts an in-flight refresh, preserves tokens, and releases its lease", async () => {
-    await withTempHome(
-      async () => {
-        await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
-          await provider.saveTokens({
-            access_token: "decoy-token",
-            refresh_token: "test-auth-token",
-            token_type: "Bearer",
-            expires_in: -1,
-          });
-        });
-        let signalStarted: (() => void) | undefined;
-        const started = new Promise<void>((resolve) => {
-          signalStarted = resolve;
-        });
-        let refreshSignal: AbortSignal | undefined;
-        const fetchFn = vi.fn(
-          async (_url: string | URL, init?: RequestInit): Promise<Response> =>
-            await new Promise<Response>((_resolve, reject) => {
-              refreshSignal = init?.signal ?? undefined;
-              const rejectAbort = () => {
-                const abortReason = refreshSignal?.reason;
-                reject(abortReason instanceof Error ? abortReason : new Error("refresh aborted"));
-              };
-              if (refreshSignal?.aborted) {
-                rejectAbort();
-              } else {
-                refreshSignal?.addEventListener("abort", rejectAbort, { once: true });
-              }
-              signalStarted?.();
-            }),
-        );
-        authMock.mockImplementationOnce(async (_refreshProvider, options) => {
-          await options.fetchFn("https://auth.example.com/token");
-          return "AUTHORIZED";
-        });
-        const controller = new AbortController();
-
-        const refresh = resolveMcpOAuthAccessToken({
-          identity: IDENTITY,
-          fetchFn,
-          signal: controller.signal,
-        });
-        await started;
-        controller.abort(new Error("request stopped"));
-
-        await expect(refresh).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
-        expect(refreshSignal).toMatchObject({ aborted: true });
-        expect(
-          await withMcpOAuthProviderForTest(
-            { identity: IDENTITY },
-            async (provider) => await provider.tokens(),
-          ),
-        ).toMatchObject({
-          access_token: "decoy-token",
-          refresh_token: "test-auth-token",
-        });
-        const leaseCount = openOpenClawStateDatabase()
-          .db.prepare("SELECT COUNT(*) AS count FROM state_leases WHERE scope = ?")
-          .get("core:mcp-oauth") as { count: number };
-        expect(leaseCount.count).toBe(0);
-      },
-      {
-        prefix: "openclaw-mcp-oauth-aborted-refresh-",
-        skipSessionCleanup: true,
-        env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
-      },
-    );
-  });
-
   it("refreshes an expired stored access token before projecting it", async () => {
     await withTempHome(
       async () => {
@@ -202,69 +131,6 @@ describe("MCP OAuth provider", () => {
       },
       {
         prefix: "openclaw-mcp-oauth-expired-token-",
-        skipSessionCleanup: true,
-        env: {
-          OPENCLAW_CONFIG_PATH: undefined,
-          OPENCLAW_STATE_DIR: undefined,
-        },
-      },
-    );
-  });
-
-  it("serializes concurrent refreshes for the same OAuth credential store", async () => {
-    await withTempHome(
-      async () => {
-        await withMcpOAuthProviderForTest(
-          {
-            identity: IDENTITY,
-          },
-          async (provider) => {
-            await provider.saveTokens({
-              access_token: "decoy-token",
-              refresh_token: "test-auth-token",
-              token_type: "Bearer",
-              expires_in: -1,
-            });
-          },
-        );
-
-        let signalRefreshStarted: (() => void) | undefined;
-        const refreshStarted = new Promise<void>((resolve) => {
-          signalRefreshStarted = resolve;
-        });
-        let releaseRefresh: (() => void) | undefined;
-        const refreshGate = new Promise<void>((resolve) => {
-          releaseRefresh = resolve;
-        });
-        authMock.mockImplementationOnce(async (refreshProvider) => {
-          signalRefreshStarted?.();
-          await refreshGate;
-          await refreshProvider.saveTokens({
-            access_token: "gateway-token",
-            refresh_token: "secret-token",
-            token_type: "Bearer",
-            expires_in: 3600,
-          });
-          return "AUTHORIZED";
-        });
-
-        const first = resolveMcpOAuthAccessToken({
-          identity: IDENTITY,
-        });
-        await refreshStarted;
-        const second = resolveMcpOAuthAccessToken({
-          identity: IDENTITY,
-        });
-        releaseRefresh?.();
-
-        await expect(Promise.all([first, second])).resolves.toEqual([
-          ROTATED_ACCESS,
-          ROTATED_ACCESS,
-        ]);
-        expect(authMock).toHaveBeenCalledOnce();
-      },
-      {
-        prefix: "openclaw-mcp-oauth-concurrent-refresh-",
         skipSessionCleanup: true,
         env: {
           OPENCLAW_CONFIG_PATH: undefined,

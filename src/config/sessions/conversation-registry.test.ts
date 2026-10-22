@@ -61,6 +61,18 @@ describe("conversation registry", () => {
   let storePath: string;
   const subscriptions: (() => void)[] = [];
   const observe = (unsubscribe: () => void) => subscriptions.push(unsubscribe);
+  const watchFacts = (onReceipt = () => {}) => {
+    const receipts: ConversationPublication[] = [];
+    observe(
+      conversationPublication.subscribeFacts((receipt) => {
+        if ("facts" in receipt) {
+          receipts.push(receipt);
+          onReceipt();
+        }
+      }),
+    );
+    return receipts;
+  };
   const expectPostimage = (fact: unknown, row: unknown, kind?: string) =>
     expect(fact).toMatchObject({ kind: "postimage", value: { ...(kind ? { kind } : {}), row } });
 
@@ -151,14 +163,7 @@ describe("conversation registry", () => {
       nativeDirectUserId: "peer-a",
       label: "@peer-a's agent",
     });
-    const receipts: ConversationPublication[] = [];
-    observe(
-      conversationPublication.subscribeFacts((receipt) => {
-        if ("facts" in receipt) {
-          receipts.push(receipt);
-        }
-      }),
-    );
+    const receipts = watchFacts();
     await registerConversationAddresses(registryScope(), [identity!], 100);
     expect(receipts).toHaveLength(1);
     expectPostimage(
@@ -591,15 +596,9 @@ describe("conversation registry", () => {
       payload: "\0".repeat(Math.floor(SQLITE_WORKER_MAX_MESSAGE_BYTES / 6) + 1),
     };
     const events: string[] = [];
-    const receipts: ConversationPublication[] = [];
-    observe(
-      conversationPublication.subscribeFacts((change) => {
-        if ("facts" in change) {
-          receipts.push(change);
-          events.push("facts");
-        }
-      }),
-    );
+    const receipts = watchFacts(() => {
+      events.push("facts");
+    });
     await expect(registerConversationAddresses(scope, [identity], 100)).resolves.toBeUndefined();
     events.push("reply");
     const database = openDatabase(scope);

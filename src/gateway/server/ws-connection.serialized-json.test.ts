@@ -201,10 +201,6 @@ it("delivers an owned shared history payload as a JSON text frame", async () => 
   const [data, isBinary] = (await received) as [Buffer, boolean];
   expect(result).toEqual({ kind: "sent", bytes: data.byteLength });
   expect(isBinary).toBe(false);
-  const plainReceived = once(peer, "message");
-  const plainResult = handler.send({ type: "res", id: "plain", ok: true, payload: "é🦞" });
-  const [plainData] = (await plainReceived) as [Buffer];
-  expect(plainResult).toEqual({ kind: "sent", bytes: plainData.byteLength });
   expect(JSON.parse(data.toString())).toEqual({ ...response, payload: { messages } });
 });
 

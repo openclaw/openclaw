@@ -14,7 +14,6 @@ export type MantisDiscordSmokeOptions = {
   env?: NodeJS.ProcessEnv;
   guildId?: string;
   message?: string;
-  now?: () => Date;
   outputDir?: string;
   redactPublicMetadata?: boolean;
   repoRoot?: string;
@@ -296,7 +295,7 @@ export async function runMantisDiscordSmoke(
   opts: MantisDiscordSmokeOptions = {},
 ): Promise<MantisDiscordSmokeResult> {
   const env = opts.env ?? process.env;
-  const startedAt = (opts.now ?? (() => new Date()))();
+  const startedAt = new Date();
   const redactPublicMetadata =
     opts.redactPublicMetadata ?? isTruthyOptIn(env[QA_REDACT_PUBLIC_METADATA_ENV]);
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());

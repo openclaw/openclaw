@@ -39,7 +39,7 @@ import {
 } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
 import {
-  hasSessionsYieldCall,
+  hasHandoffToolCall,
   pendingSessionsYield,
   projectSessionsYieldItems,
 } from "./chat-sessions-yield.ts";
@@ -335,7 +335,7 @@ export function buildChatItems(
       !props.showToolCalls &&
       isToolResult &&
       !(raw.role === "assistant" && extractTextCached(msg)?.trim()) &&
-      !hasSessionsYieldCall(msg) &&
+      !hasHandoffToolCall(msg) &&
       !permissionInMessage(msg)
     ) {
       continue;
@@ -620,7 +620,7 @@ export function buildChatItems(
     if (
       tool &&
       (props.showToolCalls ||
-        hasSessionsYieldCall(tool.projection.item.message) ||
+        hasHandoffToolCall(tool.projection.item.message) ||
         permissionInMessage(tool.projection.item.message))
     ) {
       tool.projection.bounds = resolveProjectionBounds(

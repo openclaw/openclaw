@@ -239,7 +239,7 @@ function buildProps(
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
     onRefreshWikiOverview: () => {},
-    onOpenConfig: () => {},
+    onOpenConfig: async () => {},
     onOpenWikiPage: async () => {},
     onCloseWikiPreview: vi.fn(),
     wikiPreview: null,

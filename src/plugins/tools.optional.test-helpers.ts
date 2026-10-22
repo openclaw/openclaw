@@ -109,7 +109,7 @@ export function createToolRegistry(
   return registry;
 }
 
-export function createToolRuntimeRecord(
+function createToolRuntimeRecord(
   id: string,
   source = `/tmp/${id}.js`,
   origin: MockRegistryToolEntry["origin"] = "bundled",

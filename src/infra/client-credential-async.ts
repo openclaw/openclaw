@@ -15,7 +15,9 @@ import type {
   ClientCredentialResult,
 } from "./client-credential-store.js";
 import type {
+  ClientCredentialPreparation,
   ClientCredentialWorkerInput,
+  ClientCredentialWorkerOperation,
   ClientCredentialWorkerResult,
 } from "./client-credential.worker.js";
 import {
@@ -65,6 +67,31 @@ export async function runClientCredentialOperationAsync(
   operation: ClientCredentialOperation,
   options: { signal?: AbortSignal; assertCurrent?: () => void } = {},
 ): Promise<ClientCredentialResult> {
+  return runClientCredentialTaskAsync(env, operation, options);
+}
+
+/** Reuse native admission's postimage without reading credentials on the caller thread. */
+export async function prepareClientCredentialStoreAsync(
+  env: NodeJS.ProcessEnv,
+): Promise<ClientCredentialPreparation["state"]> {
+  const result = await runClientCredentialTaskAsync(env, { kind: "startup.prepare" });
+  return result.state;
+}
+
+function runClientCredentialTaskAsync(
+  env: NodeJS.ProcessEnv,
+  operation: ClientCredentialOperation,
+  options?: { signal?: AbortSignal; assertCurrent?: () => void },
+): Promise<ClientCredentialResult>;
+function runClientCredentialTaskAsync(
+  env: NodeJS.ProcessEnv,
+  operation: { kind: "startup.prepare" },
+): Promise<ClientCredentialPreparation>;
+async function runClientCredentialTaskAsync(
+  env: NodeJS.ProcessEnv,
+  operation: ClientCredentialWorkerOperation,
+  options: { signal?: AbortSignal; assertCurrent?: () => void } = {},
+): Promise<ClientCredentialResult | ClientCredentialPreparation> {
   const root = resolveDatabasePathKey(path.resolve(resolveStateDir(env)));
   const capturedEnv = {
     HOME: env.HOME,
@@ -169,17 +196,21 @@ export async function runClientCredentialOperationAsync(
         assertCurrent();
         const result = await requestClientCredentialsFromApp(
           capturedEnv,
-          operation,
+          operation.kind === "startup.prepare"
+            ? { kind: "identity.read", identity_key: "primary" }
+            : operation,
           options.signal,
           assertCurrent,
         );
         assertCurrent();
         if (result) {
-          return result;
+          return operation.kind === "startup.prepare"
+            ? { kind: "preparation", state: "ready" }
+            : result;
         }
       }
       // An uncertain app dispatch is terminal. Offline custody requires no app
-      // request, an explicit unowned-root refusal, or held maintenance admission.
+      // request, a definite predispatch refusal, or held maintenance admission.
       const retried = await offline();
       if (retried.kind === "result") {
         return retried.result;

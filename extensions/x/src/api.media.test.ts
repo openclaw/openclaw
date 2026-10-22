@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { createXApiClient, XFetch } from "./api.js";
-import { createXTestApi } from "./test-support/api-client.js";
+import type { createXApiClient } from "./api.js";
+import { createXTestApi, type XFetch } from "./test-support/api-client.js";
 
 type Media = Parameters<ReturnType<typeof createXApiClient>["uploadMedia"]>[0];
 function client(fetch: XFetch) {
@@ -30,10 +30,11 @@ const uploadPaths = [
   "/2/media/upload/101/append",
   "/2/media/upload/101/finalize",
 ];
-const uploadThenReply = (api: ReturnType<typeof client>, media: Media = image) =>
-  api
-    .uploadMedia(media)
-    .then((id) => api.reply({ text: "Never text-only", inReplyToId: "20", mediaIds: [id] }));
+const uploadThenReply = (
+  api: ReturnType<typeof client>,
+  media: Media = image,
+  text = "Never text-only",
+) => api.uploadMedia(media).then((id) => api.reply({ text, inReplyToId: "20", mediaIds: [id] }));
 
 const image = {
   buffer: Buffer.from("synthetic-image-bytes"),
@@ -135,11 +136,7 @@ describe("X native media request boundary", () => {
         statuses: [processing("in_progress", 3, id), processing("succeeded", undefined, id)],
       });
       const started = Date.now();
-      const pending = test.api
-        .uploadMedia(media)
-        .then((mediaId) =>
-          test.api.reply({ text: "Video", inReplyToId: "20", mediaIds: [mediaId] }),
-        );
+      const pending = uploadThenReply(test.api, media, "Video");
       await test.finalized;
       if (video) {
         await vi.advanceTimersByTimeAsync(1999);
@@ -293,8 +290,6 @@ describe("X native media request boundary", () => {
         }
         return mediaResponse();
       },
-      clientSecret: "secret",
-      refreshToken: "seed",
       saveRefreshToken: async (token) => {
         persisted = token;
       },
@@ -325,8 +320,6 @@ describe("X native media request boundary", () => {
         }
         return mediaResponse();
       },
-      clientSecret: "secret",
-      refreshToken: "seed",
     });
     await expect(
       api.uploadMedia({

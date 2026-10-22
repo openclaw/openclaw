@@ -369,6 +369,7 @@ export function appendTranscriptEventInTransaction(
             scope.sessionId,
             deferWindowTouch ? windowUpdatedAt : undefined,
             cursor.rowTranscript,
+            options.persistActorMutation,
           );
         });
       }

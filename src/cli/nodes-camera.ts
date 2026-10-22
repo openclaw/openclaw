@@ -238,8 +238,6 @@ async function writeUrlToFile(filePath: string, url: string, opts: { expectedHos
   } finally {
     await release();
   }
-
-  return { path: filePath, bytes };
 }
 
 function validateCameraPayloadBase64(base64: string, maxBytes: number): string {
@@ -272,7 +270,7 @@ export async function writeBase64ToFile(
       await fs.writeFile(tempPath, buf, { flag: "wx" });
     },
   });
-  return { path: filePath, bytes: buf.length };
+  return { path: filePath };
 }
 
 function requireNodeRemoteIp(remoteIp?: string): string {

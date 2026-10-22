@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -48,6 +47,9 @@ const llm = vi.hoisted(() => ({ completeSimple: vi.fn() }));
 const strings = (values: Record<string, string>) => new Map(Object.entries(values));
 const childOptions = { reject: false, timeout: 120_000, stripFinalNewline: false } as const;
 const tsxArgs = ["--import", "./scripts/tsx.mjs"];
+const runNode = (args: string[], env?: NodeJS.ProcessEnv) =>
+  execa(testNodeExecPath, [...tsxArgs, ...args], { ...childOptions, env });
+const runI18n = (command: string) => runNode(["scripts/control-ui-i18n.ts", ...command.split(" ")]);
 vi.mock("@openclaw/ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/ai")>();
   return {
@@ -97,59 +99,30 @@ describe("translation provider privacy and fallback", () => {
   });
 
   it("reports CLI failures without disclosing configured model or key values", async () => {
-    const result = await execa(
-      process.execPath,
-      [
-        ...tsxArgs,
-        "scripts/control-ui-i18n.ts",
-        "sync",
-        "--locale",
-        `${primary.toUpperCase()}/${fallback}/test-key`,
-      ],
-      childOptions,
-    );
+    const result = await runI18n(`sync --locale ${primary.toUpperCase()}/${fallback}/test-key`);
     expect(result.exitCode).toBe(1);
     expect(result.stderr.trim()).toBe("unknown locale: [redacted]/[redacted]/[redacted]");
   });
 
   it.each([
-    { args: ["sync", "--refresh-key"], error: "requires a catalog key" },
-    {
-      args: ["sync", "--locale", "pl", "--refresh-key", "chat.parentSession"],
-      error: "requires sync --write --locale",
-    },
-    {
-      args: ["sync", "--write", "--refresh-key", "chat.parentSession"],
-      error: "requires sync --write --locale",
-    },
-    {
-      args: ["check", "--locale", "pl", "--refresh-key", "chat.parentSession"],
-      error: "requires sync --write --locale",
-    },
-    {
-      args: ["sync", "--write", "--locale", "pl", "--force", "--refresh-key", "chat.parentSession"],
-      error: "cannot be combined with --force",
-    },
-    {
-      args: [
-        "sync",
-        "--write",
-        "--locale",
-        "pl",
-        ...Array.from({ length: 65 }, (_, i) => ["--refresh-key", `key${i}`]).flat(),
-      ],
-      error: "at most 64 distinct keys",
-    },
-    {
-      args: ["sync", "--write", "--locale", "pl", "--refresh-key", "missing.fixture.key"],
-      error: "unknown refresh key: missing.fixture.key",
-    },
-  ])("rejects invalid targeted refresh: $error", async ({ args, error }) => {
-    const result = await execa(
-      process.execPath,
-      ["--import", "./scripts/tsx.mjs", "scripts/control-ui-i18n.ts", ...args],
-      { reject: false, timeout: 120_000, stripFinalNewline: false },
-    );
+    ["sync --refresh-key", "requires a catalog key"],
+    ["sync --locale pl --refresh-key chat.parentSession", "requires sync --write --locale"],
+    ["sync --write --refresh-key chat.parentSession", "requires sync --write --locale"],
+    ["check --locale pl --refresh-key chat.parentSession", "requires sync --write --locale"],
+    [
+      "sync --write --locale pl --force --refresh-key chat.parentSession",
+      "cannot be combined with --force",
+    ],
+    [
+      `sync --write --locale pl ${Array.from({ length: 65 }, (_, i) => `--refresh-key key${i}`).join(" ")}`,
+      "at most 64 distinct keys",
+    ],
+    [
+      "sync --write --locale pl --refresh-key missing.fixture.key",
+      "unknown refresh key: missing.fixture.key",
+    ],
+  ])("rejects invalid targeted refresh: %s", async (args, error) => {
+    const result = await runI18n(args);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain(error);
   });
@@ -158,21 +131,7 @@ describe("translation provider privacy and fallback", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL", "1");
-    const result = await execa(
-      process.execPath,
-      [
-        "--import",
-        "./scripts/tsx.mjs",
-        "scripts/control-ui-i18n.ts",
-        "sync",
-        "--write",
-        "--locale",
-        "pl",
-        "--refresh-key",
-        "chat.parentSession",
-      ],
-      { reject: false, timeout: 120_000, stripFinalNewline: false },
-    );
+    const result = await runI18n("sync --write --locale pl --refresh-key chat.parentSession");
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("--refresh-key requires a configured translation provider");
   });
@@ -234,11 +193,7 @@ describe("translation provider privacy and fallback", () => {
         assert.equal(requests, 1);
         console.log("isolated-runtime-ok");
       `;
-      const result = await execa(
-        testNodeExecPath,
-        [...tsxArgs, "--input-type=module", "-e", code],
-        childOptions,
-      );
+      const result = await runNode(["--input-type=module", "-e", code]);
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stdout).toContain("isolated-runtime-ok");
       expect(result.stdout + result.stderr).not.toContain(primary);
@@ -341,23 +296,13 @@ describe("control-ui config hint source catalog", () => {
 });
 
 describe("control-ui-i18n generated ownership", () => {
-  it("includes lazy page copy and shared search labels in the generator catalog", () => {
-    const result = spawnSync(
-      testNodeExecPath,
-      [
-        "--import",
-        "./scripts/tsx.mjs",
-        "--input-type=module",
-        "--eval",
-        [
-          'import { loadControlUiSourceCatalog } from "./scripts/lib/control-ui-i18n-catalog.ts";',
-          "const catalog = loadControlUiSourceCatalog();",
-          "console.log(JSON.stringify(catalog));",
-        ].join("\n"),
-      ],
-      { cwd: process.cwd(), encoding: "utf8" },
-    );
-    expect(result.status, result.stderr).toBe(0);
+  it("includes lazy page copy and shared search labels in the generator catalog", async () => {
+    const result = await runNode([
+      "--input-type=module",
+      "--eval",
+      'import { loadControlUiSourceCatalog } from "./scripts/lib/control-ui-i18n-catalog.ts";\nconsole.log(JSON.stringify(loadControlUiSourceCatalog()));',
+    ]);
+    expect(result.exitCode, result.stderr).toBe(0);
     const catalog: unknown = JSON.parse(result.stdout);
     const source = flattenCatalog(catalog, "en");
     for (const fragment of [
@@ -566,22 +511,13 @@ describe("control-ui-i18n catalog validation", () => {
     ]);
   });
 
-  it("keeps verification keyless even when provider credentials exist", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/control-ui-i18n-verify.ts", "verify"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          ANTHROPIC_API_KEY: "redacted",
-          OPENAI_API_KEY: "redacted",
-        },
-      },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
+  it("keeps verification keyless even when provider credentials exist", async () => {
+    const result = await runNode(["scripts/control-ui-i18n-verify.ts", "verify"], {
+      ...process.env,
+      ANTHROPIC_API_KEY: "redacted",
+      OPENAI_API_KEY: "redacted",
+    });
+    expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout).toContain("source:");
     expect(result.stdout).not.toContain("provider=openai");
     expect(result.stdout).not.toContain("provider=anthropic");

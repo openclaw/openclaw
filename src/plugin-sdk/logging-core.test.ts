@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as diagnostics from "../infra/diagnostic-events.js";
 import * as schedulerModule from "../infra/gateway-scheduler.js";
+import { logSessionStateChange } from "../logging/diagnostic.js";
+import { resetDiagnosticStateForTest } from "../logging/diagnostic.test-support.js";
 import * as resources from "../plugins/legacy-sdk-resource-host.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { testing } from "../sessions/session-controller.test-support.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -100,3 +104,67 @@ it("rejects timed work from an explicit resource host whose scheduler was not bo
     await host.close();
   }
 });
+
+it.each(["standalone", "bound"] as const)(
+  "keeps %s SDK recovery callbacks on the eligible host controller",
+  async (mode) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(6_000);
+    resetDiagnosticStateForTest();
+    const ref = { sessionKey: "agent:main:sdk-recovery", sessionId: "sdk-recovery-session" };
+    // The host creates work; the public logging API does not manufacture session state.
+    const operation = createReplyOperation({ ...ref, resetTriggered: false });
+    operation.setPhase("running");
+    logSessionStateChange({ ...ref, state: "processing" });
+    vi.setSystemTime(306_000);
+    const clock = createGatewaySchedulerClock(306_000);
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const constructor = vi
+      .spyOn(schedulerModule, "GatewayScheduler")
+      .mockImplementation(function () {
+        return scheduler;
+      });
+    const host = mode === "bound" ? new resources.LegacyPluginSdkResourceHost() : undefined;
+    host?.bindScheduler(scheduler);
+    const recover = vi.fn();
+    const start = () =>
+      logging.startDiagnosticHeartbeat(
+        { diagnostics: { enabled: true } },
+        { recoverStuckSession: recover, sampleLiveness: () => null },
+      );
+    try {
+      if (host) {
+        host.run(start);
+      } else {
+        start();
+      }
+      vi.setSystemTime(336_000);
+      await clock.advanceTo(336_000);
+      expect(operation.watchdog.decide().action).toBe("warn");
+      expect(recover).not.toHaveBeenCalled();
+      vi.setSystemTime(366_000);
+      expect(operation.watchdog.decide().action).toBe("stop");
+      await clock.advanceTo(366_000);
+      expect(recover).toHaveBeenCalledOnce();
+      expect(recover).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ...ref,
+          operation,
+          allowActiveAbort: true,
+          expectedState: "processing",
+        }),
+      );
+      // The callback remains the selected dispatch adapter, not an extra built-in effect.
+      expect(operation.result).toBeNull();
+    } finally {
+      logging.stopDiagnosticHeartbeat();
+      await host?.close();
+      await scheduler.stop();
+      constructor.mockRestore();
+      operation.complete();
+      testing.resetSessionControllerForTest();
+      resetDiagnosticStateForTest();
+      vi.useRealTimers();
+    }
+  },
+);

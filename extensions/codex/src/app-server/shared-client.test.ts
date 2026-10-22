@@ -19,6 +19,11 @@ import { registerSharedClientInferenceTests } from "./shared-client-inference.te
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./shared-client-lifecycle.js";
 import { registerSharedClientLifetimeTests } from "./shared-client-lifetime.test-support.js";
 import { registerSharedClientManagedFallbackTests } from "./shared-client-managed-fallback.test-support.js";
+import {
+  createInitializingClientHarness,
+  createStartOptions,
+} from "./shared-client-start.test-support.js";
+import { registerSharedClientUsageTests } from "./shared-client-usage.test-support.js";
 import { registerSharedClientWebSocketStartupTests } from "./shared-client-websocket-startup.test-support.js";
 import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -156,18 +161,6 @@ async function sendInitializeResult(
   harness.send({ id: initialize.id, result: { userAgent } });
 }
 
-// Capture reads runtime files before startup; respond when initialize reaches the wire.
-function createInitializingClientHarness(userAgent = `codex-cli/${CODEX_APP_SERVER_VERSION}`) {
-  return createClientHarness({
-    onWrite: (line, send) => {
-      const request = JSON.parse(line) as { id: number; method: string };
-      if (request.method === "initialize") {
-        send({ id: request.id, result: { userAgent } });
-      }
-    },
-  });
-}
-
 async function sendEmptyModelList(harness: ReturnType<typeof createClientHarness>): Promise<void> {
   const modelList = JSON.parse(await harness.waitForWrite(2)) as { id: number; method: string };
   expect(modelList.method).toBe("model/list");
@@ -253,12 +246,6 @@ function configureManagedDesktopFallback(): CodexAppServerStartOptions {
     commandSource: "managed",
     args: ["app-server", "--listen", "stdio://"],
   });
-}
-
-function createStartOptions(
-  overrides: Partial<CodexAppServerStartOptions> = {},
-): CodexAppServerStartOptions {
-  return { transport: "stdio", command: "codex", args: ["app-server"], headers: {}, ...overrides };
 }
 
 describe("shared Codex app-server client", () => {
@@ -1338,6 +1325,8 @@ describe("shared Codex app-server client", () => {
       expect(resolvedCacheKeys.join("\n")).not.toContain("second-secret-token");
     },
   );
+
+  registerSharedClientUsageTests();
 
   it.each(["api-key", "subscription"] as const)(
     "reuses a turn's %s physical client for a control resume",

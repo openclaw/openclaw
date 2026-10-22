@@ -105,12 +105,7 @@ it("resolves canonical option C when rendered option A repeats across blocks", a
       method: "question.request",
       params: {
         id: questionId,
-        questions: [
-          {
-            questionId: "destination",
-            ...question,
-          },
-        ],
+        questions: [{ questionId: "destination", ...question }],
         timeoutMs: 15_000,
       },
     });

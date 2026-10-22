@@ -260,7 +260,13 @@ it.each(["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"] as const)(
     }
     expect(repeatedPlan.snapshot.stateDigest).toBe(plan.snapshot.stateDigest);
     expect(repeatedPlan.planDigest).toBe(plan.planDigest);
-    for (const stepId of ["media-persistence", "transcript-directives", "shared-auth-store"]) {
+    for (const stepId of [
+      "session-entry-state-preparation",
+      "media-persistence",
+      "session-entry-state",
+      "transcript-directives",
+      "shared-auth-store",
+    ]) {
       const plannedSource = byId(plan.steps, stepId)?.source;
       if (overrideKey === "PI_CODING_AGENT_DIR") {
         expect(plannedSource).toEqual(byId(result.stepReceipts, stepId)?.source);

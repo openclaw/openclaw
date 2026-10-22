@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as catalog from "./official-external-plugin-catalog.js";
 import { installableEntry } from "./official-external-plugin-catalog.test-support.js";
 import {
-  resolveExternalPluginRuntimeDependencyRepairHint,
-  resolveMissingOfficialExternalChannelPluginRepairHint,
-  resolveMissingOfficialExternalChannelPluginRepairHints,
-  resolveOfficialExternalPluginRepairHint,
+  resolveExternalPluginRuntimeDependencyRepairHint as dependencyHint,
+  resolveMissingOfficialExternalChannelPluginRepairHint as missingChannelHint,
+  resolveMissingOfficialExternalChannelPluginRepairHints as missingChannelHints,
+  resolveOfficialExternalPluginRepairHint as repairHint,
   tracksPluginDependencyStatus,
 } from "./official-external-plugin-repair-hints.js";
 
@@ -28,7 +28,7 @@ function channelHint(channelId: string, effective: boolean, blockedReasons: stri
       blockedReasons,
     },
   ]);
-  return resolveMissingOfficialExternalChannelPluginRepairHint({
+  return missingChannelHint({
     config: {
       channels: { [channelId]: channelId === "feishu" ? { appId: "cli_xxx" } : { enabled: true } },
     },
@@ -62,7 +62,7 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
         installableEntry("acme-plugin", { sourceRef, package: "@acme/plugin", version: "1.2.3" }),
       );
 
-      expect(resolveOfficialExternalPluginRepairHint("acme-plugin")).toMatchObject({
+      expect(repairHint("acme-plugin")).toMatchObject({
         installSpec,
         installCommand: `openclaw plugins install ${target}`,
       });
@@ -70,53 +70,38 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
   );
 
   it("skips presence policy when no channel ids need repair hints", () => {
-    expect(
-      resolveMissingOfficialExternalChannelPluginRepairHints({
-        config: {},
-        channelIds: [],
-      }),
-    ).toEqual([]);
+    expect(missingChannelHints({ config: {}, channelIds: [] })).toEqual([]);
     expect(resolvePresence).not.toHaveBeenCalled();
   });
 
-  it("does not return install hints for policy-blocked official external channel owners", () => {
-    expect(channelHint("whatsapp", false, ["not-in-allowlist"])).toBeNull();
-  });
-
-  it("does not return install hints for active official external channel owners", () => {
-    expect(channelHint("whatsapp", true, [])).toBeNull();
+  it.each([
+    [false, ["not-in-allowlist"]],
+    [true, []],
+  ] as const)("does not repair an existing owner (active: %s)", (effective, blockedReasons) => {
+    expect(channelHint("whatsapp", effective, [...blockedReasons])).toBeNull();
   });
 });
 
 describe("resolveExternalPluginRuntimeDependencyRepairHint", () => {
-  it.each([
-    ["bundled", "discord", "@openclaw/discord", "openclaw plugins install npm:@openclaw/discord"],
-    [
-      "config",
-      "cloudflare",
-      "@openclaw/cloudflare",
-      "openclaw plugins install npm:@openclaw/cloudflare",
-    ],
-    ["bundled", "discord", "@example/discord-fork", "reinstall or update the plugin package"],
-  ])("repairs %s %s from %s with %s", (origin, pluginId, packageName, expected) => {
-    const hint = resolveExternalPluginRuntimeDependencyRepairHint({
+  it.each<[string, string, string | undefined, string?]>([
+    ["bundled", "discord", "openclaw plugins install npm:@openclaw/discord"],
+    ["config", "cloudflare", "openclaw plugins install npm:@openclaw/cloudflare"],
+    ["bundled", "discord", "reinstall or update the plugin package", "@example/discord-fork"],
+    ["bundled", "telegram", undefined],
+    ["bundled", "cloudflare", undefined],
+  ])("resolves %s %s dependency repair", (origin, pluginId, expected, foreignPackage) => {
+    const hint = dependencyHint({
       origin,
       pluginId,
-      packageName,
-      ...(packageName === "@example/discord-fork" ? { packageBuild: { bundledDist: false } } : {}),
+      packageName: foreignPackage ?? `@openclaw/${pluginId}`,
+      ...(foreignPackage ? { packageBuild: { bundledDist: false } } : {}),
     });
-    expect(hint).toContain("runtime dependencies are missing");
-    expect(hint).toContain(expected);
-  });
-
-  it.each(["telegram", "cloudflare"])("stays silent for root-packaged %s", (pluginId) => {
-    expect(
-      resolveExternalPluginRuntimeDependencyRepairHint({
-        origin: "bundled",
-        pluginId,
-        packageName: `@openclaw/${pluginId}`,
-      }),
-    ).toBeUndefined();
+    if (expected === undefined) {
+      expect(hint).toBeUndefined();
+    } else {
+      expect(hint).toContain("runtime dependencies are missing");
+      expect(hint).toContain(expected);
+    }
   });
 });
 

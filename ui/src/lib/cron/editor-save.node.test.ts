@@ -580,7 +580,6 @@ describe("automation default timing", () => {
         cronEnabled: false,
         enqueueSystemEvent: vi.fn(),
         enqueueSessionEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: async () => {
           throw new Error("Paused automation must not execute");
         },

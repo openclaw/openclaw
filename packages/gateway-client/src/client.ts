@@ -19,6 +19,7 @@ import {
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-protocol/version";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAbortError, raceWithTimeout } from "@openclaw/retry";
 import {
@@ -338,10 +339,8 @@ export class GatewayClient {
       onConnectFailure: (error, context) => this.handleConnectRequestFailure(error, context.plan),
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
-        if (this.tickTimer) {
-          clearInterval(this.tickTimer);
-          this.tickTimer = null;
-        }
+        clearInterval(this.tickTimer ?? undefined);
+        this.tickTimer = null;
         if (decision.notify) {
           this.opts.onClose?.(context.code, context.reason, this.closeInfo(context));
         }
@@ -498,14 +497,8 @@ export class GatewayClient {
     ws.on("unexpected-response", (request: ClientRequest, response: IncomingMessage) => {
       void readUpgradeErrorBody(response).then((body) => {
         const statusCode = response.statusCode;
-        let gatewayError: { type?: unknown; message?: unknown } | undefined;
-        try {
-          const parsed: unknown = JSON.parse(body);
-          const parsedError = isRecord(parsed) ? parsed.error : undefined;
-          gatewayError = isRecord(parsedError) ? parsedError : undefined;
-        } catch {
-          // Plain-text and truncated rejections remain visible in the original error message.
-        }
+        const parsedError = safeParseJsonRecord(body)?.error;
+        const gatewayError = isRecord(parsedError) ? parsedError : undefined;
         const rawLocation = response.headers.location;
         const location = rawLocation
           ? redactSensitiveUrlLikeString(
@@ -585,10 +578,8 @@ export class GatewayClient {
     this.stopped = true;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-      this.tickTimer = null;
-    }
+    clearInterval(this.tickTimer ?? undefined);
+    this.tickTimer = null;
     if (this.pendingStop) {
       return this.pendingStop.promise;
     }
@@ -1220,9 +1211,7 @@ export class GatewayClient {
   }
 
   private startTickWatch() {
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-    }
+    clearInterval(this.tickTimer ?? undefined);
     const rawMinInterval = this.opts.tickWatchMinIntervalMs;
     const minInterval =
       typeof rawMinInterval === "number" && Number.isFinite(rawMinInterval)

@@ -6,9 +6,7 @@ import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
-import { registerEnglishCatalog, getLocale, t } from "../../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../../lib/reactive/projection.ts";
-import { createSessionDiffSummary } from "../../../lib/session-diff-summary.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ProcessesPanelData } from "../processes-panel-data.ts";
@@ -27,7 +25,6 @@ import type {
   ChatDetailsProps,
 } from "./chat-details-types.ts";
 import { ChatOutputsDesktop, getChatOutputsCount, hasChatDesktopOutputs } from "./chat-outputs.tsx";
-import { hasChatPullRequests } from "./chat-pull-requests.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
@@ -42,7 +39,6 @@ type Props = {
   desktop?: boolean;
 };
 export type ChatDetailsSession = SolidBridgeElement<Props>;
-const diffSummaryInputs = new WeakMap<ChatDetailsSession, () => void>();
 
 export const ChatDetailsSession = defineSolidBridge<Props>(
   "openclaw-chat-details-session",
@@ -62,57 +58,13 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
       : () => undefined;
     const Background = (backgroundProps: Parameters<typeof ChatDetailsBackground>[0]) =>
       ChatDetailsBackground(backgroundProps, processes);
-    const changes = createSessionDiffSummary(host.ownerDocument, () => host.isConnected);
-    const syncDiffSummary = () =>
-      changes.update({
-        gateway: host.props?.pullRequestsGateway,
-        sessionKey: host.props?.sessionKey ?? "",
-        agentId: host.props?.currentAgentId ?? undefined,
-        sessionId: host.props?.selectedSession?.sessionId,
-        presented: host.presented && !host.desktop && Boolean(host.props?.onOpenSessionDiff),
-        runActive:
-          host.props?.runActive === true || host.props?.selectedSession?.hasActiveRun === true,
-      });
-    onSettled(() => {
-      diffSummaryInputs.set(host, syncDiffSummary);
-      syncDiffSummary();
-      return () => {
-        diffSummaryInputs.delete(host);
-        changes.dispose();
-      };
-    });
-    const changesView = projectOwner(changes, (owner) => owner.snapshot);
-    const summary = () => changesView.read().summary;
-    const compactNumber = createMemo(
-      () => new Intl.NumberFormat(getLocale(), { notation: "compact", maximumFractionDigits: 1 }),
-    );
-    const fileCount = (count: number) =>
-      count === 1
-        ? t("chat.sessionDetails.changedFile")
-        : t("chat.sessionDetails.changedFiles", { count: String(count) });
-    const summaryDescription = () => {
-      const value = summary();
-      return [
-        value
-          ? t("chat.sessionDetails.changeSummary", {
-              files: fileCount(value.fileCount),
-              additions: String(value.additions),
-              deletions: String(value.deletions),
-            })
-          : t("chat.sessionDetails.changesUnavailable"),
-        value?.truncated ? t("chat.sessionDetails.changesPartialDescription") : "",
-        changesView.read().stale ? t("chat.sessionDetails.changesStaleDescription") : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-    };
-    const identity = createMemo(() =>
+    const readIdentity = () =>
       JSON.stringify([
         props.props?.sessionKey,
         props.props?.currentAgentId,
         props.props?.selectedSession?.sessionId,
-      ]),
-    );
+      ]);
+    const identity = createMemo(readIdentity);
     const outputsDemand = createMemo(() =>
       props.presented && props.desktop && props.props?.outputs
         ? props.props.retainOutputs
@@ -185,11 +137,6 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               ? props.props?.desktopDisclosures?.expanded["pull-requests"]
               : undefined) ?? pullRequestsOpen();
           const active = () => props.presented;
-          const openAllChanges = () => {
-            if (host.isConnected && props.presented) {
-              props.props?.onOpenSessionDiff?.();
-            }
-          };
           const session = () => props.props?.selectedSession;
           const creatorName = () => session()?.createdActor?.label || session()?.createdActor?.id;
           const owner = () => session()?.owner?.actor;
@@ -221,6 +168,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             if (!snapshot) {
               return null;
             }
+            const navigationIdentity = readIdentity();
             const current = () =>
               host.isConnected && props.presented && props.props?.outputs === snapshot;
             return {
@@ -231,8 +179,9 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 }
               },
               onViewAll: () => {
-                if (current()) {
-                  snapshot.onViewAll();
+                // Native props can advance before the visible Outputs row settles.
+                if (host.isConnected && props.presented && readIdentity() === navigationIdentity) {
+                  props.props?.outputs?.onViewAll();
                 }
               },
               onRetryArtifacts: snapshot.onRetryArtifacts
@@ -379,7 +328,12 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                           </details>
                         </div>
                       </Show>
-                      <ChatDetailsEnvironment details={props.props!} presented={active()} />
+                      <ChatDetailsEnvironment
+                        {...props.props?.environment}
+                        details={props.props!}
+                        presented={active()}
+                        work={pullRequests() ?? undefined}
+                      />
                     </>
                   }
                 >
@@ -441,6 +395,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                       </Show>
                       <ChatDetailsEnvironment
                         {...props.props?.environment}
+                        work={pullRequests() ?? undefined}
                         details={props.props!}
                         presented={active()}
                         expanded={sectionExpanded("environment")}
@@ -467,20 +422,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                   {(requests) => (
                     <Show
                       when={
-                        (!props.desktop && Boolean(props.props?.onOpenSessionDiff)) ||
-                        hasChatPullRequests(requests())
+                        requests().pullRequests.length > 0 ||
+                        requests().publication?.result?.status === "published"
                       }
                     >
-                      <div
-                        class={[
-                          "chat-details__group",
-                          "chat-details__changes",
-                          {
-                            "chat-details__changes--summary":
-                              !props.desktop && Boolean(props.props?.onOpenSessionDiff),
-                          },
-                        ]}
-                      >
+                      <div class="chat-details__group chat-details__changes">
                         <Show
                           when={!props.desktop}
                           fallback={
@@ -497,7 +443,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                                 );
                               }}
                             >
-                              <ChatPullRequests {...requests()} />
+                              <ChatPullRequests {...requests()} publishedOnly />
                             </ChatDetailsDesktopSection>
                           }
                         >
@@ -511,75 +457,13 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                             }}
                           >
                             <summary class="chat-details__caption">
-                              {t("chat.sessionDetails.changes")}
+                              {t("sessionHovercard.pullRequests")}
                               <span>{props.props?.pullRequests?.length || null}</span>
                               <Icon name="chevronDown" />
                             </summary>
-                            <ChatPullRequests {...requests()} />
+                            <ChatPullRequests {...requests()} publishedOnly />
                           </details>
                         </Show>
-                        {props.props?.onOpenSessionDiff && !props.desktop && (
-                          <button
-                            type="button"
-                            class="chat-details__all-changes"
-                            aria-label={t("chat.sessionDetails.allChanges")}
-                            aria-description={summaryDescription()}
-                            title={summaryDescription()}
-                            onClick={openAllChanges}
-                          >
-                            <span>{t("chat.sessionDetails.allChanges")}</span>
-                            <span class="chat-details__change-summary" aria-hidden="true">
-                              <Show
-                                when={summary()}
-                                fallback={
-                                  <span class="chat-details__change-status">
-                                    {changesView.read().unavailable
-                                      ? t("chat.sessionDetails.changesUnavailableShort")
-                                      : "—"}
-                                  </span>
-                                }
-                              >
-                                {(value) => (
-                                  <>
-                                    <span class="chat-details__change-files">
-                                      {fileCount(value().fileCount)}
-                                    </span>
-                                    <span
-                                      class={[
-                                        "chat-details__change-lines",
-                                        {
-                                          "chat-details__change-lines--add": value().additions > 0,
-                                        },
-                                      ]}
-                                    >
-                                      +{compactNumber().format(value().additions)}
-                                    </span>
-                                    <span
-                                      class={[
-                                        "chat-details__change-lines",
-                                        {
-                                          "chat-details__change-lines--del": value().deletions > 0,
-                                        },
-                                      ]}
-                                    >
-                                      −{compactNumber().format(value().deletions)}
-                                    </span>
-                                    {value().truncated && (
-                                      <span class="chat-details__change-status">
-                                        {t("chat.sessionDetails.changesPartial")}
-                                      </span>
-                                    )}
-                                    {changesView.read().stale && (
-                                      <span class="chat-details__change-status">
-                                        {t("chat.sessionDetails.changesStale")}
-                                      </span>
-                                    )}
-                                  </>
-                                )}
-                              </Show>
-                            </span>
-                          </button>
-                        )}
                       </div>
                     </Show>
                   )}
@@ -651,7 +535,6 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
     propertyChanged: (host, key) => {
       if (key === "props" || key === "presented" || key === "desktop") {
         syncSessionPanelInputs(host);
-        diffSummaryInputs.get(host)?.();
       }
     },
     properties: {

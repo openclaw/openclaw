@@ -221,31 +221,8 @@ it("projects three descendant receipts without mixing the parent's current branc
     throw new Error("offline");
   });
   await fixture.subscriptions.pollNow();
-  expect(latest()).toMatchObject({
-    status: "unavailable",
-    taskPullRequestCount: 3,
-  });
+  expect(latest()).toMatchObject({ status: "unavailable", taskPullRequestCount: 3 });
   expect(latest()?.taskPullRequests?.every((pr) => pr.pullRequest?.state === "closed")).toBe(true);
-});
-
-it("counts branch PRs against the complete receipt set, not only the bounded preview", async () => {
-  await fixture.seedRepository();
-  for (let number = 1; number <= 25; number++) {
-    receipt(sessionKey, number);
-  }
-  stubGitHub();
-  await fixture.subscribe();
-  await fixture.subscriptions.pollNow();
-  expect(latest()).toMatchObject({ taskPullRequestCount: 25, pullRequestCount: 26 });
-  expect(latest()?.taskPullRequests).toHaveLength(20);
-  receipt(sessionKey, 40, "older-branch-receipt", { updated_at_ms: 1 });
-  await vi.waitFor(() =>
-    expect(latest()).toMatchObject({
-      taskPullRequestCount: 26,
-      pullRequestCount: 26,
-    }),
-  );
-  expect(taskNumbers()?.includes(40)).toBe(false);
 });
 
 async function passive(client = fixture.client) {
@@ -296,46 +273,54 @@ it("reads own and nested receipts without a checkout, refreshes on commit, and n
   expect(fetcher).not.toHaveBeenCalled();
 });
 
-it("retains an external branch PR when active watching becomes passive without polling", async () => {
-  await fixture.seedRepository();
-  for (let number = 1; number <= 25; number++) {
-    receipt(sessionKey, number);
-  }
-  const fetcher = stubGitHub();
-  await fixture.subscribe();
-  await fixture.subscriptions.pollNow();
-  const active = latest();
-  expect(active).toMatchObject({
-    pullRequests: [{ number: 40 }],
-    taskPullRequestCount: 25,
-    pullRequestCount: 26,
-  });
-  const git = vi.spyOn(gitReads, "runGitReadOperation");
-  const networkCalls = fetcher.mock.calls.length;
-  // Another browser may already retain this profile's passive audience cell.
-  await passive(fixture.addReader("passive-peer").client);
-  await passive();
-  expect(latest()).toMatchObject({
-    branchRead: false,
-    pullRequests: active?.pullRequests,
-    repository: active?.repository,
-    taskPullRequestCount: 25,
-    pullRequestCount: 26,
-  });
-  // This overlap is outside the preview: counting only visible URLs is incorrect.
-  receipt(sessionKey, 40, "passive-overlap", { updated_at_ms: 1 });
-  await vi.waitFor(() =>
-    expect(latest()).toMatchObject({
-      branchRead: false,
-      taskPullRequestCount: 26,
+it.each([false, true])(
+  "counts branch PRs beyond the receipt preview (passive=%s)",
+  async (watchPassively) => {
+    await fixture.seedRepository();
+    for (let number = 1; number <= 25; number++) {
+      receipt(sessionKey, number);
+    }
+    const fetcher = stubGitHub();
+    await fixture.subscribe();
+    await fixture.subscriptions.pollNow();
+    const active = latest();
+    expect(active).toMatchObject({
+      pullRequests: [{ number: 40 }],
+      taskPullRequestCount: 25,
       pullRequestCount: 26,
-    }),
-  );
-  expect(taskNumbers()?.includes(40)).toBe(false);
-  await fixture.subscriptions.pollNow();
-  expect(git).not.toHaveBeenCalled();
-  expect(fetcher).toHaveBeenCalledTimes(networkCalls);
-});
+    });
+    expect(active?.taskPullRequests).toHaveLength(20);
+    const git = vi.spyOn(gitReads, "runGitReadOperation");
+    const networkCalls = fetcher.mock.calls.length;
+    if (watchPassively) {
+      // Another browser may already retain this profile's passive audience cell.
+      await passive(fixture.addReader("passive-peer").client);
+      await passive();
+      expect(latest()).toMatchObject({
+        branchRead: false,
+        pullRequests: active?.pullRequests,
+        repository: active?.repository,
+        taskPullRequestCount: 25,
+        pullRequestCount: 26,
+      });
+    }
+    // This overlap is outside the preview: counting only visible URLs is incorrect.
+    receipt(sessionKey, 40, "passive-overlap", { updated_at_ms: 1 });
+    await vi.waitFor(() =>
+      expect(latest()).toMatchObject({
+        ...(watchPassively ? { branchRead: false } : {}),
+        taskPullRequestCount: 26,
+        pullRequestCount: 26,
+      }),
+    );
+    expect(taskNumbers()?.includes(40)).toBe(false);
+    if (watchPassively) {
+      await fixture.subscriptions.pollNow();
+      expect(git).not.toHaveBeenCalled();
+      expect(fetcher).toHaveBeenCalledTimes(networkCalls);
+    }
+  },
+);
 
 it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants", async () => {
   const child = "agent:main:private-child";

@@ -21,7 +21,7 @@ import { createApplicationRouter, routeIdFromPath, type RouteId } from "./app-ro
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
 import { settingsSearchTextMatches } from "./lib/settings-navigation.ts";
-import { pluginTabKey, pluginTabRefFromSearch } from "./pages/plugin/route.ts";
+import { pluginTabKey, pluginTabRefFromSearch } from "./pages/plugin/route.tsx";
 
 const ALL_ROUTES: RouteId[] = [
   "chat",

@@ -38,6 +38,7 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+import { DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT } from "./run-attempt.context-engine.test-support.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -134,10 +135,7 @@ it("attributes completed models and refreshes their selection on warm reuse", as
       supervisionSourceThreadId: "native-thread",
       conversationSourceTransferComplete: true,
       dynamicToolsFingerprint: codexDynamicToolsFingerprint([]),
-      webSearchThreadConfigFingerprint: JSON.stringify({
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      }),
+      webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
       historyCoveredThrough: new Date().toISOString(),
       rolloutPath,
       appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(

@@ -734,6 +734,7 @@ export async function statusAllCommand(
     lines.push("");
     lines.push(muted("Pasteable debug report. Auth tokens redacted."));
     lines.push("Troubleshooting: https://docs.openclaw.ai/troubleshooting");
+    lines.push("Support: https://community.openclaw.ai/");
     lines.push("");
 
     if (usage) {

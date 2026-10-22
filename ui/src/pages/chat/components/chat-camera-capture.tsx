@@ -1,7 +1,7 @@
 import { createStore, For, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatCameraEnglish } from "../../../i18n/locales/en-chat-camera.ts";
-import "../../../components/modal-dialog.ts";
+import "../../../components/modal-dialog.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";

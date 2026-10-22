@@ -1,5 +1,6 @@
 import { createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatSessionSharing, type ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
@@ -285,6 +286,45 @@ describe("chat session sharing menu", () => {
       expect(onPublicShareChange).not.toHaveBeenCalled();
     },
   );
+
+  it("uses read readiness and retains the roster and search through a failed refresh", async () => {
+    const initialRead = createDeferred();
+    const props = renderSharing({ state: { loading: false, read: initialRead.promise } });
+    const root = await mount(props);
+    expect(root.querySelector('[role="status"][aria-label="Loading…"]')).not.toBeNull();
+    expect(item(root, "member:alice")).toBeNull();
+    const ready = renderSharing({ state: sharingState({ identities: [human("alice", "Alice")] }) });
+    render(ready, root);
+    initialRead.resolve();
+    await waitForSolid(() => expect(item(root, "member:alice")).not.toBeNull());
+    const person = item(root, "member:alice");
+    root.querySelector<HTMLButtonElement>('[aria-label="Search people…"]')!.click();
+    await waitForSolid(() => expect(root.querySelector("input[type=search]")).not.toBeNull());
+    const search = root.querySelector<HTMLInputElement>("input[type=search]")!;
+    search.value = "Ali";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    const refresh = createDeferred();
+    render({ ...ready, state: { ...ready.state!, loading: true, read: refresh.promise } }, root);
+    expect(item(root, "member:alice")).toBe(person);
+    expect(root.querySelector("input[type=search]")).toBe(search);
+    expect(search.value).toBe("Ali");
+    render({ ...ready, state: { ...ready.state!, error: "Membership refresh failed" } }, root);
+    refresh.resolve();
+    await waitForSolid(() =>
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain(
+        "Membership refresh failed",
+      ),
+    );
+    expect(item(root, "member:alice")).toBe(person);
+    expect(root.querySelector("input[type=search]")).toBe(search);
+    const retry = createDeferred();
+    render({ ...ready, state: { ...ready.state!, loading: true, read: retry.promise } }, root);
+    render(ready, root);
+    retry.resolve();
+    await waitForSolid(() => expect(root.querySelector('[role="alert"]')).toBeNull());
+    expect(item(root, "member:alice")).toBe(person);
+    expect(search.value).toBe("Ali");
+  });
 
   it("shows the owner picker with policy-gated modes and known identities", async () => {
     const onVisibilityChange = vi.fn();

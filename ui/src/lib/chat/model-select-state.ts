@@ -281,6 +281,9 @@ export function normalizeChatFastModeInput(raw: string): FastMode | undefined {
   if (raw === "auto" || raw === "ultrafast") {
     return raw;
   }
+  if (raw === "ultra") {
+    return "ultrafast";
+  }
   if (raw === "on") {
     return true;
   }

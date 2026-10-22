@@ -2,7 +2,6 @@ import "./server-node-events.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
-import type { CliDeps } from "../cli/deps.js";
 import {
   getCurrentActiveNodeContext,
   setActiveNodeContexts,
@@ -17,18 +16,22 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import type { HealthSummary } from "./health/types.js";
 import { NodeRegistry } from "./node-registry.js";
 import * as nodeEventSource from "./server-node-event-source.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
-const { buildSessionLookup, makeNodeClient, runtimeMocks } =
-  await import("./server-node-events.test-support.js");
 const {
-  enqueueSystemEvent: enqueue,
-  requestHeartbeat: heartbeat,
+  buildSessionLookup,
+  buildNodeEventContext: buildCtx,
+  makeNodeClient,
+  runtimeMocks,
+} = await import("./server-node-events.test-support.js");
+const {
+  enqueueSystemEventEntry: enqueue,
+  captureSessionEventTargetForHost: captureTarget,
+  enqueueSessionEventForHost: handoff,
   agentCommandFromIngress: dispatch,
   upsertSessionEntryCore: touchSession,
   loadSessionEntry: lookupSession,
@@ -67,8 +70,9 @@ function expectNoCalls(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
 
 beforeEach(() => {
   resetGatewayWorkAdmission();
-  enqueue.mockReset().mockReturnValue(true);
-  heartbeat.mockClear();
+  enqueue.mockReset().mockImplementation((text: string) => ({ id: "node-event", text }));
+  captureTarget.mockClear();
+  handoff.mockClear();
   dispatch.mockClear();
   touchSession.mockClear();
   lookupSession
@@ -131,35 +135,6 @@ function expectSuspendReady(requestId: string): void {
       resumed: true,
     });
   }
-}
-
-const execEventHeartbeatOptions = (sessionKey?: string) => ({
-  source: "exec-event",
-  intent: "event",
-  reason: "exec-event",
-  coalesceMs: 0,
-  ...(sessionKey ? { sessionKey } : {}),
-});
-
-function buildCtx(overrides: Partial<NodeEventContext> = {}): NodeEventContext {
-  return {
-    deps: {} as CliDeps,
-    broadcast: () => {},
-    nodeSendToSession: () => {},
-    nodeSubscribe: () => {},
-    nodeUnsubscribe: () => {},
-    broadcastVoiceWakeChanged: () => {},
-    addChatRun: () => {},
-    removeChatRun: () => undefined,
-    dedupe: new Map(),
-    agentRunSeq: new Map(),
-    getHealthCache: () => null,
-    refreshHealthSnapshot: async () => ({}) as HealthSummary,
-    loadGatewayModelCatalog: async () => [],
-    authorizeNodeSystemRunEvent: () => false,
-    logGateway: { warn: () => {} },
-    ...overrides,
-  };
 }
 
 function nodeFixture(nodeId = "node", overrides: Partial<NodeEventContext> = {}) {
@@ -261,9 +236,14 @@ describe("node exec events", () => {
       await expect(emit("exec.started", startedPayload, connection)).resolves.toBeUndefined();
 
       const started = [`Exec started (node=node-1 id=${runId}): printf ok`, eventRouting];
-      const wake = [execEventHeartbeatOptions(sessionKey)];
-      expect(enqueue.mock.calls).toEqual([started]);
-      expect(heartbeat.mock.calls).toEqual([wake]);
+      expect(enqueue).toHaveBeenCalledExactlyOnceWith(
+        started[0],
+        expect.objectContaining(eventRouting),
+      );
+      expect(handoff).toHaveBeenCalledExactlyOnceWith(
+        started[0],
+        expect.objectContaining({ source: "node", agentId: "main", sessionKey }),
+      );
 
       await expect(emit("exec.finished", finishedPayload, connection)).resolves.toBeUndefined();
       // Remove suppression on replay so filtering cannot hide unconsumed authorization.
@@ -291,8 +271,13 @@ describe("node exec events", () => {
       }
       const finished = [`Exec finished (node=node-1 id=${runId}, code 0)\ndone`, eventRouting];
       const recovered = !suppressNotifyOnExit && settle === "disconnect";
-      expect(enqueue.mock.calls).toEqual(recovered ? [started, finished] : [started]);
-      expect(heartbeat.mock.calls).toEqual(recovered ? [wake, wake] : [wake]);
+      expect(enqueue.mock.calls).toEqual(
+        (recovered ? [started, finished] : [started]).map(([text, routing]) => [
+          text,
+          expect.objectContaining(routing),
+        ]),
+      );
+      expect(handoff).toHaveBeenCalledTimes(recovered ? 2 : 1);
       registry.unregister(connection.connId);
     },
   );
@@ -364,12 +349,16 @@ describe("node exec events", () => {
           event: "exec.finished",
         });
       }
-      expect(heartbeat).toHaveBeenCalledExactlyOnceWith(
-        execEventHeartbeatOptions(payload.sessionKey),
+      expect(handoff).toHaveBeenCalledExactlyOnceWith(
+        expect.any(String),
+        expect.objectContaining({ source: "node", sessionKey: payload.sessionKey }),
       );
       expect(enqueue).toHaveBeenCalledExactlyOnceWith(
         `Exec finished (node=node-2${runId ? ` id=${runId}` : ""}, code 0)\ndone`,
-        { sessionKey: payload.sessionKey, contextKey: runId ? `exec:${runId}` : "exec" },
+        expect.objectContaining({
+          sessionKey: payload.sessionKey,
+          contextKey: runId ? `exec:${runId}` : "exec",
+        }),
       );
     },
   );
@@ -388,7 +377,7 @@ describe("node exec events", () => {
         timedOut: false,
         output: mode === "empty output" ? "   " : "some output",
       });
-      expectNoCalls(enqueue, heartbeat);
+      expectNoCalls(enqueue, handoff);
     },
   );
 });
@@ -552,7 +541,7 @@ describe("voice transcript events", () => {
       await emit(event, { ...payload, sessionKey });
       await Promise.resolve();
 
-      expectNoCalls(touchSession, addChatRun, dispatch, enqueue, heartbeat);
+      expectNoCalls(touchSession, addChatRun, dispatch, enqueue, handoff);
     },
   );
 
@@ -591,7 +580,7 @@ describe("notifications changed events", () => {
     lookup.resolve(buildSessionLookup("agent:main:notice"));
 
     await expect(request).resolves.toEqual(eventResult("notifications.changed", "pairing_changed"));
-    expectNoCalls(enqueue, heartbeat);
+    expectNoCalls(enqueue, handoff);
   });
 
   it("records non-delivery when a targetless notification has no system owner", async () => {
@@ -602,14 +591,14 @@ describe("notifications changed events", () => {
     const { notify, warn } = nodeFixture("node-unowned");
     await notify();
 
-    expectNoCalls(enqueue, heartbeat);
+    expectNoCalls(enqueue, handoff);
     expect(warn).toHaveBeenCalledWith(
       "notification event not delivered node=node-unowned: Set agents.defaults.systemAgent.agentId",
     );
   });
 
-  it("does not wake heartbeat when notifications.changed event is deduped", async () => {
-    enqueue.mockReturnValueOnce(true).mockReturnValueOnce(false);
+  it("does not admit another turn when notifications.changed event is deduped", async () => {
+    enqueue.mockReturnValueOnce({ id: "notification-event" }).mockReturnValueOnce(undefined);
     const { notify } = nodeFixture();
     const payload = {
       packageName: "com.example.chat",
@@ -620,7 +609,7 @@ describe("notifications changed events", () => {
     await notify(payload);
 
     expect(enqueue).toHaveBeenCalledTimes(2);
-    expect(heartbeat).toHaveBeenCalledTimes(1);
+    expect(handoff).toHaveBeenCalledTimes(1);
   });
   it.each([
     ["removed", undefined, "agent:ops:main", "ops", "com.example.mail"],
@@ -640,15 +629,12 @@ describe("notifications changed events", () => {
       const routing = { sessionKey, contextKey: "notification:notif" };
       expect(enqueue).toHaveBeenCalledWith(
         `Notification ${change} (node=node key=notif${packageName ? ` package=${packageName}` : ""})`,
-        requestedKey ? routing : expect.objectContaining(routing),
+        expect.objectContaining(routing),
       );
-      expect(heartbeat).toHaveBeenCalledWith({
-        source: "notifications-event",
-        intent: "event",
-        reason: "notifications-event",
-        agentId,
-        sessionKey,
-      });
+      expect(handoff).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ source: "device", agentId, sessionKey }),
+      );
     },
   );
 
@@ -656,7 +642,7 @@ describe("notifications changed events", () => {
     const { emit } = nodeFixture("node-n3");
     await emit("notifications.changed", { change: "posted" });
 
-    expectNoCalls(enqueue, heartbeat);
+    expectNoCalls(enqueue, handoff);
   });
 });
 

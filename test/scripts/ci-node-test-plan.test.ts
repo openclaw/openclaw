@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createChangedNodeTestShards as changedTests,
+  createNodeWorkerE2eTestShards,
   hasControlUiPerformanceAffectingChange,
   hasPromptSnapshotAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
@@ -545,22 +546,23 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         );
       }
       try {
-        const jobs = bundleTests({
+        const workerRows = createNodeWorkerE2eTestShards();
+        const compactRows = bundleTests({
           includeProofTests: true,
           includeReleaseOnlyPluginShards: false,
           includeReleaseOnlyToolingShards: true,
           includeReleaseOnlyRuntimeTests: false,
           includePrExemptRuntimeTests: true,
           compactMode: "pull-request",
-          compactNodeJobCap: 76,
+          compactNodeJobCap: 77 - workerRows.length,
           mainValidation: true,
           runnerBackend: "hybrid",
         });
-        // Main's 77 Node rows reserve one for the separate worker-E2E owner.
-        expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(76);
-        expect(jobs.length).toBeLessThanOrEqual(78);
+        const jobs = [...compactRows, ...workerRows];
+        expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
+        expect(jobs.length).toBeLessThanOrEqual(79);
         expect(
-          jobs
+          compactRows
             .flatMap(jobGroups)
             .filter((group) => group.shard_name === "synthetic-capacity-growth"),
         ).toHaveLength(extraGroup ? 1 : 0);
@@ -2897,7 +2899,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const targets = [
       "src/config/allowed-values.test.ts",
       "src/commands/doctor-heartbeat-cadence-migration.test.ts",
-      "src/infra/heartbeat-runner.ack-token-heartbeat-acks.test.ts",
+      "src/infra/heartbeat-events.test.ts",
       "src/infra/runtime-guard.test.ts",
       heavyCli,
       "src/cli/directory-cli.test.ts",
@@ -2919,7 +2921,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const cliFiles = [heavyCli, "src/cli/directory-cli.test.ts", ...fillers("src/cli/fixture", 8)];
     const infraFiles = [
       ...targets.filter((file) => file.startsWith("src/infra/")),
-      ...fillers("src/infra/heartbeat-runner"),
+      ...fillers("src/infra/heartbeat"),
       ...fillers("src/infra/runtime-guard"),
       ...fillers("src/infra/os-summary", 10),
       ...fillers("src/infra/provider-usage", 10),
@@ -2930,7 +2932,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const inventory = [...configFiles, ...cliFiles, ...infraFiles, ...commandFiles];
     const timings: Record<string, number> = {
       "core-runtime-config": 240,
-      "core-runtime-infra-heartbeat-runner": 170,
+      "core-runtime-infra-heartbeat-core": 170,
       "core-runtime-infra-system-runtime": 160,
       "core-runtime-infra-misc-os": 170,
       "core-runtime-infra-provider-push": 160,

@@ -7,7 +7,7 @@ import { BrandIcon, Icon } from "../../components/solid/icon.tsx";
 import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import "../../styles/apps.css";
-import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
+import { COMMUNITY_DISCORD_URL, OFFICIAL_SUPPORT_URL } from "../../lib/product-links.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerAppsEnglish);
@@ -210,6 +210,11 @@ const APP_SECTIONS: readonly AppSection[] = [
 
 const COMMUNITY_LINKS: ReadonlyArray<{ href: string; icon: () => JSX.Element; labelKey: string }> =
   [
+    {
+      href: OFFICIAL_SUPPORT_URL,
+      icon: () => <Icon name="messageSquare" />,
+      labelKey: "appsPage.linkSupport",
+    },
     {
       href: COMMUNITY_DISCORD_URL,
       icon: () => <BrandIcon name="discord" />,

@@ -429,6 +429,7 @@
   .chat-pr.chat-pr,
   .nav-item.nav-item,
   .sidebar-recent-session.sidebar-recent-session,
+  .plugin-catalog-detail__security-score.plugin-catalog-detail__security-score,
   .settings-sidebar__item.settings-sidebar__item,
   .btn.btn,
   .agent-select__trigger.agent-select__trigger,
@@ -666,7 +667,9 @@
   scrollbar-width: thin;
 }
 
-.sr-only {
+.sr-only,
+.settings-control__sr-label,
+.cron-required-sr {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -674,9 +677,13 @@
   padding: 0;
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
-  clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* Preserve the additional clipping only for the existing generic utility. */
+.sr-only {
+  clip-path: inset(50%);
 }
 
 html,
@@ -850,7 +857,6 @@ a:where(
     .sidebar-markdown a,
     .markdown a,
     .markdown-body a,
-    .chat-session-rail__answer a,
     .dreams-diary__para a
   ):not(:where(.btn, [role="button"])) {
   text-decoration: underline;

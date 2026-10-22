@@ -28,6 +28,14 @@ async function openMenu(sidebar: Element, value = "sessions") {
   await vi.waitFor(() => expect(menuItem(sidebar, value)).not.toBeNull());
   return menuItem(sidebar, value);
 }
+const rightClick = (element: Element) =>
+  element.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 60 }),
+  );
+const menuLabels = (sidebar: Element) =>
+  [...sidebar.querySelectorAll('[role="menu"] [role="menuitem"]')].map((item) =>
+    item.textContent?.trim(),
+  );
 const modalButton = (text: string) =>
   [...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
     (button) => button.textContent === text,
@@ -191,8 +199,36 @@ it("offers agent sessions and settings without a create action, and confirms age
   });
 });
 
+it("opens the same agent menu from a right-clicked pinned tile and unpins it", async () => {
+  const { sidebar, context } = await mountRoster(roster, reply());
+  context.navigation.update({ pinnedAgentIds: ["main"] });
+  sidebar.sidebarAgentsMode = "roster";
+  await vi.waitFor(() => expect(pinned(sidebar)).not.toBeNull());
+  await settleRoster(sidebar);
+  expect(pinned(sidebar)!.querySelector("button")).toBeNull();
+
+  rightClick(pinned(sidebar)!.querySelector("a")!);
+  await vi.waitFor(() => expect(menuItem(sidebar, "pin")).not.toBeNull());
+  expect(menuLabels(sidebar)).toEqual(["Unpin", "Sessions", "Settings", "Delete"]);
+  expect(menuItem(sidebar, "pin").classList).toContain("sidebar-agent-roster__pin--pinned");
+  menuItem(sidebar, "pin").click();
+  await vi.waitFor(() => {
+    expect(pinned(sidebar)).toBeNull();
+    expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]);
+  });
+  expect(context.navigation.snapshot.pinnedAgentIds).toEqual([]);
+  await vi.waitFor(() =>
+    expect(document.activeElement?.getAttribute("data-agent-id")).toBe("main"),
+  );
+
+  rightClick(sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__row')!);
+  await vi.waitFor(() => expect(menuItem(sidebar, "pin")?.textContent).toContain("Pin"));
+  expect(menuLabels(sidebar)).toEqual(["Pin", "Sessions", "Settings", "Delete"]);
+  expect(menuItem(sidebar, "pin").classList).not.toContain("sidebar-agent-roster__pin--pinned");
+});
+
 it.each([false, true])(
-  "offers Create Claw with pinned=%s without unrelated pinned actions",
+  "offers the same agent actions and Create Claw with pinned=%s",
   async (isPinned) => {
     const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
     context.runtimeConfig.state.configForm = {
@@ -220,23 +256,21 @@ it.each([false, true])(
         ? Promise.reject(new Error("The agent workspace is unavailable."))
         : previousRequest(...args),
     );
-    const menuHost = isPinned ? pinned(sidebar)! : sidebar;
-    const trigger = menuHost.querySelector<HTMLButtonElement>(
-      'button[aria-label="Options for Harbor"]',
-    );
-    expect(trigger).not.toBeNull();
-    trigger!.click();
-    await vi.waitFor(() =>
-      expect(menuHost.querySelector('[data-value="create-claw"]')).not.toBeNull(),
-    );
     if (isPinned) {
-      expect(
-        menuHost.querySelector(
-          '[data-value="pin"], [data-value="sessions"], [data-value="settings"], [data-value="delete"]',
-        ),
-      ).toBeNull();
+      expect(pinned(sidebar)!.querySelector("button")).toBeNull();
+      rightClick(pinned(sidebar)!);
+    } else {
+      sidebar.querySelector<HTMLButtonElement>('button[aria-label="Options for Harbor"]')!.click();
     }
-    menuHost.querySelector<HTMLElement>('[data-value="create-claw"]')!.click();
+    await vi.waitFor(() => expect(menuItem(sidebar, "create-claw")).not.toBeNull());
+    expect(menuLabels(sidebar)).toEqual([
+      isPinned ? "Unpin" : "Pin",
+      "Sessions",
+      "Create Claw",
+      "Settings",
+      "Delete",
+    ]);
+    menuItem(sidebar, "create-claw").click();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("claws.drafts.create", { agentId: "main" }),
     );

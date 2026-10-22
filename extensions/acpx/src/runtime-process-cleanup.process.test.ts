@@ -5,25 +5,19 @@ import {
   createAgentRegistry,
   createFileSessionStore,
 } from "acpx/runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, expect, it, vi } from "vitest";
-import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { resolveAcpxPluginConfig } from "./config.js";
-import {
-  createAcpxProcessLeaseStore,
-  openAcpxProcessLeaseStateStore,
-  readAcpxProcessLeaseIdentity,
-} from "./process-lease.js";
+import { readAcpxProcessLeaseIdentity } from "./process-lease.js";
 import {
   createTestGate,
   fixtureSession,
   ownerAgentScript as script,
   ownerRuntimeOptions,
   promptJson,
+  prepareTestWrappers,
+  testProcessLeases,
 } from "./runtime-process.test-support.js";
 import { AcpxRuntime } from "./runtime.js";
 
@@ -38,25 +32,18 @@ it.skipIf(process.platform === "win32").each([false, true])(
   async (keepPid) => {
     await withOpenClawTestState({ label: "acpx-close-lease-overlap" }, async (state) => {
       const peerDirectory = state.path("peer");
-      const codexHome = state.path("empty-codex-home");
       await fs.mkdir(peerDirectory);
-      await fs.mkdir(codexHome);
-      vi.stubEnv("CODEX_HOME", codexHome);
-      const config = await prepareAcpxCodexAuthConfig({
-        pluginConfig: resolveAcpxPluginConfig({
+      const config = await prepareTestWrappers(
+        state.root,
+        resolveAcpxPluginConfig({
           rawConfig: {
             agents: { codex: { command: process.execPath, args: [script, peerDirectory] } },
           },
           workspaceDir: state.root,
         }),
-        stateDir: state.root,
-      });
+      );
       const store = createFileSessionStore({ stateDir: config.stateDir });
-      const leases = createAcpxProcessLeaseStore({
-        store: openAcpxProcessLeaseStateStore((options) =>
-          createPluginStateKeyedStoreForTests("acpx", { ...options, env: state.env }),
-        ),
-      });
+      const leases = await testProcessLeases(state);
       const runtime = new AcpxRuntime(
         ownerRuntimeOptions(state.root, {
           sessionStore: store,

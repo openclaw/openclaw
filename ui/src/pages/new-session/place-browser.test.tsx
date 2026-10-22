@@ -29,6 +29,7 @@ it("keeps the focused folder input and retained rows through a failed refresh an
       if (pending) {
         browser.readCompletion = null;
       }
+      setRevision((value) => value + 1);
       setRegisteringProject(pending);
     };
     onSettled(() => () => browser.reset());
@@ -39,14 +40,13 @@ it("keeps the focused folder input and retained rows through a failed refresh an
         id: "folder-browser-test",
         label: "Folder",
         registerProjectPath: null,
-        registeringProject: registeringProject(),
         onBack: vi.fn(),
         onRegisterProject: vi.fn(),
         onClose: vi.fn(),
         onApplyFolder: vi.fn(),
       };
     });
-    return <PlaceBrowser params={params()} />;
+    return <PlaceBrowser params={params()} registeringProject={registeringProject()} />;
   });
   await browser.navigate(workspace.path);
   await waitForSolid(() => expect(mounted.getByRole("option").textContent).toContain("packages"));

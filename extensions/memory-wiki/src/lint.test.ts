@@ -21,22 +21,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   };
 });
 
-const { createVault } = createMemoryWikiTestHarness();
-async function createLintVault(options: Parameters<typeof createVault>[0] = {}) {
-  const vault = await createVault(options);
-  const write = async (relativePath: string, content: string | Buffer) => {
-    const target = path.join(vault.rootDir, relativePath);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, content);
-    return target;
-  };
-  const page = (
-    relativePath: string,
-    frontmatter: Record<string, unknown> & { title: string },
-    body = `# ${frontmatter.title}\n`,
-  ) => write(relativePath, renderWikiMarkdown({ frontmatter, body }));
-  return { ...vault, write, page };
-}
+const { createVault: createLintVault } = createMemoryWikiTestHarness();
 
 function issueCodesForPath(
   result: Awaited<ReturnType<typeof lintMemoryWikiVault>>,

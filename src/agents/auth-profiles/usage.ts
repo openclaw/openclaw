@@ -662,10 +662,7 @@ export async function markAuthProfileBlockedUntil(params: {
         cooldownClassification: undefined,
         cooldownModel: undefined,
         lastFailureAt: now,
-        failureCounts: {
-          ...previousStats?.failureCounts,
-          rate_limit: (previousStats?.failureCounts?.rate_limit ?? 0) + 1,
-        },
+        lastRateLimitAt: now,
       };
       freshStore.usageStats ??= {};
       freshStore.usageStats[profileId] = nextStats;

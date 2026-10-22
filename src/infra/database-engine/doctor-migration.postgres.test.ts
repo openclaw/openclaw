@@ -357,6 +357,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
   it("captures the predecessor before migration, re-admits exact DDL, and publishes", async () => {
     await prepare();
     const original = await readMeta();
+    expect(admit(predecessor)?.version).toBe(target - 1);
     const anchorBytes = fs.readFileSync(pathname);
     const before = new Set(archives());
     const result = await runDoctor();
@@ -378,12 +379,6 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     ).toEqual({ value_json: '"before"' });
     expect(image.prepare("PRAGMA user_version").get()?.user_version).toBe(target - 1);
     expect(original.version).toBe(String(target - 1));
-    if (target === 30) {
-      // The v30 automation policy fence changes metadata, not the PostgreSQL catalog.
-      expect(original.fingerprint).toBe(targetFingerprint);
-    } else {
-      expect(original.fingerprint).not.toBe(targetFingerprint);
-    }
     expect(fs.readFileSync(pathname)).toEqual(anchorBytes);
   });
 

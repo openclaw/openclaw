@@ -6,12 +6,11 @@ import { evaluateWorkflowExpression, readCiWorkflow } from "./ci-workflow.test-s
 describe("Control UI WebKit selection", () => {
   it.each([
     ["ui/vitest.config.ts", true],
-    ["ui/src/components/modal-dialog.ts", true],
+    ["ui/src/components/modal-dialog.tsx", true],
     ["ui/src/components/session-hovercard-automations.tsx", true],
     ["ui/src/components/solid/session-hovercard-automations.browser.test.tsx", true],
     ["ui/src/components/session-hovercard.css", true],
     ["ui/src/components/solid/menu.tsx", true],
-    ["ui/src/components/solid/menu-shortcut-alignment.browser.test.tsx", true],
     ["ui/src/components/solid/overlay.css", true],
     ["ui/src/pages/chat/components/chat-composer.tsx", true],
     ["ui/src/pages/chat/chat-pane-header.ts", true],

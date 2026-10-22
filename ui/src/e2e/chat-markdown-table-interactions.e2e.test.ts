@@ -1,6 +1,8 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   auditMarkdownTable,
@@ -140,10 +142,65 @@ ${auditMarkdownTable}`,
         return geometry.contained && geometry.overflow <= 1;
       })
       .toBe(true);
-    await page.getByRole("button", { name: "Close Files" }).click();
-    await expand.click();
     const dialog = page.locator(".markdown-table-dialog");
-    await dialog.waitFor({ state: "visible" });
+    const expansion = await expand.evaluateHandle((trigger) => {
+      const state = {
+        clicked: false,
+        trigger,
+        pane: trigger.closest<HTMLElement>("openclaw-chat-pane"),
+        workspace: document.querySelector<HTMLElement>('[data-panel-slot="workspace"]'),
+      };
+      trigger.addEventListener(
+        "click",
+        () => {
+          state.clicked = true;
+        },
+        { once: true, capture: true },
+      );
+      return state;
+    });
+    try {
+      await page.getByRole("button", { name: "Close Files" }).click();
+      await waitForLayoutSettled(
+        page,
+        '.chat-thread, [data-entry-id="wrapping-table"] .markdown-table',
+      );
+      await expand.click();
+      await dialog.waitFor({ state: "visible" });
+    } catch (error) {
+      await withTimeout(
+        expansion.evaluate((state) => {
+          const content = document.querySelector(".markdown-table-dialog");
+          const modal = document.querySelector(".markdown-table-modal");
+          return {
+            expandClickObserved: state.clicked,
+            originalExpandConnected: state.trigger.isConnected,
+            originalExpandFocused: state.trigger === document.activeElement,
+            originalExpandStillSelected:
+              state.trigger ===
+              document.querySelector('[data-entry-id="wrapping-table"] .markdown-table__expand'),
+            retainedPaneConnected: state.pane?.isConnected ?? false,
+            retainedPaneHidden: state.pane?.getAttribute("aria-hidden") === "true",
+            retainedPaneInert: state.pane?.inert ?? null,
+            retainedPaneVisible: state.pane?.checkVisibility({ visibilityProperty: true }) ?? false,
+            workspaceConnected: state.workspace?.isConnected ?? false,
+            workspaceHidden: state.workspace ? Boolean(state.workspace.hidden) : null,
+            workspaceVisible:
+              state.workspace?.checkVisibility({ visibilityProperty: true }) ?? false,
+            tableDialogCount: document.querySelectorAll(".markdown-table-dialog").length,
+            tableDialogVisible: content?.checkVisibility({ visibilityProperty: true }) ?? false,
+            tableModalPresent: Boolean(modal),
+            nativeDialogOpen: modal?.querySelector("dialog")?.open ?? null,
+          };
+        }),
+        1_000,
+      )
+        .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+        .catch(() => undefined);
+      throw error;
+    } finally {
+      await expansion.dispose().catch(() => undefined);
+    }
     await dialog.evaluate((element) => {
       element.scrollTop = 400;
     });

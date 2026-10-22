@@ -29,7 +29,7 @@ import {
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
 import { cronRpc, mountCronPage, emitEvent } from "./cron-rpc.test-support.ts";
-import { createCronViewJob } from "./view.test-support.ts";
+import { createCronViewJob, createCronViewRun, cronRunsResponse } from "./view.test-support.ts";
 import "./cron-page.tsx";
 
 function modelClient(read: (params?: unknown) => unknown) {
@@ -324,13 +324,11 @@ it("refreshes model suggestions when team selection changes without changing sco
 it("applies run events to the complete job table without fetching the inventory again", async () => {
   const job = createCronViewJob("running-job", { state: { nextRunAtMs: 100 } });
   const other = createCronViewJob("other-job", { state: { nextRunAtMs: 200 } });
-  let inventory = [job, other];
-  const request = cronRpc({ "cron.list": () => cronListResponse(structuredClone(inventory)) });
+  const request = cronRpc({ "cron.list": () => cronListResponse(structuredClone([job, other])) });
   const { page, gateway } = mountCronPage(request);
   await waitForCronPage(() => expect(page.cron.cronJobs).toHaveLength(2));
   await page.settle();
   request.mockClear();
-  inventory = [{ ...job, updatedAtMs: 1, state: { nextRunAtMs: 100, runningAtMs: 100 } }, other];
   emitEvent(gateway, "cron", {
     action: "started",
     jobId: job.id,
@@ -345,19 +343,6 @@ it("applies run events to the complete job table without fetching the inventory 
   await page.settle();
   expect(page.cron.cronJobs[0]?.state.runningAtMs).toBe(100);
   expect(callsFor(request, "cron.list"), "started event").toHaveLength(0);
-  inventory = [
-    other,
-    {
-      ...job,
-      updatedAtMs: 2,
-      state: {
-        nextRunAtMs: 300,
-        lastRunAtMs: 100,
-        lastRunStatus: "ok",
-        lastDurationMs: 10,
-      },
-    },
-  ];
   emitEvent(gateway, "cron", {
     action: "finished",
     jobId: job.id,
@@ -400,13 +385,11 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
   const held = createDeferred();
   let released = false;
   const freshJob = createCronViewJob("fresh-job", { configRevision: "fresh-config", state: {} });
-  const freshRun = {
+  const freshRun = createCronViewRun({
     ts: 2,
     jobId: freshJob.id,
-    action: "finished",
-    status: "ok",
     summary: "Finished after the refresh started",
-  };
+  });
   const request = vi.fn(async (method: string) => {
     const stale = !released;
     if (method.startsWith("cron.") || method === "channels.status") {
@@ -465,11 +448,7 @@ it("lets manual Refresh supersede held status and run-history reads", async () =
     }
     return method === "cron.status"
       ? { enabled: true, triggersEnabled: true, jobs: revision }
-      : {
-          entries: [{ ts: revision, jobId: "job", action: "finished", status: "ok" }],
-          total: 1,
-          hasMore: false,
-        };
+      : cronRunsResponse([createCronViewRun({ ts: revision, jobId: "job" })]);
   });
   const { page } = mountCronPage(request);
   try {
@@ -511,11 +490,7 @@ it.each(["disconnect", "reconnect", "agent scope", "gateway source", "unmount"])
           return cronListResponse([createCronViewJob("retired-job")]);
         }
         if (method === "cron.runs") {
-          return {
-            entries: [{ ts: 99, jobId: "retired-job", action: "finished", status: "ok" }],
-            total: 1,
-            hasMore: false,
-          };
+          return cronRunsResponse([createCronViewRun({ ts: 99, jobId: "retired-job" })]);
         }
       }
       return fallback(method);
@@ -951,7 +926,7 @@ it("finishes an accepted create-and-run chain while hidden without background re
       id: "created-job",
       mode: "force",
     });
-    expect(page.cron.cronError).toContain("Run queued. Run ID: synthetic-run");
+    expect(page.cron.cronNotice).toContain("Run queued. Run ID: synthetic-run");
     expect(page.cron.cronCreateOpen).toBe(false);
     visibility("visible");
     await settle();

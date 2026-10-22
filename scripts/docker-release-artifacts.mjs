@@ -37,6 +37,7 @@ const SHA = /^[a-f0-9]{40}$/u;
 const DIGEST = /^sha256:[a-f0-9]{64}$/u;
 const POSITIVE_INTEGER = /^[1-9][0-9]*$/u;
 const INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json";
+const GITHUB_READ_RETRY_DELAYS_MS = [1_000, 3_000, 6_000];
 
 /**
  * Release commands use explicit argv/options and return UTF-8 stdout.
@@ -74,17 +75,40 @@ function run(command, args, options = {}) {
   });
 }
 
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+export function readDockerGithubJson(
+  endpoint,
+  { runCommand = run, sleep = sleepSync, retryDelaysMs = GITHUB_READ_RETRY_DELAYS_MS } = {},
+) {
+  const args = [
+    "api",
+    endpoint,
+    "--method",
+    "GET",
+    "--jq",
+    endpoint.includes("/compare/") ? "{status}" : ".",
+  ];
+  for (let attempt = 0; ; attempt += 1) {
+    let output;
+    try {
+      output = runCommand("gh", args);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/HTTP 5\d\d/iu.test(message) || attempt >= retryDelaysMs.length) {
+        throw error;
+      }
+      sleep(retryDelaysMs[attempt]);
+      continue;
+    }
+    return JSON.parse(output);
+  }
+}
+
 function ghJson(endpoint) {
-  return JSON.parse(
-    run("gh", [
-      "api",
-      endpoint,
-      "--method",
-      "GET",
-      "--jq",
-      endpoint.includes("/compare/") ? "{status}" : ".",
-    ]),
-  );
+  return readDockerGithubJson(endpoint);
 }
 
 export function dockerReleaseArtifactName(sourceSha, runAttempt) {

@@ -64,6 +64,7 @@ import {
   isReplyOperationSuperseded,
   resolveReplyOperationAbortReason,
 } from "./reply-operation-abort.js";
+import type { ReplySteeringIntent } from "./reply-steering-intent.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
@@ -400,6 +401,7 @@ export async function handleReplyAgentRunError(
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({
         text: "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.",
+        isError: true,
       }),
     );
   }
@@ -495,6 +497,8 @@ export async function cleanupReplyAgentRun(context: {
 }
 
 export type RunReplyAgentParams = ReplyAgentTurnContext & {
+  /** Absent only for legacy callers, which retain fresh incoming-policy checks. */
+  steeringIntent?: ReplySteeringIntent;
   queueKey: string;
   resolvedQueue: QueueSettings;
   shouldSteer: boolean;
