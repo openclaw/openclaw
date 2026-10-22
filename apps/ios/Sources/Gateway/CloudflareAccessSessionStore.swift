@@ -236,7 +236,9 @@ final class CloudflareAccessSessionStore {
                 if self.retirements[origin]?.id == id { self.retirements.removeValue(forKey: origin) }
             }
             await self.retireTransports(origin)
-            guard self.persistence.delete(origin) else { throw CloudflareAccessError.storageFailed }
+            guard self.persistence.delete(origin) else {
+                throw CloudflareAccessError.storageFailed
+            }
         }
         // Queue completion only releases its task. Its acknowledgement stays current
         // until a later transition for this origin, even after the queue entry is gone.

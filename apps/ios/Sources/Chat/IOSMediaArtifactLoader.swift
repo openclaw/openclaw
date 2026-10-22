@@ -22,7 +22,8 @@ struct IOSMediaArtifactLoader: Sendable {
     init(
         connectionProvider: @escaping ConnectionProvider,
         requestFactory: @escaping RequestFactory = { tls, maximumBytes in
-            let session = GatewayTLSPinningSession(params: tls, allowsRedirects: false, allowsStoredCredentials: false)
+            let session = GatewayTLSPinningSession(
+                params: tls, allowsRedirects: false, allowsStoredCredentials: false)
             return { request in
                 defer { session.finishTasksAndInvalidate() }
                 return try await session.data(for: request, maximumBytes: maximumBytes)

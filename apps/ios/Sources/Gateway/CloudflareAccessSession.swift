@@ -78,6 +78,35 @@ struct CloudflareAccessSession: Codable, Sendable, CustomStringConvertible, Cust
         return self.token
     }
 
+    /// Builds the app-token cookie for an in-app Dashboard without exposing it to page JavaScript.
+    func dashboardCookie(for url: URL, now: Date = Date()) -> HTTPCookie? {
+        guard self.origin.contains(url),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.scheme?.lowercased() == "https",
+              components.user == nil,
+              components.password == nil,
+              components.fragment == nil,
+              let host = self.origin.url.host,
+              let token = self.authorizationHeader(for: url, now: now),
+              let cookie = HTTPCookie(properties: [
+                  .name: "CF_Authorization",
+                  .value: token,
+                  .originURL: self.origin.url,
+                  .path: "/",
+                  .secure: "TRUE",
+                  .expires: self.expiresAt,
+                  HTTPCookiePropertyKey("HttpOnly"): "TRUE",
+              ]),
+              cookie.name == "CF_Authorization",
+              cookie.domain.caseInsensitiveCompare(host) == .orderedSame,
+              cookie.path == "/",
+              cookie.isSecure,
+              cookie.isHTTPOnly,
+              cookie.expiresDate.map({ $0 > now && $0 <= self.expiresAt }) == true
+        else { return nil }
+        return cookie
+    }
+
     func validate(now: Date = Date()) throws {
         let application = CloudflareAccessApplication(
             origin: self.origin,
