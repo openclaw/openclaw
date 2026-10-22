@@ -290,10 +290,14 @@ it.each([
   ["wrap", "is-wrapped", "aria-pressed", [true, false]],
 ] as const)("handles %s through the shared click owner", (action, className, attribute, states) => {
   const fragment = interactive();
+  document.body.append(fragment);
+  const outside = document.body.appendChild(document.createElement("button"));
+  outside.focus();
   const wrapper = fragment.querySelector(".code-block-wrapper");
   const button = fragment.querySelector<HTMLButtonElement>(`.code-block-${action}`);
   for (const state of states) {
     button?.click();
+    expect(document.activeElement).toBe(outside);
     expect(wrapper?.classList.contains(className)).toBe(state);
     expect(button?.getAttribute(attribute)).toBe(String(state));
   }

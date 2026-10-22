@@ -1,4 +1,3 @@
-import { randomBytes } from "@noble/hashes/utils.js";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 // Import from defining modules, not the protocol barrel: index.js re-exports
@@ -265,7 +264,6 @@ export async function openStores(
   keys: ReefKeys,
   options: {
     auditMaxEntries?: number;
-    replayMaxEntries?: number;
     deliveredMaxEntries?: number;
     authoritySignal?: AbortSignal;
   } = {},
@@ -280,12 +278,7 @@ export async function openStores(
       options.auditMaxEntries,
       options.authoritySignal,
     ),
-    replay: new ReefSqliteReplayStore(
-      runtime,
-      fromBase64url(keys.replayKey),
-      randomBytes,
-      options.replayMaxEntries,
-    ),
+    replay: new ReefSqliteReplayStore(runtime, fromBase64url(keys.replayKey)),
     reviews: new ReviewApprovalStore(runtime, undefined, options.authoritySignal),
     delivered: new ReefDeliveredStore(runtime, options.deliveredMaxEntries),
   };

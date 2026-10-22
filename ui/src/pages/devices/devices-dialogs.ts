@@ -8,6 +8,7 @@ import type {
   DevicesPageDataState,
   InventoryRemovalRequest,
   RotatedDeviceTokenOutcome,
+  rotateDeviceToken,
 } from "../../lib/nodes/page-operations.ts";
 import {
   rejectDevicePairing,
@@ -37,6 +38,9 @@ export type DevicesDialogHost = {
   gatewayUrl: () => string;
   runPageTask: <T>(task: (pageState: DevicesPageDataState) => T | Promise<T>) => Promise<T>;
   runInventoryTask: (task: (pageState: DevicesPageDataState) => unknown) => Promise<void>;
+  rotateDevice: (
+    params: Parameters<typeof rotateDeviceToken>[1],
+  ) => Promise<RotatedDeviceTokenOutcome | null>;
   setDevicesError: (message: string) => void;
 };
 
@@ -144,6 +148,26 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     );
   }
 
+  // A returned credential must remain visible even after its connection resets.
+  async function reportRotationOutcome(
+    device: { id: string; name: string },
+    role: string,
+    scopes?: string[],
+  ) {
+    if (!host.canManagePairing()) {
+      return;
+    }
+    const outcome = await host.rotateDevice({
+      deviceId: device.id,
+      gatewayUrl: host.gatewayUrl(),
+      role,
+      scopes,
+    });
+    if (outcome) {
+      await showDeviceRotationOutcome(device.name, role, outcome);
+    }
+  }
+
   /**
    * Switching the exec approvals target throws away an unsaved policy draft, so
    * it confirms through the same single-dialog slot as the destructive actions:
@@ -209,11 +233,12 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     confirmInventoryRemoval,
     confirmPairingReject,
     confirmTokenRevoke,
+    reportRotationOutcome,
     confirmExecApprovalsDiscard,
   };
 }
 
-export async function showDeviceRotationOutcome(
+async function showDeviceRotationOutcome(
   deviceName: string,
   role: string,
   outcome: RotatedDeviceTokenOutcome,

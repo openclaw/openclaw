@@ -4255,7 +4255,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "extensions/crabbox/src/crabbox-worker-warm-image-lifecycle.test.ts",
   "extensions/crabbox/src/crabbox-worker-warm-image-maintenance.test.ts",
   "extensions/crabbox/src/crabbox-worker-warm-image-retirement.test.ts",
-  "extensions/crabbox/src/crabbox-worker-warm-image-store.test.ts",
   "extensions/crabbox/src/crabbox-worker-warm-image.test.ts",
   "extensions/diffs/src/store.cleanup.test.ts",
   "extensions/diffs/src/tool.test.ts",

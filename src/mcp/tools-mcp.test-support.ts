@@ -7,10 +7,8 @@ export function createTool(name: string, execute: AnyAgentTool["execute"]): AnyA
   return { name, label: name, description: name, parameters: Type.Object({}), execute };
 }
 
-export const toolResult = (text: string) => ({
-  content: [{ type: "text" as const, text }],
-  details: {},
-});
+export const textResult = (text: string) => ({ content: [{ type: "text" as const, text }] });
+export const toolResult = (text: string) => ({ ...textResult(text), details: {} });
 export const outcome = <T>(promise: Promise<T>) =>
   promise.then(
     (result) => ({ result }),

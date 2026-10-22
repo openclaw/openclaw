@@ -1,4 +1,4 @@
-import { createMemo, Errored, For, Loading } from "solid-js";
+import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type {
   NativeDeviceSettingsCapability,
@@ -65,16 +65,61 @@ function changeDeviceLocales(
 
 export type VoiceWakeEditorState =
   | { kind: "unavailable" }
-  | { kind: "ready"; text: string; phase: "saved" | "pending" | "saving"; error: string | null };
+  | { kind: "ready"; text: string; phase: "saved" | "pending" | "saving" };
+
+function VoiceWakeWriteStatus(props: {
+  saving: boolean;
+  readWriteResult: () => void;
+  onRetry: () => void;
+}) {
+  const savedLabel = () => {
+    props.readWriteResult();
+    return t("configPage.deviceTalk.saved");
+  };
+  return (
+    <Errored
+      fallback={(error, reset) => (
+        <div class="callout danger" role="alert">
+          {formatUiError(error())}
+          <button
+            class="btn btn--sm"
+            type="button"
+            onClick={() => {
+              props.onRetry();
+              reset();
+            }}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      )}
+    >
+      <Loading
+        fallback={
+          <span class="muted" role="status">
+            {t("common.saving")}
+          </span>
+        }
+      >
+        <span class="muted" role="status">
+          {props.saving ? t("common.saving") : savedLabel()}
+        </span>
+      </Loading>
+    </Errored>
+  );
+}
 
 function VoiceWakeControls(props: {
   state: VoiceWakeEditorState;
+  saving: boolean;
+  readWriteResult: () => void;
   onInput: (text: string) => void;
   onRetry: () => void;
 }) {
   const ready = () => props.state.kind === "ready";
-  const text = () => (props.state.kind === "ready" ? props.state.text : "");
-  const error = () => (props.state.kind === "ready" ? props.state.error : null);
+  const text = createMemo(() => (props.state.kind === "ready" ? props.state.text : ""));
+  // An empty draft still resets only the status boundary, preserving the editor.
+  const statusDraft = createMemo(() => ({ text: text() }));
   return (
     <>
       {ready() && (
@@ -86,19 +131,18 @@ function VoiceWakeControls(props: {
           onInput={(event) => props.onInput(event.currentTarget.value)}
         />
       )}
-      {error() ? (
-        <div class="callout danger" role="alert">
-          {error()}
-          <button class="btn btn--sm" type="button" onClick={() => props.onRetry()}>
-            {t("common.retry")}
-          </button>
-        </div>
-      ) : props.state.kind === "unavailable" ? (
+      {props.state.kind === "unavailable" ? (
         <span class="muted">{t("configPage.deviceTalk.triggerWordsUnavailable")}</span>
       ) : (
-        <span class="muted" role="status">
-          {props.state.phase !== "saved" ? t("common.saving") : t("configPage.deviceTalk.saved")}
-        </span>
+        <Show when={statusDraft()} keyed>
+          {(_draft) => (
+            <VoiceWakeWriteStatus
+              saving={props.saving}
+              readWriteResult={props.readWriteResult}
+              onRetry={props.onRetry}
+            />
+          )}
+        </Show>
       )}
     </>
   );
@@ -107,9 +151,13 @@ function VoiceWakeControls(props: {
 export function VoiceWakeEditor(props: {
   readState: () => VoiceWakeEditorState;
   scope?: object | null;
+  saving: boolean;
+  readWriteResult: () => void;
   onInput: (text: string) => void;
   onRetry: () => void;
 }) {
+  // Only an admitted read re-arms loading; reconnecting a retained draft keeps the editor.
+  const scope = createMemo(() => props.scope);
   return (
     <SettingsSection title={t("configPage.deviceTalk.triggerWords")}>
       <SettingsRow
@@ -135,7 +183,7 @@ export function VoiceWakeEditor(props: {
             )}
           >
             <Loading
-              on={props.scope}
+              on={scope()}
               fallback={
                 <span class="muted" role="status">
                   {t("common.loading")}
@@ -144,6 +192,8 @@ export function VoiceWakeEditor(props: {
             >
               <VoiceWakeControls
                 state={props.readState()}
+                saving={props.saving}
+                readWriteResult={props.readWriteResult}
                 onInput={props.onInput}
                 onRetry={props.onRetry}
               />

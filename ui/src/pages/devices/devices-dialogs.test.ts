@@ -23,6 +23,7 @@ function createHost(request = vi.fn(), canManagePairing = () => true): DevicesDi
     runInventoryTask: async (task) => {
       await task(state);
     },
+    rotateDevice: vi.fn(),
     setDevicesError: vi.fn(),
   };
 }

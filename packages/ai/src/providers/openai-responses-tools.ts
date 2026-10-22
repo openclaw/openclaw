@@ -16,7 +16,6 @@ import { withPreparedToolSchemaNormalization } from "./tool-schema-normalization
 interface ConvertResponsesToolsOptions {
   strict?: boolean | null;
   model?: Model;
-  supportsStrictMode?: boolean;
   mutableParameters?: boolean;
 }
 
@@ -92,9 +91,7 @@ function resolveResponsesStrictToolSetting(
   if (options?.model) {
     return getAiTransportHost().resolveOpenAIStrictToolSetting(options.model, {
       transport: "stream",
-      supportsStrictMode:
-        options.supportsStrictMode ??
-        resolveOpenAICompletionsCompat(options.model).supportsStrictMode,
+      supportsStrictMode: resolveOpenAICompletionsCompat(options.model).supportsStrictMode,
     });
   }
   return false;
