@@ -23,14 +23,7 @@ async function writeHook(hookDir: string, name: string): Promise<void> {
   await fs.mkdir(hookDir, { recursive: true });
   await fs.writeFile(
     path.join(hookDir, "HOOK.md"),
-    [
-      "---",
-      `name: ${name}`,
-      'description: "Test hook"',
-      'metadata: {"openclaw":{"events":["command:new"]}}',
-      "---",
-      "",
-    ].join("\n"),
+    `---\nname: ${name}\ndescription: "Test hook"\nmetadata: {"openclaw":{"events":["command:new"]}}\n---\n`,
     "utf-8",
   );
   await fs.writeFile(

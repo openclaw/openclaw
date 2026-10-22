@@ -1,10 +1,9 @@
 /* @vitest-environment jsdom */
 
 import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
-import { expectDefined } from "@openclaw/normalization-core";
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { flush } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { PresenceEntry } from "../../api/types.ts";
@@ -14,130 +13,30 @@ import {
   deviceSystemInfo,
   deviceDesktopEnvironments,
 } from "../../test-helpers/devices-fixtures.ts";
-import {
-  createModalDialogTestFixture,
-  waitForRenderedModalDialog,
-} from "../../test-helpers/modal-dialog.ts";
+import { waitForRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
-  cleanups,
   gatewaySnapshot,
   gatewayFixture,
   mountPage,
   responseFor,
   clientFor,
   button,
+  dialogButton,
+  selectEntryAction,
+  secretDialogText,
+  expectNoModal,
+  mountPaired,
+  rotatingRequest,
+  stubLocalDeviceIdentity,
+  dialogs,
+  setupDevicesPageFixtures,
 } from "./devices-page.test-support.tsx";
 
 const ROTATED_TOKEN = "rotated-operator-token";
-const pairedDevice = {
-  deviceId: "device-1",
-  displayName: "MacBook Pro",
-  tokens: [{ role: "operator", scopes: [] }],
-};
-let dialogs: ReturnType<typeof createModalDialogTestFixture>;
-
-function stubLocalDeviceIdentity() {
-  localStorage.setItem(
-    "openclaw-device-identity-v1",
-    JSON.stringify({
-      version: 1,
-      deviceId: "00",
-      publicKey: "AA",
-      privateKey: "AA",
-    }),
-  );
-  vi.stubGlobal("crypto", { subtle: { digest: async () => new Uint8Array([0]).buffer } });
-}
-
-function dialogButton(label: string) {
-  const modal = document.body.querySelector("openclaw-modal-dialog");
-  if (!modal) {
-    throw new Error("Expected an open dialog");
-  }
-  return button(modal, label);
-}
-
-async function selectEntryAction(container: ParentNode, action: string, name = "MacBook Pro") {
-  // Let initial native readiness settle before keeping an interactive row reference.
-  await waitForSolid(() => expect(container.textContent).toContain(name));
-  const row = [...container.querySelectorAll(".device-entry")].find(
-    (entry) => entry.querySelector(".settings-row__title")?.textContent === name,
-  );
-  const trigger = expectDefined(
-    row?.querySelector<HTMLButtonElement>(".device-entry__menu-trigger"),
-    "device actions trigger",
-  );
-  trigger.click();
-  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
-  expectDefined(
-    row?.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${action}"]`),
-    `device action ${action}`,
-  ).click();
-  await Promise.resolve();
-  flush();
-}
-
-function secretDialogText() {
-  return document.body.querySelector(".secret-reveal__code")?.textContent?.trim() ?? "";
-}
-
-async function expectNoModal() {
-  await vi.waitFor(() => expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull());
-}
-
-function mountPaired(request: Parameters<typeof clientFor>[0]) {
-  const { client } = clientFor(request);
-  const fixture = gatewayFixture(gatewaySnapshot(client));
-  const page = mountPage(fixture, {
-    devicesList: { paired: [pairedDevice], pending: [] },
-    nodes: [{ nodeId: "node-1", displayName: "Office Mac" }],
-  });
-  return { ...page, fixture, client };
-}
-
-function rotatingRequest(token: string | null) {
-  return dialogs.mockRequest(async (method: string, params?: unknown) => {
-    if (method !== "device.token.rotate") {
-      return responseFor(method);
-    }
-    const { deviceId, role } = params as { deviceId: string; role: string };
-    return {
-      deviceId,
-      role,
-      scopes: [],
-      rotatedAtMs: 1_700_000_000_000,
-      ...(token ? { token } : {}),
-      tokenDelivery: token ? "in-band" : "withheld-cross-device",
-    };
-  });
-}
 
 describe("DevicesPage gateway lifecycle", () => {
-  beforeEach(() => {
-    dialogs = createModalDialogTestFixture((modal) => {
-      const acknowledge = modal.querySelector<HTMLButtonElement>(
-        ".exec-approval-actions button[autofocus]",
-      );
-      if (acknowledge) {
-        acknowledge.click();
-      } else {
-        modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
-      }
-    });
-  });
-  afterEach(async () => {
-    try {
-      for (const dispose of cleanups.splice(0)) {
-        dispose();
-      }
-      await dialogs.cleanup();
-    } finally {
-      localStorage.clear();
-      vi.useRealTimers();
-      vi.unstubAllGlobals();
-    }
-  });
+  setupDevicesPageFixtures();
 
   it("names the page with a level-one heading", () => {
     const page = mountPage(gatewayFixture(gatewaySnapshot(clientFor().client)));

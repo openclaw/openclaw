@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { For, Show, onCleanup } from "solid-js";
+import { For, Show, onSettled } from "solid-js";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { createMsFormatter, formatTimeMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -288,7 +288,7 @@ function TimeSeriesChart(props: {
   const model = () => props.model;
   let svg!: SVGSVGElement;
   let stopDrag: (() => void) | undefined;
-  onCleanup(() => stopDrag?.());
+  onSettled(() => () => stopDrag?.());
   const moveCursor = (
     side: "left" | "right",
     timestamp: number,
