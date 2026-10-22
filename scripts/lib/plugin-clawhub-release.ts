@@ -99,6 +99,7 @@ const CLAWHUB_RELEASE_AUTHORITY_PATHS = [
   "scripts/lib/managed-child-process.mts",
   "scripts/lib/vitest-resource-ownership.mts",
   "scripts/lib/tsx-cli-shim.mjs",
+  "scripts/lib/tooling-dependencies.mjs",
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",

@@ -40,6 +40,40 @@ function setup(actionsAvailable = false) {
   return { callGateway, tool, execute };
 }
 
+it.each([true, false])(
+  "reads incomplete publication receipts without publishing (publication available: %s)",
+  async (publicationAvailable) => {
+    const { callGateway } = setup();
+    const tool = createGitHubPublishTool({ publicationAvailable });
+    const publishingSessionKey = "agent:main:subagent:retained-child";
+    for (const requestId of [undefined, "8c698e8a-bdc7-4927-a0f2-73a842c2d7b1"]) {
+      const args = { action: "status", publishingSessionKey, ...(requestId ? { requestId } : {}) };
+      expect(Value.Check(tool.parameters, args)).toBe(true);
+      const result = await withGatewayToolCallerIdentity(caller, () =>
+        tool.execute("recover", args),
+      );
+      expect(result.details).toEqual(publication);
+      expect(callGateway).toHaveBeenLastCalledWith(
+        requestId ? "sessions.github.status" : "sessions.github.options",
+        {
+          sessionKey: caller.sessionKey,
+          publishingSessionKey,
+          ...(requestId ? { requestId } : {}),
+        },
+      );
+    }
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    for (const field of ["title", "body", "expectedHeadCommit", "mergeMethod", "draft"]) {
+      await expect(
+        withGatewayToolCallerIdentity(caller, () =>
+          tool.execute("forged-recovery", { action: "status", [field]: "forbidden" }),
+        ),
+      ).rejects.toThrow("status");
+    }
+    expect(callGateway).toHaveBeenCalledTimes(2);
+  },
+);
+
 it("applies deployment action limits when publication and operator actions are available", () => {
   const [tool] = applyGatewayToolPolicy([createGitHubPublishTool({ actionsAvailable: true })], {
     tools: {
@@ -219,9 +253,6 @@ it.each<{
     for (const action of ["inspect", "merge", "close"]) {
       expect(Value.Check(tool.parameters, { action }), action).toBe(actionsAvailable);
     }
-    expect(
-      Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "agent:main:child" }),
-    ).toBe(actionsAvailable);
     const description = tool.description;
     finalizeAgentToolAvailability([tool]);
     expect(tool.description).toBe(description);
@@ -271,7 +302,8 @@ it.each(["managed-worktree"] as const)(
   },
 );
 
-it("offers current-PR preparation without privileged actions", () => {
+it("offers current-PR preparation without privileged actions", async () => {
+  const { callGateway } = setup();
   const tool = createGitHubPublishTool({ sandbox: publicationSandbox() });
   const check = (args: unknown, valid = true) =>
     expect(Value.Check(tool.parameters, args)).toBe(valid);
@@ -303,8 +335,13 @@ it("offers current-PR preparation without privileged actions", () => {
     check({ action }, false);
   }
   for (const action of ["ready", "edit"]) {
-    check({ action, publishingSessionKey: "another" }, false);
+    await expect(
+      withGatewayToolCallerIdentity(caller, () =>
+        tool.execute("child-write", { action, publishingSessionKey: "agent:main:child" }),
+      ),
+    ).rejects.toThrow("Only status can select a child without operator write access");
   }
+  expect(callGateway).not.toHaveBeenCalled();
   expect(tool.description).toContain("omit action to append accepted changes to the original PR");
   expect(tool.description).not.toContain("Imported source publication is not available");
   expect(tool.description).toContain("used only when creating a PR");

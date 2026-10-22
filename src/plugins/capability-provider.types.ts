@@ -423,7 +423,7 @@ export type WorkerProvider = {
   ) => Promise<WorkerLease>;
   /** Provider-owned transport for repository lifecycle commands on an enrolled lease. */
   runSetupCommand?: (
-    lease: { leaseId: string; profile: WorkerProfile },
+    lease: { leaseId: string; profile: WorkerProfile; machineClass?: string; os?: string },
     command: {
       createScript: (setupEnv?: Record<string, string>) => string;
       workspaceDir: string;

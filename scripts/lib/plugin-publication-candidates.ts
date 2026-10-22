@@ -33,6 +33,7 @@ export const PLUGIN_NPM_RELEASE_AUTHORITY_PATHS = [
   "scripts/lib/plugin-npm-package-manifest.mts",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/tsx-cli-shim.mjs",
+  "scripts/lib/tooling-dependencies.mjs",
   "scripts/tsx.mjs",
   "scripts/openclaw-npm-extended-stable-release.mjs",
   "scripts/plugin-npm-publish.sh",

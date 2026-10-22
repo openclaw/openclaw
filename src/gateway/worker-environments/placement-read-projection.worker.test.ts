@@ -348,10 +348,18 @@ it.each(["worker-turn", "remote-exec"] as const)(
   },
 );
 
-it("derives inference without rewriting its bound snapshot", async () => {
+it("projects original environment diagnostics without rewriting its bound snapshot", async () => {
   const sessionId = "snapshot-worker";
   const environmentId = "environment-" + sessionId;
-  const profileSnapshot = { settings: { device: "paired-node", inference: "worker" } };
+  const profileSnapshot = {
+    settings: {
+      device: "paired-node",
+      inference: "worker",
+      privateSetting: "not-for-disclosure",
+    },
+    os: "linux",
+    machineClass: "original-class",
+  };
   writePlacementEnvironmentFixture(database, {
     environmentId,
     state: "attached",
@@ -361,6 +369,7 @@ it("derives inference without rewriting its bound snapshot", async () => {
     profileId: "named-device",
     nodeDeviceId: "paired-node",
     profileSnapshot,
+    lastError: "Original setup response was lost",
   });
   const { store, placement } = await activePlacement(sessionId);
   const snapshot = await store.readProjection([sessionId]);
@@ -369,7 +378,20 @@ it("derives inference without rewriting its bound snapshot", async () => {
   const identity = readWorkerPlacementIdentity(placement, undefined, environment);
   const projected = projectWorkerSessionPlacement(placement, undefined, undefined, identity);
   expect(projected).toHaveProperty("inference", "worker");
+  expect(projected).toHaveProperty("environment", {
+    state: "attached",
+    requestedOs: "linux",
+    requestedMachineClass: "original-class",
+    lastError: "Original setup response was lost",
+    setupSecretGrant: "unknown",
+  });
   expect(projected).not.toHaveProperty("profileSnapshot");
+  expect(JSON.stringify(projected)).not.toContain("not-for-disclosure");
+  for (const patch of [{ ownerEpoch: 8 }, { environmentId: "different-environment" }]) {
+    expect(
+      readWorkerPlacementIdentity(placement, undefined, { ...environment!, ...patch }),
+    ).toBeUndefined();
+  }
   expect(
     (await store.readProjection([sessionId])).environments.get(environmentId)?.profileSnapshot,
   ).toEqual(profileSnapshot);
@@ -486,6 +508,7 @@ it("reads all projection facts off the host SQLite thread", async () => {
     ownerEpoch: 7,
     nodeDeviceId: null,
     attachedSessionIds: ["pending"],
+    lastError: null,
   });
   const cancelled = new AbortController();
   cancelled.abort(new Error("Worker environment reconciliation stopped"));

@@ -62,6 +62,102 @@ async function git(root: string, ...args: string[]) {
 beforeEach(mockPublicationIdentity);
 afterEach(() => vi.restoreAllMocks());
 
+describe.each(["options", "status"] as const)("retained child publication %s", (method) => {
+  it("reads an incomplete descendant receipt but refuses unrelated sessions", async () => {
+    await withReadFixture(async (fixture) => {
+      const childKey = "agent:main:retained-publication-child";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: childKey },
+        { sessionId: "retained-child", updatedAt: 1, parentSessionKey: sessionKey },
+      );
+      const params = {
+        sessionKey,
+        publishingSessionKey: childKey,
+        ...(method === "status" ? { requestId: receipt.result.requestId } : {}),
+      };
+      expectReply(
+        await fixture.invoke(`sessions.github.${method}`, params),
+        method === "status" ? receipt : optionsResult(),
+      );
+      const read = method === "status" ? fixture.sharedStatus : fixture.latestShared;
+      expect(read.mock.calls[0]?.[0]).toMatchObject({
+        sessionKey: childKey,
+        sessionId: "retained-child",
+      });
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: childKey },
+        { parentSessionKey: "agent:main:unrelated" },
+      );
+      expectFailure(await fixture.invoke(`sessions.github.${method}`, params));
+      expect(read).toHaveBeenCalledOnce();
+      expectNoPersonalReads(fixture);
+    });
+  });
+
+  it.each(["lineage", "child visibility", "source visibility", "source lifecycle"] as const)(
+    "withholds a held receipt when its %s changes",
+    async (change) => {
+      await withReadFixture(
+        async (fixture) => {
+          const childKey = "agent:main:retained-publication-child";
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: childKey },
+            {
+              sessionId: "retained-child",
+              updatedAt: 1,
+              parentSessionKey: sessionKey,
+              createdActor: {
+                type: "human",
+                source: "profile",
+                id: ensureProfileForEmail("other-publication-reader@example.test").id,
+              },
+            },
+          );
+          const entered = createDeferredCore();
+          const pending = createDeferredCore<typeof receipt>();
+          const read = method === "status" ? fixture.sharedStatus : fixture.latestShared;
+          read.mockImplementationOnce(() => {
+            entered.resolve();
+            return pending.promise;
+          });
+          const respond = vi.fn();
+          const request = fixture.invoke(
+            `sessions.github.${method}`,
+            {
+              sessionKey,
+              publishingSessionKey: childKey,
+              ...(method === "status" ? { requestId: receipt.result.requestId } : {}),
+            },
+            respond,
+          );
+          try {
+            await awaitGateBeforeSettlement(entered.promise, request, "Read ended before receipt");
+            await upsertSessionEntryCore(
+              {
+                agentId: "main",
+                sessionKey: change.startsWith("source") ? sessionKey : childKey,
+              },
+              change === "lineage"
+                ? { parentSessionKey: "agent:main:replacement-parent" }
+                : change === "source lifecycle"
+                  ? { lifecycleRevision: "replacement-source" }
+                  : { visibility: "draft" },
+            );
+            pending.resolve(receipt);
+            await request;
+            expectFailure(respond);
+            expectNoPersonalReads(fixture);
+          } finally {
+            pending.resolve(receipt);
+            await request;
+          }
+        },
+        { personal: true, scopes: ["operator.sessions.read"], others: "view", foreign: true },
+      );
+    },
+  );
+});
+
 async function registerWorktree(origin?: string, bare = false) {
   let root = await fs.realpath(temporary.make("publication-read-target-"));
   await git(root, "init", "--initial-branch=feature");

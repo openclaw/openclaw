@@ -251,6 +251,7 @@ describe("worker placement recovery session events", () => {
         ownerEpoch: 1,
         nodeDeviceId: deviceId,
         attachedSessionIds: [row.sessionId],
+        lastError: null,
       });
     };
     environment(placement, "changed-device");

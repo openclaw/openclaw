@@ -434,6 +434,8 @@
     "scripts/lib/bun-cli-launcher.mjs",
     "scripts/lib/openclaw-bun.json",
     "scripts/lib/javascript-statements.mjs",
+    "scripts/lib/native-protocol-tooling.mjs",
+    "scripts/lib/tooling-dependencies.mjs",
     "scripts/install-cli.sh",
     "scripts/install-policy.sh",
     "scripts/install.ps1",

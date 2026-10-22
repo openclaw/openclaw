@@ -430,7 +430,13 @@ describe("sessions.dispatch", () => {
               if (state === "unavailable") {
                 throw new Error("environment inventory unavailable");
               }
-              return { state, leaseId: "lease-previous", ownerEpoch: 1, providerId };
+              return {
+                state,
+                environmentId: "environment-previous",
+                leaseId: "lease-previous",
+                ownerEpoch: 1,
+                providerId,
+              };
             }),
             supportsExecutionMode: () => true,
           } as never,

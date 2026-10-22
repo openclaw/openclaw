@@ -78,6 +78,7 @@ export function describeSessionsListTool(options?: SessionLinkDescriptionOptions
     "Metadata-only by default. limit defaults to 100; larger requests stay valid but limitApplied never exceeds 200. count is this page, not an inventory total. Continue with nextOffset and identical filters while hasMore; truncationReason names a scan/byte budget. Pages are live: deduplicate by agentId/key/sessionId or restart for a fresh inventory. archived=all includes active and archived rows.",
     "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. enrichmentOmitted means previews exceeded the byte budget; read history separately.",
     "Use before history/send target selection.",
+    "placement reports retained worker/environment state without starting work. Inspect it after an interrupted dispatch; failure or sentBeforeError does not mean no effects. Unknown setup grants are not evidence of absent access.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }

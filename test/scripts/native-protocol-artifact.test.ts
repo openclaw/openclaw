@@ -42,7 +42,11 @@ describe("native protocol build artifacts", () => {
       execFileSync(
         process.execPath,
         [path.join(alias, "scripts/prepare-native-protocol.mjs"), ...(check ? ["--check"] : [])],
-        { cwd: fixture, encoding: "utf8" },
+        {
+          cwd: fixture,
+          encoding: "utf8",
+          env: { ...process.env, OPENCLAW_PR_TOOLING_ROOT: path.join(fixture, "missing-donor") },
+        },
       );
     const swiftPath = path.join(
       fixture,

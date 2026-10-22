@@ -92,6 +92,20 @@ it("accepts bounded store references for recipe setup without a profile setup co
   expect(resolveCrabboxPreparationTarget({ ...recipe, target: "macos" })).toBeUndefined();
 });
 
+it("preserves own prototype-named secret mappings in setup and snapshot identity", () => {
+  const setupSecrets = Object.fromEntries([["__proto__", storeRef()]]);
+  const profile = parseCrabboxProfile({ ...PROFILE, setupSecrets });
+  expect(Object.keys(profile.setupSecrets!)).toEqual(["__proto__"]);
+  expect(JSON.stringify(profile.setupSecrets)).toBe(JSON.stringify(setupSecrets));
+  expect(resolveCrabboxProvisionProfile({ ...PROFILE, setupSecrets }, undefined)).toMatchObject({
+    profile: { warmImage: true, setupSecrets },
+  });
+  expect(resolveCrabboxWarmImageProfileKey(profile)).not.toBe(
+    resolveCrabboxWarmImageProfileKey(parseCrabboxProfile(PROFILE)),
+  );
+  expect(Object.prototype).not.toHaveProperty("source");
+});
+
 it.each([
   [{ TOKEN: "literal" }, "store SecretRef"],
   [{ TOKEN: { ...storeRef(), source: "env" } }, "store SecretRef"],

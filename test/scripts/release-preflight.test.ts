@@ -163,6 +163,7 @@ function makeIsolatedPreflightFixture(params: Parameters<typeof makeReleaseFixtu
     "scripts/lib/vitest-resource-ownership.mts",
     "scripts/lib/release-version.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
+    "scripts/lib/tooling-dependencies.mjs",
     "scripts/lib/windows-taskkill.mjs",
   ];
   for (const file of files) {
@@ -218,9 +219,9 @@ describe("scripts/release-preflight.mjs", () => {
     const result = runIsolatedPreflight(["--macos-versions-only", "--check"]);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "Run pnpm install --frozen-lockfile in an independently owned checkout.",
-    );
+    expect(result.stderr).toContain("Cannot resolve tooling dependencies");
+    expect(result.stderr).toContain("Cannot find the canonical checkout.");
+    expect(result.stdout).toBe("");
     expect(result.stderr).toContain("[release-preflight] FAILED (exit 1)");
   });
 

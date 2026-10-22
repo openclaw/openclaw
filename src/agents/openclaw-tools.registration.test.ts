@@ -456,12 +456,12 @@ describe("gateway client capability tool filtering", () => {
     }
   });
 
-  it("exposes GitHub publication only from a prepared session capability", () => {
+  it("exposes GitHub receipt reads only from a prepared session capability", () => {
     expect(hasTool(createOpenClawTools(), "github_publish")).toBe(false);
     expect(hasTool(createOpenClawTools(), "github_identity_status")).toBe(false);
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_publish"),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_identity_status"),
     ).toBe(true);
@@ -476,7 +476,7 @@ describe("gateway client capability tool filtering", () => {
       publishing: false,
       deny: false,
       managed: true,
-      expected: false,
+      expected: true,
       actions: false,
     },
     {
@@ -584,6 +584,12 @@ describe("gateway client capability tool filtering", () => {
       const tool = expectToolNamed(tools, "github_publish");
       expect(
         Value.Check(tool.parameters, {
+          action: "status",
+          publishingSessionKey: "agent:main:child",
+        }),
+      ).toBe(true);
+      expect(
+        Value.Check(tool.parameters, {
           action: "inspect",
           publishingSessionKey: "agent:main:child",
         }),
@@ -599,9 +605,23 @@ describe("gateway client capability tool filtering", () => {
       expect(Value.Check(tool.parameters, { action: "refresh_base" })).toBe(false);
       expect(Value.Check(tool.parameters, { action: "edit" })).toBe(publishing);
       expect(Value.Check(tool.parameters, { action: "ready" })).toBe(publishing || actions);
-      expect(
-        Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "agent:main:child" }),
-      ).toBe(actions);
+      if (publishing && !actions) {
+        await expect(
+          withGatewayToolCallerIdentity({ agentId: "main", sessionKey }, () =>
+            tool.execute("child-write", {
+              action: "ready",
+              publishingSessionKey: "agent:main:child",
+            }),
+          ),
+        ).rejects.toThrow("Only status can select a child");
+      } else {
+        expect(
+          Value.Check(tool.parameters, {
+            action: "ready",
+            publishingSessionKey: "agent:main:child",
+          }),
+        ).toBe(actions);
+      }
       expect(Value.Check(tool.parameters, { action: "upload_evidence" })).toBe(false);
       if (!publishing) {
         expect(tool.description).toContain("cannot publish its own workspace");
@@ -613,6 +633,7 @@ describe("gateway client capability tool filtering", () => {
           title: expect.any(Object),
           body: expect.any(Object),
           requestId: expect.any(Object),
+          publishingSessionKey: expect.any(Object),
           expectedHeadCommit: expect.any(Object),
           expectedTitle: expect.any(Object),
           expectedBody: expect.any(Object),
@@ -650,7 +671,7 @@ describe("gateway client capability tool filtering", () => {
       available: true,
       expected: false,
     },
-    { name: "unavailable publication", config: {}, available: false, expected: false },
+    { name: "unavailable publication", config: {}, available: false, expected: true },
     { name: "unprepared publication", config: {}, available: undefined, expected: false },
   ] satisfies {
     name: string;
@@ -689,7 +710,11 @@ describe("gateway client capability tool filtering", () => {
         },
       });
       expect(hasTool(tools, "github_publish")).toBe(expected);
-      if (expected) {
+      if (expected && !available) {
+        await expectToolNamed(tools, "github_publish").execute("status-1", { action: "status" });
+        expect(call).toHaveBeenCalledExactlyOnceWith("sessions.github.options", { sessionKey });
+        expect(callers).toEqual([sessionKey]);
+      } else if (expected) {
         await expectToolNamed(tools, "github_publish").execute("publish-1", {
           title: "Publish fix",
         });

@@ -15,6 +15,7 @@ export type WorkerEnvironmentPlacementFacts = Pick<
   | "ownerEpoch"
   | "nodeDeviceId"
   | "attachedSessionIds"
+  | "lastError"
 > & { inference?: "worker" };
 
 export type WorkerSessionPlacementProjection = {

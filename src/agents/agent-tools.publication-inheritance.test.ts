@@ -105,8 +105,14 @@ describe("publication policy inherited by a managed child", () => {
     runtime?: string[];
     inheritedDeny?: string[];
     expected: boolean;
+    expectedRead?: boolean;
   }>([
-    { name: "permitted publication", tools: { allow: allowed }, expected: true },
+    {
+      name: "permitted publication",
+      tools: { allow: allowed },
+      expected: true,
+      expectedRead: true,
+    },
     {
       name: "preparation-only deployment policy",
       tools: {
@@ -164,7 +170,7 @@ describe("publication policy inherited by a managed child", () => {
     },
   ])(
     "preserves $name when the parent has no publishable repository",
-    ({ tools, runtime, inheritedDeny, expected }) => {
+    ({ tools, runtime, inheritedDeny, expected, expectedRead = false }) => {
       const config: OpenClawConfig = {
         agents: { entries: { main: {} } },
         tools: { ...tools, sandbox: { tools: { alsoAllow: ["github_publish"] } } },
@@ -204,7 +210,12 @@ describe("publication policy inherited by a managed child", () => {
             : {},
         }),
       });
-      expect(parent.some((tool) => tool.name === "github_publish")).toBe(false);
+      const parentPublisher = parent.find((tool) => tool.name === "github_publish");
+      expect(Boolean(parentPublisher)).toBe(expectedRead);
+      if (parentPublisher) {
+        expect(Value.Check(parentPublisher.parameters, { action: "status" })).toBe(true);
+        expect(Value.Check(parentPublisher.parameters, { action: "publish" })).toBe(false);
+      }
       expect(inheritedToolAllowlistRef.includes("github_publish")).toBe(expected);
 
       // Child construction has its own valid publication fact. The captured parent

@@ -486,6 +486,7 @@ export function createSessionsListTool(opts?: {
           ...(contextTokens !== undefined ? { contextTokens } : {}),
           ...(totalTokens !== undefined ? { totalTokens } : {}),
           ...(status ? { status } : {}),
+          ...(entry.placement ? { placement: entry.placement } : {}),
           ...(abortedLastRun !== undefined ? { abortedLastRun } : {}),
           ...(childSessions ? { childSessions } : {}),
         };

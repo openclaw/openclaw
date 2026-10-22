@@ -343,7 +343,9 @@ test.each([
       stateChangedAtMs: 200,
       diskSpace,
       runner: { kind: "device", status: "offline" },
-      ...(expectedIdentity ? identity : {}),
+      ...(expectedIdentity
+        ? { ...identity, environment: { state: "attached", setupSecretGrant: "unknown" } }
+        : {}),
     });
     expect(other?.placement).toBeUndefined();
     getMany.mockClear();

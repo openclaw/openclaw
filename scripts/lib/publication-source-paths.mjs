@@ -43,6 +43,7 @@ export const publicationSourceToolingPaths = new Set([
   "scripts/lib/arg-utils.runtime.mjs",
   "scripts/tsx.mjs",
   "scripts/lib/tsx-cli-shim.mjs",
+  "scripts/lib/tooling-dependencies.mjs",
   "scripts/lib/local-check-runtime.mts",
   "packages/normalization-core/src/number-coercion.ts",
   "packages/normalization-core/src/utf16-slice.ts",

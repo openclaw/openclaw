@@ -3,12 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
 import { deleteRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntrySync,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { GitHubPublicationRow } from "../state/github-publication-read.types.js";
@@ -50,6 +56,11 @@ import {
   sharedPublicationSession as session,
   sharedRepositoryWorkspace,
 } from "./github-shared-publication.test-support.js";
+import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "./server-plugin-in-process-dispatch.test-support.js";
 
 installGitHubPublicationTestHarness();
 afterEach(async () => {
@@ -660,30 +671,79 @@ describe("shared repository receipt observation", () => {
     await expect(coordinator.latestShared(session)).rejects.toThrow(/owner.*unavailable/);
   });
 
-  it("reads durable effect facts after a new coordinator starts without confirmation, replay, or credential work", async () => {
+  it("reads an incomplete child's original effect through the native tool after stores reopen", async () => {
     const workspace = await sharedRepositoryWorkspace();
-    const row = insertRepositoryReceipt(workspace);
+    const persisted = await persistPublicationTestSession();
+    const parentKey = "agent:main:dashboard:publication-parent";
+    const scopes = ["operator.sessions.read"];
+    const client = createOperatorClient({ profileName: "receipt-reader", scopes });
+    const createdActor = {
+      type: "human" as const,
+      source: "profile" as const,
+      id: client.authenticatedUserProfile!.profileId,
+    };
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: parentKey },
+      { sessionId: "publication-parent", updatedAt: 1, createdActor },
+    );
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: SESSION_KEY },
+      { parentSessionKey: parentKey, createdActor },
+    );
+    mocks.persistedSessionKeys.add(parentKey);
+    const originalSession = {
+      ...session,
+      lifecycleRevision: persisted.read().lifecycleRevision ?? null,
+    };
+    const row = insertRepositoryReceipt(workspace, {
+      request_id: "7139b0f5-2d34-4b77-8625-5bc0f287abef",
+      session_lifecycle_revision: originalSession.lifecycleRevision,
+    });
     const execution = claimRepositoryGitHubPublicationFixture(row, "old-instance", {
       assertCustody: () => {},
       assertCurrent: () => {},
     });
     execution.recordEffect("push", { headCommit: OLD_HEAD });
-    const coordinator = sharedPublicationCoordinator();
     const before = readRepositoryGitHubPublicationFixture(row.request_id);
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    const coordinator = sharedPublicationCoordinator();
+    const context = createContext([], getRuntimeConfig);
+    context.githubPublicationService = coordinator;
+    context.getClientConnIds = (filter) =>
+      new Set(!filter || filter(client) ? [client.connId!] : []);
+    const publish = vi.spyOn(coordinator, "requestForSessionV2");
+    const startTurn = vi.spyOn(context, "createAgentTurnFacade");
     prohibitPublicationWork();
     using observer = observeEvents();
-    expect(await coordinator.latestShared(session)).toMatchObject({
+    const expected = {
       confirmation: null,
       result: {
         requestId: row.request_id,
         status: "publishing",
         effect: { kind: "push", status: "observed", headCommit: OLD_HEAD },
       },
-    });
-    expect(await coordinator.sharedStatus(session, row.request_id)).toEqual(
-      await coordinator.latestShared(session, row.idempotency_key),
+    };
+    expect(await coordinator.latestShared(originalSession)).toMatchObject(expected);
+    const observed = await withPluginRuntimeGatewayRequestScope(
+      { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+      () =>
+        withOperatorToolGatewayAuthority({ scopes }, () =>
+          withGatewayToolCallerIdentity(
+            { agentId: "main", sessionKey: parentKey, receiptAuthority: () => true },
+            () =>
+              createGitHubPublishTool({ publicationAvailable: false }).execute("inspect-receipt", {
+                action: "status",
+                publishingSessionKey: SESSION_KEY,
+                requestId: row.request_id,
+              }),
+          ),
+        ),
     );
+    expect(observed.details).toMatchObject(expected);
     expect(readRepositoryGitHubPublicationFixture(row.request_id)).toEqual(before);
+    expect(publish).not.toHaveBeenCalled();
+    expect(startTurn).not.toHaveBeenCalled();
     expect(observer).not.toHaveBeenCalled();
     expectNoPublicationWork();
   });

@@ -66,7 +66,7 @@ export async function preparePublishingSession(
     key = parent;
   }
   assertSessions();
-  return { selected, assertCurrent: assertSessions };
+  return { source, selected, assertCurrent: assertSessions };
 }
 
 export function pullRequestState(

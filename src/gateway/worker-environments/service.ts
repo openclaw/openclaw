@@ -32,6 +32,7 @@ import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projectio
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
+import { readWorkerProfileSelection } from "./profile-selection.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerEnvironmentAbandonment } from "./provider-lifecycle.types.js";
 import { createWorkerReconcileCancellation } from "./provider-provisioning-cancellation.js";
@@ -654,9 +655,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       if (!provider?.runSetupCommand) {
         return undefined;
       }
+      const { machineClass, os } = readWorkerProfileSelection(record.profileSnapshot);
+      const profile = requireWorkerProfile(record.profileSnapshot.settings);
       const result = await trackOperation(
         provider.runSetupCommand(
-          { leaseId, profile: requireWorkerProfile(record.profileSnapshot.settings) },
+          { leaseId, profile, machineClass, os },
           { ...command, signal, assertCurrent },
         ),
       );

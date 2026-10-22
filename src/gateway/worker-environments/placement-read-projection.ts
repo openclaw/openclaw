@@ -309,6 +309,7 @@ export function readWorkerSessionPlacementProjectionInDatabase(
           ownerEpoch: record.ownerEpoch,
           nodeDeviceId: record.nodeDeviceId,
           attachedSessionIds: record.attachedSessionIds,
+          lastError: record.lastError,
         });
       }
     }

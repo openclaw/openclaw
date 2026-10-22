@@ -6,6 +6,7 @@ import {
   type WorkerProfile,
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { validateSetupSecretEgress } from "openclaw/plugin-sdk/secret-egress-runtime";
 import { type LeaseCommandContext, stopCrabboxLease } from "./crabbox-worker-command.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import type { ParsedInspect } from "./crabbox-worker-inspect.js";
@@ -208,6 +209,13 @@ export function createCrabboxWorkerProvider(
       ...(signal ? [signal] : []),
       ...(project?.signal ? [project.signal] : []),
     ]);
+    if (protectedSetup) {
+      await validateSetupSecretEgress({
+        secrets: parsed.setupSecrets ?? {},
+        signal: preparationSignal,
+      });
+      assertCurrent();
+    }
     const allocation = await resolveAllocation(profile, operationId);
     signal?.throwIfAborted();
     const { binary, version: cliVersion } = await resolveBinary(parsed.binary, preparationSignal);

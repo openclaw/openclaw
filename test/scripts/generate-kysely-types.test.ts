@@ -48,6 +48,8 @@ it("packages a runnable generator closure through the published file policy", ()
     ...entrypoints,
     "scripts/runtime-postbuild-shared.mjs",
     "scripts/lib/direct-run.mjs",
+    "scripts/lib/native-protocol-tooling.mjs",
+    "scripts/lib/tooling-dependencies.mjs",
   ]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.copyFileSync(file, path.join(root, file));

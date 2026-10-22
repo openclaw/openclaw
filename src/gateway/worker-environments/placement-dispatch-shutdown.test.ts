@@ -13,6 +13,10 @@ import {
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { expectPlacement, workerBundle } from "./placement-lifecycle.test-support.js";
+import {
+  projectWorkerSessionPlacement,
+  readWorkerPlacementIdentity,
+} from "./placement-projector.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import {
   deriveEnvironmentIntent,
@@ -73,6 +77,30 @@ describe("worker placement shutdown replay", () => {
 
     await support.reopenWorkerEnvironmentStore();
     placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+    const retained = await placements.readProjection([REQUEST.sessionId]);
+    const retainedPlacement = retained.placements.get(REQUEST.sessionId)!;
+    const original = projectWorkerSessionPlacement(
+      retainedPlacement,
+      undefined,
+      undefined,
+      readWorkerPlacementIdentity(
+        retainedPlacement,
+        undefined,
+        retained.environments.get(environmentId),
+      ),
+    );
+    expect(original).toMatchObject({
+      state: "provisioning",
+      environmentId,
+      profileId: "development",
+      environment: {
+        state: "provisioning",
+        lastError: expect.stringContaining("provider interrupted"),
+        setupSecretGrant: "unknown",
+      },
+    });
+    expect(operationIds).toEqual([operationId]);
+    expect(destroy).not.toHaveBeenCalled();
     const restarted = support.createService(provider);
     const syncWorkspace = vi.fn(async () => ({
       mode: "git" as const,

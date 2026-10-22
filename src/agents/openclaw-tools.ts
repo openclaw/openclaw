@@ -518,8 +518,7 @@ function* createOpenClawToolsSteps(
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),
     options?.githubPublicationAvailable !== undefined ? createGitHubIdentityStatusTool() : null,
-    options?.githubPublicationAvailable === true ||
-    (options?.githubPublicationAvailable === false && githubActionsAvailable)
+    options?.githubPublicationAvailable !== undefined
       ? createGitHubPublishTool({
           ...options,
           publicationAvailable: options.githubPublicationAvailable,

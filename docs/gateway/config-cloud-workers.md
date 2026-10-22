@@ -173,6 +173,12 @@ Profile setup and repository lifecycle commands run through Crabbox native egres
 
 Setup secrets do not disable snapshots. Names and store references affect compatibility; values and temporary placeholders do not. For storing credentials and binding destinations, see [job-scoped setup grants](/gateway/secrets/secret-store-and-egress#job-scoped-setup-grants).
 
+Protected entries and destination bindings are checked before a new allocation
+and again when each setup grant opens. A refusal during replay does not prove
+that an earlier attempt allocated nothing. Repository lifecycle commands use the
+OS and machine class recorded for the original environment, including after a
+Gateway restart.
+
 `settings.setupEnv` is retired. Run `openclaw doctor --fix` to migrate existing profiles to same-name protected store entries. Doctor requires explicit destination bindings and compatible existing mappings; missing entries or conflicts leave the profile unchanged with repair guidance. It never creates secret values or infers destinations. Complete the repair before provisioning.
 
 ### Static SSH development profile

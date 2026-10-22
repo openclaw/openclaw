@@ -15,6 +15,7 @@ on:
       - scripts/lib/docs-markdown.mjs
       - scripts/lib/docs-redirects.mjs
       - scripts/lib/tsx-cli-shim.mjs
+      - scripts/lib/tooling-dependencies.mjs
       - scripts/lib/local-check-runtime.mts
       - .github/workflows/docs-sync-publish.yml
       - "!docs/AGENTS.md"

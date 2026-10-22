@@ -87,6 +87,7 @@ const GENERATOR_INPUTS = [
   "scripts/lib/repo-root.mjs",
   "scripts/tsx.mjs",
   "scripts/lib/tsx-cli-shim.mjs",
+  "scripts/lib/tooling-dependencies.mjs",
   "scripts/lib/plugin-sdk-entries.mts",
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",

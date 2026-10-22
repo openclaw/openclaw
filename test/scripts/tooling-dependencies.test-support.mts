@@ -108,6 +108,7 @@ console.log("qualified bootstrap OK");
     checkout,
     tooling,
     writePackage,
+    env,
     run: (entrypoint = "crabbox-wrapper.mjs") =>
       spawnSync(process.execPath, [join(checkout, "scripts", entrypoint), "--help"], {
         cwd: root,

@@ -32,7 +32,7 @@ export async function withJobSecretEgress<T>(
   run: (egress: JobSecretEgress) => Promise<T>,
 ): Promise<T> {
   params.signal?.throwIfAborted();
-  const remoteEnv: Record<string, string> = {};
+  const remoteEnv: Record<string, string> = Object.create(null);
   const bindings = params.secrets.map((secret) => {
     assertJobEnvName(secret.envName);
     assertSecretStoreValue(secret.value, "secret", secret.name);
@@ -72,11 +72,7 @@ export type SetupSecretEgressOptions = {
   signal: AbortSignal;
 };
 
-/** Reads only selected protected store rows and binds their destination policy to one job. */
-export async function withSetupSecretEgress<T>(
-  params: SetupSecretEgressOptions,
-  run: (egress: JobSecretEgress) => Promise<T>,
-): Promise<T> {
+async function readSetupSecrets(params: SetupSecretEgressOptions): Promise<JobSecret[]> {
   params.signal.throwIfAborted();
   const selection = Object.entries(params.secrets).map(([envName, ref]) => {
     assertJobEnvName(envName);
@@ -90,7 +86,8 @@ export async function withSetupSecretEgress<T>(
     assertCurrent: () => params.signal.throwIfAborted(),
   });
   const byName = new Map(entries.map((entry) => [entry.name, entry]));
-  const secrets = selection.map(({ envName, name }) => {
+  params.signal.throwIfAborted();
+  return selection.map(({ envName, name }) => {
     const entry = byName.get(name);
     if (!entry) {
       throw new Error(
@@ -104,5 +101,20 @@ export async function withSetupSecretEgress<T>(
     }
     return { envName, name: entry.name, value: entry.value, allowedHosts: entry.allowedHosts };
   });
-  return withJobSecretEgress({ secrets, signal: params.signal }, run);
+}
+
+/** Validate required inputs before allocation without opening a proxy or granting access. */
+export async function validateSetupSecretEgress(params: SetupSecretEgressOptions): Promise<void> {
+  await readSetupSecrets(params);
+}
+
+/** Reread selected protected rows at grant creation; preparation never retains credential values. */
+export async function withSetupSecretEgress<T>(
+  params: SetupSecretEgressOptions,
+  run: (egress: JobSecretEgress) => Promise<T>,
+): Promise<T> {
+  return withJobSecretEgress(
+    { secrets: await readSetupSecrets(params), signal: params.signal },
+    run,
+  );
 }

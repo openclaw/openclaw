@@ -10,6 +10,7 @@ import { prepareUserProfileRolePolicyAuthority } from "../../state/user-channel-
 import { captureResidentUserProfileAccess } from "../../state/user-profile-list.js";
 import type { PersonalGitHubAction, PersonalGitHubActionV2 } from "../github-personal-oauth.js";
 import type { PersonalGitHubSessionActionV2 } from "../github-personal-publication.js";
+import { preparePublishingSession } from "../github-publication-action-target.js";
 import {
   currentGitHubPublicationConfig,
   prepareGitHubPublicationSession,
@@ -171,7 +172,11 @@ export async function prepareGitHubPublicationOptionsRead(
       GatewayRequestHandlerOptions,
       "req" | "hasCurrentClientAuthority" | "sessionMutationCommitGuard"
     >,
-  { sessionKey, agentId: requestedAgentId }: SessionMutationTarget,
+  {
+    sessionKey,
+    agentId: requestedAgentId,
+    publishingSessionKey,
+  }: SessionMutationTarget & { publishingSessionKey?: string },
   signal?: AbortSignal,
 ) {
   const authority = readGatewayRequestMutationAuthority(options);
@@ -218,17 +223,37 @@ export async function prepareGitHubPublicationOptionsRead(
             kind: "eligible",
             action: preparePersonalGitHubAction(options, "operator.read", signal),
           };
-  const preparedSession = await prepareOptionsSession(sessionKey, requestedAgentId, () => {
-    currentClient();
-  });
+  const resources = new DisposableStack();
   try {
+    const selection = publishingSessionKey
+      ? await preparePublishingSession(
+          { sessionKey, agentId: requestedAgentId, publishingSessionKey },
+          () => {
+            currentClient();
+          },
+          resources,
+        )
+      : undefined;
+    const preparedSession =
+      selection?.source ??
+      (await prepareOptionsSession(sessionKey, requestedAgentId, () => {
+        currentClient();
+      }));
+    if (!selection) {
+      resources.defer(preparedSession.release);
+    }
     const readSession = () => {
-      const loaded = preparedSession.readCurrent();
+      selection?.assertCurrent();
+      const source = preparedSession.readCurrent();
+      const loaded = selection?.selected.readCurrent() ?? source;
       const filter = createSessionListEntryFilter({
         cfg: options.context.getRuntimeConfig(),
         client: currentClient(),
       });
-      return loaded.entry && filter?.(loaded.canonicalKey, loaded.entry) !== false
+      return source.entry &&
+        filter?.(source.canonicalKey, source.entry) !== false &&
+        loaded.entry &&
+        filter?.(loaded.canonicalKey, loaded.entry) !== false
         ? {
             sessionId: loaded.entry.sessionId,
             sessionKey: loaded.canonicalKey,
@@ -257,11 +282,14 @@ export async function prepareGitHubPublicationOptionsRead(
     return {
       personal,
       session,
-      release: () => preparedSession.release(),
-      [Symbol.dispose]: () => preparedSession.release(),
+      release: () => resources.dispose(),
+      [Symbol.dispose]: () => resources.dispose(),
       sessionScoped: authority.sessionScope === "operator.sessions.read",
       currentSession: readCurrent,
-      currentSessionRead: preparedSession.readCurrent,
+      currentSessionRead: () => {
+        readCurrent();
+        return selection?.selected.readCurrent() ?? preparedSession.readCurrent();
+      },
       // Callbacks may refresh live facts, but must not replace the response's archive snapshot.
       assertSessionUnchanged: (snapshot: ReturnType<typeof readCurrent>): void => {
         const current = readCurrent();
@@ -271,7 +299,7 @@ export async function prepareGitHubPublicationOptionsRead(
       },
     };
   } catch (error) {
-    preparedSession.release();
+    resources.dispose();
     throw error;
   }
 }

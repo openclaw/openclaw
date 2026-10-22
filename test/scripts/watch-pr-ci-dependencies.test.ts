@@ -50,6 +50,7 @@ it.each<{ source: string; reason?: string }>([
     const cwd = args?.[1];
     const command = args?.slice(2).join(" ") ?? "";
     const responses: Record<string, string> = {
+      "rev-parse --local-env-vars": "GIT_DIR\nGIT_WORK_TREE\nGIT_INDEX_FILE\n",
       "rev-parse --path-format=absolute --git-common-dir": join(canonical, ".git"),
       "config --path --get openclaw.pr.toolingRoot":
         source === "canonical" ? "" : "../tooling #root\n",
@@ -64,7 +65,7 @@ it.each<{ source: string; reason?: string }>([
     if (!Object.hasOwn(responses, command)) {
       throw new Error(`Unexpected Git command: ${command}`);
     }
-    if (command.endsWith("--git-common-dir")) {
+    if (command.endsWith("--git-common-dir") || command === "rev-parse --local-env-vars") {
       expect(cwd).toBe(checkout);
     } else if (command.endsWith("openclaw.pr.toolingRoot")) {
       expect(cwd).toBe(canonical);

@@ -52,6 +52,7 @@ function publicationFixture(releaseVersion = "2026.9.4") {
     "scripts/render-github-release-notes.mts",
     "scripts/tsx.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
+    "scripts/lib/tooling-dependencies.mjs",
     "scripts/lib/local-check-runtime.mts",
     "scripts/lib/managed-cleanup-handoff.mts",
     "scripts/openclaw-npm-extended-stable-release.mjs",

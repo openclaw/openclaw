@@ -94,10 +94,14 @@ describe("worker environment service provision replay", () => {
     const machineClasses: Array<string | undefined> = [];
     const operatingSystems: Array<string | undefined> = [];
     const destroyed: string[] = [];
+    const runSetupCommand = vi.fn<NonNullable<WorkerProvider["runSetupCommand"]>>(
+      async () => undefined,
+    );
     let creates = 0;
     let loseFirstReply = true;
     const provider = () =>
       support.createProvider({
+        runSetupCommand,
         provision: async (_profile, operationId, options) => {
           operationIds.push(operationId);
           machineClasses.push(options?.machineClass);
@@ -154,7 +158,34 @@ describe("worker environment service provision replay", () => {
         lastError: null,
       }),
     );
+    const attached = await support.testState.store.transition({
+      environmentId,
+      from: "ready",
+      to: "attached",
+      patch: support.attachedPatch(environmentId, "session-replay"),
+    });
+    const command = {
+      createScript: () => "setup",
+      workspaceDir: "/workspace",
+      homeDir: "/home/worker",
+      timeoutMs: 1_000,
+      assertCurrent: () => {},
+    };
+    await restarted.runProjectLifecycleCommand(environmentId, attached.ownerEpoch, command);
+    expect(runSetupCommand).toHaveBeenCalledExactlyOnceWith(
+      {
+        leaseId: "lease-restarted",
+        profile: { region: "test" },
+        machineClass: "large",
+        os: "os-a",
+      },
+      expect.objectContaining({ ...command, assertCurrent: expect.any(Function) }),
+    );
     await restarted.destroy(environmentId);
+    await expect(
+      restarted.runProjectLifecycleCommand(environmentId, attached.ownerEpoch, command),
+    ).rejects.toThrow("lost its attached lease owner");
+    expect(runSetupCommand).toHaveBeenCalledOnce();
 
     expect(creates).toBe(1);
     expect(operationIds).toEqual([operationId, operationId]);

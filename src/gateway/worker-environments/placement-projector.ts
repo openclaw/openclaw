@@ -12,7 +12,9 @@ import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projectio
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { isWorkerEnvironmentAttachedTo } from "./placement-target.js";
+import { readWorkerProfileSelection } from "./profile-selection.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 export type WorkerSessionPlacementReader = Pick<WorkerSessionPlacementStore, "getMany"> &
   Partial<
@@ -104,6 +106,7 @@ type WorkerPlacementIdentity = {
   profileId: string;
   machine?: SessionPlacementMachine;
   inference?: "worker";
+  environment?: Extract<SessionPlacement, { state: "active" }>["environment"];
 };
 
 export function readWorkerPlacementIdentity(
@@ -117,7 +120,7 @@ export function readWorkerPlacementIdentity(
         ? environments?.get(record.environmentId)
         : undefined
       : preparedEnvironment;
-  if (!environment) {
+  if (!environment || environment.environmentId !== record.environmentId) {
     return undefined;
   }
   // Epochs correlate instances even when an environment id is reused. Matching terminal
@@ -136,12 +139,29 @@ export function readWorkerPlacementIdentity(
     environment.environmentId,
     preparedEnvironment ?? undefined,
   );
+  // Snapshot selections describe the original request, not the current catalog or guest.
+  // Setup grants have no retained owner receipt; do not infer access from a profile or error.
+  const selection = preparedEnvironment
+    ? readWorkerProfileSelection(preparedEnvironment.profileSnapshot)
+    : undefined;
   return {
     providerId: environment.providerId,
     profileId: environment.profileId,
+    ...(preparedEnvironment
+      ? {
+          environment: {
+            state: preparedEnvironment.state,
+            ...(selection?.os ? { requestedOs: selection.os } : {}),
+            ...(selection?.machineClass ? { requestedMachineClass: selection.machineClass } : {}),
+            ...(preparedEnvironment.lastError
+              ? { lastError: boundedWorkerError(preparedEnvironment.lastError) }
+              : {}),
+            setupSecretGrant: "unknown" as const,
+          },
+        }
+      : {}),
     ...(record.state === "active" &&
     record.executionMode === "worker-turn" &&
-    environment.environmentId === record.environmentId &&
     environment.state === "attached" &&
     environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
     environment.nodeDeviceId &&

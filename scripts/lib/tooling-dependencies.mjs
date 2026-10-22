@@ -3,9 +3,15 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire, registerHooks } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolveConfiguredModulesDir } from "./tsx-cli-shim.mjs";
 
-function isWithin(root, target) {
+export function resolveConfiguredModulesDir(checkoutRoot) {
+  const modulesDir =
+    (process.env.PNPM_CONFIG_MODULES_DIR ?? process.env.pnpm_config_modules_dir) ||
+    process.env.npm_config_modules_dir;
+  return modulesDir ? resolve(checkoutRoot, modulesDir) : undefined;
+}
+
+export function isWithin(root, target) {
   const rel = relative(root, target);
   return (
     rel !== "" &&
@@ -16,7 +22,7 @@ function isWithin(root, target) {
   );
 }
 
-function contained(root, target) {
+export function contained(root, target) {
   const physical = realpathSync(target);
   if (!isWithin(root, physical)) {
     throw new Error("Tooling package escapes its installed dependency owner.");
@@ -43,13 +49,20 @@ function readManifest(checkout) {
   return JSON.parse(readFileSync(join(checkout, "package.json"), "utf8"));
 }
 
-function qualifiedPackage(manifest, root, specifier, consumer, owner = root) {
+export function qualifiedPackage(
+  manifest,
+  root,
+  specifier,
+  consumer,
+  owner = root,
+  candidate = join(owner, "node_modules", packageName(specifier)),
+) {
   const name = packageName(specifier);
   const required = declaredVersion(manifest, name);
   const modules = realpathSync(join(root, "node_modules"));
   // A workspace link would execute another checkout's source. Only installed
   // third-party packages can fill missing dependencies in this checkout.
-  const directory = contained(modules, join(owner, "node_modules", name));
+  const directory = contained(modules, candidate);
   const installed = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
   if (!required || installed.name !== name || installed.version !== required) {
     throw new Error(
@@ -84,12 +97,23 @@ export function toolingDependencyOptions(checkout, consumer, { tsx = false } = {
   }
   let root = checkout;
   try {
+    const gitEnv = { ...process.env };
     const git = (cwd, args) =>
       spawnSync(process.env.OPENCLAW_PR_GIT || "git", ["-C", cwd, ...args], {
+        env: gitEnv,
         encoding: "utf8",
         timeout: 10_000,
         stdio: ["ignore", "pipe", "pipe"],
       });
+    const localEnv = git(checkout, ["rev-parse", "--local-env-vars"]);
+    if (localEnv.status !== 0) {
+      throw new Error("Cannot isolate repository probes.");
+    }
+    // Hooks export their repository and index. Qualify each supplied checkout,
+    // not the invoking hook's repository, without changing the hook's own context.
+    for (const name of localEnv.stdout.trim().split(/\r?\n/)) {
+      delete gitEnv[name];
+    }
     const common = git(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
     if (common.status !== 0) {
       throw new Error("Cannot find the canonical checkout.");
@@ -156,14 +180,20 @@ export function toolingDependencyOptions(checkout, consumer, { tsx = false } = {
   }
   console.error(`[${consumer}] resolving missing packages from scripts/pr tooling root ${root}`);
   // A node_modules link would change scripts/pr's wrapper selection in this checkout.
-  return { execArgv: ["--import", hook.href], ...(tsxImport ? { tsxImport } : {}) };
+  let resolver;
+  return {
+    execArgv: ["--import", hook.href],
+    ...(tsxImport ? { tsxImport } : {}),
+    root,
+    resolvePackage(specifier, parentURL) {
+      resolver ??= toolingPackageResolver(realpathSync(checkout), root, consumer);
+      const owner = resolver.sourceOwner({ parentURL });
+      return owner ? resolver.resolvePackage(specifier, owner) : undefined;
+    },
+  };
 }
 
-const params = new URL(import.meta.url).searchParams;
-const root = params.get("root");
-if (root) {
-  const checkout = realpathSync(params.get("checkout"));
-  const consumer = params.get("consumer");
+function toolingPackageResolver(checkout, root, consumer) {
   const manifests = new Map([[checkout, readManifest(checkout)]]);
   const sourceOwner = (context) => {
     const importer = context.parentURL?.startsWith("file:")
@@ -186,6 +216,31 @@ if (root) {
     }
     return { directory, manifest: manifests.get(directory) };
   };
+  return {
+    sourceOwner,
+    resolvePackage: (specifier, owner) => {
+      // Workspace pins belong to this checkout; donor links supply installed packages only.
+      const donor =
+        owner.directory === checkout
+          ? root
+          : contained(root, join(root, relative(checkout, owner.directory)));
+      return {
+        directory: qualifiedPackage(owner.manifest, root, specifier, consumer, donor),
+        resolveDir: donor,
+      };
+    },
+  };
+}
+
+const params = new URL(import.meta.url).searchParams;
+const root = params.get("root");
+if (root) {
+  const checkout = realpathSync(params.get("checkout"));
+  const { sourceOwner, resolvePackage } = toolingPackageResolver(
+    checkout,
+    root,
+    params.get("consumer"),
+  );
   registerHooks({
     resolve(specifier, context, nextResolve) {
       if (isAbsolute(specifier) || /^(?:\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:|#)/i.test(specifier)) {
@@ -216,16 +271,10 @@ if (root) {
           throw new Error("Tooling package escapes its installed dependency owner.");
         }
       }
-      // A workspace package owns its pins and its donor resolution context.
-      // Its pnpm links may land in the root store, never in foreign source.
-      const donor =
-        owner.directory === checkout
-          ? root
-          : contained(root, join(root, relative(checkout, owner.directory)));
-      const directory = qualifiedPackage(owner.manifest, root, specifier, consumer, donor);
+      const { directory, resolveDir } = resolvePackage(specifier, owner);
       resolved = nextResolve(specifier, {
         ...context,
-        parentURL: pathToFileURL(join(donor, "package.json")).href,
+        parentURL: pathToFileURL(join(resolveDir, "package.json")).href,
       });
       contained(directory, fileURLToPath(resolved.url));
       return resolved;

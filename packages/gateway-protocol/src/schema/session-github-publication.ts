@@ -303,12 +303,14 @@ export const SessionGitHubPublicationResultSchema = Type.Union([
 export const SessionGitHubOptionsParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  publishingSessionKey: Type.Optional(NonEmptyString),
   // Narrows shared receipt recovery to the original invocation after a lost acknowledgement.
   idempotencyKey: Type.Optional(NonEmptyString),
 });
 export const SessionGitHubStatusParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  publishingSessionKey: Type.Optional(NonEmptyString),
   requestId: PersonalGitHubGenerationSchema,
 });
 export const SessionGitHubConfirmParamsSchema = closedObject({

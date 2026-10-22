@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { nativeProtocolTooling } from "./lib/native-protocol-tooling.mjs";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -65,8 +65,7 @@ export async function prepareNativeProtocol({ language = "all", out, check = fal
     }
     fs.mkdirSync(cache, { recursive: true });
     if (!generator) {
-      const require = createRequire(path.join(root, "packages/gateway-protocol/package.json"));
-      const { build } = require("esbuild");
+      const { build, plugins } = nativeProtocolTooling(root);
       const bundle = await build({
         absWorkingDir: root,
         entryPoints: ["packages/gateway-protocol/scripts/native-codegen.ts"],
@@ -76,6 +75,7 @@ export async function prepareNativeProtocol({ language = "all", out, check = fal
         target: "node24",
         write: false,
         metafile: true,
+        plugins,
       });
       const declaredInputs = new Set(inputs);
       for (const file of Object.keys(bundle.metafile.inputs)) {

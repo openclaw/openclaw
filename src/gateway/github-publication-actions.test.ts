@@ -338,7 +338,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
     );
     await expect(
       f.invoke("guest", { ...args, publishingSessionKey: "agent:main:other" }),
-    ).rejects.toThrow("current session");
+    ).rejects.toThrow("Only status can select a child");
     f.state.state = "closed";
     await expect(f.invoke("guest", args)).rejects.toThrow("closed");
     expect(f.writes).toEqual([]);
@@ -359,7 +359,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
     const f = await fixture();
     const args = { action: "ready", ...f.expected };
     await expect(f.invoke("guest", { ...args, publishingSessionKey: SESSION_KEY })).rejects.toThrow(
-      /scope|permission/iu,
+      "Only status can select a child",
     );
     const foreign = { agentId: "main", sessionKey: "agent:main:foreign-publication" };
     await upsertSessionEntryCore(foreign, {

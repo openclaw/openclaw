@@ -85,8 +85,14 @@ export function resolveTsdownDeclarationGeneratorInputs(
     [
       "scripts/lib/tsx-cli-shim.mjs",
       {
-        expressions: ["resolveTsxImport(SHIM_CHECKOUT_ROOT)"],
-        targets: [fileURLToPath(resolveTsxImport(root))],
+        expressions: [
+          "tooling.execArgv[1]",
+          "tooling.tsxImport",
+          "resolveTsxImport(SHIM_CHECKOUT_ROOT)",
+        ],
+        // The qualified preload is this resolver with owner parameters. Owned
+        // declaration installs still load their local, exact TSX entry.
+        targets: ["scripts/lib/tooling-dependencies.mjs", fileURLToPath(resolveTsxImport(root))],
       },
     ],
     [

@@ -11,7 +11,8 @@ import { resolveSecretSentinel } from "./sentinel.js";
 import { inspectSetupSecretMigration } from "./setup-secret-migration.js";
 import { writeSecretStoreEntries } from "./store/secret-store.js";
 
-const { withSetupSecretEgress } = await import("../plugin-sdk/secret-egress-runtime.js");
+const { validateSetupSecretEgress, withSetupSecretEgress } =
+  await import("../plugin-sdk/secret-egress-runtime.js");
 const { proxy, revoke } = useEgressProxyMock();
 const stop = proxy.stop;
 let state: OpenClawTestState;
@@ -81,17 +82,56 @@ it("returns only selected POSIX sentinel env and public trust with host proxy cr
   });
 });
 
+it("preserves an own prototype-named setup variable without exposing its secret", async () => {
+  await withSetupSecretEgress(
+    options(undefined, Object.fromEntries([["__proto__", "JOB_TOKEN"]])),
+    async (egress) => {
+      expect(Object.keys(egress.remoteEnv)).toEqual(["__proto__"]);
+      const serialized = JSON.stringify(egress.remoteEnv);
+      const env = JSON.parse(serialized);
+      expect(resolveSecretSentinel(Object.getOwnPropertyDescriptor(env, "__proto__")?.value)).toBe(
+        "synthetic-job-token",
+      );
+      expect(serialized).not.toContain("synthetic-job-token");
+    },
+  );
+  expect(revoke).toHaveBeenCalledOnce();
+  expect(stop).toHaveBeenCalledOnce();
+});
+
 it.each([
   ["MISSING_TOKEN", "protected shared-store entry"],
   ["READABLE_TOKEN", "protected shared-store entry"],
   ["UNBOUND_TOKEN", "--allow-host <host>"],
 ])("rejects %s without a proxy or partial environment", async (id, message) => {
   const run = vi.fn();
+  await expect(validateSetupSecretEgress(options(undefined, { TOKEN: id }))).rejects.toThrow(
+    message,
+  );
   await expect(withSetupSecretEgress(options(undefined, { TOKEN: id }), run)).rejects.toThrow(
     message,
   );
   expect(startProxy).not.toHaveBeenCalled();
   expect(run).not.toHaveBeenCalled();
+});
+
+it("validates required setup inputs without a grant and rereads them when access opens", async () => {
+  await writeSecretStoreEntries({
+    scope: { kind: "team" },
+    updatedBy: "fixture",
+    entries: [protectedEntry("ROTATING_TOKEN", "initial-job-token", "registry.example.test")],
+  });
+  const params = options(undefined, { TOKEN: "ROTATING_TOKEN" });
+  expect(await validateSetupSecretEgress(params)).toBeUndefined();
+  expect(startProxy).not.toHaveBeenCalled();
+  await writeSecretStoreEntries({
+    scope: { kind: "team" },
+    updatedBy: "fixture",
+    entries: [protectedEntry("ROTATING_TOKEN", "rotated-job-token", "registry.example.test")],
+  });
+  await withSetupSecretEgress(params, async ({ remoteEnv }) => {
+    expect(resolveSecretSentinel(remoteEnv.TOKEN!)).toBe("rotated-job-token");
+  });
 });
 
 it("revokes cancellation before the job's termination listener and cleans up on failure", async () => {

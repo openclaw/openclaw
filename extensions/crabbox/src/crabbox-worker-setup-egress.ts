@@ -6,7 +6,7 @@ import type { SecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { runCrabboxProcess } from "./crabbox-process.js";
 import type { LeaseCommandContext } from "./crabbox-worker-command.js";
 import { runCrabboxCommand } from "./crabbox-worker-command.js";
-import { assertCrabboxLeaseId, parseCrabboxProfile } from "./crabbox-worker-profile.js";
+import { assertCrabboxLeaseId, resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
 
 const UPSTREAM_PROXY_ENV = "CRABBOX_SETUP_PROXY";
 
@@ -56,7 +56,7 @@ export function createCrabboxSetupCommandRunner(params: {
 }): NonNullable<WorkerProvider["runSetupCommand"]> {
   return async (lease, command) => {
     command.assertCurrent();
-    const profile = parseCrabboxProfile(lease.profile);
+    const { profile } = resolveCrabboxProvisionProfile(lease.profile, lease.machineClass, lease.os);
     if (!Object.keys(profile.setupSecrets ?? {}).length) {
       return undefined;
     }

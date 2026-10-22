@@ -96,6 +96,7 @@ describe("worker placement projection", () => {
       attachedSessionIds: [placement.sessionId],
       profileSnapshot: { settings: { device: "paired-node", inference: "worker" } },
       inference: "worker" as const,
+      lastError: null,
     };
     const project = (record: WorkerSessionPlacementRecord, prepared = environment) =>
       projectWorkerSessionPlacement(

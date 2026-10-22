@@ -15,10 +15,13 @@ title: "PR wrapper tooling"
 `OPENCLAW_PR_TOOLING_ROOT` selects a full checkout of the same repository for
 materialized wrappers' third-party dependencies; otherwise `openclaw.pr.toolingRoot` in the
 canonical checkout's Git config applies, then the canonical checkout itself.
-The standalone CI watcher and Crabbox entrypoint resolve missing third-party
+The generic TSX loader, standalone CI watcher and Crabbox entrypoint resolve missing third-party
 packages from the same tooling root when their checkout has no `node_modules`,
 with the same explicit-root identity checks and exact package versions. They
 never link an installation or resolve workspace packages from another checkout.
+Native protocol generation uses the same qualification for esbuild and bundled
+third-party packages, including the matching native executable. Generator source,
+workspace aliases, input inventory and generated contracts remain checkout-owned.
 The wrapper still selects and verifies code against the existing trust anchor.
 Installed package versions must exactly match the anchor manifest. On mismatch,
 an explicitly selected, separate, clean `main` checkout is fetched, fast-forwarded,

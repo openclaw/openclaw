@@ -11,6 +11,10 @@ export type { JobSecretEgress, SetupSecretEgressOptions };
 const loadModelEgressRuntime = createLazyRuntimeModule(() => import("../secrets/model-egress.js"));
 const loadJobEgressRuntime = createLazyRuntimeModule(() => import("../secrets/job-egress.js"));
 
+export async function validateSetupSecretEgress(options: SetupSecretEgressOptions): Promise<void> {
+  return (await loadJobEgressRuntime()).validateSetupSecretEgress(options);
+}
+
 /** Private official-plugin runtime for selected setup secrets and host-only egress. */
 export async function withSetupSecretEgress<T>(
   options: SetupSecretEgressOptions,

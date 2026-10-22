@@ -199,6 +199,15 @@ publication to recover it. Inspecting the remote PR does not settle the
 publication receipt. The Gateway's existing recovery continues the original
 request and reports its result without starting another agent turn.
 
+Use `github_publish` with `action: "status"` to read that retained request.
+Supply its `requestId` for the exact receipt, or omit it to discover the latest
+shared publication. `publishingSessionKey` selects a visible descendant of the
+current conversation. These reads use native control-plane state; they do not
+publish, allocate a worker, run setup, or start another model turn. An incomplete
+or failed receipt does not prove that no external effects occurred. Existing
+session visibility and current read authority still apply; status grants no
+write or landing authority.
+
 After preparation, existing metadata, readiness, fixed re-review and evidence
 actions select the original bound PR, including before any new push and when an
 older publication exists in the conversation. Read it with `edit` first. Its

@@ -96,6 +96,17 @@ to start work is not a suggestion request.
 
 `sessions_list` is a metadata inventory, not a transcript search. Rows include session key and ID, agent, kind, channel, title/label, sidebar group, current owner and original creator, stored project/workspace associations, visible parent/child links, archive/pin state, state version, model/token counts, and run status. Unknown associations remain absent; a stored worktree association does not prove that its checkout still exists.
 
+Worker rows also include the retained `placement`: its state, generation,
+original environment ID, and recorded owner epoch or recovery error when known.
+When that environment still matches the retained owner epoch,
+`placement.environment` includes its state, original requested OS and machine
+class when explicitly selected, and bounded last error. These are recorded
+request facts, not a new guest inspection. `setupSecretGrant: "unknown"` means no
+historical setup-grant receipt is retained; it does not mean access was absent.
+Use these facts to inspect an interrupted child before sending more work.
+Listing does not allocate a worker, run setup, or start a model turn. A failed
+placement or `sentBeforeError: true` is not proof that no effects occurred.
+
 Use the filters together to narrow the inventory before paging:
 
 - `relationship`: `owned`, `created`, or `involving`, relative to the authenticated requesting user. Ownership is current responsibility; creation is original provenance; involvement means current ownership or retained prompt participation. This is not the agent's owner and does not infer identity from a session label. Without a trusted requesting-user identity, the tool rejects this filter; use an explicit `ownerId` or `creatorId` instead.

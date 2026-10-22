@@ -12,6 +12,8 @@
     "packages/normalization-core/package.json",
     "scripts/native-protocol-inputs.json",
     "scripts/prepare-native-protocol.mjs",
+    "scripts/lib/native-protocol-tooling.mjs",
+    "scripts/lib/tooling-dependencies.mjs",
     "packages/gateway-protocol/scripts/native-codegen.ts",
     "scripts/protocol-gen-swift.ts",
     "scripts/protocol-gen-kotlin.ts",

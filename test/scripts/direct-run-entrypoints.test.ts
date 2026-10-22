@@ -589,7 +589,7 @@ record("stdout-write-returned");
     expectShimLoader(result, "hydrated", nodeArgs);
   });
 
-  it("requires explicit hydration to bootstrap from primary without local modules", async () => {
+  it("refuses primary tooling without a checkout dependency manifest", async () => {
     const result = await runShimFixture(TSX_SHIM_WRAPPERS[0], ({ checkoutRoot, fixtureRoot }) => {
       rmSync(path.join(checkoutRoot, "node_modules"), { recursive: true });
       const primaryRoot = path.join(fixtureRoot, "primary");
@@ -605,9 +605,7 @@ record("stdout-write-returned");
     });
     expectExit(result, 1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(
-      "Run pnpm install --frozen-lockfile in an independently owned checkout.",
-    );
+    expect(result.stderr).toContain("package.json");
   });
 
   it("matches Windows drive paths case-insensitively", () => {

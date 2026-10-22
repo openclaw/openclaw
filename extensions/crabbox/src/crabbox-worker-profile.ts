@@ -245,7 +245,7 @@ export function parseCrabboxSetupSecrets(value: unknown): CrabboxProfile["setupS
   if (Object.keys(entries).length > 16) {
     throw new WorkerProviderError("Crabbox profile setupSecrets must contain at most 16 names");
   }
-  const parsed: NonNullable<CrabboxProfile["setupSecrets"]> = {};
+  const parsed: NonNullable<CrabboxProfile["setupSecrets"]> = Object.create(null);
   for (const [name, ref] of Object.entries(entries)) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
       throw new WorkerProviderError(

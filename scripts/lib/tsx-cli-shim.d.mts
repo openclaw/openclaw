@@ -13,7 +13,6 @@ export type CliShimOptions = {
 };
 
 export function resolveForwardedNodeCompilerArgs(execArgv?: readonly string[]): string[];
-export function resolveConfiguredModulesDir(checkoutRoot: string): string | undefined;
 export function resolveTsxImport(checkoutRoot: string): string;
 export function registerToolingTsx(): Promise<void>;
 export function runNodeCliShim(moduleUrl: string | URL, options: CliShimOptions): Promise<void>;

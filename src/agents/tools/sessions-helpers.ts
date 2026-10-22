@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type, type Static } from "typebox";
+import { SessionPlacementSchema } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import {
   SessionCreatedActorSchema,
   SessionRowSchema,
@@ -79,6 +80,7 @@ export const SessionListRowSchema = Type.Object(
     channel: Type.String(),
     archived: Type.Boolean(),
     pinned: Type.Boolean(),
+    placement: Type.Optional(SessionPlacementSchema),
     createdActor: Type.Optional(SessionInventoryActorSchema),
     owner: Type.Optional(
       Type.Object({ actor: SessionInventoryActorSchema }, { additionalProperties: false }),

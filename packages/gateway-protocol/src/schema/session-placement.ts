@@ -1,7 +1,10 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
-import { WorkerEnvironmentStartStatusSchema } from "./environments.js";
+import {
+  WorkerEnvironmentStartStatusSchema,
+  WorkerEnvironmentStateSchema,
+} from "./environments.js";
 import { NonEmptyString } from "./primitives.js";
 import { SESSION_PLACEMENT_STATES } from "./session-placement-state.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
@@ -97,6 +100,15 @@ const SessionPlacementIdentityProperties = {
   providerId: Type.Optional(NonEmptyString),
   profileId: Type.Optional(NonEmptyString),
   machine: Type.Optional(SessionPlacementMachineSchema),
+  environment: Type.Optional(
+    closedObject({
+      state: WorkerEnvironmentStateSchema,
+      requestedOs: Type.Optional(WorkerOperatingSystemIdSchema),
+      requestedMachineClass: Type.Optional(WorkerMachineClassSchema),
+      lastError: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024 })),
+      setupSecretGrant: Type.Literal("unknown"),
+    }),
+  ),
 };
 
 const WorkspaceResultConflictSchema = closedObject({
