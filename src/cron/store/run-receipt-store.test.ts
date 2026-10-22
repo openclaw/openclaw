@@ -97,6 +97,24 @@ function finishOk(handle: CronRunReceiptHandle, finishedAtMs = Date.now()) {
   return finishCronRunReceiptAsync({ handle, status: "ok", finishedAtMs });
 }
 
+function requesterGrant(senderId: string): CronToolsAllowProvenance {
+  return {
+    version: 1,
+    source: "authenticated-requester",
+    channelRequester: { version: 1, channel: "discord", accountId: "work", senderId },
+  };
+}
+function originGrant(channel: string): CronToolsAllowProvenance {
+  return {
+    version: 1,
+    source: "final-executable-surface",
+    callerOrigin: { kind: "external", channel },
+  };
+}
+const toolPatch = (toolsAllow: string[]): CronJobPatch => ({
+  payload: { kind: "agentTurn", toolsAllow },
+});
+
 async function messageRun(job: CronJob, runId: string) {
   const { storePath } = await storeJob(job);
   const receipt = claimCronRunReceiptForTest(storePath, job, Date.now());
@@ -198,31 +216,13 @@ it.each([
   "retires message access after a service $mutation change from enabled=$enabled without retiring its receipt",
   async ({ enabled, mutation }) => {
     const native = mutation !== "tool policy" && mutation !== "origin";
-    const channelRequester = {
-      version: 1 as const,
-      channel: "discord",
-      accountId: "work",
-      senderId: "requester-a",
-    };
-    const grant: CronToolsAllowProvenance = {
-      version: 1,
-      source: "authenticated-requester",
-      channelRequester,
-    };
-    const replacementGrant: CronToolsAllowProvenance = {
-      ...grant,
-      channelRequester: { ...channelRequester, senderId: "requester-b" },
-    };
+    const grant = requesterGrant("requester-a");
+    const replacementGrant = requesterGrant("requester-b");
     const origin = mutation === "origin";
     const owner = {
       agentId: "alpha",
       sessionKey: origin ? "agent:alpha:discord:channel:creator" : "agent:alpha:discord:group:ops",
-      accountId: origin ? "creator" : channelRequester.accountId,
-    };
-    const provenance: CronToolsAllowProvenance = {
-      version: 1,
-      source: "final-executable-surface",
-      callerOrigin: { kind: "external", channel: "discord" },
+      accountId: origin ? "creator" : "work",
     };
     const job: CronStoredJob = {
       ...makeCronReceiptJob("message-permission-change"),
@@ -231,7 +231,7 @@ it.each([
       scheduledToolPolicy: { version: 1, mode: "trusted" },
     };
     if (native || origin) {
-      Object.assign(job, { owner, toolsAllowProvenance: origin ? provenance : grant });
+      Object.assign(job, { owner, toolsAllowProvenance: origin ? originGrant("discord") : grant });
       job.schedule = { kind: "every", everyMs: 60_000, anchorMs: job.createdAtMs };
       job.scheduledToolPolicy = {
         version: 1,
@@ -256,64 +256,53 @@ it.each([
         patch,
         authorization ? { toolsAllowProvenance: authorization } : undefined,
       );
-    const editTools = (toolsAllow: string[], authorization?: CronToolsAllowProvenance) =>
-      edit({ payload: { kind: "agentTurn", toolsAllow } }, authorization);
     expect(message).not.toThrow();
     expect(source).not.toThrow();
+    const harmless: CronJobPatch = native
+      ? { description: "Operator notes", displayName: "Readable label" }
+      : origin
+        ? { description: "descriptive origin notes" }
+        : { name: "renamed", delivery: { mode: "none" }, ...toolPatch(["message"]) };
+    await edit(harmless, native ? replacementGrant : undefined);
+    expect(message).not.toThrow();
+    expect(source).not.toThrow();
+
+    type Edit = [CronJobPatch, CronToolsAllowProvenance?];
+    const nativePatches: Record<
+      "native name" | "native delivery" | "native trigger state",
+      [CronJobPatch, CronJobPatch]
+    > = {
+      "native name": [{ name: "Different executable instructions" }, { name: job.name }],
+      "native delivery": [{ delivery: { to: "channel:replacement" } }, { delivery: job.delivery }],
+      "native trigger state": [
+        { state: { triggerState: { phase: "replacement" } } },
+        { state: { triggerState: job.state.triggerState } },
+      ],
+    };
+    const edits: Edit[] =
+      mutation === "native requester"
+        ? [
+            [toolPatch(["message", "exec"]), replacementGrant],
+            [toolPatch(["message", "exec"]), grant],
+          ]
+        : native
+          ? nativePatches[mutation].map((patch): Edit => [patch, grant])
+          : origin
+            ? ["slack", "discord"].map((channel): Edit => [
+                toolPatch(["message", "exec"]),
+                originGrant(channel),
+              ])
+            : [[toolPatch(["read"])], [toolPatch(["message"])]];
+    for (const [patch, authorization] of edits) {
+      await edit(patch, authorization);
+    }
     if (native) {
-      await edit(
-        { description: "Operator notes", displayName: "Readable label" },
-        replacementGrant,
-      );
-      expect(message).not.toThrow();
-      expect(source).not.toThrow();
-      if (mutation === "native requester") {
-        await editTools(["message", "exec"], replacementGrant);
-        await editTools(["message", "exec"], grant);
-      } else {
-        const [changed, restored]: [CronJobPatch, CronJobPatch] =
-          mutation === "native name"
-            ? [{ name: "Different executable instructions" }, { name: job.name }]
-            : mutation === "native delivery"
-              ? [{ delivery: { to: "channel:replacement" } }, { delivery: job.delivery }]
-              : [
-                  { state: { triggerState: { phase: "replacement" } } },
-                  { state: { triggerState: job.state.triggerState } },
-                ];
-        await edit(changed, grant);
-        await edit(restored, grant);
-      }
       // No access check between edits: the committed mutation must latch revocation.
       const restored = (await loadCronStore(storePath)).jobs[0]!;
       expect(restored.toolsAllowProvenance).toEqual(grant);
       expect(restored.name).toBe(job.name);
       expect(restored.delivery).toEqual(job.delivery);
       expect(restored.state.triggerState).toEqual(job.state.triggerState);
-    } else {
-      // An admission that began disabled and unrelated tool/delivery edits keep access.
-      await edit(
-        mutation === "origin"
-          ? { description: "descriptive origin notes" }
-          : {
-              name: "renamed",
-              delivery: { mode: "none" },
-              payload: { kind: "agentTurn", toolsAllow: ["message"] },
-            },
-      );
-      expect(message).not.toThrow();
-      expect(source).not.toThrow();
-      if (mutation === "origin") {
-        for (const channel of ["slack", "discord"]) {
-          const originProvenance: CronToolsAllowProvenance = {
-            ...provenance,
-            callerOrigin: { kind: "external", channel },
-          };
-          await editTools(["message", "exec"], originProvenance);
-        }
-      } else {
-        await editTools(["read"]);
-        await editTools(["message"]);
-      }
     }
     expect(source).toThrow();
     if (mutation === "tool policy") {
