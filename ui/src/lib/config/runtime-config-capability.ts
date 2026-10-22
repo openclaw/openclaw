@@ -98,9 +98,8 @@ export function createRuntimeConfigCapability(
     task();
     publish();
   };
-  const loadConfigOnce = async (task: () => Promise<unknown>): Promise<void> => {
-    await (loads.get("config") ?? run(task, "config"));
-  };
+  const loadConfigOnce = (task: () => Promise<unknown>) =>
+    loads.get("config") ?? run(task, "config");
 
   const loadSchema = () => {
     if (loads.has("schema") && schemaRead) {
