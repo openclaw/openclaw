@@ -3097,9 +3097,6 @@ openclaw-chat-ci-details {
     padding-inline: 0;
   }
 
-  .agent-chat__input--chat .context-ring__dial,
-  .agent-chat__input--chat .chat-controls__permission-icon,
-  .agent-chat__input--chat .chat-controls__permission-lock,
   .agent-chat__input--chat .chat-talk-input-picker__trigger svg {
     width: 16px;
     height: 16px;
@@ -3152,29 +3149,6 @@ openclaw-chat-ci-details {
 
   .agent-chat__input--chat :is(.chat-send-btn--send, .chat-send-btn--talk-mode) > svg {
     color: var(--primary-foreground);
-  }
-
-  .agent-chat__input--chat
-    :is(.chat-send-btn--send, .chat-send-btn--stop, .chat-send-btn--talk-mode)
-    > svg {
-    width: var(--chat-mobile-row-icon-size);
-    height: var(--chat-mobile-row-icon-size);
-  }
-
-  .agent-chat__input--chat .chat-send-btn--stop {
-    width: var(--chat-mobile-row-target-size);
-    min-width: var(--chat-mobile-row-target-size);
-    height: var(--chat-mobile-row-target-size);
-    background: color-mix(in srgb, var(--danger) 14%, transparent);
-    color: var(--danger);
-  }
-
-  .agent-chat__input--chat .chat-send-btn--stop > svg {
-    width: var(--chat-mobile-row-stop-icon-size);
-    height: var(--chat-mobile-row-stop-icon-size);
-    color: var(--danger);
-    fill: currentColor;
-    stroke: none;
   }
 
   .agent-chat__input--chat .chat-mobile-dictation-action .chat-send-btn--voice > svg {

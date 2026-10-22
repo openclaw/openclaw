@@ -246,7 +246,7 @@
 
 .agent-chat__composer-controls .chat-controls__model-settings {
   /* Keep the desktop seam, but honor the compact row's 2px chip rhythm so
-     independent 44px model/effort targets still fit the narrowest composer. */
+     independent model/effort targets still fit the narrowest composer. */
   gap: min(4px, var(--chat-composer-chip-gap));
 }
 
@@ -1200,14 +1200,12 @@
     gap: 0;
   }
 
-  /* The borderless trigger is 30px on desktop; keep a >=44px touch target
-     inside the mobile composer row. */
-  /* Box, gap and inset now come from the family tokens above; this keeps only
-     what is specific to a trigger on a narrow row. */
+  /* The family owns box, gap and inset; narrow panes may reduce the picker
+     width to keep neighboring touch targets separate. */
   .agent-chat__input .agent-chat__composer-controls .chat-controls__inline-select-trigger {
     width: fit-content;
     max-width: 100%;
-    min-width: 44px;
+    min-width: var(--chat-composer-picker-min-width, 44px);
   }
 
   .agent-chat__input .chat-controls__model-menu,
@@ -1923,7 +1921,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
 /* Model text can shrink, but its flex item must still reserve the hit target. */
 .chat-controls__model-picker {
   flex: 0 1 auto;
-  min-width: 44px;
+  min-width: var(--chat-composer-picker-min-width, 44px);
 }
 
 .chat-controls__effort-picker,
@@ -3183,7 +3181,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
   .agent-chat__input--mobile-toolbar
     :is(.chat-controls__model-trigger, .chat-controls__effort-trigger) {
-    min-width: 44px;
+    min-width: var(--chat-composer-picker-min-width, 44px);
     min-height: 44px;
     background: var(--chat-effort-tint, transparent);
   }
@@ -3301,17 +3299,17 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
   .agent-chat__input--mobile-toolbar
     :is(.chat-controls__permission-icon, .chat-controls__permission-lock) {
-    width: var(--chat-mobile-row-muted-icon-size);
-    height: var(--chat-mobile-row-muted-icon-size);
-    flex-basis: var(--chat-mobile-row-muted-icon-size);
+    width: var(--chat-mobile-row-icon-size);
+    height: var(--chat-mobile-row-icon-size);
+    flex-basis: var(--chat-mobile-row-icon-size);
     color: inherit;
     opacity: var(--chat-mobile-row-muted-opacity);
   }
 
   .agent-chat__input--mobile-toolbar .context-ring__dial {
-    width: var(--chat-mobile-row-context-icon-size);
-    height: var(--chat-mobile-row-context-icon-size);
-    flex-basis: var(--chat-mobile-row-context-icon-size);
+    width: var(--chat-mobile-row-icon-size);
+    height: var(--chat-mobile-row-icon-size);
+    flex-basis: var(--chat-mobile-row-icon-size);
     color: inherit;
     opacity: var(--chat-mobile-row-muted-opacity);
   }
@@ -3338,8 +3336,22 @@ html[dir="rtl"] .chat-attachment-loading > span {
   .agent-chat__input--mobile-toolbar
     .agent-chat__composer-footer
     :is(.chat-controls__permission-icon svg, .chat-controls__permission-lock svg) {
-    width: var(--chat-mobile-row-muted-icon-size);
-    height: var(--chat-mobile-row-muted-icon-size);
+    width: var(--chat-mobile-row-icon-size);
+    height: var(--chat-mobile-row-icon-size);
+  }
+}
+
+@container chat-composer (max-width: 320px) {
+  /* Very narrow panes keep separate picker targets without pushing the effort
+     control into Mic. Its gauge stands alone; the model label truncates. */
+  .agent-chat__input--mobile-toolbar {
+    --chat-composer-picker-min-width: var(--chat-mobile-row-target-size);
+  }
+
+  .agent-chat__input--mobile-toolbar
+    .chat-controls__effort-trigger
+    .chat-controls__inline-select-chevron {
+    display: none;
   }
 }
 

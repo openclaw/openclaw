@@ -634,6 +634,7 @@ suite.define(() => {
       await polledCount(page.locator(".chat-send-btn--stop")).toBe(0);
       await page.setViewportSize({ width: 393, height: 852 });
       await textarea.click();
+      const activeMobileSendBox = await layoutBox(followUp);
 
       await textarea.fill("");
       const stop = page.getByRole("button", { name: "Stop generating" });
@@ -647,8 +648,8 @@ suite.define(() => {
       ]);
       expect(activeMobileSettingsBox?.width).toBeGreaterThanOrEqual(44);
       expect(activeMobileSettingsBox?.height).toBeGreaterThanOrEqual(44);
-      expect(activeMobileStopBox?.width).toBeCloseTo(32, 2);
-      expect(activeMobileStopBox?.height).toBeCloseTo(32, 2);
+      expect(activeMobileStopBox?.width).toBeCloseTo(activeMobileSendBox.width, 2);
+      expect(activeMobileStopBox?.height).toBeCloseTo(activeMobileSendBox.height, 2);
       expect(await composerShell.locator(".agent-chat__composer-run-status").count()).toBe(0);
       // Escape dismisses an active tooltip before it reaches the composer.
       await page.mouse.move(0, 0);

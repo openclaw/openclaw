@@ -1147,7 +1147,7 @@
 }
 
 /* Density follows the composer, including narrow split panes in wider windows.
-   Plus and Send retain their targets while model and effort remain separate. */
+   Icon buttons share one target while model and effort remain separate. */
 @container chat-composer (max-width: 560px) {
   .agent-chat__input--mobile-toolbar .agent-chat__composer-context {
     margin-inline-start: auto;
@@ -1167,16 +1167,12 @@
   }
   .agent-chat__input--mobile-toolbar {
     --chat-composer-min-height: 105px;
-    --chat-mobile-row-target-size: 32px;
+    --chat-mobile-row-target-size: 36px;
     --chat-mobile-row-icon-size: 20px;
     --chat-mobile-row-icon-stroke: 2;
     --chat-mobile-row-icon-padding: 0px;
-    --chat-mobile-row-muted-icon-size: 18px;
-    --chat-mobile-row-context-icon-size: 16px;
     --chat-mobile-row-muted-opacity: 0.55;
     --chat-mobile-row-permission-stroke: 2.25;
-    --chat-mobile-row-plus-target-size: 36px;
-    --chat-mobile-row-plus-icon-size: 24px;
     --chat-mobile-row-chevron-size: 14px;
     --chat-mobile-row-chip-gap: 2px;
     --chat-mobile-row-chip-padding-inline: 6px;
@@ -1191,7 +1187,7 @@
     --chat-composer-chip-padding-inline: var(--chat-mobile-row-chip-padding-inline);
     --chat-composer-footer-icon-size: var(--chat-mobile-row-icon-size);
     --chat-composer-menu-icon: var(--chat-mobile-row-icon-size);
-    --chat-composer-send-size: var(--chat-mobile-row-plus-target-size);
+    --chat-composer-send-size: var(--chat-mobile-row-target-size);
   }
 
   :where(.agent-chat__input--mobile-toolbar) svg {
@@ -1213,9 +1209,9 @@
   }
 
   .agent-chat__input--mobile-toolbar .agent-chat__input-btn--attach {
-    width: var(--chat-mobile-row-plus-target-size);
-    min-width: var(--chat-mobile-row-plus-target-size);
-    height: var(--chat-mobile-row-plus-target-size);
+    width: var(--chat-mobile-row-target-size);
+    min-width: var(--chat-mobile-row-target-size);
+    height: var(--chat-mobile-row-target-size);
     padding: var(--chat-mobile-row-icon-padding);
   }
 
@@ -1227,6 +1223,7 @@
   }
 
   .agent-chat__input.agent-chat__input--mobile-toolbar .chat-controls__permission-trigger,
+  .agent-chat__input.agent-chat__input--mobile-toolbar .context-ring,
   .agent-chat__input--mobile-toolbar .chat-send-btn--voice {
     width: var(--chat-composer-control-size);
     min-width: var(--chat-composer-control-size);
@@ -1234,16 +1231,8 @@
     border-radius: var(--radius-full);
   }
 
-  /* The small dial keeps a 24px-wide target so both pickers and actions remain
-     separate even when a desktop side panel narrows the composer. */
-  .agent-chat__input.agent-chat__input--mobile-toolbar .context-ring {
-    width: 24px;
-    min-width: 24px;
-    height: var(--chat-mobile-row-target-size);
-  }
-
-  /* Mobile action controls own a real 32px target; Plus uses its explicit 36px
-     role token. Adjacent controls never compete for one tap. */
+  /* Equal targets stay disjoint rather than extending invisible hit areas over
+     adjacent controls. */
   .agent-chat__input--mobile-toolbar
     :is(
       .agent-chat__input-btn--attach,
@@ -1262,25 +1251,24 @@
     justify-content: center;
   }
 
-  /* Row icons share one optical tier; role tokens below express the deliberate
-     exceptions for Plus, quiet state indicators, and Mic. */
+  /* Color distinguishes primary actions and quiet indicators, not icon size. */
   .agent-chat__input--mobile-toolbar .agent-chat__composer-footer svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
+  }
+
+  .agent-chat__input--mobile-toolbar .chat-send-btn--stop > svg {
+    width: var(--chat-mobile-row-stop-icon-size);
+    height: var(--chat-mobile-row-stop-icon-size);
+    color: var(--danger);
+    fill: currentColor;
+    stroke: none;
   }
 
   /* Keep the muted default below action-specific foregrounds regardless of
      lazy stylesheet order. */
   .agent-chat__input--mobile-toolbar :where(.agent-chat__composer-footer) svg {
     color: var(--muted);
-  }
-
-  .agent-chat__input--mobile-toolbar
-    .agent-chat__composer-footer
-    .agent-chat__input-btn--attach
-    > svg {
-    width: var(--chat-mobile-row-plus-icon-size);
-    height: var(--chat-mobile-row-plus-icon-size);
   }
 
   .agent-chat__input--mobile-toolbar .agent-chat__composer-actions {

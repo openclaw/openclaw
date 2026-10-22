@@ -10,6 +10,78 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI composer picker layout" });
 
 suite.define(() => {
+  it("keeps Send and Stop equally sized and reachable across active-run draft states", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 729 } }, async ({ page }) => {
+      const runId = "composer-layout-active-run";
+      const gateway = await installMockGateway(page, {
+        sessionKey: "agent:main:main",
+        sessionInfo: { key: "agent:main:main", activeRunIds: [runId], hasActiveRun: true },
+        inFlightRun: { runId, text: "Reviewing the composer layout." },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      const composer = page.locator(".agent-chat__input");
+      for (const width of [1280, 1100, 393, 560, 320]) {
+        await page.setViewportSize({ width, height: 729 });
+        if (width === 1100) {
+          await openChatSidePanelType(page, "Files");
+          await page.locator('[data-panel-slot="workspace"]').waitFor();
+          await expect
+            .poll(() => composer.evaluate((node) => node.getBoundingClientRect().width))
+            .toBeLessThan(360);
+        }
+        const measureAction = async (action: "stop" | "send") => {
+          await composer.locator("textarea").fill(action === "send" ? "Review this follow-up" : "");
+          const primary = composer.locator(`.chat-send-btn--${action}`);
+          await expect.poll(() => primary.isVisible()).toBe(true);
+          await expect.poll(() => primary.isEnabled()).toBe(true);
+          const geometry = await primary.evaluate((node) => {
+            const rect = node.getBoundingClientRect();
+            const icon = node.querySelector("svg")!.getBoundingClientRect();
+            const footer = node.closest(".agent-chat__composer-footer")!.getBoundingClientRect();
+            return {
+              width: rect.width,
+              height: rect.height,
+              iconWidth: icon.width,
+              iconHeight: icon.height,
+              centerY: rect.y + rect.height / 2,
+              contained:
+                rect.left >= footer.left - 1 &&
+                rect.right <= footer.right + 1 &&
+                rect.top >= footer.top - 1 &&
+                rect.bottom <= footer.bottom + 1,
+              reachable: node.contains(
+                document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2),
+              ),
+            };
+          });
+          expect(geometry.contained, `${action} stays in the footer at ${width}px`).toBe(true);
+          expect(geometry.reachable, `${action} hit target at ${width}px`).toBe(true);
+          if (width !== 1280 && action === "stop") {
+            expect(geometry.iconWidth, `compact Stop glyph at ${width}px`).toBeCloseTo(18, 2);
+            expect(geometry.iconHeight, `compact Stop glyph at ${width}px`).toBeCloseTo(18, 2);
+          }
+          return geometry;
+        };
+        // The primary slot changes action with the draft. Compare its rendered
+        // bounds across states; the smaller square stop glyph is intentional.
+        const stop = await measureAction("stop");
+        const send = await measureAction("send");
+        expect(stop.width, `primary width at ${width}px`).toBeCloseTo(send.width, 2);
+        expect(stop.height, `primary height at ${width}px`).toBeCloseTo(send.height, 2);
+        expect(stop.width, `square primary control at ${width}px`).toBeCloseTo(stop.height, 2);
+        expect(
+          Math.abs(stop.centerY - send.centerY),
+          `primary center at ${width}px`,
+        ).toBeLessThanOrEqual(1);
+        if (width === 1100) {
+          await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
+          await page.locator('[data-panel-slot="workspace"]').waitFor({ state: "hidden" });
+        }
+      }
+    });
+  });
+
   it("fits a tall model catalog above the mobile new-session composer", async () => {
     await suite.withPage(
       { viewport: { width: 393, height: 500 }, isMobile: true, hasTouch: true },
@@ -77,21 +149,37 @@ suite.define(() => {
         await page.mouse.move(0, 0);
         await expect
           .poll(() =>
-            composer.locator(".agent-chat__composer-footer").evaluate((footer) => {
+            composer.locator(".agent-chat__composer-footer").evaluate((footer, viewportWidth) => {
               const bounds = footer.getBoundingClientRect();
-              const controls = [
+              const buttons = [
                 ...footer.querySelectorAll<HTMLElement>(
                   ".agent-chat__input-btn--attach, [data-chat-permission-select], .context-ring, " +
                     "[data-chat-model-select], [data-chat-thinking-select], .chat-send-btn",
                 ),
-              ]
-                .filter((node) => node.checkVisibility())
+              ].filter((node) => node.checkVisibility());
+              const controls = buttons
                 .map((node) => node.getBoundingClientRect())
                 .filter((rect) => rect.width > 0);
               const overlaps = (a: DOMRect, b: DOMRect) =>
                 Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 &&
                 Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1;
               return {
+                uniformSizes:
+                  viewportWidth > 560 ||
+                  buttons.every((node) => {
+                    if (node.matches("[data-chat-model-select], [data-chat-thinking-select]")) {
+                      return true;
+                    }
+                    const rect = node.getBoundingClientRect();
+                    const icon = node.querySelector("svg")?.getBoundingClientRect();
+                    return (
+                      Math.abs(rect.width - 36) <= 1 &&
+                      Math.abs(rect.height - 36) <= 1 &&
+                      icon !== undefined &&
+                      Math.abs(icon.width - 20) <= 1 &&
+                      Math.abs(icon.height - 20) <= 1
+                    );
+                  }),
                 inside: controls.every(
                   (rect) => rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1,
                 ),
@@ -99,9 +187,9 @@ suite.define(() => {
                   controls.slice(index + 1).some((b) => overlaps(a, b)),
                 ),
               };
-            }),
+            }, width),
           )
-          .toEqual({ inside: true, separate: true });
+          .toEqual({ inside: true, separate: true, uniformSizes: true });
         const layout = await composer.evaluate((node) => {
           const ring = node.querySelector<HTMLElement>(".context-ring")!;
           const ringBox = ring.getBoundingClientRect();
