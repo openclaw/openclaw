@@ -230,7 +230,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
             apply: true,
             cfg: params.config,
             env: stateEnv,
-            deferSchemaRepair: true,
+            deferToMediaPreparation: true,
             excludedDatabasePaths: versionMigrationPaths,
             integrityCheck: params.integrityCheck,
             ...(params.agentDatabaseMigrationDiscovery

@@ -13,7 +13,6 @@ import {
   projectExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
-import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   assertExistingDatabaseIdentity,
@@ -85,6 +84,7 @@ type PreparedSessionEntryRepairParams =
         updatedAt: number,
       ) => Record<string, unknown>;
       deferSchemaRepair?: boolean;
+      deferToMediaPreparation?: boolean;
     });
 
 function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
@@ -151,13 +151,16 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
     } catch (error) {
       if (
         params.source === "raw" &&
-        params.deferSchemaRepair &&
-        (error instanceof SqliteSchemaMismatchError ||
-          error instanceof OpenClawAgentDatabaseMediaMigrationRequiredError ||
-          (error instanceof Error && isTerminalSqliteIntegrityError(error)))
+        (params.deferToMediaPreparation ||
+          (params.deferSchemaRepair &&
+            (error instanceof SqliteSchemaMismatchError ||
+              error instanceof OpenClawAgentDatabaseMediaMigrationRequiredError)))
       ) {
+        const owner = params.deferToMediaPreparation
+          ? "media database preparation"
+          : "database schema repair";
         note(
-          `- Session entry inspection awaits its database schema repair: ${formatErrorMessage(error)}`,
+          `- Session entry inspection awaits ${owner}: ${formatErrorMessage(error)}`,
           "Session SQLite",
         );
         return [];
@@ -222,6 +225,7 @@ export async function repairLegacySessionEntryStates(params: {
   registeredDatabases?: readonly { agentId: string; path: string }[];
   excludedDatabasePaths?: ReadonlySet<string>;
   deferSchemaRepair?: boolean;
+  deferToMediaPreparation?: boolean;
   integrityCheck?: "quick" | "full";
   onInspectedTargets?: (
     targets: readonly (ExistingAgentDatabaseTarget & { canonicalPath: string })[],
