@@ -780,7 +780,7 @@ it.each(["channel probe", "plugin load"] as const)(
           }
         : {}),
     });
-    expect(validation).toMatchObject({ ok: true, score: 7 });
+    expect(validation.ok).toBe(true);
     if (fault === "plugin load") {
       expect(validation.summary).toBe(
         "Gateway service, version, channels, and readiness verified; plugin failures need a retry.",

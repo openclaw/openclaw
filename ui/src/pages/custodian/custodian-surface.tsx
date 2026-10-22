@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, Errored, For, Loading, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, Errored, For, latest, Loading, onSettled, Show } from "solid-js";
 import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
 import { MarkdownBlocks } from "../../components/markdown-blocks-owner.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
@@ -38,9 +38,9 @@ import {
 } from "../chat/components/chat-composer-dom.ts";
 import { ChatDivider } from "../chat/components/chat-divider.tsx";
 import { MessageGroup } from "../chat/components/chat-message-group-view.tsx";
+import { createCustodianActions, type CustodianActions } from "./custodian-actions.ts";
 import { CustodianAlertCard } from "./custodian-alert-card.tsx";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
-import type { SetupAutoCandidate } from "./custodian-auto-setup.ts";
 import { CustodianEventNudgeView } from "./custodian-nudge.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import { CustodianSetupCard } from "./custodian-setup-card.tsx";
@@ -80,6 +80,7 @@ function toCustodianMessageGroup(message: CustodianMessage): MessageGroupData {
 
 function TranscriptEntry(props: {
   store: () => CustodianSessionStore;
+  actions: CustodianActions["session"];
   message: CustodianMessage;
   activeWizardMessage: CustodianMessage | undefined;
 }) {
@@ -121,9 +122,11 @@ function TranscriptEntry(props: {
                 recommended: option.recommended,
               })),
               disabled:
-                !props.store().canSend || props.store().answeredQuestions.has(questionKey()),
-              onSelect: (label: string) => props.store().answerQuestion(props.message, label),
-              onSkip: () => void props.store().dismissQuestion(props.message),
+                props.actions.sending ||
+                !props.store().canSend ||
+                props.store().answeredQuestions.has(questionKey()),
+              onSelect: (label: string) => props.actions.answerQuestion(props.message, label),
+              onSkip: () => props.actions.dismissQuestion(props.message),
             }}
           />
         </div>
@@ -140,19 +143,19 @@ function TranscriptEntry(props: {
             <WizardStepControls
               step={step()}
               value={props.store().wizardValue}
-              busy={!props.store().canSend}
+              busy={props.actions.sending || !props.store().canSend}
               inputId={`custodian-wizard-input-${props.message.id}`}
               sensitiveRevealed={props.store().wizardSecretVisible}
               onValueChange={(value) => props.store().setWizardValue(value)}
-              onAnswer={(value) => props.store().answerWizardStep(props.message, value)}
+              onAnswer={(value) => props.actions.answerWizardStep(props.message, value)}
               onToggleSensitiveVisibility={() => props.store().toggleWizardSecretVisibility()}
               leadingAction={
                 props.store().wizardCancelAvailable ? (
                   <button
                     class="btn btn--ghost custodian__wizard-cancel"
                     type="button"
-                    disabled={!props.store().canSend}
-                    onClick={() => props.store().cancelWizardStep(props.message)}
+                    disabled={props.actions.sending || !props.store().canSend}
+                    onClick={() => props.actions.cancelWizardStep(props.message)}
                   >
                     {t("custodian.cancel")}
                   </button>
@@ -168,11 +171,10 @@ function TranscriptEntry(props: {
 
 export type CustodianSurfaceProps = {
   store: CustodianSessionStore;
+  actions?: CustodianActions;
   onboarding: boolean;
   newAgentIntent: boolean;
   channelOnboardingContent: JSX.Element;
-  activating: boolean;
-  onActivate?: (candidate: SetupAutoCandidate) => void;
   compact: boolean;
   historyContent: JSX.Element;
 };
@@ -182,9 +184,17 @@ const inputChanges = new WeakMap<CustodianSurfaceElement, () => void>();
 
 function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfaceElement) {
   const context = useApplication();
+  const presentation = createCustodianActions(() => host.store);
   const projection = createMemo(() => projectOwner(props.store, (store) => store));
   const alerts = projectOwner(custodianAlertStore, (store) => store.alert);
   const store = () => projection().read();
+  const actions = () => props.actions ?? presentation.actions;
+  const ownerSending = createMemo(() => store().sending);
+  const sending = () => actions().session.sending || ownerSending();
+  const eventNudge = createMemo(() => {
+    const source = store();
+    return source.eventNudgePending ? null : source.eventNudge;
+  });
   const transcriptStatus = createMemo(() => {
     const transcript = store().transcript;
     const completion = transcript.completion ?? Promise.resolve(transcript.status);
@@ -208,6 +218,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
   }
   onSettled(() => {
     inputChanges.set(host, () => {
+      presentation.retire();
       if (!queued) {
         queued = true;
         // Bridge properties arrive separately during one render.
@@ -322,7 +333,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
       return;
     }
     event.preventDefault();
-    void store().send();
+    actions().session.send();
   };
   const alertCard = () => (
     <Show when={currentAlert()}>
@@ -337,17 +348,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
   );
   const setupCard = () => (
     <Show when={props.onboarding}>
-      <CustodianSetupCard
-        store={store()}
-        activating={props.activating}
-        onActivate={(candidate) => {
-          if (props.onActivate) {
-            props.onActivate(candidate);
-          } else {
-            void store().autoSetup.activate(candidate);
-          }
-        }}
-      />
+      <CustodianSetupCard store={store()} actions={actions().setup} />
     </Show>
   );
   const transcriptNotice = (status: CustodianSessionStore["transcript"]["status"]) => (
@@ -394,7 +395,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
           {
             "custodian-surface--panel": props.compact,
             "custodian-surface--empty-error":
-              store().messages.length === 0 && store().error !== null && !store().sending,
+              store().messages.length === 0 && store().error !== null && !sending(),
           },
         ]}
       >
@@ -410,12 +411,13 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
           {setupCard()}
           {alertCard()}
           {props.channelOnboardingContent}
-          <Show when={!props.onboarding && !store().eventNudgePending ? store().eventNudge : null}>
+          {/* Independent health events stay visible while a user turn is pending. */}
+          <Show when={!props.onboarding ? latest(eventNudge) : null}>
             {(nudge) => (
               <CustodianEventNudgeView
                 nudge={nudge()}
                 disabled={!store().canSend || store().sensitive || store().hasUnresolvedQuestion()}
-                onSend={() => void store().sendEventNudge()}
+                onSend={() => actions().session.sendEventNudge()}
                 onDismiss={() => store().dismissEventNudge()}
               />
             )}
@@ -460,12 +462,14 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
             {(message) => (
               <TranscriptEntry
                 store={store}
+                actions={actions().session}
                 message={message()}
                 activeWizardMessage={activeWizardMessage()}
               />
             )}
           </For>
-          <Show when={store().sending}>
+          {/* Mount the canvas from owner admission, outside the pending action. */}
+          <Show when={ownerSending()}>
             <div class="chat-group assistant custodian__thinking-row" role="status">
               <div class="chat-avatar assistant custodian__mascot-avatar" aria-hidden="true">
                 <openclaw-mascot mood="thinking" prop:size={26} />
@@ -503,7 +507,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
             <div class="custodian__error" role="alert">
               <span>{store().error}</span>
               <Show when={store().activeClient && store().chatAvailable && store().canRetry()}>
-                <button class="btn btn--sm" type="button" onClick={() => store().retry()}>
+                <button class="btn btn--sm" type="button" onClick={() => actions().session.retry()}>
                   {t("common.retry")}
                 </button>
               </Show>
@@ -550,7 +554,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
                       autocomplete="off"
                       placeholder={t("custodian.sensitivePlaceholder")}
                       aria-label={t("custodian.sensitivePlaceholder")}
-                      disabled={!store().canSend}
+                      disabled={sending() || !store().canSend}
                       onInput={(event) => store().setInput(event.currentTarget.value)}
                       onKeyDown={handleKeydown}
                     />
@@ -564,8 +568,8 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
                     class="chat-send-btn"
                     type="button"
                     aria-label={t("custodian.send")}
-                    disabled={!store().input.trim() || !store().canSend}
-                    onClick={() => void store().send()}
+                    disabled={sending() || !store().input.trim() || !store().canSend}
+                    onClick={() => actions().session.send()}
                   >
                     <Icon name="arrowUp" />
                     <span class="agent-chat__control-label">{t("custodian.send")}</span>
@@ -591,11 +595,10 @@ export const CustodianSurface = defineSolidBridge<CustodianSurfaceProps>(
     },
     properties: {
       store: { default: custodianSessionStore, attribute: false },
+      actions: { default: undefined, attribute: false },
       onboarding: { default: false, attribute: false },
       newAgentIntent: { default: false, attribute: false },
       channelOnboardingContent: { default: undefined, attribute: false },
-      activating: { default: false, attribute: false },
-      onActivate: { default: undefined, attribute: false },
       compact: { default: false, attribute: false },
       historyContent: { default: undefined, attribute: false },
     },

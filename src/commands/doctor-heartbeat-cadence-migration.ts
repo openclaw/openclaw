@@ -37,7 +37,7 @@ import {
   resolveLegacyHeartbeatAgents,
   resolveLegacyHeartbeatConfig,
   resolveLegacyHeartbeatIntervalMs,
-  resolveLegacyHeartbeatVisibility,
+  resolveLegacyHeartbeatAlertsEnabled,
   migrateHeartbeatPrompt,
   validateLegacyHeartbeatConfig,
 } from "./doctor-heartbeat-legacy.js";
@@ -85,8 +85,8 @@ function legacyAlertsEnabled(cfg: OpenClawConfig, target: string, accountId?: st
       const config = cfg.channels?.[channel];
       const accounts =
         isRecord(config) && isRecord(config.accounts) ? Object.keys(config.accounts) : [];
-      return (accountId ? [accountId] : accounts.length ? accounts : [undefined]).map(
-        (id) => resolveLegacyHeartbeatVisibility({ cfg, channel, accountId: id }).showAlerts,
+      return (accountId ? [accountId] : accounts.length ? accounts : [undefined]).map((id) =>
+        resolveLegacyHeartbeatAlertsEnabled({ cfg, channel, accountId: id }),
       );
     }),
   );

@@ -160,7 +160,7 @@ function mount(
           sessionLogs: errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
           sessionLogsStatus: status(errors.sessionLogs, errors.sessionLogsHasLoaded),
           logFilters: errors.logFilters ?? defaults.detail.logFilters,
-          context: { weight: errors.contextWeight, loading: false, status: status() },
+          context: { weight: errors.contextWeight, loading: false, read: null, status: status() },
         },
         callbacks: {
           ...defaults.callbacks.details,

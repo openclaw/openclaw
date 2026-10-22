@@ -8,6 +8,7 @@ import { listen } from "../../lib/reactive/listener.ts";
 import type { prepareUsageDateRange } from "./helpers.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
+import { createUsageRead, UsagePending, UsageReadStatus, type UsageRead } from "./read-status.tsx";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
 import { USAGE_TOKEN_CATEGORIES } from "./view-chart.tsx";
 
@@ -31,7 +32,6 @@ export function deriveTimeSeries(
 ) {
   const {
     timeSeries,
-    timeSeriesLoading: loading,
     timeSeriesStatus: status,
     timeSeriesMode: mode,
     timeSeriesBreakdownMode: breakdownMode,
@@ -82,15 +82,6 @@ export function deriveTimeSeries(
           messageCounts: undefined,
         }
       : undefined;
-  if ((loading || status.awaitingGateway) && !status.hasLoaded) {
-    return {
-      chart: null,
-      emptyKey: "usage.loading.badge",
-      showTitle: false,
-      showStatus: false,
-      filteredUsage,
-    };
-  }
   if (status.error && !status.hasLoaded) {
     return { chart: null, emptyKey: null, showTitle: true, showStatus: true, filteredUsage };
   }
@@ -247,24 +238,46 @@ export function deriveTimeSeries(
 }
 
 export function TimeSeriesCompact(props: TimeSeriesProps) {
+  const read = createUsageRead(
+    () => props.detail.timeSeriesRead,
+    () => props.detail.timeSeriesStatus.error,
+  );
+  return (
+    <UsagePending read={read}>
+      {(loading) => <TimeSeriesContent {...props} loading={loading()} read={read} />}
+    </UsagePending>
+  );
+}
+
+function TimeSeriesContent(props: TimeSeriesProps & { loading: boolean; read: UsageRead }) {
+  // Loaded charts must not join the pending lane during a background refresh.
+  const loading = () =>
+    !props.detail.timeSeriesStatus.hasLoaded &&
+    (props.loading || props.detail.timeSeriesStatus.awaitingGateway);
   const view = () => props.view;
   return (
     <Show
-      when={view().chart}
+      when={!loading() && view().chart}
       fallback={
         <div class="session-timeseries-compact">
-          {view().showTitle ? (
+          {!loading() && view().showTitle ? (
             <div class="card-title usage-section-title">{t("usage.details.usageOverTime")}</div>
           ) : undefined}
-          {view().showStatus
-            ? renderUsageRefreshStatus(
-                props.detail.timeSeriesStatus,
-                "usage.details.usageOverTime",
-                "timeline",
-              )
-            : undefined}
-          {view().emptyKey ? (
-            <div class="usage-empty-block">{t(view().emptyKey ?? "")}</div>
+          <UsageReadStatus read={props.read}>
+            {() =>
+              !loading() && view().showStatus
+                ? renderUsageRefreshStatus(
+                    props.detail.timeSeriesStatus,
+                    "usage.details.usageOverTime",
+                    "timeline",
+                  )
+                : undefined
+            }
+          </UsageReadStatus>
+          {loading() || view().emptyKey ? (
+            <div class="usage-empty-block">
+              {t(loading() ? "usage.loading.badge" : (view().emptyKey ?? ""))}
+            </div>
           ) : undefined}
         </div>
       }
@@ -274,6 +287,7 @@ export function TimeSeriesCompact(props: TimeSeriesProps) {
           model={chart()}
           callbacks={props.callbacks}
           status={props.detail.timeSeriesStatus}
+          read={props.read}
         />
       )}
     </Show>
@@ -284,6 +298,7 @@ function TimeSeriesChart(props: {
   model: NonNullable<ReturnType<typeof deriveTimeSeries>["chart"]>;
   callbacks: TimeSeriesProps["callbacks"];
   status: TimeSeriesProps["detail"]["timeSeriesStatus"];
+  read: UsageRead;
 }) {
   const model = () => props.model;
   let svg!: SVGSVGElement;
@@ -423,7 +438,9 @@ function TimeSeriesChart(props: {
           ) : undefined}
         </div>
       </div>
-      {renderUsageRefreshStatus(props.status, "usage.details.usageOverTime", "timeline")}
+      <UsageReadStatus read={props.read}>
+        {() => renderUsageRefreshStatus(props.status, "usage.details.usageOverTime", "timeline")}
+      </UsageReadStatus>
       <div class="timeseries-chart-wrapper">
         <svg
           ref={(element) => (svg = element)}

@@ -129,7 +129,7 @@ export async function prepareDoctorInteractiveMaintenance(params: {
     confirm: (p) => prompter.confirm(p),
     outro: params.outro,
   });
-  if (offeredUpdate.handled) {
+  if (offeredUpdate) {
     return "handled";
   }
   if (!params.databasePreflight) {

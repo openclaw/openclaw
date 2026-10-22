@@ -820,7 +820,7 @@ describe("custodian page", () => {
     const { page } = await mountPage(context);
     await element(page, ".custodian__wizard-step");
     expect(page.querySelector(".custodian__wizard-cancel")).toBeNull();
-    page.store.cancelWizardStep(page.store.messages.at(-1)!);
+    await page.store.cancelWizardStep(page.store.messages.at(-1)!);
     expect(request).toHaveBeenCalledOnce();
   });
 

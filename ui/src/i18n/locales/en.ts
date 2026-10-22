@@ -2109,6 +2109,7 @@ export const en: TranslationMap & {
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
       namingWorktree: "Naming worktree…",
+      updatingRepository: "Updating repository…",
       creatingWorktree: "Creating worktree…",
       runningSetup: "Running setup…",
       provisioningEnvironment: "Provisioning environment…",
