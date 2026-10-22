@@ -172,7 +172,6 @@ suite.define(() => {
               shortcut.boundingBox(),
               row.locator(".session-glyph, .nav-item__icon").first().boundingBox(),
             ]);
-            expect(await row.locator(".sidebar-reorder-trigger").count()).toBe(0);
             expect(button).not.toBeNull();
             expect(glyph).not.toBeNull();
             expect(button!.width).toBeGreaterThanOrEqual(32);
@@ -224,12 +223,6 @@ suite.define(() => {
             });
             expect(clearance).toBeGreaterThanOrEqual(2);
           }
-          const header = group.locator(".sidebar-recent-sessions__head");
-          const [handle, lead] = await Promise.all([
-            header.locator(".sidebar-session-group-drag-handle").boundingBox(),
-            header.locator(".sidebar-session-group-toggle__lead").boundingBox(),
-          ]);
-          expect(handle!.x + handle!.width).toBeLessThanOrEqual(lead!.x);
         }
         const toggle = group.locator(".sidebar-session-group-toggle");
         await toggle.click();

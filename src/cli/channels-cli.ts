@@ -250,7 +250,8 @@ export async function registerChannelsCli(
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { channelsCapabilitiesCommand } = await import("../commands/channels.js");
+        const { channelsCapabilitiesCommand } =
+          await import("../commands/channels/capabilities.js");
         await channelsCapabilitiesCommand(
           { ...opts, agent: resolveStringOption(command, "agent") },
           defaultRuntime,
@@ -273,7 +274,7 @@ export async function registerChannelsCli(
     .option("--json", "Output JSON", false)
     .action(async (entries, opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { channelsResolveCommand } = await import("../commands/channels.js");
+        const { channelsResolveCommand } = await import("../commands/channels/resolve.js");
         await channelsResolveCommand(
           {
             agent: resolveStringOption(command, "agent"),
@@ -296,7 +297,7 @@ export async function registerChannelsCli(
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { channelsLogsCommand } = await import("../commands/channels.js");
+        const { channelsLogsCommand } = await import("../commands/channels/logs.js");
         await channelsLogsCommand(opts);
       });
     });
@@ -409,7 +410,7 @@ export async function registerChannelsCli(
       command: Command,
     ) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { channelsAddCommand } = await import("../commands/channels.js");
+        const { channelsAddCommand } = await import("../commands/channels/add.js");
         const hasFlags = hasExplicitOptions(
           command,
           command.options
@@ -459,7 +460,7 @@ export async function registerChannelsCli(
     .option("--delete", "Delete config entries (no prompt)", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { channelsRemoveCommand } = await import("../commands/channels.js");
+        const { channelsRemoveCommand } = await import("../commands/channels/remove.js");
         const hasFlags = hasExplicitOptions(command, optionNamesRemove);
         await channelsRemoveCommand(
           { ...opts, agent: resolveStringOption(command, "agent") },

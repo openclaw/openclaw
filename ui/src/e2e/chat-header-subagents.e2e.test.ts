@@ -119,7 +119,7 @@ suite.define(() => {
             .count(),
         ).toBe(0);
         detailsChunk.resolve();
-        // The lazy section can be empty; mounting is the readiness signal.
+        // Optional metadata can be empty; the visible panel and cleared loader prove arrival.
         await detailsDialog.locator(".chat-details-session").waitFor({ state: "attached" });
         expect(
           await detailsDialog.getByRole("status", { name: "Loading…", exact: true }).count(),

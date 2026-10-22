@@ -56,10 +56,15 @@ import {
   installResultMiddleware,
   mediaResult,
   textToolResult,
+  throwingResultObserver,
+  createBridge,
+  createTool,
+  callTool,
+  createDynamicToolCall,
+  type BridgeOptions,
 } from "./dynamic-tools.test-support.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
-  type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
@@ -113,41 +118,6 @@ function frameImageIdentity(data: string, mimeType = "image/png") {
     .digest("hex");
 }
 
-function createDynamicToolCall(
-  tool: string,
-  arguments_: JsonValue = {},
-  callId = "call-1",
-): CodexDynamicToolCallParams {
-  return {
-    threadId: "thread-1",
-    turnId: "turn-1",
-    callId,
-    namespace: null,
-    tool,
-    arguments: arguments_,
-  };
-}
-
-function callTool(
-  bridge: ReturnType<typeof createCodexDynamicToolBridge>,
-  tool: string,
-  args: JsonValue = {},
-  callId = "call-1",
-  options?: Parameters<typeof bridge.handleToolCall>[1],
-) {
-  return bridge.handleToolCall(createDynamicToolCall(tool, args, callId), options);
-}
-
-function createTool(name: string, overrides: Partial<AnyAgentTool> = {}): AnyAgentTool {
-  return {
-    name,
-    description: "Convert text to speech.",
-    parameters: { type: "object", properties: {}, additionalProperties: true },
-    execute: vi.fn(),
-    ...overrides,
-  } as unknown as AnyAgentTool;
-}
-
 function createDecisionToolForBridge(workspaceDir: string): AnyAgentTool {
   const tool = createOpenClawCodingTools({
     agentId: "main",
@@ -173,16 +143,6 @@ function createDecisionToolForBridge(workspaceDir: string): AnyAgentTool {
 
 function createSingleToolBridge(tool: AnyAgentTool, options: BridgeOptions = {}) {
   return createBridge([tool], options);
-}
-
-type BridgeOptions = Omit<
-  Parameters<typeof createCodexDynamicToolBridge>[0],
-  "tools" | "signal"
-> & {
-  signal?: AbortSignal;
-};
-function createBridge(tools: AnyAgentTool[], options: BridgeOptions = {}) {
-  return createCodexDynamicToolBridge({ tools, signal: new AbortController().signal, ...options });
 }
 
 function createBridgeWithToolResult(
@@ -973,16 +933,7 @@ describe("createCodexDynamicToolBridge", () => {
   );
 
   it("preserves successful execution when its observer throws an unreadable error", async () => {
-    const observerError = Object.defineProperty(new Error(), "message", {
-      get() {
-        throw new Error("observer message getter escaped");
-      },
-    });
-    const onAgentToolResult = vi.fn(() => {
-      throw observerError;
-    });
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    warn.mockClear();
+    const { onAgentToolResult, warn } = throwingResultObserver();
     const rawResult = textToolResult("committed effect", { receipt: "effect-1" });
     const execute = vi.fn(async () => rawResult);
     const bridge = createSingleToolBridge(createTool("exec", { execute }));

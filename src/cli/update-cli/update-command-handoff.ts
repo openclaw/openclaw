@@ -284,7 +284,7 @@ export async function handoffUpdateFromGateway(params: {
     recordUpdateRunStep(
       params.opts.run.runId,
       { step: "managed-service update handoff", status: "completed", endedAtMs: Date.now() },
-      { env: params.opts.run.env },
+      params.opts.run,
     );
   }
   await printResult(result, params.opts, { nextAction: guidance });
