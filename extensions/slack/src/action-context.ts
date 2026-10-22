@@ -11,6 +11,9 @@ export type SlackActionClientOpts = {
   accountId?: string;
   token?: string;
   teamId?: string;
+  /** Preserve admission scope while omitting team_id from a Slack API request. */
+  omitTeamId?: boolean;
+  inviteUserId?: string;
   client?: WebClient;
   assertDirectAdapterHandoff?: () => void;
 };

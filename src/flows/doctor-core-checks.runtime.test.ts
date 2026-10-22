@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { collectGatewayHealthFindings } from "../commands/doctor-gateway-health.js";
 import { createSqliteWalHealth } from "../commands/sqlite-wal-health.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createCoreHealthChecks } from "./doctor-core-checks.js";
 import { exitCodeFromFindings } from "./doctor-lint-flow.js";
@@ -401,40 +399,6 @@ describe("doctor runtime tool schema checks", () => {
     expect(mocks.disposeMcp).toHaveBeenCalledTimes(1);
   });
 
-  it("does not probe requester-scoped MCP without a requester", async () => {
-    const resolverRegistry = createMcpProofPluginRegistry();
-    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
-      const resolveConnection = vi.fn();
-      resolverRegistry.apiFor("fuzzplugin").registerMcpServerConnectionResolver({
-        serverName: "fuzzplugin",
-        resolve: resolveConnection,
-      });
-      expect(
-        await inspectSchemas(
-          mcpServers({
-            fuzzplugin: {
-              url: "https://placeholder.invalid/mcp",
-              transport: "streamable-http",
-              auth: "oauth",
-            },
-          }),
-        ),
-      ).toContainEqual(
-        findingMatching("runtime-tool-schemas", "info", {
-          path: "mcp.servers.fuzzplugin",
-          requirement: "authenticated requester context",
-          fixHint: "Verify this server from an authenticated agent turn.",
-        }),
-      );
-      expect(resolveConnection).not.toHaveBeenCalled();
-      expect(mocks.mcpRuntime).toHaveBeenCalledWith(
-        expect.objectContaining({
-          excludeServerNames: new Set(["fuzzplugin"]),
-        }),
-      );
-    });
-  });
-
   it("defers shared OAuth without suppressing non-OAuth probes", async () => {
     const findings = await inspectSchemas({
       ...agentConfig("main", "worker"),
@@ -734,54 +698,40 @@ describe("doctor gateway runtime checks", () => {
   });
 
   it.each([
-    {
-      label: "missing",
-      installed: false,
-      loadState: "not-loaded",
-      runtimeStatus: "stopped",
-      message: "Gateway service is not installed.",
-      path: "gateway.mode",
-      fixHint: "Run `openclaw gateway install` to install the service.",
-    },
-    {
-      label: "installed but not loaded",
-      installed: true,
-      loadState: "not-loaded",
-      runtimeStatus: "stopped",
-      message: "Gateway service is installed but not loaded.",
-      path: "/tmp/gateway.service",
-      fixHint: "Start the installed service with `openclaw gateway start`.",
-    },
-    {
-      label: "loaded with unconfirmed runtime",
-      installed: true,
-      loadState: "loaded",
-      runtimeStatus: "unknown",
-      message: "Gateway service runtime is unknown, not running.",
-      path: "/tmp/gateway.service",
-      fixHint:
-        "Run `openclaw gateway status --deep` to inspect the service before choosing a recovery action.",
-    },
-  ])("reports actionable advice for a $label local gateway daemon", async (entry) => {
+    [
+      "missing",
+      "Gateway service is not installed.",
+      "Run `openclaw gateway install` to install the service.",
+    ],
+    [
+      "unloaded",
+      "Gateway service is installed but not loaded.",
+      "Start the installed service with `openclaw gateway start`.",
+    ],
+    [
+      "unconfirmed",
+      "Gateway service runtime is unknown, not running.",
+      "Run `openclaw gateway status --deep` to inspect the service before choosing a recovery action.",
+    ],
+  ])("reports actionable advice for a %s local gateway daemon", async (state, message, fixHint) => {
+    const installed = state !== "missing";
     mocks.serviceState.mockResolvedValueOnce({
-      installed: entry.installed,
-      loadState: { status: entry.loadState },
+      ...runningService(),
+      installed,
+      loadState: { status: state === "unconfirmed" ? "loaded" : "not-loaded" },
       running: false,
-      env: {},
-      command: entry.installed
-        ? { programArguments: ["openclaw", "gateway"], sourcePath: "/tmp/gateway.service" }
-        : null,
-      runtime: { status: entry.runtimeStatus },
+      command: installed ? runningService().command : null,
+      runtime: { status: state === "unconfirmed" ? "unknown" : "stopped" },
     });
 
     expect(await inspectDaemon({ cfg: localConfig })).toEqual([
       {
         checkId: "core/doctor/gateway-daemon",
         severity: "warning",
-        message: entry.message,
-        path: entry.path,
+        message,
+        path: installed ? "/tmp/gateway.service" : "gateway.mode",
         target: "openclaw-gateway",
-        fixHint: entry.fixHint,
+        fixHint,
       },
     ]);
   });

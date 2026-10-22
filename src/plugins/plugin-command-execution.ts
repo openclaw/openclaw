@@ -19,7 +19,7 @@ import {
 } from "./conversation-binding.js";
 import { pluginCommandSupportsChannel } from "./plugin-command-metadata.js";
 import type { PluginCommandDispatchContext } from "./plugin-command-runtime.js";
-import { isPluginRegistryRetired } from "./registry-lifecycle.js";
+import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
 
@@ -63,10 +63,15 @@ async function buildRuntimeContext(
   if (!sessionKey && !agentId) {
     return undefined;
   }
+  const pluginAuthority = capturePluginLifecycleAuthority(
+    registry,
+    registry.plugins.find((record) => record.id === command.pluginId),
+    { scopedRuntime: true },
+  );
   const assertInvocationCurrent = () => {
     invocationSignal.throwIfAborted();
-    if (isPluginRegistryRetired(registry)) {
-      throw new Error("Plugin command registry is no longer active.");
+    if (!pluginAuthority?.()) {
+      throw new Error("Plugin command runtime is no longer active.");
     }
     params.assertOwnerCurrent?.();
   };
@@ -89,6 +94,14 @@ async function buildRuntimeContext(
   }
   return {
     ...(subagents ? { subagents } : {}),
+    ...(command.runtimeCapabilities?.includes("models") && params.isAuthorizedSender
+      ? {
+          models: params.runtimeContext?.createModels?.({
+            signal: invocationSignal,
+            assertCurrent: assertInvocationCurrent,
+          }),
+        }
+      : {}),
     llm: {
       complete: async (request) => {
         const { createRuntimeLlm } = await import("./runtime/runtime-llm.runtime.js");

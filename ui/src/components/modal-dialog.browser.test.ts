@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import { emulateOverlayMedia } from "../test-helpers/overlay-browser-media.ts";
-import "./modal-dialog.ts";
+import "./modal-dialog.tsx";
 import "./tooltip.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;

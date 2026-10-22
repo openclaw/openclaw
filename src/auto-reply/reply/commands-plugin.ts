@@ -13,6 +13,7 @@ import {
   PLUGIN_COMMAND_DISPATCH,
   type PluginCommandExecutionReplyOptions,
 } from "../../plugins/plugin-command-runtime.js";
+import { createPluginRequesterModels } from "../../plugins/requester-models.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { buildPluginCommandContext } from "./commands-context.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -79,6 +80,18 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
         ? {
             runtimeContext: {
               createSubagents,
+              createModels: ({ signal, assertCurrent }) =>
+                createPluginRequesterModels({
+                  config: cfg,
+                  agentId: targetAgentId,
+                  sessionKey: params.sessionKey,
+                  sessionId: targetSessionEntry?.sessionId,
+                  authority: params.opts?.operatorAuthority,
+                  signal: params.opts?.abortSignal
+                    ? AbortSignal.any([signal, params.opts.abortSignal])
+                    : signal,
+                  assertCurrent,
+                }),
               compactCurrent: async (invocationSignal, assertOwnerCurrent) => {
                 if (!params.command.isAuthorizedSender) {
                   return { compacted: false, reason: "compaction requires authorization" };

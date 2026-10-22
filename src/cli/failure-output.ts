@@ -220,14 +220,6 @@ export function formatCliOperatorError(
   return formatErrorMessage(value);
 }
 
-function pushPrefixed(out: string[], value: string): void {
-  for (const line of value.split("\n")) {
-    if (line.trim().length > 0) {
-      out.push(`[openclaw] ${line}`);
-    }
-  }
-}
-
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
   const env = options.env ?? process.env;
   const argv = options.argv ?? process.argv;
@@ -308,7 +300,11 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
 
   if (showDebugDetails) {
     lines.push("[openclaw] Stack:");
-    pushPrefixed(lines, formatUncaughtError(options.error));
+    for (const line of formatUncaughtError(options.error).split("\n")) {
+      if (line.trim().length > 0) {
+        lines.push(`[openclaw] ${line}`);
+      }
+    }
   }
 
   // Doctor needs the same state owner; inspect wrappers without loading the SQLite runtime.

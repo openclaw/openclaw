@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
 import { registerComputerUseProvider } from "../../plugins/computer-use-registration.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -179,6 +178,15 @@ function createFixture() {
       params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
       idempotencyKey,
     });
+  const closeRequest = (reason?: string) =>
+    request({
+      command: "computer.act",
+      params: {
+        executionId: logicalId,
+        action: "__close_execution",
+        ...(reason ? { reason } : {}),
+      },
+    });
   const mocks = { start: startHost, snapshot, act, open: openExecution, close: physicalClose };
   const calls = (expected: Partial<Record<keyof typeof mocks | "release" | "leases", number>>) =>
     expect({
@@ -203,6 +211,7 @@ function createFixture() {
     stops,
     request,
     click,
+    closeRequest,
     declared: () => service.status({ probe: false }),
     holdCleanup: () => {
       const gate = createDeferredCore();
@@ -523,31 +532,21 @@ describe("Gateway computer service", () => {
   });
 
   it("joins native preparation on shutdown and releases the acquired desktop after the child closes", async () => {
-    const nativeReady = createDeferredCore<ComputerUseCapabilityDescriptor>();
-    const launchStarted = createDeferredCore();
+    const delayed = delayReadiness();
     const closed = createDeferredCore();
-    const childClose = vi.fn(() => {
-      nativeReady.reject(new Error("Native preparation was closed"));
+    const discovering = f.service.status();
+    await delayed.started;
+    delayed.close.mockImplementation(() => {
+      delayed.ready.reject(new Error("Native preparation was closed"));
       return closed.promise;
     });
-    startHost.mockImplementationOnce(() => {
-      launchStarted.resolve();
-      return {
-        ready: nativeReady.promise,
-        isCurrent: () => true,
-        invoke: async () => {},
-        close: childClose,
-      };
-    });
-    const discovering = f.service.status();
-    await launchStarted.promise;
     await expectCleanupHeld(
       closed,
       f.service.close(),
       () => {
         expect(f.leases[0]!.release).not.toHaveBeenCalled();
       },
-      childClose,
+      delayed.close,
     );
     expect(await discovering).toMatchObject({ available: false });
     expect(f.leases[0]!.release).toHaveBeenCalled();
@@ -605,12 +604,7 @@ describe("Gateway computer service", () => {
       new Error("Native helper exited unexpectedly"),
     );
     vi.spyOn(child, "close").mockRejectedValue(failure);
-    await expect(
-      f.invoke({
-        command: "computer.act",
-        params: { executionId: logicalId, action: "__close_execution", reason: "completion" },
-      }),
-    ).rejects.toBe(failure);
+    await expect(f.service.invoke(f.closeRequest("completion"))).rejects.toBe(failure);
     expect(f.leases[0]!.release).toHaveBeenCalledTimes(1);
     expect(await f.service.status()).toMatchObject({ available: true });
     f.calls({ start: 2, snapshot: 1, open: 1 });
@@ -621,16 +615,12 @@ describe("Gateway computer service", () => {
     await f.invoke();
     const cleanup = f.holdCleanup();
     const failure = new Error("native cleanup failed");
-    const closeRequest = f.request({
-      command: "computer.act",
-      params: { executionId: logicalId, action: "__close_execution" },
-    });
+    const closeRequest = f.closeRequest();
     const first = f.service.invoke(closeRequest);
-    const firstObserved = Promise.allSettled([first]);
+    const firstObserved = observeSettlement(first);
     await vi.waitFor(() => expect(f.physicalClose).toHaveBeenCalledTimes(1));
     const duplicate = f.service.invoke(closeRequest);
-    const duplicateSettled = vi.fn();
-    const duplicateObserved = duplicate.then(duplicateSettled, duplicateSettled);
+    const duplicateObserved = observeSettlement(duplicate);
     const results = Promise.allSettled([first, duplicate]);
     try {
       await expect(f.service.invoke({ ...closeRequest, owner: "session-b" })).rejects.toThrow(
@@ -639,7 +629,7 @@ describe("Gateway computer service", () => {
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      expect(duplicateSettled).not.toHaveBeenCalled();
+      expect(duplicateObserved.settled).not.toHaveBeenCalled();
       expect(f.leases[0]!.release).not.toHaveBeenCalled();
     } finally {
       cleanup.reject(failure);
@@ -648,8 +638,7 @@ describe("Gateway computer service", () => {
       { status: "rejected", reason: failure },
       { status: "rejected", reason: failure },
     ]);
-    await firstObserved;
-    await duplicateObserved;
+    await Promise.all([firstObserved.done, duplicateObserved.done]);
     await expect(f.service.invoke(closeRequest)).resolves.toEqual({ ok: true });
     expect(f.physicalClose).toHaveBeenLastCalledWith("completion");
     f.calls({ close: 2, release: 1 });

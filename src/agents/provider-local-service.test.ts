@@ -417,8 +417,7 @@ describe("provider local service", () => {
   it("serializes concurrent chat and embedding starts with independent leases", async () => {
     const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
-    const tempDir = tempDirs.make("openclaw-local-service-");
-    const startsPath = path.join(tempDir, "starts.txt");
+    const startsPath = path.join(tempDirs.make("openclaw-local-service-"), "starts.txt");
     const service = scriptService(
       port,
       `const fs=require("node:fs");const http=require("node:http");fs.appendFileSync(${JSON.stringify(
@@ -448,8 +447,7 @@ describe("provider local service", () => {
     const secondPort = firstPort + 1;
     const firstHealthUrl = `http://127.0.0.1:${firstPort}/v1/models`;
     const secondHealthUrl = `http://127.0.0.1:${secondPort}/v1/models`;
-    const tempDir = tempDirs.make("openclaw-local-service-key-");
-    const startsPath = path.join(tempDir, "starts.txt");
+    const startsPath = path.join(tempDirs.make("openclaw-local-service-key-"), "starts.txt");
     const args = [
       "-e",
       `const fs=require("node:fs");const http=require("node:http");fs.appendFileSync(process.env.STARTS_PATH,process.env.LOCAL_SERVICE_PORT+"\\n");const server=http.createServer((req,res)=>{res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');});server.listen(Number(process.env.LOCAL_SERVICE_PORT),"127.0.0.1");process.on("SIGTERM",()=>server.close(()=>process.exit(0)));`,
@@ -564,8 +562,7 @@ describe("provider local service", () => {
 
   it("does not keep one-shot hosts alive through diagnostic pipes", async ({ signal }) => {
     const port = await fixture.claimPort();
-    const tempDir = tempDirs.make("openclaw-local-service-unref-");
-    const servicePidPath = path.join(tempDir, "service.pid");
+    const servicePidPath = path.join(tempDirs.make("openclaw-local-service-unref-"), "service.pid");
     const moduleUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.providerLocalService);
     const script = [
       `import fs from "node:fs/promises";`,
@@ -595,8 +592,10 @@ describe("provider local service", () => {
 
   it("does not keep failed one-shot hosts alive through diagnostic pipes", async () => {
     const port = await fixture.claimPort();
-    const tempDir = tempDirs.make("openclaw-local-service-failed-unref-");
-    const servicePidPath = path.join(tempDir, "service.pid");
+    const servicePidPath = path.join(
+      tempDirs.make("openclaw-local-service-failed-unref-"),
+      "service.pid",
+    );
     const moduleUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.providerLocalService);
     const failedServiceReadyTimeoutMs = 60_000;
     const serviceScript = [
@@ -709,8 +708,7 @@ describe("provider local service", () => {
   });
 
   it("does not spawn a local service after its last startup caller aborts", async () => {
-    const tempDir = tempDirs.make("openclaw-local-service-abort-");
-    const pidPath = path.join(tempDir, "child.pid");
+    const pidPath = path.join(tempDirs.make("openclaw-local-service-abort-"), "child.pid");
     const controller = new AbortController();
     let probeCount = 0;
     let childPid: number | undefined;

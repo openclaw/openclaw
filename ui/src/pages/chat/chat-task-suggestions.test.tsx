@@ -7,6 +7,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   ChatTaskSuggestionTray,
   type ChatTaskSuggestionTrayProps,
+  type TaskSuggestionAcceptance,
 } from "./components/chat-task-suggestions.tsx";
 
 const suggestion: TaskSuggestion = {
@@ -27,7 +28,6 @@ function renderSuggestion(overrides: Partial<ChatTaskSuggestionTrayProps> = {}) 
   const onCopyPrompt = vi.fn();
   const view: ChatTaskSuggestionTrayProps = {
     taskSuggestions: [suggestion],
-    taskSuggestionBusyIds: new Set(),
     canAcceptTaskSuggestions: true,
     canDismissTaskSuggestions: true,
     onAcceptTaskSuggestion: onAccept,
@@ -41,6 +41,35 @@ function renderSuggestion(overrides: Partial<ChatTaskSuggestionTrayProps> = {}) 
 }
 
 describe("chat task suggestions", () => {
+  it("derives starting controls from the live acceptance outcome", () => {
+    const [acceptance, setAcceptance] = createSignal<TaskSuggestionAcceptance | undefined>();
+    const { container, onAccept, onDismiss } = renderSuggestion({
+      taskSuggestionAcceptance: acceptance,
+    });
+    const start = container.querySelector<HTMLButtonElement>(".task-suggestion__start")!;
+    const dismiss = container.querySelector<HTMLButtonElement>(".task-suggestion__dismiss")!;
+    const details = container.querySelector<HTMLDetailsElement>(".task-suggestion__instructions")!;
+    expect(start.disabled).toBe(false);
+
+    setAcceptance({ phase: "starting" });
+    flush();
+    expect(start.textContent).toContain("Starting");
+    expect(start.disabled).toBe(true);
+    expect(dismiss.disabled).toBe(true);
+    expect(details.open).toBe(true);
+    start.click();
+    dismiss.click();
+    expect(onAccept).not.toHaveBeenCalled();
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    setAcceptance({ phase: "failed", error: "Start unavailable" });
+    flush();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Start unavailable");
+    container.querySelector<HTMLButtonElement>(".task-suggestion__retry")!.click();
+    expect(onAccept).toHaveBeenCalledWith(suggestion, "local", undefined);
+    expect(dismiss.disabled).toBe(false);
+  });
+
   it("starts a new session from the primary action", () => {
     const { container, onAccept, onDismiss } = renderSuggestion();
 

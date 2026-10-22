@@ -7,6 +7,7 @@ import type {
   PluginConversationBindingRequestParams,
   PluginConversationBindingRequestResult,
 } from "./conversation-binding.types.js";
+import type { PluginRequesterModels } from "./model-catalog.types.js";
 
 type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
 
@@ -80,6 +81,8 @@ export type PluginCommandContext = {
   diagnosticsSessions?: PluginCommandDiagnosticsSession[];
   /** Host-bound runtime capabilities scoped to this command invocation. */
   runtimeContext?: {
+    /** Read-only requester/session-bound catalog, when explicitly requested and admitted. */
+    models?: PluginRequesterModels;
     llm?: Pick<import("./runtime/types-core.js").PluginRuntimeCore["llm"], "complete">;
     /** Native helpers bound to this authenticated command invocation. */
     subagents?: import("./runtime/types-native-subagent.js").NativeSubagentRuntime;
@@ -134,7 +137,7 @@ export type AgentPromptGuidanceEntry = {
 export type AgentPromptGuidance = string | AgentPromptGuidanceEntry;
 
 /** Opt-in command runtime families; future families extend this union. */
-export type PluginCommandRuntimeCapability = "subagents";
+export type PluginCommandRuntimeCapability = "subagents" | "models";
 
 export type OpenClawPluginCommandDefinition = {
   /** Command name without leading slash (e.g., "tts") */
@@ -176,7 +179,7 @@ export type OpenClawPluginCommandDefinition = {
   requireAuth?: boolean;
   /** Operator scopes required by gateway clients; command owners may satisfy this on chat surfaces. */
   requiredScopes?: OperatorScope[];
-  /** Requires matching manifest contracts.commandRuntimeCapabilities and requireAuth: true. */
+  /** Optional invocation capabilities; subagents requires a manifest contract and requireAuth: true. */
   runtimeCapabilities?: readonly PluginCommandRuntimeCapability[];
   /** Whether a trusted bundled handler needs owner status for subcommand-level authorization. */
   exposeSenderIsOwner?: boolean;

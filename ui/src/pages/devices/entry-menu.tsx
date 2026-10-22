@@ -96,7 +96,10 @@ export function DeviceEntryMenu(props: {
             id: action.value,
             label: t(action.labelKey),
             disabled:
-              action.pairing && (!props.devices.connected || !props.devices.canManagePairing),
+              action.pairing &&
+              (props.devices.inventorySaving ||
+                !props.devices.connected ||
+                !props.devices.canManagePairing),
             attributes: {
               title:
                 action.pairing && props.devices.connected && !props.devices.canManagePairing

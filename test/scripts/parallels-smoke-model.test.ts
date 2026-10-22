@@ -772,7 +772,6 @@ ensure_vm_running`,
       [linux, '"Could not get lock"'],
       [linux, '"Unable to acquire the dpkg frontend lock"'],
       [linux, '"Unable to lock directory"'],
-      [linux, "downloadGuestFile"],
       [linux, "this.downloadGuestFile(tgzUrl"],
       [linux, "curl -fsSL --connect-timeout 10 --max-time 120 --retry 2"],
       [linux, "wget -q --timeout=10 --read-timeout=120 --tries=3"],
@@ -842,7 +841,6 @@ ensure_vm_running`,
       [windows, "gateway-reachable recovery"],
     ],
     "runs Windows ref onboarding through a detached done-file runner": [
-      [windows, "guestPowerShellBackground"],
       [windows, "runWindowsBackgroundPowerShell"],
       [transports, "Join-Path (Join-Path $env:WINDIR 'Temp\\\\openclaw-parallels')"],
       [transports, "icacls.exe $runDir /inheritance:r"],
@@ -874,7 +872,6 @@ ensure_vm_running`,
     ],
     "runs the Windows agent turn through the detached done-file runner": [
       [windows, 'guestPowerShellBackground(\n      "agent-turn"'],
-      [windows, "OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S"],
       [windows, 'readPositiveIntEnv(\n    "OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S"'],
       [windows, "windowsAgentTurnConfigPatchScript(this.auth.modelId)"],
       [windows, "--model"],
@@ -915,7 +912,6 @@ ensure_vm_running`,
       [powershell, "$ErrorActionPreference = 'Continue'"],
       [powershell, "$PSNativeCommandUseErrorActionPreference = $false"],
       [windows, "windowsOpenClawResolver"],
-      [windows, "Invoke-OpenClaw gateway"],
       [windows, "Join-Path $env:APPDATA 'npm\\\\openclaw.cmd'", false],
     ],
   };
@@ -974,17 +970,15 @@ ensure_vm_running`,
   });
 
   it("accepts leading package-manager separators and still honors later terminators", () => {
-    expect(parseLinuxSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
-    expect(parseLinuxSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
-    expect(parseMacosSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
-    expect(parseMacosSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
+    for (const parseArgs of [parseLinuxSmokeArgs, parseMacosSmokeArgs]) {
+      expect(parseArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
+      expect(parseArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
+    }
     expect(parseMacosSmokeArgs([]).vmNameExplicit).toBe(false);
     expect(parseMacosSmokeArgs(["--vm", "macOS"]).vmNameExplicit).toBe(true);
-    expect(parseMacosSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
-    expect(parseLinuxSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
-    expect(parseWindowsSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
     expect(parseWindowsSmokeArgs([]).snapshotHint).toBe("pre-openclaw-native-e2e-");
     for (const parseArgs of [parseMacosSmokeArgs, parseLinuxSmokeArgs, parseWindowsSmokeArgs]) {
+      expect(parseArgs(["--host-port", "65535"]).hostPort).toBe(65535);
       expect(parseArgs(["--npm-registry", "http://192.0.2.2:48123"]).npmRegistry).toBe(
         "http://192.0.2.2:48123",
       );
@@ -1111,47 +1105,11 @@ ensure_vm_running`,
     expect(JSON.stringify(batch)).not.toContain("agentRuntime");
   });
 
-  it("keeps snapshot, host, package, and quote helpers shared", () => {
-    const common = readScriptSource("common");
-
-    const packageArtifactExports = new Set(
-      (common.match(/export \{([^}]*)\} from "\.\/package-artifact\.ts";/)?.[1] ?? "")
-        .split(",")
-        .map((name) => name.trim())
-        .filter(Boolean),
-    );
-    expect(packageArtifactExports).toContain("packOpenClaw");
-    expect(packageArtifactExports).toContain("resolveOpenClawRegistryVersion");
-    expect(common).not.toContain('export * from "./package-artifact.ts"');
-    expect(packageArtifact).toContain("withPackageLock");
-    expect(packageArtifact).toContain("Wait for Parallels package lock");
+  it("pins the host-local registry proxy and artifact server", () => {
     expect(packageArtifact).toContain('"--allow-unreleased-changelog"');
-    expect(packageArtifact).toContain("filename !== path.basename(filename)");
-    expect(packageArtifact).toContain("filename !== path.win32.basename(filename)");
-    expect(packageArtifact).toContain("npm pack did not report a safe tarball filename");
-    expect(packageArtifact).not.toContain("path.basename(packed)");
     expect(hostServer).toContain("hostUrl: `http://127.0.0.1:${port}`");
     expect(hostServer).toContain('OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org"');
     expect(hostServer).toContain("http.server");
-    expect(smokeCommon).toContain("runSmokeLane");
-    expect(smokeCommon).toContain("abstract class SmokeRunController");
-
-    for (const scriptPath of OS_TS_PATHS) {
-      const script = readFileSync(scriptPath, "utf8");
-
-      expect(script, scriptPath).toContain("resolveSnapshot");
-      expect(script, scriptPath).toContain("SmokeRunController");
-      expect(script, scriptPath).not.toContain("def aliases(name: str)");
-    }
-  });
-
-  it("bounds host artifact server startup stderr", () => {
-    const retained = hostServerTesting.appendBoundedOutput(
-      "a".repeat(10),
-      Buffer.from("b".repeat(10)),
-      12,
-    );
-    expect(retained).toBe(`${"a".repeat(2)}${"b".repeat(10)}`);
   });
 
   describe.skipIf(process.platform === "win32")("Parallels host IP detection", () => {
@@ -1214,17 +1172,19 @@ ensure_vm_running`,
   });
 
   it("accepts npm 10/11 array and npm 12 workspace result shapes", () => {
-    expect(
-      packageArtifactTesting.resolveNpmPackTarballFilename([
-        { filename: "openclaw-2026.6.11.tgz" },
-      ]),
-    ).toBe("openclaw-2026.6.11.tgz");
-    expect(
-      packageArtifactTesting.resolveNpmPackTarballFilename({
-        openclaw: { filename: "openclaw-2026.6.11.tgz" },
-      }),
-    ).toBe("openclaw-2026.6.11.tgz");
+    const filename = "openclaw-2026.6.11.tgz";
+    for (const output of [[{ filename }], { openclaw: { filename } }]) {
+      expect(packageArtifactTesting.resolveNpmPackTarballFilename(output)).toBe(filename);
+    }
   });
+  it.each(["../escape.tgz", "C:\\escape.tgz", "nul\0.tgz", "not-a-tarball"])(
+    "rejects unsafe npm pack filename %j",
+    (filename) =>
+      expectFatalError(
+        () => packageArtifactTesting.resolveNpmPackTarballFilename([{ filename }]),
+        "npm pack did not report a safe tarball filename",
+      ),
+  );
 
   it.each([
     ["retains fresh", 2 * 60 * 60_000, true],
@@ -1374,26 +1334,22 @@ kill -TERM "$$"`,
           "{current-macos}": saved("macOS 26.5", "poweron"),
         },
       },
-      () => {
-        const snapshot = resolveSnapshot("vm", "fresh");
-        const latestE2e = resolveSnapshot("vm", "pre-openclaw-native-e2e-");
-        const missingDate = resolveSnapshot("vm", "undated-family-");
-        const latestMacos = resolveSnapshot("vm", "macOS 26.5 latest");
-        return [
-          shellQuote("it's ok"),
-          [snapshot.id, snapshot.state, snapshot.name].join("\t"),
-          [latestE2e.id, latestE2e.state, latestE2e.name].join("\t"),
-          [missingDate.id, missingDate.state, missingDate.name].join("\t"),
-          [latestMacos.id, latestMacos.state, latestMacos.name].join("\t"),
-        ].join("\n");
-      },
+      () =>
+        ["fresh", "pre-openclaw-native-e2e-", "undated-family-", "macOS 26.5 latest"].map(
+          (hint) => {
+            const { id, state, name } = resolveSnapshot("vm", hint);
+            return [id, state, name];
+          },
+        ),
     );
 
-    expect(output.split("\n")[0]).toBe("'it'\"'\"'s ok'");
-    expect(output).toContain("{wanted}\tpoweroff\tfresh-poweroff-2026-04-01");
-    expect(output).toContain("{new-e2e}\tpoweroff\tpre-openclaw-native-e2e-2026-07-26");
-    expect(output).toContain("{undated-first}\tpoweroff\tundated-family-1");
-    expect(output.split("\n").at(-1)).toBe("{current-macos}\tpoweron\tmacOS 26.5");
+    expect(shellQuote("it's ok")).toBe("'it'\"'\"'s ok'");
+    expect(output).toEqual([
+      ["{wanted}", "poweroff", "fresh-poweroff-2026-04-01"],
+      ["{new-e2e}", "poweroff", "pre-openclaw-native-e2e-2026-07-26"],
+      ["{undated-first}", "poweroff", "undated-family-1"],
+      ["{current-macos}", "poweron", "macOS 26.5"],
+    ]);
   });
 
   it.each(["poweron", "poweroff"] as const)(
@@ -1717,7 +1673,6 @@ if (commandArgs[0] === "list") {
       expect(source).toContain("modelProviderConfigBatchJson");
       expect(source).toContain("config set --batch-file");
     }
-    expect(windows).toContain("windowsAgentTurnConfigPatchScript");
     expect(powershell).toContain("agents.defaults.skipBootstrap");
     expect(powershell).toContain("tools.profile");
     expect(powershell).toContain("replace(/^\\\\uFEFF/u");

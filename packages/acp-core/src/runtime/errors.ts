@@ -71,14 +71,6 @@ function readAcpRequestErrorDetails(value: Error): string | undefined {
   return rendered.length > 0 ? rendered : undefined;
 }
 
-function messageWithAcpRequestErrorDetails(error: Error): string {
-  const details = readAcpRequestErrorDetails(error);
-  if (!details || error.message.includes(details)) {
-    return error.message;
-  }
-  return `${error.message}: ${details}`;
-}
-
 /** Recognizes local and cross-realm ACP runtime errors by their stable error code. */
 export function isAcpRuntimeError(value: unknown): value is AcpRuntimeError {
   return value instanceof AcpRuntimeError || getForeignAcpRuntimeError(value) !== null;
@@ -99,13 +91,17 @@ export function toAcpRuntimeError(params: {
       cause: params.error,
     });
   }
-  return new AcpRuntimeError(
-    params.fallbackCode,
-    params.error instanceof Error
-      ? messageWithAcpRequestErrorDetails(params.error)
-      : params.fallbackMessage,
-    { cause: params.error },
-  );
+  if (params.error instanceof Error) {
+    const details = readAcpRequestErrorDetails(params.error);
+    return new AcpRuntimeError(
+      params.fallbackCode,
+      !details || params.error.message.includes(details)
+        ? params.error.message
+        : `${params.error.message}: ${details}`,
+      { cause: params.error },
+    );
+  }
+  return new AcpRuntimeError(params.fallbackCode, params.fallbackMessage, { cause: params.error });
 }
 
 /**

@@ -37,9 +37,36 @@ const results = await native.collect({ ids: [child.runId], awaitResults: true })
 
 Supported ingress is the Gateway's normal reply-dispatch path with an existing admitted requester session, current operator authority, and the host's user-turn transcript recorder. Before spawning, the host adopts the turn when necessary and commits its actual input through that recorder. Existing restricted-ingress hook exclusions remain unchanged. Direct embedded/CLI `before_agent_reply` hooks, direct ACP dispatch, services, timers, and detached callbacks do not acquire this capability merely by holding its object. Custom runtimes may omit `native`; absence or an unsupported invocation fails explicitly.
 
-Both calls recheck the invoking plugin's full-runtime lifetime and request authority after asynchronous preparation and at effect. The requester's effective native tool policy must allow `sessions_spawn` or `agents_wait`, respectively; disabled Swarm/collector support, denied tools, revoked authority, or a retired hook cannot fall back to an administrator or system actor. Collection checks the exact parent session incarnation and native ownership; unrelated or reset parents cannot read a result.
+Both calls recheck the invoking plugin's full-runtime lifetime and request authority after asynchronous preparation and at effect. The requester's effective native tool policy must allow both `sessions_spawn` and a callable native `agents_wait` for spawn, and `agents_wait` for collection; disabled Swarm/collector support, denied tools, revoked authority, or a retired hook cannot fall back to an administrator or system actor. Collection checks the exact parent session incarnation and native ownership; unrelated or reset parents cannot read a result.
 
 A handler owns its calls only until it settles or times out. Accepted children transfer to native execution custody and do not automatically send a chat reply. A controller can await results while its handler remains active, or retain accepted IDs in its existing plugin store and collect during a later eligible invocation for the same parent incarnation. Persist controller decisions in the plugin's own store; this facade does not add a task engine, scheduler, or model-memory protocol. Existing `subagent.run`, `complete`, and `waitForRun` behavior is unchanged.
+
+## Recover plugin-owned native children
+
+Hosts advertising the string capability `native-subagent-list-v1` support optional
+`native.list({ status? })` on both eligible reply-dispatch and command runtimes.
+Probe the optional method before calling it; older hosts and custom runtimes may
+omit it. An older record without host-captured ownership is not inferred to belong
+to a plugin, even if its label, request key, or parent looks familiar.
+
+Listing recovers native acceptance when the plugin did not persist its receipt.
+It returns at most 200 entries, newest first (the returned run ID, in code-unit order, breaks equal-time ties):
+`{ runId, childSessionKey, requestId, label?, status }`. The status filter is
+applied before the bound, and an unknown status value is rejected. There is no pagination or completeness claim beyond
+that bounded window. A known collector completion has status `done`, `failed`,
+`killed`, or `timeout`; otherwise the native execution state is `queued`,
+`running`, `interrupted`, or `terminal`. Terminal execution alone is not a
+completed result; use `collect` for result/error data.
+
+Only children accepted through this facade by the exact current plugin,
+requester’s profile, and parent session incarnation are returned. Plugins cannot
+supply those identities. A reset parent, another requester, or another plugin
+cannot enumerate them. Listing rechecks request/plugin lifetime, native currency,
+and the current `agents_wait` tool policy; revocation never falls back to an
+administrator. This uses existing native custody and retention, not a separate
+plugin index. If the runtime config changes during preparation or reading, listing
+rejects with a policy-changed error; retry from the still-active invocation. Spawn,
+collection, and reply dispatch signatures remain unchanged.
 
 ## Command-scoped native children
 

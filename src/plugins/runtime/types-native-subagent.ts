@@ -59,4 +59,26 @@ type NativeSubagentCollection = {
 export type NativeSubagentRuntime = {
   spawn(params: NativeSubagentSpawnParams): Promise<NativeSubagentAccepted>;
   collect(params: NativeSubagentCollectParams): Promise<NativeSubagentCollection>;
+  /** Most recent 200 children owned by this plugin, requester and exact parent incarnation. */
+  list?(
+    this: void,
+    params?: { status?: NativeSubagentChild["status"] },
+  ): Promise<NativeSubagentChild[]>;
+};
+
+type NativeSubagentChild = {
+  runId: string;
+  childSessionKey: string;
+  requestId: string;
+  label?: string;
+  /** Native completion when known; otherwise the recorded execution state. */
+  status:
+    | "queued"
+    | "running"
+    | "interrupted"
+    | "terminal"
+    | "done"
+    | "failed"
+    | "killed"
+    | "timeout";
 };
