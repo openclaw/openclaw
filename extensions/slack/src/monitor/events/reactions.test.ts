@@ -9,7 +9,8 @@ import {
 
 const reactionQueueMock = vi.hoisted(() => vi.fn());
 const reportJoinMock = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/channel-join-intro-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/channel-join-intro-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-join-intro-runtime")>()),
   reportChannelRoomJoin: reportJoinMock,
 }));
 type JoinRequest = Parameters<
