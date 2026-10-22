@@ -328,11 +328,17 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it.each(["thrown", "assistant"] as const)(
-    "does not replay %s transcript turn assertions through retries or model fallback",
-    async (surface) => {
+  it.each(
+    [
+      "Session transcript keyed user is outside the current turn: old-input",
+      'Transcript idempotency key "channel-user:v1:conflicting-input" conflicts with the admitted message.',
+    ].flatMap((errorMessage) =>
+      (["thrown", "assistant"] as const).map((surface) => ({ surface, errorMessage })),
+    ),
+  )(
+    "does not replay $surface transcript turn assertions through retries or model fallback: $errorMessage",
+    async ({ surface, errorMessage }) => {
       await withDefaultAuth(async ({ agentDir, workspaceDir }) => {
-        const errorMessage = "Session transcript keyed user is outside the current turn: old-input";
         runEmbeddedAttemptMock.mockImplementation(async (params) => {
           if (surface === "thrown") {
             throw new Error(errorMessage);

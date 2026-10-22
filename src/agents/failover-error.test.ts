@@ -40,6 +40,20 @@ function expectReason(error: unknown, reason: FailoverReason | null) {
 }
 
 describe("failover-error", () => {
+  it("preserves transcript admission conflicts through error wrappers", () => {
+    const conflict = new Error(
+      'Transcript idempotency key "channel-user:v1:conflicting-input" conflicts with the admitted message.',
+    );
+    for (const error of [
+      conflict,
+      new Error("preparation failed", { cause: conflict }),
+      new AggregateError([conflict], "run failed"),
+    ]) {
+      expect(resolveModelFallbackError(error)).toEqual({ kind: "terminal", error });
+      expect(coerceToFailoverError(error)).toBeNull();
+    }
+  });
+
   it("preserves an Ollama model-retirement error instead of coercing it to a timeout", () => {
     const body = JSON.stringify({
       error: "glm-5.1 was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic-retirement)",
