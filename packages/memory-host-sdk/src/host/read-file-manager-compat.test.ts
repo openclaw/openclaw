@@ -105,16 +105,31 @@ describe("MemoryIndexManager.readFile", () => {
     expect(result.text).toContain("Use from=");
   });
 
-  it.each(["", "\nline 2"])(
-    "truncates oversized workspace lines without continuation (%j)",
-    async (tail) => {
+  it.each([
+    { tail: "", expectedNextFrom: undefined },
+    { tail: "\nline 2", expectedNextFrom: 2 },
+  ])(
+    "continues oversized workspace lines at the next source line (%j)",
+    async ({ tail, expectedNextFrom }) => {
       const relPath = "memory/oversized-line.md";
       await write(relPath, `1: ${"x".repeat(20_000)}${tail}`);
       const result = requireMemoryReadSuccess(await read(relPath));
-      expect(result).toMatchObject({ truncated: true, lines: 1 });
-      expect(result.nextFrom).toBeUndefined();
+      expect(result).toMatchObject({
+        truncated: true,
+        lines: 1,
+        ...(expectedNextFrom ? { nextFrom: expectedNextFrom } : {}),
+      });
+      if (!expectedNextFrom) {
+        expect(result.nextFrom).toBeUndefined();
+        expect(result.text).not.toContain("Use from=");
+      } else {
+        expect(result.text).toContain(`Use from=${expectedNextFrom} to continue.`);
+        const continued = requireMemoryReadSuccess(
+          await read(relPath, [], { from: expectedNextFrom }),
+        );
+        expect(continued).toMatchObject({ from: expectedNextFrom, text: "line 2" });
+      }
       expect(result.text).toContain("use read on the source file");
-      expect(result.text).not.toContain("Use from=");
     },
   );
 

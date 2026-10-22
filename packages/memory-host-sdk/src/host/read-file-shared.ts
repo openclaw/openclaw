@@ -70,8 +70,7 @@ export function buildMemoryReadResultFromSlice(params: {
   const charCapTruncated =
     fitted.hardTruncatedSingleLine || fitted.includedLines < params.selectedLines.length;
   const nextFrom =
-    !fitted.hardTruncatedSingleLine &&
-    (moreSourceLinesRemain || fitted.includedLines < params.selectedLines.length)
+    moreSourceLinesRemain || fitted.includedLines < params.selectedLines.length
       ? start + fitted.includedLines
       : undefined;
   const truncated = charCapTruncated || moreSourceLinesRemain;
