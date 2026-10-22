@@ -131,15 +131,20 @@ export function createSessionAutomationInventory(
       canCallGatewayMethod(source?.snapshot, "cron.list", "operator.read", {
         requireAdvertisement: false,
       });
-    const scope = source ? gatewayPresentationScope(source).key : 0;
-    if (retain && readAccess && scope !== 0 && scope === presentationScope) {
+    const nextPresentationScope = source ? gatewayPresentationScope(source).key : 0;
+    if (
+      retain &&
+      readAccess &&
+      nextPresentationScope !== 0 &&
+      nextPresentationScope === presentationScope
+    ) {
       next.cronJobs = cron.cronJobs;
       next.cronJobsSnapshotRevision = cron.cronJobsSnapshotRevision;
       next.cronJobsTotal = cron.cronJobsTotal;
       next.cronJobsHasMore = cron.cronJobsHasMore;
       next.cronJobsNextOffset = cron.cronJobsNextOffset;
     }
-    presentationScope = scope;
+    presentationScope = nextPresentationScope;
     cron = next;
     dirty = true;
     publish();

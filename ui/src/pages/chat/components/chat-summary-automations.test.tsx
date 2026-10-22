@@ -479,7 +479,7 @@ it.each([false, true])("preserves offline inventory: loaded=%s", async (loaded) 
     expect(element.textContent).not.toContain("Reconnect to load");
   }
   current.update({ sessionKey: loaded ? "agent:ops:other" : "unresolved-session" });
-  expect(element.textContent).not.toContain("Check the task");
+  await waitForSolid(() => expect(element.textContent).not.toContain("Check the task"));
   if (!loaded) {
     current.publish({ ...current.gateway.snapshot, phase: "connected" });
     flush();
@@ -606,7 +606,12 @@ it("shares pending reads, retained rows, and failed refresh recovery with mobile
         <ChatSummaryAutomations {...props} inventory={inventory} />
         <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
         <ChatDetailsMobileContent
-          details={{ sessionKey: "agent:ops:task", currentAgentId: "ops", messages: [] }}
+          details={{
+            sessionKey: "agent:ops:task",
+            selectedSession: { key: "agent:ops:task", kind: "direct" },
+            currentAgentId: "ops",
+            messages: [],
+          }}
           presented
           page={{
             kind: "root",
