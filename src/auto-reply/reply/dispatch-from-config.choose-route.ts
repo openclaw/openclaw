@@ -318,9 +318,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     throwIfFinalDeliveryAborted();
     const preparation = prepareReplyPayloadForDispatcher(dispatcher, "final", inputPayload);
     if (preparation.kind === "suppress") {
-      await suppressPendingFinalDelivery(inputPayload, {
-        preserveActivity: state.replyOperationRunState.heartbeat !== undefined,
-      });
+      await suppressPendingFinalDelivery(inputPayload);
       return {
         queuedFinal: false,
         routedFinalCount: 0,
@@ -434,9 +432,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         text: undefined,
       });
       if (pendingBlock) {
-        await suppressPendingFinalDelivery(payload, {
-          preserveActivity: state.replyOperationRunState.heartbeat !== undefined,
-        });
+        await suppressPendingFinalDelivery(payload);
       }
       if (pendingBlock || sourceRecovery) {
         setReplyPayloadMetadata(normalizedPayload, { pendingFinalDeliveryCompletion: undefined });

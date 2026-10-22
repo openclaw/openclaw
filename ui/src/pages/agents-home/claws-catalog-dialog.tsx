@@ -11,6 +11,7 @@ import { registerClawsEnglish } from "../../i18n/locales/en-claws.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { createPageRequestDelay } from "../../lib/page-request.ts";
 import { loadPluginCatalog } from "../../lib/plugins/index.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
@@ -497,21 +498,9 @@ export function ClawsCatalogDialog(props: ClawsDialogProps) {
       return;
     }
     const packageName = props.initialPackageName;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let resume: (() => void) | undefined;
-    const ready = delay
-      ? new Promise<void>((resolve) => {
-          resume = resolve;
-          timer = setTimeout(resolve, delay);
-        })
-      : undefined;
-    cancelSearch = () => {
-      cancelled = true;
-      clearTimeout(timer);
-      resume?.();
-    };
-    const isCurrent = () => !cancelled && model.gateway.isCurrent(scope);
+    const { ready, isCancelled, cancel } = createPageRequestDelay(delay);
+    cancelSearch = cancel;
+    const isCurrent = () => !isCancelled() && model.gateway.isCurrent(scope);
     // Admission also refreshes hidden detail pages on reconnect. Keep selection
     // at request completion, outside the async rendering computation.
     void setCatalogRequest(

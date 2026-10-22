@@ -709,7 +709,6 @@ export abstract class ChatPaneStateOwner {
     snapshot: ApplicationContext["gateway"]["snapshot"],
   ): void;
   protected abstract applyApplicationConfig(config: ApplicationContext["config"]["current"]): void;
-  protected abstract applySessionsState(state: ApplicationContext["sessions"]["state"]): void;
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
   protected abstract resetOlderMessagesViewport(): void;

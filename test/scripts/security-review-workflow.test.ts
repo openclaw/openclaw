@@ -174,6 +174,8 @@ describe("security review workflow trust boundaries", () => {
     expect(workflow.jobs.review?.env).toEqual({
       OPENCLAW_SECURITY_REVIEW_PR_NUMBER: "${{ matrix.pr }}",
       OPENCLAW_SECURITY_REVIEW_HEAD_SHA: "${{ matrix.head }}",
+      OPENCLAW_SECURITY_REVIEW_CI_RUN_ID: "${{ matrix.ciRunId }}",
+      OPENCLAW_SECURITY_REVIEW_CI_RUN_ATTEMPT: "${{ matrix.ciRunAttempt }}",
     });
     for (const name of ["resolve", "review"]) {
       const job = workflow.jobs[name]!;
@@ -370,6 +372,7 @@ describe("security review workflow trust boundaries", () => {
       "issue_comment",
       "pull_request_target",
       "schedule",
+      "workflow_dispatch",
       "workflow_run",
     ]);
     expect(workflow.on.pull_request_target?.types).toEqual(
@@ -384,6 +387,15 @@ describe("security review workflow trust boundaries", () => {
     );
     expect(workflow.on.issue_comment?.types).toEqual(["created", "edited", "deleted"]);
     expect(workflow.on.workflow_run).toEqual({ workflows: ["CI"], types: ["completed"] });
+    expect(workflow.on.workflow_dispatch).toEqual({
+      inputs: {
+        completed_ci_run_id: {
+          description: "Completed CI run whose security review needs reconciliation",
+          required: true,
+          type: "string",
+        },
+      },
+    });
     expect(workflow.on.schedule).toEqual([{ cron: "4-59/10 * * * *" }]);
     const concurrency = workflow.jobs.resolve!.concurrency!;
     expect(concurrency["cancel-in-progress"]).toBe(false);
@@ -433,6 +445,8 @@ describe("security review workflow trust boundaries", () => {
       },
       { eventName: "pull_request_target", action: "edited", changes: {}, allowed: true },
       { eventName: "schedule", allowed: true },
+      { eventName: "workflow_dispatch", ref: "refs/heads/main", allowed: true },
+      { eventName: "workflow_dispatch", ref: "refs/heads/other", allowed: false },
       { eventName: "workflow_run", sourceEvent: "pull_request", allowed: true },
       { eventName: "workflow_run", sourceEvent: "push", allowed: false },
       { eventName: "workflow_run", sourceEvent: "workflow_dispatch", allowed: true },
@@ -458,9 +472,12 @@ describe("security review workflow trust boundaries", () => {
       { action: "edited", issue: true, allowed: false },
     ]) {
       const result = runInNewContext(condition, {
+        format: (template: string, value: string) => template.replace("{0}", value),
         github: {
           event_name: event.eventName ?? "issue_comment",
+          ref: event.ref,
           event: {
+            repository: { default_branch: "main" },
             action: event.action,
             comment: { body: event.body ?? "" },
             changes:

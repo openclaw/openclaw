@@ -266,6 +266,59 @@ describe("chat session sharing menu", () => {
     expect(part(root, "sharing-panel")?.matches(":popover-open")).toBe(true);
   });
 
+  it("keeps the empty permissions status on command failure and clears it during retry", async () => {
+    const retry = createDeferred<{ status: "success" }>();
+    const onPublicShareChange = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Sharing command failed"))
+      .mockReturnValueOnce(retry.promise);
+    const root = await mount({ state: sharingState(), onPublicShareChange });
+    const toggle = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-public-toggle")!;
+    expect(part(root, "sharing-permissions")).toBeNull();
+    toggle.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain("Sharing command failed");
+      expect(part(root, "sharing-permissions")).not.toBeNull();
+      expect(part(root, "sharing-empty")).not.toBeNull();
+    });
+    toggle.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(part(root, "sharing-permissions")).toBeNull();
+      expect(toggle.disabled).toBe(true);
+    });
+    retry.resolve({ status: "success" });
+    await waitForSolid(() => expect(toggle.disabled).toBe(false));
+  });
+
+  it("retains the copy control and clears its failure while a retry is pending", async () => {
+    const retry = createDeferred<{ status: "success" }>();
+    const onCopyPublicLink = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "failed", error: "Clipboard unavailable" })
+      .mockReturnValueOnce(retry.promise);
+    const root = await mount({
+      state: { ...sharingState({ publicShare }), publicUrl: "https://example.test/shared" },
+      onCopyPublicLink,
+    });
+    const copy = item(root, "public:copy")!;
+    copy.click();
+    await waitForSolid(() =>
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain("Clipboard unavailable"),
+    );
+    expect(item(root, "public:copy")).toBe(copy);
+    copy.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(copy.disabled).toBe(true);
+    });
+    retry.resolve({ status: "success" });
+    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
+    expect(item(root, "public:copy")).toBe(copy);
+    expect(copy.disabled).toBe(false);
+    expect(part(root, "sharing-panel")?.matches(":popover-open")).toBe(true);
+  });
+
   it.each(["loading", "read-only", "member"] as const)(
     "refuses public mutations for %s controls",
     async (blocked) => {

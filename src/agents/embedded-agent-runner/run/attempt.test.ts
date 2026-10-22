@@ -15,7 +15,6 @@ import { resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl } from "..
 import {
   mergeOrphanedTrailingUserPrompt,
   resolveAttemptFsWorkspaceOnly,
-  resolvePromptBuildHookResult,
 } from "./attempt-prompt-helpers.js";
 import { createFakeStream, type FakeWrappedStream } from "./attempt-stream.test-helpers.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
@@ -75,36 +74,6 @@ function expectSingleTextContent(content: unknown[], textFragment: string) {
 function expectSingleToolCallContent(content: unknown[], name: string) {
   expect(content).toEqual([expect.objectContaining({ type: "toolCall", name })]);
 }
-
-it("resolvePromptBuildHookResult applies contributions only during heartbeat turns", async () => {
-  const hookRunner = {
-    hasHooks: vi.fn((hookName: string) => hookName === "heartbeat_prompt_contribution"),
-    runHeartbeatPromptContribution: vi.fn(async () => ({
-      prependContext: "heartbeat prepend",
-      appendContext: "heartbeat append",
-    })),
-    runBeforePromptBuild: vi.fn(async () => undefined),
-  };
-
-  const run = (trigger: "heartbeat" | "user") =>
-    resolvePromptBuildHookResult({
-      config: {},
-      prompt: "hello",
-      messages: [],
-      hookRunner,
-      hookCtx: { trigger, sessionKey: "agent:main:main" },
-    });
-  const heartbeatResult = await run("heartbeat");
-  expect(hookRunner.runHeartbeatPromptContribution).toHaveBeenCalledTimes(1);
-  expect(heartbeatResult).toMatchObject({
-    prependContext: "heartbeat prepend",
-    appendContext: "heartbeat append",
-  });
-  hookRunner.runHeartbeatPromptContribution.mockClear();
-  const userResult = await run("user");
-  expect(hookRunner.runHeartbeatPromptContribution).not.toHaveBeenCalled();
-  expect([userResult.prependContext, userResult.appendContext]).toEqual([undefined, undefined]);
-});
 
 describe("composeSystemPromptWithHookContext", () => {
   it("normalizes hook system context block line endings and trailing whitespace", () => {

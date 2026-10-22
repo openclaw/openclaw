@@ -441,7 +441,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
   it.each([
     { trigger: "user", expectation: "required", notice: true },
     { trigger: "cron", expectation: "optional", notice: false },
-    { trigger: "heartbeat", expectation: "optional", notice: false },
     { trigger: "user", expectation: "result-required", notice: false },
   ] as const)(
     "settles empty $trigger/$expectation turns without persisting a synthetic answer",

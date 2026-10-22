@@ -62,7 +62,7 @@ export type UsageFilterState = {
 
 export type UsageDisplayState = {
   chartMode: "tokens" | "cost";
-  dailyChartMode: "total" | "by-type";
+  dailyChartMode: "total" | "by-type" | "by-provider";
   sessionSort: "tokens" | "cost" | "recent" | "messages" | "errors";
   sessionSortDir: "asc" | "desc";
   recentSessions: string[];
@@ -88,3 +88,11 @@ export type UsageDetailPresentation = {
 export type { SessionLogEntry } from "../../../../src/infra/session-cost-usage.types.js";
 
 export type SessionLogRole = SessionLogEntry["role"];
+
+export type UsagePresentation = {
+  display: Pick<
+    UsageDisplayState,
+    "chartMode" | "dailyChartMode" | "contextExpanded" | "headerPinned"
+  >;
+  detail: UsageDetailPresentation;
+};

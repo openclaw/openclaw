@@ -4,7 +4,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
@@ -54,12 +54,8 @@ function CurrentSession(props: { owner: CurrentWorkProps; row: GatewaySessionRow
       href={target()?.href ?? undefined}
       onClick={
         target()
-          ? (event: MouseEvent) => {
-              if (shouldHandleNavigationClick(event)) {
-                event.preventDefault();
-                props.owner.navigate(face(), target()!.options);
-              }
-            }
+          ? (event: MouseEvent) =>
+              handleNavigationClick(event, () => props.owner.navigate(face(), target()!.options))
           : undefined
       }
     >

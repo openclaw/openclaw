@@ -6,6 +6,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expandProvider } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI model provider profile outcomes" });
 const NOW = Date.now();
@@ -74,14 +75,13 @@ suite.define(() => {
               ],
             },
             "usage.status": { updatedAt: NOW, providers: [] },
-            "sessions.usage": { aggregates: { byProvider: [] } },
           },
         });
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         const xaiCard = page.locator('[data-provider-id="xai"]');
         const minimaxCard = page.locator('[data-provider-id="minimax"]');
-        await xaiCard.waitFor();
-        await minimaxCard.waitFor();
+        await expandProvider(page, "xai");
+        await expandProvider(page, "minimax");
         await xaiCard.screenshot({ path: path.join(suite.artifactDir, "account-status.png") });
         await minimaxCard.screenshot({ path: path.join(suite.artifactDir, "catalog-status.png") });
         await expect
@@ -92,22 +92,23 @@ suite.define(() => {
           )
           .toBe("Ready");
         expect(await xaiCard.locator(".model-providers__profile-copy strong").textContent()).toBe(
-          "Account 1",
+          "Signed-in account",
         );
-        expect(await xaiCard.locator(".model-providers__profile-status").textContent()).toContain(
-          "Signed in",
-        );
+        // The row already reads Ready, so the healthy account does not repeat it.
+        expect(
+          (await xaiCard.locator(".model-providers__profile-status").textContent())?.trim(),
+        ).toBe("");
         expect(
           await minimaxCard.locator(".model-providers__head .settings-status").textContent(),
         ).toContain("Models unavailable");
         expect(
           await minimaxCard.locator(".model-providers__profile-copy strong").textContent(),
         ).toBe("Work account");
-        const details = xaiCard.locator("details");
-        expect(await details.locator("summary").textContent()).toBe("Details");
-        expect(await details.getAttribute("open")).toBeNull();
-        await details.locator("summary").click();
-        expect(await details.textContent()).toContain("xai:opaque-account");
+        // The profile id stays reachable as the identity's title, not a separate disclosure.
+        expect(await xaiCard.locator("details").count()).toBe(0);
+        expect(
+          await xaiCard.locator(".model-providers__profile-copy strong").getAttribute("title"),
+        ).toBe("xai:opaque-account");
       },
     );
   });
@@ -148,16 +149,16 @@ suite.define(() => {
             },
             "models.authStatus": { ts: NOW, providers: [provider] },
             "usage.status": { updatedAt: NOW, providers: [] },
-            "sessions.usage": { aggregates: { byProvider: [] } },
           },
         });
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-        const card = page.locator('[data-provider-id="openai"]');
+        const card = await expandProvider(page, "openai");
         const alex = card.locator('[data-profile-id="openai:alex"]');
         const blair = card.locator('[data-profile-id="openai:blair"]');
         const grip = alex.locator(".model-providers__profile-grip");
         await expect.poll(() => grip.isEnabled()).toBe(true);
-        await grip.scrollIntoViewIfNeeded();
+        // The drag ends over the lower account, so keep both rows inside the viewport.
+        await blair.scrollIntoViewIfNeeded();
         const start = await grip.boundingBox();
         const first = await alex.boundingBox();
         const second = await blair.boundingBox();
@@ -305,7 +306,6 @@ suite.define(() => {
               ],
             },
             "usage.status": { updatedAt: NOW, providers: [] },
-            "sessions.usage": { aggregates: { byProvider: [] } },
           },
         });
 
@@ -359,15 +359,24 @@ suite.define(() => {
           )
           .toBe(status);
         if (!available) {
+          // A rejected credential opens its row without a click.
+          expect(
+            await openaiCard.locator(".provider-row__summary").getAttribute("aria-expanded"),
+          ).toBe("true");
+        }
+        await expandProvider(page, "openai");
+        if (!available) {
           await openaiCard.screenshot({
             path: path.join(suite.artifactDir, "provider-auth-rejected.png"),
           });
         }
         expect(
-          await openaiCard
-            .locator('[data-profile-id="openai:ready"] .model-providers__profile-status')
-            .textContent(),
-        ).toContain(available ? "Signed in" : "Credentials configured");
+          (
+            await openaiCard
+              .locator('[data-profile-id="openai:ready"] .model-providers__profile-status')
+              .textContent()
+          )?.trim(),
+        ).toBe(available ? "" : "Credentials configured");
       },
     );
   });

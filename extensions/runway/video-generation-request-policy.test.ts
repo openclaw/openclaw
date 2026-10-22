@@ -1,6 +1,10 @@
+import {
+  capturePluginRegistration,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { postJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { afterEach, assert, expect, it, vi } from "vitest";
-import { buildRunwayVideoGenerationProvider } from "./video-generation-provider.js";
+import plugin from "./index.js";
 
 const { postJsonResponseMock } = vi.hoisted(() => ({
   postJsonResponseMock: vi.fn<typeof postJsonResponse>(),
@@ -18,12 +22,17 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
 
 afterEach(() => vi.restoreAllMocks());
 
+const provider = requireRegisteredProvider(
+  capturePluginRegistration(plugin).videoGenerationProviders,
+  "runway",
+);
+
 it("applies configured request policy to the submitted Runway task", async () => {
   const intercepted = new Error("synthetic submission intercepted");
   postJsonResponseMock.mockRejectedValue(intercepted);
 
   await expect(
-    buildRunwayVideoGenerationProvider().generateVideo({
+    provider.generateVideo({
       provider: "runway",
       model: "gen4.5",
       prompt: "a synthetic lobster",
@@ -69,7 +78,7 @@ it("denies private polling without needing a proxy override", async () => {
     .mockRejectedValue(new Error("unguarded synthetic poll reached fetch"));
 
   await expect(
-    buildRunwayVideoGenerationProvider().generateVideo({
+    provider.generateVideo({
       provider: "runway",
       model: "gen4.5",
       prompt: "a synthetic lobster",

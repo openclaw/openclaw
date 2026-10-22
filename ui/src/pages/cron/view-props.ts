@@ -1,4 +1,4 @@
-import { hasCronFormErrors } from "../../lib/cron/index.ts";
+import { hasCronFormErrors } from "../../lib/cron/form.ts";
 import { getCronRunsViewState } from "../../lib/cron/runs.ts";
 import type { createCronPage } from "./cron-page-state.ts";
 import { validateCronEventSelection } from "./event-source.ts";
@@ -56,11 +56,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     createOpen: page.cron().cronCreateOpen,
     listTab: page.listTab(),
     detailTab: page.detailTab(),
-    error:
-      page.cron().cronError ??
-      page.cron().cronRunsError ??
-      page.deliveryDirectory.error ??
-      page.modelSuggestionsError(),
+    error: page.cron().cronError ?? page.cron().cronRunsError ?? page.deliveryDirectory.error,
     notice: page.cron().cronNotice,
     busy: page.cron().cronBusy,
     form: page.cron().cronForm,

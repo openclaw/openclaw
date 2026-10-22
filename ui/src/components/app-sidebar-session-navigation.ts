@@ -680,14 +680,8 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   private selectedAgentSessionResult(agentId = this.expandedAgentId()): SessionsListResult | null {
-    if (this.rosterSessionSource) {
-      return this.rosterSessionSource.result;
-    }
-    const selected = normalizeAgentId(agentId);
-    return this.sessionData.sessionsAgentId === null ||
-      selected === normalizeAgentId(this.sessionData.sessionsAgentId)
-      ? this.sessionData.sessionsResult
-      : (this.sessionData.sessionResultsByAgent[selected] ?? null);
+    const roster = this.rosterSessionSource;
+    return roster ? roster.result : this.sessionData.resultForAgent(agentId);
   }
 
   selectedAgentMainSessionKey(agentId?: string): string {

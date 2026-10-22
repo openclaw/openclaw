@@ -178,7 +178,7 @@ describe("resolveFollowupDeliveryDecision", () => {
   );
 
   it.each(["required", "optional"] as const)(
-    "honors a queued %s reply expectation over heartbeat drain options and NO_REPLY",
+    "honors a queued %s reply expectation over drain options and NO_REPLY",
     async (expectation) => {
       const turn = createTurn();
       turn.queued.run.terminalReplyExpectation = expectation;
@@ -190,7 +190,7 @@ describe("resolveFollowupDeliveryDecision", () => {
         turn,
         execution,
         accounting: createAccounting(),
-        opts: { isHeartbeat: true },
+        opts: {},
       });
 
       expect(decision).toEqual({ kind: "suppress", reason: "silent" });

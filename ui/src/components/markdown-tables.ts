@@ -1,8 +1,10 @@
 import type { MarkdownIt } from "markdown-it";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
+import { formatUiError, UserFacingError } from "../lib/format-error.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { showToast } from "../lib/toast.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
 import { createIconElement } from "./markdown-icon.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
@@ -214,7 +216,13 @@ async function showTableDialog(
   // Reserve through teardown before loading; reconnect cannot revive this request.
   state.closeDialog = close;
   try {
-    await import("./modal-dialog.tsx");
+    try {
+      await import("./modal-dialog.tsx");
+    } catch (cause) {
+      throw new UserFacingError(`${t("lazyView.errorTitle")}. ${t("lazyView.staleSubtitle")}`, {
+        cause,
+      });
+    }
     if (state.closeDialog !== close || !owner.isConnected || !trigger.isConnected) {
       return;
     }
@@ -264,6 +272,10 @@ async function showTableDialog(
     // Cloned anchors need their own href lifetime before the source is decorated.
     for (const target of content.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
       stopListeners.push(registerSessionTitleTarget(target, document.createElement("span")));
+    }
+  } catch (error) {
+    if (state.closeDialog === close && owner.isConnected && trigger.isConnected) {
+      showToast({ message: formatUiError(error), severity: "error" });
     }
   } finally {
     if (!dialog) {

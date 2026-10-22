@@ -37,6 +37,16 @@ const mocks = vi.hoisted(() => ({
   >(async () => null),
   converge: vi.fn<typeof import("./update-command-convergence.js").convergeUpdatePlugins>(),
   printResult: vi.fn(),
+  task: vi.fn<typeof import("../../daemon/schtasks-exec.js").execSchtasks>(),
+}));
+// Native Windows transport only; the finalizer and autostart recovery owner stay real.
+vi.mock("../../daemon/schtasks-exec.js", async () => ({
+  ...(await vi.importActual<typeof import("../../daemon/schtasks-exec.js")>(
+    "../../daemon/schtasks-exec.js",
+  )),
+  execSchtasks: mocks.task,
+  execScheduledTaskEnabledChange: (name: string, enabled: boolean) =>
+    mocks.task(["/Change", "/TN", name, enabled ? "/ENABLE" : "/DISABLE"]),
 }));
 vi.mock("./update-command-convergence.js", () => ({ convergeUpdatePlugins: mocks.converge }));
 vi.mock("./progress.js", async (importOriginal) => ({
@@ -108,6 +118,8 @@ async function useRealVerification() {
 }
 beforeEach(async () => {
   vi.clearAllMocks();
+  mocks.converge.mockReset();
+  mocks.task.mockReset();
   mocks.activePort.mockReset();
   mocks.managedService.mockReset();
   vi.mocked(verifyUpdatedGateway)
@@ -126,6 +138,247 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+it.each(
+  (["linux", "win32"] as const).flatMap((platform) =>
+    [false, true].map((dataAtRisk) => ({ platform, dataAtRisk })),
+  ),
+)(
+  "recovers a Gateway after an exited Doctor on $platform unless data is at risk ($dataAtRisk)",
+  async ({ platform, dataAtRisk }) => {
+    const [
+      { createMockGatewayService },
+      { withUpdateCommandExecutor },
+      { createPostUpdateRepairFixture },
+      { finishUpdate },
+      serviceCommand,
+      serviceMaintenance,
+      servicePlan,
+      serviceOperations,
+      { createWindowsTaskAutoStartRecovery },
+      nodeSqlite,
+      processIdentity,
+      snapshotStaging,
+    ] = await Promise.all([
+      import("../../daemon/service.test-helpers.js"),
+      import("./update-command-executor.js"),
+      import("./update-command-post-update-repair.test-support.js"),
+      import("./update-command-post-update.js"),
+      import("./update-command-service-command.js"),
+      import("./update-command-service-maintenance.js"),
+      import("./update-command-service-plan.js"),
+      import("./update-command-service.js"),
+      import("./update-command-windows-task.js"),
+      import("../../infra/node-sqlite.js"),
+      import("../../shared/pid-alive.js"),
+      import("../../infra/sqlite-snapshot-staging.js"),
+    ]);
+    const hostPlatform = process.platform;
+    const existingUri = nodeSqlite.resolveExistingSqliteFileUri;
+    vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((pathname) =>
+      existingUri(pathname, hostPlatform),
+    );
+    const servicePlatform = vi.spyOn(process, "platform", "get").mockReturnValue(hostPlatform);
+    // Native process identity and SQLite staging still belong to the real host.
+    const onHost = <T>(read: () => T): T => {
+      const activePlatform = process.platform;
+      servicePlatform.mockReturnValue(hostPlatform);
+      try {
+        return read();
+      } finally {
+        servicePlatform.mockReturnValue(activePlatform);
+      }
+    };
+    const readStart = processIdentity.getFileLockProcessStartTime;
+    vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((...args) =>
+      onHost(() => readStart(...args)),
+    );
+    const createStaging = snapshotStaging.createSqliteSnapshotStagingDirectorySync;
+    vi.spyOn(snapshotStaging, "createSqliteSnapshotStagingDirectorySync").mockImplementation(
+      (...args) => onHost(() => createStaging(...args)),
+    );
+    const params = createPostUpdateRepairFixture(root);
+    const run = params.opts.run!;
+    params.root = root;
+    params.result = {
+      ...params.result,
+      root,
+      status: "skipped",
+      reason: "already-current",
+      before: { version: "2026.9.5" },
+      after: { version: "2026.9.5" },
+    };
+    params.coreAlreadyCurrent = true;
+    params.mutationStarted = false;
+    params.rollbackBlockedReason = undefined;
+    params.preManagedServiceStop!.stopped = false;
+    await fs.mkdir(path.join(root, "dist"));
+    await fs.writeFile(path.join(root, "dist/index.js"), "export {};\n");
+    let running = true;
+    let enabled = true;
+    mocks.task.mockImplementation(async (args) => {
+      if (args[0] === "/Query") {
+        return {
+          code: 0,
+          stdout: `<Task><Settings><Enabled>${enabled}</Enabled></Settings></Task>`,
+          stderr: "",
+        };
+      }
+      if (args[0] === "/Run") {
+        if (enabled) {
+          running = true;
+        }
+        return { code: enabled ? 0 : 1, stdout: "", stderr: "" };
+      }
+      enabled = args.at(-1) === "/ENABLE";
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const state = () => ({
+      installed: true,
+      loadState: { status: "loaded" as const },
+      running,
+      runtime: {
+        status: running ? ("running" as const) : ("stopped" as const),
+        pid: running ? 4321 : undefined,
+        ...(platform === "linux" ? { systemd: { managerUid: 2001 } } : {}),
+      },
+      env: run.env,
+      command: {
+        programArguments: [process.execPath, path.join(root, "dist/index.js"), "gateway"],
+        ...(platform === "win32" ? { sourcePath: path.join(root, "gateway.cmd") } : {}),
+      },
+    });
+    vi.spyOn(servicePlan, "readGatewayServiceStateForUpdate").mockImplementation(async () =>
+      state(),
+    );
+    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(
+      createMockGatewayService({
+        readRuntime: async () => state().runtime,
+      }),
+    );
+    const stop = vi
+      .spyOn(serviceOperations, "maybeStopManagedServiceBeforeMutableUpdate")
+      .mockImplementation(async ({ onStopped }) => {
+        const recovery =
+          platform === "win32"
+            ? createWindowsTaskAutoStartRecovery({ serviceEnv: run.env })
+            : undefined;
+        await recovery?.suspended;
+        running = false;
+        const stopped = {
+          ...params.preManagedServiceStop!,
+          stopped: true,
+          windowsTaskAutoStartRecovery: recovery,
+        };
+        onStopped?.(stopped);
+        return stopped;
+      });
+    const facts = Array.from({ length: 4 }, (_, index) => ({
+      check: `fixture-check-${index + 1}`,
+      code: "step-refused",
+    }));
+    mocks.converge.mockImplementationOnce(async ({ beforeDoctor, result }) => {
+      await beforeDoctor?.();
+      return {
+        resultWithPostUpdate: {
+          ...result,
+          status: "error",
+          reason: "post-update-plugins",
+          ...(dataAtRisk
+            ? {
+                recovery: {
+                  serviceRestartSafe: false,
+                  reason: "runtime-verification-failed",
+                  dataAtRisk: "unreadable-state",
+                },
+              }
+            : {}),
+          steps: [
+            ...result.steps,
+            stepWith("post-plugin doctor", { exitCode: 1, failureFacts: facts }),
+          ],
+        },
+      };
+    });
+    const start = vi
+      .spyOn(serviceCommand, "runUpdatedInstallGatewayCommand")
+      .mockImplementation(async (command, action) => {
+        command.onGatewayStartAttempted?.(action);
+        if (platform === "win32") {
+          const launched = await mocks.task(["/Run", "/TN", "fixture-gateway"]);
+          if (launched.code !== 0) {
+            throw new Error("Scheduled Task remained disabled after Doctor failure");
+          }
+        } else {
+          running = true;
+        }
+        return "accepted";
+      });
+    const health = async () => ({
+      healthy: running,
+      outcome: running ? ("ready" as const) : ("failed" as const),
+      runtime: state().runtime,
+      gatewayVersion: "2026.9.5",
+      portUsage: {
+        port: 19431,
+        status: running ? ("busy" as const) : ("free" as const),
+        listeners: [],
+        hints: [],
+      },
+      staleGatewayPids: [],
+      waitOutcome: running ? ("healthy" as const) : ("stopped-free" as const),
+    });
+    vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockImplementation(health);
+    vi.spyOn(restartHealth, "inspectGatewayRestart").mockImplementation(health);
+    vi.spyOn(restartHealth, "waitForGatewayHttpReadiness").mockImplementation(async () => ({
+      healthz: running ? 200 : 503,
+      readyz: running ? 200 : 503,
+    }));
+    const actual = await vi.importActual<typeof import("./update-command-verification.js")>(
+      "./update-command-verification.js",
+    );
+    vi.mocked(verifyUpdatedGateway).mockImplementation(actual.verifyUpdatedGateway);
+    mocks.activePort.mockResolvedValue(19431);
+    await withUpdateCommandExecutor(run.runId, async (executor) => {
+      run.executorFence = await executor.enter(root);
+      servicePlatform.mockReturnValue(platform);
+      try {
+        params.preManagedServiceStop!.serviceUpdateVerdict =
+          await serviceMaintenance.revalidateManagedGatewayServiceAfterUpdate({
+            state: state(),
+            root,
+          });
+        await expect(finishUpdate(params)).rejects.toMatchObject({
+          result: {
+            status: "error",
+            recovery: dataAtRisk
+              ? { serviceRestartSafe: false, dataAtRisk: "unreadable-state" }
+              : { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" },
+          },
+        });
+      } finally {
+        servicePlatform.mockReturnValue(hostPlatform);
+      }
+    });
+    expect(stop).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledTimes(dataAtRisk ? 0 : 1);
+    expect(running).toBe(!dataAtRisk);
+    if (platform === "win32") {
+      expect(enabled).toBe(!dataAtRisk);
+    } else {
+      expect(mocks.task).not.toHaveBeenCalled();
+    }
+    const recorded = updateLedger.getUpdateRun(run.runId, { env: run.env });
+    expect(
+      recorded?.steps.find((step) => step.step === "post-plugin doctor")?.failureFacts,
+    ).toEqual(expect.arrayContaining(facts));
+    assert(recorded);
+    const report = renderUpdateRunReport(recorded).markdown;
+    for (const fact of facts) {
+      expect(report).toContain(fact.check);
+    }
+  },
+);
 
 it.each(["managed-service-preflight", "gateway-stop-unverified"])(
   "records untouched %s as no recovery needed and still serving before",

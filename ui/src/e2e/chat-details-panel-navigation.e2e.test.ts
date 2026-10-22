@@ -107,6 +107,11 @@ async function setup(page: Page) {
     .frameLocator(".board-widget iframe")
     .getByText("Ready for review", { exact: true })
     .waitFor();
+  await page
+    .locator(".chat-pane-cache__pane--visible .chat-group.assistant .chat-text", {
+      hasText: "The project notes and release checklist are ready for review.",
+    })
+    .waitFor();
 }
 
 async function expectBesidePanel(page: Page, details: Locator) {
@@ -128,6 +133,8 @@ async function openOutputs(details: Locator) {
     await summary.click();
   }
   await details.getByRole("button", { name: "View all", exact: true }).waitFor();
+  // The row is visible before its disclosure finishes changing height.
+  await waitForLayoutSettled(details.page(), '[data-details-group="outputs"]');
 }
 
 suite.define(() => {

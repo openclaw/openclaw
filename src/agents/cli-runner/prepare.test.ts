@@ -2055,8 +2055,8 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it("reuses normal/heartbeat/normal CLI bindings for a subagent", async () => {
-    const trigger = "heartbeat";
+  it("reuses normal/event/normal CLI bindings for a subagent", async () => {
+    const trigger = "event";
     const sessionKey = "agent:main:subagent:child";
     const cliSessionBindingFacts = { extraSystemPromptStatic: "" };
     const first = await fixture.prepare({ sessionKey, cliSessionBindingFacts });

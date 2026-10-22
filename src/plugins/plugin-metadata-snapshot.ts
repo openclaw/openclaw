@@ -61,6 +61,26 @@ import { buildDeclaredProviderOwnerIndex } from "./provider-owner-index.js";
 import { registerProviderPolicyOwnerIndexes } from "./provider-policy-owners.js";
 
 const MAX_PLUGIN_METADATA_PROJECTIONS = 64;
+export const MAX_CACHED_PLUGIN_METADATA_SNAPSHOTS = 64;
+
+/** Keep recently used discovery views; active scopes retain their own snapshot references. */
+export function readPluginMetadataSnapshotCache(key: string): PluginMetadataSnapshot | undefined {
+  const snapshots = getPluginCache().metadata.snapshots;
+  const snapshot = snapshots.get(key);
+  if (snapshot) {
+    snapshots.delete(key);
+    snapshots.set(key, snapshot);
+  }
+  return snapshot;
+}
+
+export function cachePluginMetadataSnapshot(key: string, snapshot: PluginMetadataSnapshot): void {
+  const snapshots = getPluginCache().metadata.snapshots;
+  snapshots.delete(key);
+  snapshots.set(key, snapshot);
+  pruneMapToMaxSize(snapshots, MAX_CACHED_PLUGIN_METADATA_SNAPSHOTS);
+}
+
 export type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotOwnerMaps,
@@ -377,9 +397,8 @@ export function loadPluginMetadataSnapshotForRegistry(
 function loadCachedPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
-  const cache = getPluginCache();
   const key = resolvePluginMetadataSnapshotCacheKey(params);
-  const cached = cache.metadata.snapshots.get(key);
+  const cached = readPluginMetadataSnapshotCache(key);
   if (cached) {
     return projectPluginMetadataSnapshot(
       cached,
@@ -413,7 +432,7 @@ function loadCachedPluginMetadataSnapshot(
       },
     },
   );
-  cache.metadata.snapshots.set(key, frozen);
+  cachePluginMetadataSnapshot(key, frozen);
   return projectPluginMetadataSnapshot(
     frozen,
     params.pluginIds ?? params.pluginIdScope?.resolve({ index: frozen.index }),
@@ -598,7 +617,7 @@ export function resolvePluginMetadataSnapshotInput(
     return selection.snapshot;
   }
   return (
-    getPluginCache().metadata.snapshots.get(resolvePluginMetadataSnapshotCacheKey(params)) ??
+    readPluginMetadataSnapshotCache(resolvePluginMetadataSnapshotCacheKey(params)) ??
     loadPluginMetadataSnapshotInput(params, () => registryReader(params.workspaceDir))
   );
 }

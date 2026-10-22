@@ -272,7 +272,7 @@ it("steers configured, session and explicit inputs through current authority int
             sessionCtx: {},
             sessionKey,
             touchActiveSessionEntry: async () => {},
-            typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+            typingSignals: createTypingSignaler({ typing, mode: "never" }),
           }),
         ).resolves.toBe("handled");
         expect(resultState.admission).toEqual({ status: "accepted", mode: "steer" });

@@ -1926,6 +1926,7 @@ export const en: TranslationMap & {
       emptyValue: "—",
       unknown: "unknown",
       atLeast: "≥ {value}",
+      approx: "≈ {value}",
     },
     loading: {
       title: "Usage Overview",
@@ -1964,6 +1965,9 @@ export const en: TranslationMap & {
       costCategories: "Cost categories",
       remaining: "{percent}% left",
       resets: "Resets {date}",
+      exhausted: "{label} is used up.",
+      checkFailed: "Check failed",
+      exhaustedUntil: "{label} is used up until {date}.",
     },
     presets: {},
     scope: {},
@@ -2229,6 +2233,8 @@ export const en: TranslationMap & {
     usageRemaining: "Usage Remaining",
     view: {},
     sendShortcut: "Send shortcut",
+    sendShortcutHint:
+      "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     followUpMode: "Follow-ups while the agent is working",
