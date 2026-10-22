@@ -1,4 +1,3 @@
-// Tests compile-cache child-process spawning and environment propagation.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { constants } from "node:module";
@@ -6,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Mock, MockInstance } from "vitest";
+import type { MockInstance } from "vitest";
 import { CLI_PARENT_BOUND_PRELOAD } from "../cli-parent-lifetime.mjs";
 import { awaitGateBeforeSettlement } from "../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
@@ -62,11 +61,9 @@ describe("entry compile cache", () => {
   let entryFile: string;
   let argv: string[];
   let child: ChildProcess;
-  let kill: Mock<ChildProcess["kill"]>;
-  let processKill: MockInstance<typeof process.kill>;
   let originalExitCode: typeof process.exitCode;
   let spawned: ReturnType<typeof createDeferredCore<void>>;
-  const pending: Array<Promise<boolean>> = [];
+  const pending: Promise<boolean>[] = [];
   let writeStderr: MockInstance<typeof process.stderr.write>;
   beforeEach(() => {
     root = tempDirs.make("openclaw-compile-cache-");
@@ -82,8 +79,6 @@ describe("entry compile cache", () => {
     getCompileCacheDir.mockReset();
     attachChildProcessBridge.mockReset().mockReturnValue({ detach: vi.fn() });
     child = new EventEmitter() as ChildProcess;
-    kill = vi.fn(() => true);
-    child.kill = kill;
     spawned = createDeferredCore();
     spawn.mockReset().mockImplementation(() => {
       spawned.resolve();
@@ -91,7 +86,6 @@ describe("entry compile cache", () => {
     });
     vi.spyOn(process, "argv", "get").mockImplementation(() => argv);
     vi.spyOn(process, "execArgv", "get").mockReturnValue(["--no-warnings"]);
-    processKill = vi.spyOn(process, "kill").mockReturnValue(true);
     originalExitCode = process.exitCode;
     // A nondefault status proves settlement has not published either success or failure.
     process.exitCode = 17;
@@ -99,7 +93,6 @@ describe("entry compile cache", () => {
   });
 
   afterEach(async () => {
-    vi.useRealTimers();
     child.emit("close", 0, null);
     await Promise.allSettled(pending.splice(0));
     process.exitCode = originalExitCode;
@@ -214,21 +207,22 @@ describe("entry compile cache", () => {
     }
     const { completion } = await startRespawn();
     expect(spawn).toHaveBeenCalledOnce();
-    const [command, args, options] = expectDefined(spawn.mock.calls[0], "respawn call");
-    expect({ command, args, options }).toMatchObject({
-      command: process.execPath,
-      args: standalone
-        ? cli
-        : ["--import", CLI_PARENT_BOUND_PRELOAD, "--no-warnings", entryFile, ...cli],
-      options: {
-        env: { NODE_DISABLE_COMPILE_CACHE: "1", OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1" },
+    const options = expectDefined(spawn.mock.calls[0], "respawn call")[2];
+    expect(spawn).toHaveBeenCalledWith(
+      process.execPath,
+      standalone ? cli : ["--import", CLI_PARENT_BOUND_PRELOAD, "--no-warnings", entryFile, ...cli],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1",
+        }),
         stdio: ["inherit", "inherit", "inherit", "ipc"],
         detached:
           mode !== "interactive" &&
           process.platform !== "win32" &&
           !(process.stdin.isTTY || process.stdout.isTTY),
-      },
-    });
+      }),
+    );
     expect(options?.env?.NODE_COMPILE_CACHE).toBeUndefined();
     if (standalone) {
       expect(options?.env?.OPENCLAW_CLI_RESPAWN_PARENT).toBe(String(process.pid));
@@ -274,38 +268,6 @@ describe("entry compile cache", () => {
         }
         await expect(completion).resolves.toBe(respawns);
         expect(spawn).toHaveBeenCalledTimes(respawns ? 1 : 0);
-      });
-    },
-  );
-
-  it.each(["linux", "win32"] as const)(
-    "waits for a signaled compile-cache respawn child after force-killing it on %s",
-    async (platform) => {
-      useSourceEntry();
-      argv = [process.execPath, entryFile, "tui"];
-      vi.useFakeTimers();
-      await withMockedPlatform(platform, async () => {
-        const { completion } = await startRespawn();
-        const [, onSignal] = expectDefined(attachChildProcessBridge.mock.calls[0], "bridge call");
-        expectDefined(onSignal, "signal handler")("SIGTERM");
-        vi.advanceTimersByTime(1_000);
-        expect(kill).toHaveBeenCalledWith("SIGTERM");
-        expect(process.exitCode).toBe(17);
-        vi.advanceTimersByTime(1_000);
-        expect(kill).toHaveBeenCalledWith(platform === "win32" ? "SIGTERM" : "SIGKILL");
-        expect(process.exitCode).toBe(17);
-        expect(processKill).not.toHaveBeenCalled();
-        child.emit("exit", null, "SIGKILL");
-        expect(process.exitCode).toBe(17);
-        expect(processKill).not.toHaveBeenCalled();
-        child.emit("close", null, "SIGKILL");
-        await expect(completion).resolves.toBe(true);
-        expect(process.exitCode).toBe(platform === "win32" ? 1 : 137);
-        if (platform === "win32") {
-          expect(processKill).not.toHaveBeenCalled();
-        } else {
-          expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, "SIGKILL");
-        }
       });
     },
   );

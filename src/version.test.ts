@@ -1,4 +1,3 @@
-// Tests package version resolution and generated version metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,9 +18,7 @@ import {
 
 const versionFixtureRoot = createSuiteTempRootTracker({ prefix: "openclaw-version-" });
 
-beforeAll(async () => {
-  await versionFixtureRoot.setup();
-});
+beforeAll(() => versionFixtureRoot.setup());
 afterAll(() => versionFixtureRoot.cleanup());
 
 async function versionFixture(files: Record<string, unknown>) {
@@ -52,17 +49,10 @@ describe("version resolution", () => {
   });
 
   it("continues past an oversized build id to the next candidate", async () => {
-    const root = await versionFixtureRoot.make("oversized-build-id");
-    await fs.mkdir(path.join(root, "dist/plugin-sdk"), { recursive: true });
-    await fs.writeFile(
-      path.join(root, "dist/build-info.json"),
-      JSON.stringify({ buildId: "x".repeat(97) }),
-    );
-    await fs.writeFile(
-      path.join(root, "build-info.json"),
-      JSON.stringify({ buildId: "x".repeat(96) }),
-    );
-    const moduleUrl = pathToFileURL(path.join(root, "dist/plugin-sdk/core.js")).href;
+    const moduleUrl = await versionFixture({
+      "dist/build-info.json": { buildId: "x".repeat(97) },
+      "build-info.json": { buildId: "x".repeat(96) },
+    });
     expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBe("x".repeat(96));
   });
 
@@ -119,24 +109,18 @@ describe("version resolution", () => {
     );
   });
 
-  it("keeps explicit env-object overrides for compatibility checks in tests", () => {
-    expect(
-      resolveCompatibilityHostVersion({
-        OPENCLAW_VERSION: "2026.3.99",
-        npm_package_version: "2026.3.97",
-      }),
-    ).toBe("2026.3.99");
-  });
-
-  it("prefers explicit compatibility host overrides over runtime and stale env versions", () => {
-    expect(
-      resolveCompatibilityHostVersion({
-        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.4.8",
-        OPENCLAW_VERSION: "2026.3.99",
-        npm_package_version: "2026.3.97",
-      }),
-    ).toBe("2026.4.8");
-  });
+  it.each([undefined, "2026.4.8"])(
+    "resolves explicit compatibility env (override: %s)",
+    (override) => {
+      expect(
+        resolveCompatibilityHostVersion({
+          OPENCLAW_COMPATIBILITY_HOST_VERSION: override,
+          OPENCLAW_VERSION: "2026.3.99",
+          npm_package_version: "2026.3.97",
+        }),
+      ).toBe(override ?? "2026.3.99");
+    },
+  );
 
   it("normalizes runtime version candidate for fallback handling", () => {
     expect(

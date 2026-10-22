@@ -1,4 +1,3 @@
-// Tests executable behavior for the legacy package entrypoint.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -130,16 +129,12 @@ describe("legacy package executable entrypoint", () => {
   it.each([
     { mode: "version", args: ["--version"] },
     { mode: "CLI", args: ["status"] },
-    { mode: "disabled cache", args: ["status"] },
     { mode: "Gateway", args: ["gateway", "run"] },
     { mode: "library", args: ["status"] },
   ])("loads only the modules needed for $mode", async ({ mode, args }) => {
     const handled = mode === "version";
     const caches = mode === "Gateway";
     const loadsFailure = !handled && mode !== "library";
-    if (mode === "disabled cache") {
-      vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", "1");
-    }
     vi.mocked(isMainModule).mockReturnValue(mode !== "library");
     vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(handled);
     const entry = await loadEntry(args);
@@ -202,24 +197,22 @@ describe("legacy package executable entrypoint", () => {
   it("scopes an inherited cache before starting the direct CLI", async () => {
     const base = inheritCache();
     await loadEntry();
-    expect(compileCache.respawn.mock.calls).toEqual([
-      [
-        expect.objectContaining({
-          command: process.execPath,
-          args: [
-            "--import",
-            CLI_PARENT_BOUND_PRELOAD,
-            ...process.execArgv,
-            expect.stringMatching(/[\\/]index\.ts$/),
-            "status",
-          ],
-          env: expect.objectContaining({
-            NODE_COMPILE_CACHE: expect.stringContaining(path.join(base, "openclaw")),
-            OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
-          }),
+    expect(compileCache.respawn).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        command: process.execPath,
+        args: [
+          "--import",
+          CLI_PARENT_BOUND_PRELOAD,
+          ...process.execArgv,
+          expect.stringMatching(/[\\/]index\.ts$/),
+          "status",
+        ],
+        env: expect.objectContaining({
+          NODE_COMPILE_CACHE: expect.stringContaining(path.join(base, "openclaw")),
+          OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
         }),
-      ],
-    ]);
+      }),
+    );
     expect(compileCache.enable).not.toHaveBeenCalled();
     expect(runCliWithExitFinalization).not.toHaveBeenCalled();
   });

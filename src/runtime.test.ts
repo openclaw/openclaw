@@ -45,21 +45,15 @@ describe("writeRuntimeJson", () => {
   });
 });
 
-describe("writeRuntimeStdout", () => {
-  it("uses the direct stdout writer when available", () => {
-    const runtime = makeOutputRuntime();
-    writeRuntimeStdout(runtime, "plain output");
-
+it.each([false, true])("writes stdout (direct writer: %s)", (direct) => {
+  const runtime = direct ? makeOutputRuntime() : makeRuntime();
+  writeRuntimeStdout(runtime, "plain output");
+  if ("writeStdout" in runtime) {
     expect(runtime.writeStdout).toHaveBeenCalledWith("plain output");
     expect(runtime.log).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the runtime logger when no stdout writer is available", () => {
-    const runtime = makeRuntime();
-    writeRuntimeStdout(runtime, "plain output");
-
+  } else {
     expect(runtime.log).toHaveBeenCalledWith("plain output");
-  });
+  }
 });
 
 describe("defaultRuntime terminal restoration", () => {
@@ -101,25 +95,22 @@ describe("defaultRuntime terminal restoration", () => {
     });
   });
 
-  it("keeps machine-readable stdout clean on exit", () => {
-    loggingState.forceConsoleToStderr = true;
-
-    defaultRuntime.writeJson({ ok: false });
+  it.each([false, true])("restores the terminal without corrupting output (JSON: %s)", (json) => {
+    loggingState.forceConsoleToStderr = json;
+    if (json) {
+      defaultRuntime.writeJson({ ok: false });
+    } else {
+      defaultRuntime.writeStdout("operator-visible output");
+    }
     expect(() => defaultRuntime.exit(1)).toThrow(ExitError);
-
-    expect(JSON.parse(stdout.join(""))).toEqual({ ok: false });
-    expect(stderr.join("")).toContain("\x1b[?25h");
-  });
-
-  it("preserves stdout terminal restoration for human output", () => {
-    loggingState.forceConsoleToStderr = false;
-
-    defaultRuntime.writeStdout("operator-visible output");
-    expect(() => defaultRuntime.exit(1)).toThrow(ExitError);
-
-    expect(stdout.join("")).toContain("operator-visible output\n");
-    expect(stdout.join("")).toContain("\x1b[?25h");
-    expect(stderr).toEqual([]);
+    if (json) {
+      expect(JSON.parse(stdout.join(""))).toEqual({ ok: false });
+      expect(stderr.join("")).toContain("\x1b[?25h");
+    } else {
+      expect(stdout.join("")).toContain("operator-visible output\n");
+      expect(stdout.join("")).toContain("\x1b[?25h");
+      expect(stderr).toEqual([]);
+    }
   });
 
   it("honors an explicitly selected reset stream in machine-output mode", () => {

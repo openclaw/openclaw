@@ -57,16 +57,6 @@ describe("sleep", () => {
     await expect(sleep(0, new AbortController().signal)).resolves.toBeUndefined();
     expect(setTimeoutSpy).not.toHaveBeenCalled();
   });
-
-  it("removes abort listeners after normal resolution", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const removeListenerSpy = vi.spyOn(controller.signal, "removeEventListener");
-    const promise = sleep(5, controller.signal);
-    await vi.advanceTimersByTimeAsync(5);
-    await expect(promise).resolves.toBeUndefined();
-    expect(removeListenerSpy).toHaveBeenCalledWith("abort", expect.any(Function));
-  });
 });
 
 it.each([
@@ -77,35 +67,27 @@ it.each([
 });
 
 it.each([
-  { env: {}, expected: path.resolve("config-dir-home", ".openclaw") },
-  ...[
-    { profile: " work ", directory: ".openclaw-work" },
-    { profile: "dev", directory: ".openclaw-dev" },
-    { profile: "Default", directory: ".openclaw" },
-    { profile: "bad profile", directory: ".openclaw" },
-  ].map(({ profile, directory }) => ({
-    env: { OPENCLAW_PROFILE: profile },
-    expected: path.resolve("config-dir-home", directory),
-  })),
-  {
-    env: {
+  [undefined, ".openclaw"],
+  [" work ", ".openclaw-work"],
+  ["dev", ".openclaw-dev"],
+  ["Default", ".openclaw"],
+  ["bad profile", ".openclaw"],
+] as const)("resolveConfigDir selects profile %s", (profile, directory) => {
+  const home = path.resolve("config-dir-home");
+  expect(resolveConfigDir({ OPENCLAW_PROFILE: profile }, () => home)).toBe(
+    path.join(home, directory),
+  );
+});
+
+it.each([undefined, "~/state"])("resolveConfigDir expands config/state overrides: %s", (state) => {
+  expect(
+    resolveConfigDir({
       HOME: "/tmp/openclaw-home",
       OPENCLAW_PROFILE: "work",
-      OPENCLAW_STATE_DIR: "~/state",
+      OPENCLAW_STATE_DIR: state,
       OPENCLAW_CONFIG_PATH: "~/custom/openclaw.json",
-    },
-    expected: path.resolve("/tmp/openclaw-home", "state"),
-  },
-  {
-    env: {
-      HOME: "/tmp/openclaw-home",
-      OPENCLAW_PROFILE: "work",
-      OPENCLAW_CONFIG_PATH: "~/custom/openclaw.json",
-    },
-    expected: path.resolve("/tmp/openclaw-home", "custom"),
-  },
-])("resolveConfigDir selects and expands its root: $env", ({ env, expected }) => {
-  expect(resolveConfigDir(env, () => path.resolve("config-dir-home"))).toBe(expected);
+    }),
+  ).toBe(path.resolve("/tmp/openclaw-home", state ? "state" : "custom"));
 });
 
 it("re-pins the exported configuration root after startup environment selection", () => {

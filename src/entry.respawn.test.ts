@@ -87,40 +87,30 @@ it.each(["linux", "win32"] as const)(
 
 it.each([
   [
-    "bare-root startup stays attached to the terminal",
+    "bare root stays attached",
     { args: [], autoNodeExtraCaCerts: systemCa },
     { argv: [...warningPrefix, "openclaw"], detachForProcessTree: false },
   ],
   [
-    "macOS system CA trust survives one-shot warning respawns",
-    {
-      args: ["cron", "list", "--json"],
-      env: { NODE_USE_SYSTEM_CA: "1" },
-      platform: "darwin",
-    },
+    "preserves macOS system trust",
+    { args: ["cron", "list", "--json"], env: { NODE_USE_SYSTEM_CA: "1" }, platform: "darwin" },
     {
       argv: [...warningPrefix, "openclaw", "cron", "list", "--json"],
       env: { NODE_USE_SYSTEM_CA: "1" },
     },
   ],
   [
-    "explicit NODE_EXTRA_CA_CERTS survives discovery",
+    "preserves an explicit CA",
     { env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" }, autoNodeExtraCaCerts: systemCa },
     { env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" } },
   ],
   [
-    "Windows normalization preserves post-script node.exe arguments",
-    {
-      argv: [windowsNode, windowsNode, ...windowsTail],
-      execPath: windowsNode,
-      platform: "win32",
-    },
-    {
-      argv: ["--import", CLI_PARENT_BOUND_PRELOAD, "--stack-size=8192", ...windowsTail],
-    },
+    "preserves post-script node.exe",
+    { argv: [windowsNode, windowsNode, ...windowsTail], execPath: windowsNode, platform: "win32" },
+    { argv: ["--import", CLI_PARENT_BOUND_PRELOAD, "--stack-size=8192", ...windowsTail] },
   ],
   [
-    "Volta shims respawn through node instead of calling the shim",
+    "uses node for Volta shims",
     {
       argv: [voltaShim, "/usr/local/bin/openclaw", "status"],
       env: { PATH: "/home/alice/.volta/bin:/usr/bin:/bin" },
@@ -138,15 +128,11 @@ it.each([
 
 it.each([
   [
-    "interactive macOS retains system CA loading",
-    {
-      args: ["tui"],
-      env: { NODE_USE_SYSTEM_CA: "1" },
-      platform: "darwin",
-    },
+    "retains interactive system trust",
+    { args: ["tui"], env: { NODE_USE_SYSTEM_CA: "1" }, platform: "darwin" },
   ],
   [
-    "satisfied respawn guards prevent another respawn",
+    "honors respawn guards",
     {
       env: { [caReady]: "1", [optionsReady]: "1" },
       execArgv: [warningFlag],
@@ -154,7 +140,7 @@ it.each([
     },
   ],
   [
-    "Windows accepts underscore stack-size spelling",
+    "accepts underscore stack_size",
     {
       argv: ["node", windowsScript, "dashboard"],
       execArgv: ["--stack_size=16384"],
@@ -189,25 +175,6 @@ function mockChild() {
   vi.mocked(attachChildProcessBridge).mockReturnValue({ detach });
   return { child, spawn, detach };
 }
-it("spawns the standalone plan without adding runtime flags", async () => {
-  vi.stubGlobal("__openclawStandaloneRootUrl", "file:///app/runtime/");
-  const plan = requirePlan({
-    argv: [process.execPath, "/app/runtime/openclaw.mjs", "doctor"],
-    platform: "darwin",
-  });
-  const { child, spawn } = mockChild();
-  const completion = runCliRespawnPlan(plan, vi.fn());
-  expect(spawn.mock.calls[0]).toEqual([
-    process.execPath,
-    ["doctor"],
-    expect.objectContaining({
-      env: expect.objectContaining({ OPENCLAW_CLI_RESPAWN_PARENT: String(process.pid) }),
-    }),
-  ]);
-  child.emit("close", 0, null);
-  await completion;
-});
-
 it("records status after the respawn child closes", async () => {
   process.exitCode = undefined;
   const { child, spawn, detach } = mockChild();
