@@ -7,13 +7,12 @@ import type {
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { codexModel as baseModel } from "./src/app-server/bounded-turn.test-harness.js";
-import type { CodexAppServerClient } from "./src/app-server/client.js";
 import {
-  threadStartResult as baseThreadStartResult,
-  turnStartResult as baseTurnStartResult,
-} from "./src/app-server/codex-app-server.test-fixtures.js";
-import type { CodexServerNotification, JsonValue } from "./src/app-server/protocol.js";
+  codexModel,
+  completedTurnResult,
+  createClientFactory,
+  inProgressTurnResult,
+} from "./src/app-server/bounded-turn.test-harness.js";
 import type { CodexAppServerClientFactory } from "./src/app-server/shared-client.js";
 
 const sharedClientMocks = vi.hoisted(() => ({
@@ -21,7 +20,7 @@ const sharedClientMocks = vi.hoisted(() => ({
 }));
 
 const imageInput = { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" };
-const turnIdentity = { threadId: "thread-1", turnId: "turn-1" };
+const turnIdentity = { threadId: "thread-finalizer", turnId: "turn-finalizer" };
 const websocketConfig = {
   appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:4501" },
 };
@@ -32,7 +31,7 @@ const summarySchema = {
 };
 
 function expectBoundedThread(
-  requests: Array<{ method: string; params?: JsonValue }>,
+  requests: Array<{ method: string; params?: unknown }>,
   developerInstructions: string,
 ) {
   expect(requests.map(({ method }) => method)).toEqual([
@@ -122,20 +121,6 @@ function structuredRequest(
   };
 }
 
-function threadStartResult() {
-  const result = baseThreadStartResult("thread-1", "/tmp/openclaw-agent");
-  return {
-    ...result,
-    thread: { ...result.thread, ephemeral: true, cliVersion: "0.149.0" },
-    model: "gpt-5.4",
-    approvalPolicy: "on-request",
-  };
-}
-
-function turnStartResult(status = "inProgress", items: JsonValue[] = []) {
-  return { turn: { ...baseTurnStartResult("turn-1", status).turn, items } };
-}
-
 function createFakeClient(
   options: {
     inputModalities?: string[];
@@ -147,106 +132,63 @@ function createFakeClient(
   } = {},
   pluginConfig?: Parameters<typeof buildCodexMediaUnderstandingProvider>[0],
 ) {
-  const notifications = new Set<(notification: CodexServerNotification) => void>();
-  type RequestHandler = Parameters<CodexAppServerClient["addRequestHandler"]>[0];
-  const requestHandlers = new Set<RequestHandler>();
-  const requests: Array<{ method: string; params?: JsonValue }> = [];
-  const approvalResponses: JsonValue[] = [];
-  const request = vi.fn(async (method: string, params?: JsonValue) => {
+  const model = { ...codexModel(), inputModalities: options.inputModalities ?? ["text", "image"] };
+  const fake = createClientFactory({
+    models: [model],
+    assistantDelta: options.responseText ?? "A red square.",
+    terminalItems: [],
+    completeTurn: !options.deferTurnCompletion,
+  });
+  const requests: Array<{ method: string; params?: unknown }> = [];
+  const approvalResponses: unknown[] = [];
+  const request = fake.request.getMockImplementation()!;
+  const terminal = () => ({
+    turn: {
+      ...completedTurnResult().turn,
+      items: [
+        { id: "msg-1", type: "agentMessage", text: options.responseText ?? "A blue circle." },
+      ],
+    },
+  });
+  fake.request.mockImplementation(async (method, params, requestOptions) => {
     requests.push({ method, params });
-    if (method === "model/list") {
-      const model = baseModel();
-      model.description = "GPT-5.4";
-      model.inputModalities = options.inputModalities ?? ["text", "image"];
-      return { data: [model], nextCursor: null };
-    }
-    if (method === "thread/start") {
-      return threadStartResult();
-    }
-    if (method === "turn/interrupt") {
-      queueMicrotask(() => {
-        for (const notify of notifications) {
-          notify({
-            method: "turn/completed",
-            params: { threadId: turnIdentity.threadId, turn: turnStartResult("interrupted").turn },
-          });
-        }
-      });
-      return {};
-    }
     if (method === "turn/start") {
       options.onTurnStart?.();
-      const approvalMethod = options.approvalRequestMethod;
-      const approvals = approvalMethod
-        ? [...requestHandlers].map(async (handler) => {
-            const response = await handler({
-              id: "approval-1",
-              method: approvalMethod,
-              params: turnIdentity,
-            });
-            if (response !== undefined) {
-              approvalResponses.push(response);
-            }
-          })
-        : [];
-      const completeTurn = () => {
-        if (!options.completeWithItems && !options.deferTurnCompletion) {
-          for (const notify of notifications) {
-            notify({
-              method: "item/agentMessage/delta",
-              params: {
-                ...turnIdentity,
-                itemId: "msg-1",
-                delta: options.responseText ?? "A red square.",
-              },
-            });
-            notify({
-              method: "turn/completed",
-              params: { ...turnIdentity, turn: turnStartResult("completed").turn },
-            });
-          }
-        }
-      };
-      // Return turn/start before waiting for keyed approvals; complete only after their replies.
-      if (approvals.length > 0) {
-        void Promise.all(approvals).then(completeTurn);
-      } else {
-        completeTurn();
+      if (options.completeWithItems) {
+        return terminal();
       }
-      return turnStartResult(
-        options.completeWithItems ? "completed" : "inProgress",
-        options.completeWithItems
-          ? [
-              {
-                id: "msg-1",
-                type: "agentMessage",
-                text: options.responseText ?? "A blue circle.",
-                phase: null,
-                memoryCitation: null,
-              },
-            ]
-          : [],
-      );
+      if (options.approvalRequestMethod) {
+        // Binding turn/start releases the queued approval; complete only after its reply.
+        void fake
+          .handleServerRequest({
+            id: "approval-1",
+            method: options.approvalRequestMethod,
+            params: turnIdentity,
+          })
+          .then(async (response) => {
+            approvalResponses.push(response);
+            await fake.notify({
+              method: "turn/completed",
+              params: { ...turnIdentity, ...terminal() },
+            });
+          });
+        return inProgressTurnResult();
+      }
     }
-    return {};
+    return request(method, params, requestOptions);
   });
-
-  const closeAndWait = vi.fn(async () => true);
-  const client = {
-    request,
-    addNotificationHandler(handler: (notification: CodexServerNotification) => void) {
-      notifications.add(handler);
-      return () => notifications.delete(handler);
+  const closeAndWait = vi.fn();
+  const clientFactory = sharedClientMocks.createIsolatedCodexAppServerClient.mockImplementation(
+    async (params) => {
+      const client = await fake.factory(params);
+      const close = client.closeAndWait.bind(client);
+      vi.spyOn(client, "closeAndWait").mockImplementation(async (...args) => {
+        closeAndWait(...args);
+        return close(...args);
+      });
+      return client;
     },
-    addRequestHandler(handler: RequestHandler) {
-      requestHandlers.add(handler);
-      return () => requestHandlers.delete(handler);
-    },
-    addCloseHandler: () => () => undefined,
-    closeAndWait,
-  } as unknown as CodexAppServerClient;
-  const clientFactory =
-    sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);
+  );
   const provider = buildCodexMediaUnderstandingProvider(pluginConfig);
   return { clientFactory, provider, requests, approvalResponses, closeAndWait };
 }
@@ -314,7 +256,7 @@ describe("codex media understanding provider", () => {
       "You are OpenClaw's bounded image-understanding worker. Describe only the provided image content. Do not call tools, edit files, or ask follow-up questions.",
     );
     expect(requests[2]?.params).toEqual({
-      threadId: "thread-1",
+      threadId: turnIdentity.threadId,
       input: [{ type: "text", text: "Describe briefly.", text_elements: [] }, imageInput],
       approvalPolicy: "on-request",
       effort: "low",
@@ -363,7 +305,7 @@ describe("codex media understanding provider", () => {
 
     expect(requests).toContainEqual({
       method: "turn/interrupt",
-      params: { threadId: "thread-1", turnId: "turn-1" },
+      params: turnIdentity,
     });
   });
 
@@ -464,7 +406,7 @@ describe("codex media understanding provider", () => {
     );
     const turnParams = requests[2]?.params;
     expect(turnParams).toEqual({
-      threadId: "thread-1",
+      threadId: turnIdentity.threadId,
       approvalPolicy: "on-request",
       effort: "low",
       input: [
