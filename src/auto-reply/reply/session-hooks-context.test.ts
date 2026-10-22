@@ -717,7 +717,7 @@ describe("session hook context wiring", () => {
     { reason: "idle", reset: { mode: "daily", atHour: 4, idleMinutes: 30 }, overlap: true },
   ] satisfies Array<{ reason: string; reset: SessionResetConfig; overlap?: boolean }>)(
     "emits rollover hooks and one auto-reset event: $reset",
-    async ({ reason, reset, overlap = false }) => {
+    async ({ reason, reset, overlap }) => {
       vi.useFakeTimers();
       try {
         vi.setSystemTime(new Date(2026, 0, 18, 5, overlap ? 30 : 0, 0));

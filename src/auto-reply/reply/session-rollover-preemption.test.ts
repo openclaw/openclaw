@@ -70,7 +70,7 @@ function resetSession(storePath: string, sessionKey: string, from: string) {
       Provider: "telegram",
       Surface: "telegram",
     },
-    cfg: { session: { store: storePath, idleMinutes: 999 } },
+    cfg: { session: { store: storePath, reset: { mode: "idle", idleMinutes: 999 } } },
   });
 }
 

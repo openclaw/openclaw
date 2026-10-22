@@ -1021,10 +1021,10 @@ describe("launchd install", () => {
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {
     state.bootstrapError = GUI_UNAVAILABLE;
-    const message = await install().catch(String);
-    expect(String(message)).toContain("logged-in macOS GUI session");
-    expect(String(message)).toContain("wrong user (including sudo)");
-    expect(String(message)).toContain("https://docs.openclaw.ai/gateway");
+    const installing = install();
+    await expect(installing).rejects.toThrow("logged-in macOS GUI session");
+    await expect(installing).rejects.toThrow("wrong user (including sudo)");
+    await expect(installing).rejects.toThrow("https://docs.openclaw.ai/gateway");
   });
 });
 
@@ -1065,7 +1065,7 @@ describe("retained LaunchAgent policy", () => {
       } else {
         await expect(result).resolves.toEqual({ outcome: "completed" });
       }
-      expect(state.serviceLoaded).toBe(true);
+      expect(state.serviceLoaded).toBe(scenario !== "bootstrap-failure");
       const commands = launchctlCommandNames();
       expect(commands.includes("enable")).toBe(!preserveAutoStart);
       expect(commands).not.toContain("disable");

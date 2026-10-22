@@ -147,22 +147,27 @@ describe("config path mutations", () => {
 });
 
 describe("prototype pollution prevention", () => {
-  it.each([
-    ["__proto__", ["polluted"], true, { polluted: true }],
-    ["constructor", ["prototype", "polluted"], true, { prototype: { polluted: true } }],
-    ["prototype", ["bad"], true, { bad: true }],
-    ["a", ["b"], 42, { b: 42 }],
-  ] as const)(
-    "setPathValue treats %s as own data without changing prototypes",
-    (key, path, value, expected) => {
-      const obj: Record<string, unknown> = {};
-      setPathValue(obj, [key, ...path], value);
-      expect(Reflect.get({}, "polluted")).toBeUndefined();
-      expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
-      expect(obj).toStrictEqual({ [key]: expected });
-      expect(Object.getOwnPropertyDescriptor(obj, key)?.value).toEqual(expected);
-    },
-  );
+  it("setPathValue creates own __proto__ data without changing prototypes", () => {
+    const obj: Record<string, unknown> = {};
+    setPathValue(obj, ["__proto__", "polluted"], true);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
+    expect(Object.getOwnPropertyDescriptor(obj, "__proto__")?.value).toEqual({ polluted: true });
+  });
+
+  it("setPathValue never follows the inherited constructor", () => {
+    const obj: Record<string, unknown> = {};
+    setPathValue(obj, ["constructor", "prototype", "polluted"], true);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(obj).toEqual({ constructor: { prototype: { polluted: true } } });
+  });
+
+  it("setPathValue supports an own prototype key", () => {
+    const obj: Record<string, unknown> = {};
+    setPathValue(obj, ["prototype", "bad"], true);
+    expect(obj).toStrictEqual({ prototype: { bad: true } });
+    expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
+  });
 
   it("removePathValue never follows inherited __proto__", () => {
     const obj = { safe: 1 } as Record<string, unknown>;
@@ -177,5 +182,11 @@ describe("prototype pollution prevention", () => {
     removePathValue(obj, [key]);
     expect(Object.keys(obj)).toEqual([]);
     expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
+  });
+
+  it("setPathValue allows normal keys", () => {
+    const obj: Record<string, unknown> = {};
+    setPathValue(obj, ["a", "b"], 42);
+    expect((obj.a as Record<string, unknown>).b).toBe(42);
   });
 });

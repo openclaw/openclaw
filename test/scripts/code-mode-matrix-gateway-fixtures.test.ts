@@ -95,6 +95,7 @@ describe("Gateway code-mode matrix fixtures", () => {
       invoices: { customer: string; amountCents: number; paid: boolean }[];
     };
     const run = invoke<Export>(entry, [{ name: "matrix_invoice_export" }]);
+    expect(run.tools.map((tool) => tool.name).toSorted()).toEqual(fixture.requiredTools.toSorted());
     const exported = expectDefined(run.results[0], "invoice export result").details;
     expect(Buffer.byteLength(JSON.stringify(exported))).toBeGreaterThan(64 * 1024);
     expect(expectDefined(run.tools[0], "invoice export tool").outputSchema).toBeUndefined();
@@ -130,6 +131,9 @@ describe("Gateway code-mode matrix fixtures", () => {
       }[];
     };
     const inventoryRun = invoke<Inventory>(entry, [{ name: "matrix_inventory_export" }]);
+    expect(inventoryRun.tools.map((tool) => tool.name).toSorted()).toEqual(
+      fixture.requiredTools.toSorted(),
+    );
     const inventory = expectDefined(inventoryRun.results[0], "inventory export result").details;
     const directory = expectDefined(
       invoke<Directory>(entry, [{ name: "matrix_supplier_directory" }]).results[0],
@@ -181,6 +185,9 @@ describe("Gateway code-mode matrix fixtures", () => {
     const { fixture, root, entry } = prepare("partial-failure");
     const input = { operationId: fixture.expected.operationId };
     const settled = invoke<Record<string, unknown>>(entry, [{ name: "matrix_settle", input }]);
+    expect(settled.tools.map((tool) => tool.name).toSorted()).toEqual(
+      fixture.requiredTools.toSorted(),
+    );
     const schema = settled.tools.find((tool) => tool.name === "matrix_settle")?.outputSchema;
     expect(schema).toBeDefined();
     if (!schema) {

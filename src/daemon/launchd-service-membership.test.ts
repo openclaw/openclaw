@@ -1,5 +1,6 @@
 await vi.hoisted(() => import("./launchd-ancestry.test-support.js"));
 import { PassThrough } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
@@ -37,6 +38,7 @@ import {
   readLaunchAgentRuntime,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  stopLaunchAgent,
   uninstallLaunchAgent,
 } from "./launchd.js";
 const {
@@ -315,7 +317,7 @@ describe("launchctl list detection", () => {
     await expect(disableCurrentOpenClawUpdateLaunchdJob(env)).resolves.toBe(disabled);
     if (disabled) {
       expect(state.launchctlCalls).toContainEqual(["disable", `${DOMAIN}/${label}`]);
-      expect(launchctlCommandNames()).not.toContain("remove");
+      expect(state.launchctlCalls.map(([command]) => command)).not.toContain("remove");
     } else {
       expect(state.launchctlCalls).toEqual([]);
     }
@@ -514,7 +516,7 @@ describe("LaunchAgent service membership", () => {
           : `Refusing to ${action} LaunchAgent ai.openclaw.gateway from inside ai.openclaw.gateway`,
       );
       expect(state.fileWrites).toEqual([]);
-      expect(state.files.get(PLIST)).toBe(previous);
+      expect(state.files.get(resolveLaunchAgentPlistPath(ENV))).toBe(previous);
       expectServiceCalls(["print"]);
     },
   );

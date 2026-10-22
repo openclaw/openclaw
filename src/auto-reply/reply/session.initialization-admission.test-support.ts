@@ -263,7 +263,10 @@ export function registerSessionInitializationAdmissionTests({
       await seed(scope, sessionId, "before-close");
       await using admitted = await admit(scope, sessionId, true);
       const previous = admitted.databaseClaim;
-      assert("kind" in previous && previous.afterTransition, "Expected initialization handoff");
+      assert(
+        "kind" in previous && typeof previous.afterTransition === "function",
+        "Expected initialization handoff",
+      );
       const prepare = previous.afterTransition.bind(previous);
       const prepared = createDeferred<Awaited<ReturnType<typeof prepare>>>();
       const paused = createDeferred();

@@ -259,6 +259,7 @@ vi.mock("./launchd-system.js", () => ({
     (error as { code?: string } | null)?.code === "SYSTEM_LAUNCH_DAEMON_OWNERSHIP",
 }));
 
+// mock-isolation: Process ancestry and cleanup use the suite's synthetic service processes.
 vi.mock("../infra/restart-stale-pids.js", () => ({
   getSelfAndAncestorPidsSync,
   cleanStaleGatewayProcessesSync,

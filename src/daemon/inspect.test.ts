@@ -44,10 +44,6 @@ const CLAWDBOT_GATEWAY_CONTENTS =
   "[Service]\nExecStart=/usr/bin/node /opt/clawdbot/dist/entry.js gateway --port 18789\n";
 const CUSTOM_OPENCLAW_GATEWAY_CONTENTS =
   "[Service]\nExecStart=/usr/bin/node /opt/openclaw/dist/entry.js gateway --port 18888\n";
-const cli = "/usr/bin/openclaw";
-const node = ["/usr/bin/node", "/opt/openclaw/openclaw.mjs"];
-const shell = (command: string) => ["/bin/sh", "-c", command];
-const nodeCommand = (args: string) => `${node.join(" ")} ${args}`;
 
 function plist(
   label: string,
@@ -222,40 +218,46 @@ it("resets inline metadata for an unbranded systemd command", async () => {
 
 it("includes current, sibling, custom, and template systemd Gateways while preserving incomplete inspection", async () => {
   const { home, write, userDir } = nativeFixture("linux", "managed-systemd-");
-  for (const file of [
-    ...["openclaw-gateway", "openclaw-gateway-dev", "rescue", "clawdbot-upgraded"].map((name) =>
-      path.join(userDir, `${name}.service`),
-    ),
-    "/etc/systemd/system/openclaw@.service",
-    "/usr/lib/systemd/system/vendor-gateway.service",
-  ]) {
-    await write(file, CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+  const writeCommand = (name: string, command: string) =>
+    write(path.join(userDir, `${name}.service`), `[Service]\nExecStart=${command}\n`);
+
+  for (const name of ["openclaw-gateway", "openclaw-gateway-dev", "rescue"]) {
+    await write(path.join(userDir, `${name}.service`), CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
   }
-  for (const [name, command] of [
-    ["named-node", nodeCommand('node run --display-name "Home Gateway"')],
-    ["exact-node", nodeCommand("node run --display-name gateway")],
-    ["profile-node", nodeCommand("--profile gateway node run")],
-    ["install", nodeCommand("gateway install --runtime bun")],
-    ["profile-install", nodeCommand("--profile rescue gateway --profile rescue install")],
-    ["status", nodeCommand("gateway status --json")],
-    [
-      "runtime-options",
-      "/usr/bin/node -C development --import /opt/bootstrap.mjs /opt/clawdbot/dist/entry.js --profile rescue gateway run",
-    ],
-    [
-      "shell",
-      "/bin/sh -c 'NODE_ENV=production exec /usr/bin/openclaw --profile rescue gateway run'",
-    ],
-    ["shell-node", `/bin/sh -c 'exec /usr/bin/openclaw node run --display-name "Home Gateway"'`],
-    ["env", "/usr/bin/env NODE_ENV=production node /opt/clawdbot/dist/entry.js gateway run"],
-    [
-      "openclaw-node",
-      '/usr/bin/openclaw node run\nEnvironment="OPENCLAW_SERVICE_MARKER=openclaw" "OPENCLAW_SERVICE_KIND=node"',
-    ],
+  await write("/etc/systemd/system/openclaw@.service", CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+  await write("/usr/lib/systemd/system/vendor-gateway.service", CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+  await write(
+    path.join(userDir, "openclaw-node.service"),
+    '[Service]\nExecStart=/usr/bin/openclaw node run\nEnvironment="OPENCLAW_SERVICE_MARKER=openclaw" "OPENCLAW_SERVICE_KIND=node"\n',
+  );
+  for (const [name, args] of [
+    ["named-node", 'node run --display-name "Home Gateway"'],
+    ["exact-node", "node run --display-name gateway"],
+    ["profile-node", "--profile gateway node run"],
+    ["install", "gateway install --runtime bun"],
+    ["profile-install", "--profile rescue gateway --profile rescue install"],
+    ["status", "gateway status --json"],
   ] as const) {
-    await write(path.join(userDir, `${name}.service`), `[Service]\nExecStart=${command}\n`);
+    await writeCommand(name, `/usr/bin/node /opt/openclaw/openclaw.mjs ${args}`);
   }
+  await writeCommand(
+    "runtime-options",
+    "/usr/bin/node -C development --import /opt/bootstrap.mjs /opt/clawdbot/dist/entry.js --profile rescue gateway run",
+  );
   await write(path.join(userDir, "clawdbot-gateway.service"), CLAWDBOT_GATEWAY_CONTENTS);
+  await write(path.join(userDir, "clawdbot-upgraded.service"), CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+  await writeCommand(
+    "shell",
+    "/bin/sh -c 'NODE_ENV=production exec /usr/bin/openclaw --profile rescue gateway run'",
+  );
+  await writeCommand(
+    "shell-node",
+    `/bin/sh -c 'exec /usr/bin/openclaw node run --display-name "Home Gateway"'`,
+  );
+  await writeCommand(
+    "env",
+    "/usr/bin/env NODE_ENV=production node /opt/clawdbot/dist/entry.js gateway run",
+  );
   await write("/lib/systemd/system", "unreadable service directory");
 
   const managed = await expectProjections(home, {
@@ -396,71 +398,86 @@ it("keeps discovered native selectors independent of display details", async () 
   );
 });
 
-it("reports global copies of the profile-selected user LaunchAgent", async () => {
-  const { home, write, userDir } = nativeFixture("darwin", "launchd-profile-copies-");
-  const label = "ai.openclaw.rescue";
-  const globalPaths = ["LaunchAgents", "LaunchDaemons"].map(
-    (directory) => `/Library/${directory}/${label}.plist`,
-  );
-  for (const file of [path.join(userDir, `${label}.plist`), ...globalPaths]) {
-    await write(file, plist(label));
-  }
-  expect(
-    await findExtraGatewayServices({ HOME: home, OPENCLAW_PROFILE: "rescue" }, { deep: true }),
-  ).toEqual({
-    services: globalPaths.map((sourcePath) => ({
-      platform: "darwin",
-      label,
-      detail: `plist: ${sourcePath}`,
-      sourcePath,
-      scope: "system",
-      marker: "openclaw",
-      legacy: false,
-    })),
-    errors: [],
-  });
-});
+it.each([
+  {
+    label: "ai.openclaw.rescue",
+    env: { OPENCLAW_PROFILE: "rescue" },
+  },
+  {
+    label: "org.example.rescue",
+    env: { OPENCLAW_LAUNCHD_LABEL: "org.example.rescue" },
+    executable: "/usr/bin/worker",
+    metadata: serviceMetadata("gateway"),
+  },
+])(
+  "reports global copies of the $label user LaunchAgent",
+  async ({ label, env, executable = "/usr/bin/openclaw", metadata = "" }) => {
+    const { home, write } = nativeFixture("darwin", "launchd-global-copies-");
+    const contents = plist(label, [executable, "gateway"], "", metadata);
+    const globalPaths = [
+      `/Library/LaunchAgents/${label}.plist`,
+      `/Library/LaunchDaemons/${label}.plist`,
+    ];
+    for (const file of [
+      path.join(home, "Library/LaunchAgents", `${label}.plist`),
+      ...globalPaths,
+    ]) {
+      await write(file, contents);
+    }
+
+    const inventory = await findExtraGatewayServices({ HOME: home, ...env }, { deep: true });
+
+    expect(inventory).toEqual({
+      services: globalPaths.map((file) => ({
+        platform: "darwin",
+        label,
+        detail: `plist: ${file}`,
+        sourcePath: file,
+        scope: "system",
+        marker: "openclaw",
+        legacy: false,
+      })),
+      errors: [],
+    });
+  },
+);
 
 it("includes user and global launchd Gateways without admitting Node or legacy jobs", async () => {
   const { home, write, userDir } = nativeFixture("darwin", "managed-launchd-");
-  const rescuePlist = plist(
-    "org.example.rescue",
-    ["/usr/bin/worker", "gateway"],
-    "",
-    serviceMetadata("gateway"),
-  );
   const writePlist = (label: string, args?: string[], program?: string) =>
-    write(
-      path.join(userDir, `${label}.plist`),
-      label === "org.example.rescue" ? rescuePlist : plist(label, args, program),
-    );
+    write(path.join(userDir, `${label}.plist`), plist(label, args, program));
   for (const label of ["ai.openclaw.gateway", "ai.openclaw.gateway.dev", "org.example.rescue"]) {
     await writePlist(label);
   }
   await write("/Library/LaunchAgents/org.example.global.plist", plist("org.example.global"));
   await write("/Library/LaunchDaemons/ai.openclaw.gateway.plist", plist("ai.openclaw.gateway"));
-  const globalRescuePaths = ["LaunchAgents", "LaunchDaemons"].map(
-    (directory) => `/Library/${directory}/org.example.rescue.plist`,
-  );
-  for (const file of globalRescuePaths) {
-    await write(file, rescuePlist);
-  }
   const wrapper = ["/opt/service-env/rescue-env-wrapper.sh", "/opt/service-env/rescue.env"];
+  const node = ["/usr/bin/node", "/opt/openclaw/openclaw.mjs"];
   const wrapped = (...args: string[]) => [...wrapper, ...args];
+  const cli = "/usr/bin/openclaw";
   for (const [label, args] of [
-    ["org.example.shell", shell(`NODE_ENV=production exec ${cli} --profile rescue gateway run`)],
-    ["org.example.env", ["/usr/bin/env", "NODE_ENV=production", "node", node[1]!, "gateway"]],
-    ["org.example.shell-node", shell(`exec ${cli} node run --display-name "Home Gateway"`)],
+    [
+      "org.example.shell",
+      ["/bin/sh", "-c", "NODE_ENV=production exec /usr/bin/openclaw --profile rescue gateway run"],
+    ],
+    [
+      "org.example.env",
+      ["/usr/bin/env", "NODE_ENV=production", "node", "/opt/openclaw/openclaw.mjs", "gateway"],
+    ],
+    [
+      "org.example.shell-node",
+      ["/bin/sh", "-c", 'exec /usr/bin/openclaw node run --display-name "Home Gateway"'],
+    ],
     ["org.example.named-node", [...node, "node", "run", "--display-name", "Home Gateway"]],
     [
       "org.example.wrapped",
       [
         "/bin/sh",
         ...wrapper,
-        node[0]!,
+        "/usr/bin/node",
         "--import",
         "/opt/bootstrap.mjs",
-        node[1]!,
+        "/opt/openclaw/openclaw.mjs",
         "--profile",
         "rescue",
         "gateway",
@@ -485,13 +502,13 @@ it("includes user and global launchd Gateways without admitting Node or legacy j
   const unreadable = path.join(userDir, "ai.openclaw.broken.plist");
   await write(unreadable, "malformed plist");
 
-  const managed = await expectProjections(home, {
+  await expectProjections(home, {
     managed: scopedLabels(
-      "ai.openclaw.gateway org.example.global org.example.rescue org.example.rescue",
+      "ai.openclaw.gateway org.example.global",
       "ai.openclaw.gateway ai.openclaw.gateway.dev org.example.direct-wrapper org.example.env org.example.program org.example.rescue org.example.shell org.example.wrapped",
     ),
     extras: scopedLabels(
-      "ai.openclaw.gateway org.example.global org.example.rescue org.example.rescue",
+      "ai.openclaw.gateway org.example.global",
       "com.clawdbot.gateway org.example.direct-wrapper org.example.env org.example.program org.example.rescue org.example.shell org.example.wrapped",
     ),
     selected: [
@@ -505,21 +522,6 @@ it("includes user and global launchd Gateways without admitting Node or legacy j
     errorSource: unreadable,
     scoped: true,
   });
-  expect(
-    managed.services.filter(
-      ({ scope, label }) => scope === "system" && label === "org.example.rescue",
-    ),
-  ).toEqual(
-    globalRescuePaths.map((sourcePath) => ({
-      platform: "darwin",
-      label: "org.example.rescue",
-      scope: "system",
-      sourcePath,
-      detail: `plist: ${sourcePath}`,
-      marker: "openclaw",
-      legacy: false,
-    })),
-  );
 });
 
 function isolateDirectoryReads(home: string) {
