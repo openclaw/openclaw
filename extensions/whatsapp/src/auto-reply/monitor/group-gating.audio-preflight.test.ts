@@ -89,13 +89,11 @@ describe("WhatsApp group audio admission", () => {
       transcript.resolve("openclaw please summarize the thread");
       await handling;
     }
-  });
-
-  it("accepts voice transcript text that satisfies mention gating", async () => {
-    transcribe.mockResolvedValueOnce("openclaw please summarize the thread");
-    const { msg, ...fixture } = await handle();
     expect(fixture.processMock).toHaveBeenCalledTimes(1);
-    expect(msg.groupMention).toEqual({ wasMentioned: true, requireMention: true });
+    expect(fixture.processMock.mock.calls[0]?.[0].msg.groupMention).toEqual({
+      wasMentioned: true,
+      requireMention: true,
+    });
     expect(fixture.groupHistories.get(historyKey)).toBeUndefined();
   });
 

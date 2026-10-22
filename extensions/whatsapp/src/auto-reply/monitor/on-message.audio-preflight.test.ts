@@ -1,12 +1,19 @@
 // Whatsapp tests cover on message.audio preflight plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  processMessageMock,
+  resolveGroupActivationForMock,
+  updateLastRouteInBackgroundMock,
+  transcribeFirstAudioMock,
+  maybeSendAckReactionMock,
+  createStatusReactionControllerMock,
+} from "./on-message.test-mocks.js";
 
 const events: string[] = [];
-const transcribeFirstAudioMock = vi.fn();
-const maybeSendAckReactionMock = vi.fn();
-const processMessageMock = vi.fn();
-const createStatusReactionControllerMock = vi.fn();
-const updateLastRouteInBackgroundMock = vi.fn();
+const baseConfig = vi.hoisted(() => ({
+  channels: { whatsapp: { ackReaction: { enabled: true } } },
+}));
+const statusConfig = { ...baseConfig, messages: { statusReactions: { enabled: true } } };
 const statusReactionController = {
   setQueued: vi.fn(async () => {
     events.push("status-queued");
@@ -25,33 +32,6 @@ const ackReactionHandle = {
   ackReactionValue: "👀",
   remove: vi.fn(async () => undefined),
 };
-const resolveGroupActivationForMock = vi.fn();
-
-vi.mock("./audio-preflight.runtime.js", () => ({
-  transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
-}));
-
-vi.mock("./ack-reaction.js", () => ({
-  maybeSendAckReaction: (...args: unknown[]) => maybeSendAckReactionMock(...args),
-}));
-
-vi.mock("./process-message.js", () => ({
-  processMessage: (...args: unknown[]) => processMessageMock(...args),
-}));
-
-vi.mock("./status-reaction.js", () => ({
-  createWhatsAppStatusReactionController: (...args: unknown[]) =>
-    createStatusReactionControllerMock(...args),
-}));
-
-vi.mock("./group-activation.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./group-activation.js")>()),
-  resolveGroupActivationFor: (...args: unknown[]) => resolveGroupActivationForMock(...args),
-}));
-
-vi.mock("./last-route.js", () => ({
-  updateLastRouteInBackground: (...args: unknown[]) => updateLastRouteInBackgroundMock(...args),
-}));
 
 vi.mock("./peer.js", () => ({
   resolvePeerId: (msg: { admission: { conversation: { id: string } } }) =>
@@ -66,10 +46,6 @@ vi.mock("../config.runtime.js", () => ({
       },
     },
   }),
-}));
-
-vi.mock("../../group-session-key.js", () => ({
-  resolveWhatsAppGroupSessionRoute: (route: unknown) => route,
 }));
 
 vi.mock("../../identity.js", async (importOriginal) => ({
