@@ -59,18 +59,15 @@ export async function publishDoctorUpdateResult(params: {
   });
 }
 
-/** Publish the updater receipt even when releasing maintenance reports a failure. */
+/** Publish only after maintenance custody has settled successfully. */
 export async function finishDoctorMaintenance(
   params: Omit<Parameters<typeof publishDoctorUpdateResult>[0], "updateResult"> & {
     release: () => Promise<void>;
     updateResult?: Parameters<typeof publishDoctorUpdateResult>[0]["updateResult"];
   },
 ): Promise<void> {
-  try {
-    await params.release();
-  } finally {
-    if (params.updateResult) {
-      await publishDoctorUpdateResult({ ...params, updateResult: params.updateResult });
-    }
+  await params.release();
+  if (params.updateResult) {
+    await publishDoctorUpdateResult({ ...params, updateResult: params.updateResult });
   }
 }

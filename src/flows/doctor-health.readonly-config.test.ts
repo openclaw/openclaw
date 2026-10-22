@@ -95,12 +95,12 @@ describe("Doctor with externally managed config", () => {
               await expect(startup).resolves.toMatchObject({ snapshot: { valid: true } });
             }
             const output = runtime.log.mock.calls.flat().join("\n");
-            expect(output).toContain("Recommended improvements:");
-            expect(output).toContain("Optional state improvement remains available.");
-            expect(output).toContain(
+            expect(output).not.toContain("Recommended improvements:");
+            expect(output).not.toContain("Optional state improvement remains available.");
+            expect(output).not.toContain(
               "Next step: Review the optional state improvement after redeploying config.",
             );
-            expect(output).toContain(
+            expect(output).not.toContain(
               "Docs: https://docs.openclaw.ai/cli/doctor/running#understanding-findings",
             );
           } finally {
