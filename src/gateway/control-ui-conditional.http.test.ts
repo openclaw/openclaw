@@ -77,6 +77,8 @@ describe.each([
     await write("assets/selected.js.gz", gzipSync(assetBody));
     await write("assets/selected.js.br", brotliCompressSync(assetBody));
     await write("assets/cold.js", assetBody);
+    await write("assets/brotli-only.js", assetBody);
+    await write("assets/brotli-only.js.br", brotliCompressSync(assetBody));
     for (const publicAsset of ["themes/absolutely.css", "sw.js"]) {
       await write(publicAsset, assetBody, modifiedAt);
     }
@@ -188,6 +190,47 @@ describe.each([
   });
 
   describe.each(["GET", "HEAD"] as const)("%s", (method) => {
+    it("falls back to identity when compressed sidecars are absent", async () => {
+      const { response, body } = await requestAsset(`${baseUrl}/assets/cold.js`, method, {
+        "Accept-Encoding": "br, gzip",
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-encoding"]).toBeUndefined();
+      expect(response.headers["content-length"]).toBe(String(assetBody.length));
+      expect(response.headers["content-type"]).toBe("application/javascript; charset=utf-8");
+      expect(response.headers["cache-control"]).toBe(cacheControl);
+      expect(response.headers.vary).toBe("Accept-Encoding");
+      expect(body).toEqual(method === "GET" ? assetBody : Buffer.alloc(0));
+    });
+
+    it("rejects an absent encoding when identity is explicitly forbidden", async () => {
+      const { response, body } = await requestAsset(`${baseUrl}/assets/cold.js`, method, {
+        "Accept-Encoding": "gzip, identity;q=0",
+      });
+      expect(response.statusCode).toBe(406);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.vary).toBe("Accept-Encoding");
+      expect(body.toString()).toBe(method === "GET" ? "Not Acceptable" : "");
+    });
+
+    if (kind === "bundled") {
+      it("uses an accepted sibling encoding when the preferred sidecar is absent", async () => {
+        const { response, body } = await requestAsset(`${baseUrl}/assets/brotli-only.js`, method, {
+          "Accept-Encoding": "gzip, br;q=0.5, identity;q=0",
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.headers["content-encoding"]).toBe("br");
+        expect(response.headers["content-length"]).toBe(
+          String(brotliCompressSync(assetBody).length),
+        );
+        expect(response.headers["cache-control"]).toBe(cacheControl);
+        expect(response.headers.vary).toBe("Accept-Encoding");
+        expect(method === "GET" ? brotliDecompressSync(body) : body).toEqual(
+          method === "GET" ? assetBody : Buffer.alloc(0),
+        );
+      });
+    }
+
     it.each(["themes/absolutely.css", "sw.js"])(
       "versions public %s only for the active bundled build",
       async (asset) => {

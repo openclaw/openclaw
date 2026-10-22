@@ -106,7 +106,7 @@ export async function createControlUiPrecompressedAssetVariants(
       // Smaller deflate blocks reduce startup JavaScript size and encoder memory.
       source: Buffer.from(gzip(body, { level: 9, legacyHash: true, memLevel: 6 })),
     },
-  ];
+  ].filter((variant) => variant.source.byteLength < body.byteLength);
 }
 
 function normalizeBase(input: string): string {

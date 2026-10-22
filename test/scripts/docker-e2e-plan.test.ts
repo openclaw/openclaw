@@ -722,6 +722,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
     { scenario: "projects-startup-migration", baselines: ["2026.9.4"] },
     { scenario: "dreaming-cron-doctor", baselines: ["2026.9.6"] },
     { scenario: "cron-owner-doctor", baselines: ["2026.9.4", "2026.9.7"] },
+    { scenario: "snapshot-cleanup-refusal", baselines: ["2026.9.7"] },
+    { scenario: "snapshot-cleanup-diagnostic", baselines: ["2026.9.7"] },
   ])(
     "plans $scenario only for its exact supported published writers without registry or credential fixtures",
     ({ scenario, baselines }) => {
@@ -750,6 +752,25 @@ describe("scripts/lib/docker-e2e-plan", () => {
           expect(aliasNames).not.toContain(lane.name);
         }
       }
+    },
+  );
+
+  it.each(["snapshot-cleanup-refusal", "snapshot-cleanup-diagnostic"])(
+    "runs %s from the trusted harness without candidate scenario code",
+    (scenario) => {
+      const plan = planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorBaselines: "2026.9.7",
+        upgradeSurvivorScenarios: scenario,
+        allowFrozenTargetScenarioOmissions: false,
+        frozenTarget: { mode: "inert", source: { readText: () => null } },
+      });
+      expect(plan.lanes.map((lane) => lane.name)).toEqual([
+        `published-upgrade-survivor-2026.9.7-${scenario}`,
+      ]);
+      expect(plan.omittedUnsupportedLanes).toEqual([]);
+      expect(plan.credentials).toEqual([]);
+      expect(plan.requiredPrepublishPluginPackages).toEqual([]);
     },
   );
 

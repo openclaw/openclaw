@@ -369,6 +369,16 @@ export function ChatDashboardMenu(
       ...entries.filter((entry) => entry.id === "separator" || entry.id === "remove"),
     ];
   });
+  // Retain trailing content while open so a snapshot refresh cannot detach a
+  // pressed menu item when the entry list reconciles.
+  const capabilities = createMemo(
+    () => (
+      <Show when={props.widgetMenu}>
+        {(page) => <BoardGrantedCapabilities widget={page().widget} presentation="details" />}
+      </Show>
+    ),
+    { lazy: true },
+  );
   return (
     <Menu
       lazy="while-open"
@@ -391,11 +401,7 @@ export function ChatDashboardMenu(
         {
           kind: "content",
           id: "page-granted-capabilities",
-          content: (
-            <Show when={props.widgetMenu}>
-              {(page) => <BoardGrantedCapabilities widget={page().widget} presentation="details" />}
-            </Show>
-          ),
+          content: capabilities(),
         },
       ]}
       ref={(handle) => {

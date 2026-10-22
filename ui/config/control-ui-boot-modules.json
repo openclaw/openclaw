@@ -31,6 +31,7 @@
   "node_modules/@solidjs/signals/dist/prod/core/scheduler.js",
   "node_modules/@solidjs/signals/dist/prod/core/truth.js",
   "node_modules/@solidjs/signals/dist/prod/core/verdict.js",
+  "node_modules/@solidjs/signals/dist/prod/deferred.js",
   "node_modules/@solidjs/signals/dist/prod/flatten.js",
   "node_modules/@solidjs/signals/dist/prod/map.js",
   "node_modules/@solidjs/signals/dist/prod/reveal.js",
@@ -723,7 +724,6 @@
   "ui/src/components/sidebar-projection-cache.ts",
   "ui/src/components/sidebar-projection-memo.ts",
   "ui/src/components/sidebar-renderer-loader.tsx",
-  "ui/src/components/sidebar-reorder.tsx",
   "ui/src/components/sidebar-snapshot-capture.ts",
   "ui/src/components/sidebar-snapshot-data.ts",
   "ui/src/components/sidebar-snapshot-model.ts",
@@ -1027,6 +1027,7 @@
   "ui/src/lib/sidebar-zone.ts",
   "ui/src/lib/skills/status-report.ts",
   "ui/src/lib/snapshot-json.ts",
+  "ui/src/lib/solid-bridge-view.tsx",
   "ui/src/lib/solid-bridge.ts",
   "ui/src/lib/solid-native-listener.ts",
   "ui/src/lib/solid/hover-marquee.tsx",
@@ -1248,8 +1249,7 @@
   "ui/src/styles/copy-button.css",
   "ui/src/styles/rail-header.css",
   "ui/src/styles/select-picker.css",
-  "ui/src/styles/session-title-placeholder.css",
-  "ui/src/styles/sidebar-reorder.css"
+  "ui/src/styles/session-title-placeholder.css"
  ],
  "new": [
   "packages/gateway-protocol/src/worker-capacity.ts",

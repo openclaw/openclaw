@@ -3,7 +3,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../../i18n/lib/translate.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { BoardPendingCapabilities } from "./board-widget-capabilities.solid.tsx";
+import { BoardPendingCapabilities } from "./board-widget-pending-capabilities.solid.tsx";
 
 it("updates a mounted approval label when the locale changes", async () => {
   const previousLocale = i18n.getLocale();

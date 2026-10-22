@@ -70,7 +70,31 @@ const pluginPolicyLogs = [
   "webhooks-only-policy/baseline-runtime.out",
   "webhooks-only-policy/candidate-runtime.out",
 ];
+const snapshotCleanupDiagnosticLogs = [
+  "snapshot-cleanup-diagnostic.json",
+  "install-baseline.stderr",
+  "install-candidate.stderr",
+  "candidate-doctor.stdout",
+  "candidate-doctor.stderr",
+];
+const snapshotCleanupLogs = [
+  "update.stdout",
+  "update.stderr",
+  "snapshot-cleanup-candidate.json",
+  "snapshot-cleanup-evidence.json",
+  "snapshot-cleanup-proof.json",
+  ...[
+    "service-probe-install",
+    "service-probe-reload",
+    "service-probe-verify",
+    "service-probe-restore",
+    "service-probe-restore-reload",
+    "service-probe-restore-verify",
+  ].flatMap((phase) => [`${phase}.stdout`, `${phase}.stderr`, `${phase}-exit.json`]),
+];
 const logNames = [
+  ...snapshotCleanupLogs,
+  ...snapshotCleanupDiagnosticLogs,
   "baseline-install.log",
   "baseline-companion.json",
   "install.log",
@@ -1868,6 +1892,12 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
           : []),
         ...(snapshot.scenario === "dreaming-cron-doctor" ? ["dreaming-cron-proof.json"] : []),
         ...(snapshot.scenario === "cron-owner-doctor" ? ["cron-owner-proof.json"] : []),
+        ...(["snapshot-cleanup-refusal", "snapshot-cleanup-diagnostic"].includes(snapshot.scenario)
+          ? snapshotCleanupLogs
+          : []),
+        ...(snapshot.scenario === "snapshot-cleanup-diagnostic"
+          ? snapshotCleanupDiagnosticLogs
+          : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&
         ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)
@@ -1894,7 +1924,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
 }
 
 function failedUpdateContext(text, label) {
-  if (label !== "update.json" && label !== "recovery-update.json") {
+  if (label !== "update.json" && label !== "update.stdout" && label !== "recovery-update.json") {
     return "";
   }
   try {
@@ -2016,6 +2046,18 @@ export function publishDiagnostics(
       throw new Error();
     }
     let redacted = redactSensitiveText(text, { mode: "tools" });
+    if (
+      label === "snapshot-cleanup-evidence.json" &&
+      Buffer.byteLength(JSON.stringify(redacted)) > 8 * 1024
+    ) {
+      omissions[label] = "critical snapshot summary exceeded 8 KiB after redaction";
+      return JSON.stringify({
+        version: 2,
+        overflow: true,
+        unknown: ["redacted-summary-overflow"],
+        sha256: createHash("sha256").update(redacted).digest("hex"),
+      });
+    }
     if (outcome === "failed" && Buffer.byteLength(JSON.stringify(redacted)) > outputLimit) {
       const context = failedUpdateContext(text, label);
       if (context) {

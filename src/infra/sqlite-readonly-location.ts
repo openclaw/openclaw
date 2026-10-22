@@ -13,7 +13,10 @@ import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import {
+  createSqliteLifecycleAggregateError,
+  preparationCleanupError,
+} from "./sqlite-lifecycle-errors.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
   publishPreparedCopy,
@@ -401,7 +404,14 @@ function* createStableReadOnlyCopyInTempDirectory(
       ? sqliteSnapshotStagingError(tempDir, error, false, pathname)
       : error;
     if (tempDir && existingTempDir === undefined) {
-      removeTempDirectory(tempDir);
+      const errors: unknown[] = [stagingError];
+      if (!removeTempDirectory(tempDir, (cleanupError) => errors.push(cleanupError))) {
+        throw createSqliteLifecycleAggregateError(
+          errors,
+          `SQLite artifact-preserving copy and cleanup failed: ${coerceErrorMessage(stagingError)}. Check directory permissions and available storage before retrying: ${tempDir}`,
+          stagingError,
+        );
+      }
     }
     throw stagingError;
   }
@@ -450,14 +460,6 @@ async function copyPreparedLocation(
     step = steps.next();
   }
   return step.value;
-}
-
-function preparationCleanupError(errors: unknown[], operation: string): AggregateError {
-  return createSqliteLifecycleAggregateError(
-    errors,
-    `${operation} and cleanup failed: ${coerceErrorMessage(errors[0])}`,
-    errors[0],
-  );
 }
 
 async function createStableReadOnlyCopy(

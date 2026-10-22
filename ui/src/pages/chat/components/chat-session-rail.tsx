@@ -1,6 +1,6 @@
+import { createMemo, For, onSettled, Show } from "solid-js";
 import "../../../styles/chat/session-rail.css";
 import "../../../styles/chat/working-indicator.css";
-import { createMemo, For, onSettled, Show } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";

@@ -5,12 +5,42 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import {
+  brotliCompressSync,
+  brotliDecompressSync,
+  constants as zlibConstants,
+  gunzipSync,
+} from "node:zlib";
+import { gzip } from "pako";
 import { build, createLogger, type InlineConfig } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import controlUiViteConfig from "../../vite.config.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
+
+async function expectBeneficialSidecars(target: string, source: Buffer) {
+  // Independent codecs decide whether an on-disk representation must exist.
+  // Never derive expected variants from the producer being exercised.
+  for (const [suffix, encoded, decode] of [
+    [
+      "br",
+      brotliCompressSync(source, {
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 9 },
+      }),
+      brotliDecompressSync,
+    ],
+    ["gz", Buffer.from(gzip(source, { level: 9, legacyHash: true, memLevel: 6 })), gunzipSync],
+  ] as const) {
+    const sidecar = fs.readFile(target + "." + suffix);
+    if (encoded.byteLength < source.byteLength) {
+      const actual = await sidecar;
+      expect(actual.byteLength).toBeLessThan(source.byteLength);
+      expect(decode(actual)).toEqual(source);
+    } else {
+      await expect(sidecar).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  }
+}
 
 function readBuiltIdentity(html: string): { buildId: string } {
   const encoded = /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(.*?);<\/script>/u.exec(html)?.[1];
@@ -318,21 +348,31 @@ it("reports completed compression work before build completion at a bounded cade
     activity.push({
       message,
       elapsed: clockMs,
-      assets: emitted.filter(
-        (name) => name.endsWith(".br") && emitted.includes(name.replace(/\.br$/u, ".gz")),
-      ).length,
+      assets: new Set(
+        emitted
+          .filter((name) => /\.(br|gz)$/u.test(name))
+          .map((name) => name.replace(/\.(br|gz)$/u, "")),
+      ).size,
       sidecars: emitted.filter((name) => /\.(br|gz)$/u.test(name)).length,
     });
     // The logger observes real disk writes while build() is still finalizing.
     expect(fsSync.existsSync(path.join(outDir, "sw.js"))).toBe(false);
   });
+  const fixtureAssets: [string, string][] = [
+    ...Array.from({ length: 4 }, (_, index): [string, string] => [
+      "nested/extra-" + index + ".txt",
+      "fixture content for beneficial compression\n".repeat(128),
+    ]),
+    ["br-only.txt", "a".repeat(20)],
+    ["empty.txt", ""],
+  ];
   config.plugins = [
     ...(config.plugins ?? []),
     {
       name: "compression-progress-fixture",
       generateBundle() {
-        for (let index = 0; index < 4; index++) {
-          this.emitFile({ type: "asset", fileName: `assets/x/${index}.txt`, source: "fixture" });
+        for (const [name, source] of fixtureAssets) {
+          this.emitFile({ type: "asset", fileName: "assets/" + name, source });
         }
       },
     },
@@ -344,20 +384,42 @@ it("reports completed compression work before build completion at a bounded cade
     encoding: "utf8",
     recursive: true,
   });
-  const completed = emitted.filter((name) => name.endsWith(".gz")).length;
-  expect(completed).toBeGreaterThan(4);
-  expect(activity).toMatchObject([
-    ...Array.from({ length: Math.floor(completed / 2) + 1 }, (_, index) => ({
-      elapsed: index * 10_000,
-      assets: index * 2,
-      sidecars: index * 4,
-    })),
-    { elapsed: completed * 5_000, assets: completed, sidecars: completed * 2 },
-  ]);
+  const br = emitted.filter((name) => name.endsWith(".br"));
+  const gz = emitted.filter((name) => name.endsWith(".gz"));
+  const completed = new Set([...br, ...gz].map((name) => name.replace(/\.(br|gz)$/u, ""))).size;
+  expect(br.length).toBeGreaterThan(4);
+  expect(gz.length).toBeGreaterThanOrEqual(4);
+  expect(emitted).toContain("br-only.txt.br");
+  expect(emitted).not.toContain("br-only.txt.gz");
+  expect(emitted).not.toContain("empty.txt.br");
+  expect(emitted).not.toContain("empty.txt.gz");
+  for (const [name, body] of fixtureAssets) {
+    const target = path.join(outDir, "assets", name);
+    expect(await fs.readFile(target, "utf8")).toBe(body);
+    await expectBeneficialSidecars(target, Buffer.from(body));
+  }
+  expect(activity[0]).toMatchObject({ elapsed: 0, assets: 0, sidecars: 0 });
   expect(activity[0]?.message).toMatch(/starting/u);
+  const progress = activity.slice(1, -1);
+  expect(progress.length).toBeGreaterThan(0);
+  let previousElapsed = 0;
+  for (const entry of progress) {
+    // Clock advances only after real writes. Each completed asset can write
+    // one or two encodings; async completion order must not affect cadence.
+    expect(entry.elapsed - previousElapsed).toBeGreaterThanOrEqual(10_000);
+    expect(entry.elapsed - previousElapsed).toBeLessThan(15_000);
+    previousElapsed = entry.elapsed;
+  }
+  expect(clockMs - previousElapsed).toBeLessThan(10_000);
   for (const entry of activity.slice(1)) {
+    expect(entry.elapsed).toBe(entry.sidecars * 2_500);
     expect(entry.message).toContain(`${entry.assets} assets (${entry.sidecars} sidecars)`);
   }
+  expect(activity.at(-1)).toMatchObject({
+    elapsed: (br.length + gz.length) * 2_500,
+    assets: completed,
+    sidecars: br.length + gz.length,
+  });
   expect(activity.at(-1)?.message).toContain("precompression complete");
   await expect(fs.stat(path.join(outDir, "sw.js"))).resolves.toBeDefined();
 });
@@ -401,10 +463,7 @@ it.each([
   expect(emitted.some((name) => name.endsWith(".css"))).toBe(true);
   for (const name of emitted.filter((fileName) => /\.(js|css)$/u.test(fileName))) {
     const source = await readBytes(name);
-    const brotli = await readBytes(`${name}.br`);
-    const gzip = await readBytes(`${name}.gz`);
-    expect(brotliDecompressSync(brotli)).toEqual(source);
-    expect(gunzipSync(gzip)).toEqual(source);
+    await expectBeneficialSidecars(path.join(outDir, "assets", name), source);
     if (name.endsWith(".js")) {
       expect(source.toString("utf8").includes("sourceMappingURL="), name).toBe(
         !release && emitted.includes(`${name}.map`),

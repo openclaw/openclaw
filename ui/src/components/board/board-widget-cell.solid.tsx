@@ -29,10 +29,7 @@ import { LazyViewError } from "../solid/lazy-view-error.tsx";
 import type { MenuHandle } from "../solid/menu.tsx";
 import { BoardMcpAppContent } from "./board-mcp-app-content.tsx";
 import { createBoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
-import {
-  BoardGrantedCapabilities,
-  BoardPendingCapabilities,
-} from "./board-widget-capabilities.solid.tsx";
+import { BoardGrantedCapabilities } from "./board-widget-capabilities.solid.tsx";
 import {
   BOARD_SIZE_PRESETS,
   type BoardWidgetCellHandle,
@@ -42,6 +39,7 @@ import {
 import { BoardWidgetError } from "./board-widget-error.tsx";
 import { createBoardWidgetFrame, BoardWidgetFrame } from "./board-widget-frame.tsx";
 import { BoardWidgetMenu } from "./board-widget-menu.tsx";
+import { BoardPendingCapabilities } from "./board-widget-pending-capabilities.solid.tsx";
 
 registerEnglishCatalog(registerBoardEnglish);
 

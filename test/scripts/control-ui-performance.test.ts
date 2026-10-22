@@ -4,13 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { build } from "tsdown";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   CONTROL_UI_PERFORMANCE_BUDGETS,
   collectControlUiPerformanceMetrics as collectMetrics,
   evaluateControlUiPerformanceBudgets as evaluateBudgets,
   extractControlUiStartupAssetPaths as extractStartupAssets,
   formatControlUiPerformanceReport as formatReport,
+  runControlUiPerformanceCheck as checkPerformance,
 } from "../../scripts/check-control-ui-performance.mts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -243,6 +244,7 @@ describe("Control UI performance budgets", () => {
       largest: { js: { file: "assets/lazy-g.js" }, css: { file: "assets/index-c.css" } },
     });
     const report = formatReport(metrics);
+    expect(report).not.toContain("startup JS gzip vs base:");
     expectReportText(
       report,
       "startup CSS: 1 request",
@@ -252,9 +254,98 @@ describe("Control UI performance budgets", () => {
     );
     writeAsset("chat-d.js", 180, 50, 40);
     const smaller = collectMetrics(distDir);
-    expect(formatReport(smaller, undefined, null, 512, metrics)).toContain(
+    expectReportText(
+      formatReport(smaller, undefined, startupBaseline(60), 512, metrics),
+      "startup JS gzip vs baseline: 65 B (baseline 60 B",
+      "startup JS gzip vs base: 65 B -> 65 B (+0 B)",
       "chat boot JS gzip vs base: 135 B -> 115 B (-20 B); requests 3 -> 3",
     );
+    for (const [gzipBytes, expected] of [
+      [43, "startup JS gzip vs base: 65 B -> 68 B (+3 B)"],
+      [37, "startup JS gzip vs base: 65 B -> 62 B (-3 B)"],
+    ] as const) {
+      writeAsset("index-a.js", 100, gzipBytes, 30);
+      const changed = collectMetrics(distDir);
+      expect(formatReport(changed, undefined, startupBaseline(60), 512, metrics)).toContain(
+        expected,
+      );
+    }
+  });
+
+  it.each([
+    { name: "both", omitted: [], gzipBytes: 40, brotliBytes: 30 },
+    { name: "gzip only", omitted: [".br"], gzipBytes: 40, brotliBytes: 100 },
+    { name: "Brotli only", omitted: [".gz"], gzipBytes: 100, brotliBytes: 30 },
+    { name: "neither", omitted: [".gz", ".br"], gzipBytes: 100, brotliBytes: 100 },
+  ])("counts the served bytes with $name sidecars", ({ omitted, gzipBytes, brotliBytes }) => {
+    const { distDir } = createStartupFixture();
+    for (const suffix of omitted) {
+      fs.unlinkSync(path.join(distDir, "assets", `index-a.js${suffix}`));
+    }
+
+    const metrics = collectMetrics(distDir);
+    expect(metrics.startup.js).toEqual({ requests: 1, rawBytes: 100, gzipBytes, brotliBytes });
+    expect(metrics.total.js).toEqual({ requests: 1, rawBytes: 100, gzipBytes, brotliBytes });
+    expect(metrics.largest.js).toEqual({
+      file: "assets/index-a.js",
+      type: "js",
+      rawBytes: 100,
+      gzipBytes,
+      brotliBytes,
+    });
+    expect(formatReport(metrics)).toContain(
+      "measurement: shipped gzip/br sidecars with per-encoding identity fallback",
+    );
+  });
+
+  it("keeps raw fallback bytes in baseline and differential budget enforcement", () => {
+    const { distDir } = createStartupFixture();
+    const baselinePath = path.join(distDir, "baseline.json");
+    fs.writeFileSync(baselinePath, JSON.stringify(startupBaseline(40)));
+    const baseMetrics = collectMetrics(distDir);
+    fs.unlinkSync(path.join(distDir, "assets/index-a.js.gz"));
+    const metrics = checkPerformance(distDir, undefined, baselinePath).metrics;
+
+    expect(evaluateBudgets(metrics, undefined, startupBaseline(40), 0)).toEqual([]);
+    expect(evaluateBudgets(metrics, undefined, startupBaseline(35), 0)).toEqual([
+      { metric: "startup JS gzip", actual: 100, limit: 99, unit: "bytes" },
+    ]);
+    expect(
+      evaluateBudgets(metrics, { ...CONTROL_UI_PERFORMANCE_BUDGETS, largestJsGzipBytes: 99 }),
+    ).toEqual([{ metric: "largest JS gzip", actual: 100, limit: 99, unit: "bytes" }]);
+    fs.writeFileSync(path.join(distDir, "assets/index-c.css"), Buffer.alloc(1551));
+    fs.unlinkSync(path.join(distDir, "assets/index-c.css.gz"));
+    expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, baseMetrics)).toEqual([
+      { metric: "startup CSS gzip growth", actual: 1536, limit: 1535, unit: "bytes" },
+      { metric: "largest CSS gzip growth", actual: 1536, limit: 1535, unit: "bytes" },
+    ]);
+    expect(fs.readFileSync(baselinePath, "utf8")).toBe(JSON.stringify(startupBaseline(40)));
+  });
+
+  it("rejects a missing raw startup asset even when its sidecars remain", () => {
+    const { distDir } = createStartupFixture();
+    fs.unlinkSync(path.join(distDir, "assets/index-a.js"));
+
+    expect(() => collectMetrics(distDir)).toThrow(
+      "Control UI performance check cannot find startup asset assets/index-a.js",
+    );
+  });
+
+  it("propagates real sidecar stat errors other than absence", () => {
+    const { distDir } = createStartupFixture();
+    const sourcePath = path.join(distDir, "assets/index-a.js");
+    const statSync = fs.statSync;
+    // A real ENOTDIR remains an I/O failure, not an absent optional encoding.
+    const stat = vi
+      .spyOn(fs, "statSync")
+      .mockImplementation((file) =>
+        statSync(file === `${sourcePath}.gz` ? path.join(sourcePath, "not-a-directory") : file),
+      );
+    try {
+      expect(() => collectMetrics(distDir)).toThrow(expect.objectContaining({ code: "ENOTDIR" }));
+    } finally {
+      stat.mockRestore();
+    }
   });
 
   it("returns actionable custom-budget violations", () => {

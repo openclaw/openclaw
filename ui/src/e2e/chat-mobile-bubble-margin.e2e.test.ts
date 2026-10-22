@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createMarginImage,
@@ -90,6 +91,10 @@ suite.define(() => {
                 "false",
               );
             }
+            const surface = `.chat-thread ${testCase.selector}`;
+            await page.locator(surface).first().waitFor();
+            // Reduced motion still gives newly mounted cards a brief entrance transform.
+            await waitForLayoutSettled(page, surface);
             const desktop = await measure();
             for (const width of [390, 430]) {
               const label = `${testCase.id} at ${width} px in ${theme}`;
