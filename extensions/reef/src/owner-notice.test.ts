@@ -38,6 +38,20 @@ function rejection(value: number | string, category = "guard_deny"): ReefDeliver
 
 async function consumeNotice(_notice: ReefRejectionNotice): Promise<void> {}
 
+function ownerNoticeRuntime() {
+  const runtime = createPluginRuntimeMock();
+  vi.mocked(runtime.channel.routing.resolveAgentRoute).mockReturnValue({
+    agentId: "main",
+    channel: "reef",
+    accountId: "default",
+    sessionKey: "agent:main:reef:direct:alice",
+    mainSessionKey: "agent:main:main",
+    lastRoutePolicy: "session",
+    matchedBy: "default",
+  });
+  return runtime;
+}
+
 function createNoticeStore() {
   const records = new Map<
     string,
@@ -84,43 +98,45 @@ function createNoticeStore() {
   return { records, store };
 }
 
-it.each([true, false])("wakes only for a newly queued notice (queued: %s)", async (queued) => {
-  const runtime = createPluginRuntimeMock();
-  if (queued) {
-    vi.mocked(runtime.channel.routing.resolveAgentRoute).mockReturnValue({
-      agentId: "main",
-      channel: "reef",
-      accountId: "default",
-      sessionKey: "agent:main:reef:direct:alice",
-      mainSessionKey: "agent:main:main",
-      lastRoutePolicy: "session",
-      matchedBy: "default",
-    });
-  }
-  vi.mocked(runtime.system.enqueueSystemEvent).mockReturnValue(queued);
+it("keeps non-waking owner notices passive", async () => {
+  const runtime = ownerNoticeRuntime();
   const notify = createReefOwnerNoticeHandler({ runtime, cfg: {}, handle: "bob" });
   await notify({
     text: "owner notice",
-    ...(queued ? { peer: "alice" } : {}),
-    contextKey: queued ? "reef:owner:alice" : "reef:owner:bob",
-    wakeAgent: true,
+    peer: "alice",
+    contextKey: "reef:owner:alice",
   });
-  if (queued) {
-    expect(runtime.system.enqueueSystemEvent).toHaveBeenCalledWith("owner notice", {
-      sessionKey: "agent:main:reef:direct:alice",
-      contextKey: "reef:owner:alice",
-    });
-    expect(runtime.system.requestHeartbeat).toHaveBeenCalledWith({
-      source: "other",
-      intent: "immediate",
-      reason: "reef:delivery-rejected",
-      agentId: "main",
-      sessionKey: "agent:main:reef:direct:alice",
-    });
-  } else {
-    expect(runtime.system.requestHeartbeat).not.toHaveBeenCalled();
-  }
+  expect(runtime.system.enqueueSystemEvent).toHaveBeenCalledWith("owner notice", {
+    sessionKey: "agent:main:reef:direct:alice",
+    contextKey: "reef:owner:alice",
+  });
+  expect(runtime.system.captureSessionEventTarget).not.toHaveBeenCalled();
+  expect(runtime.system.enqueueSessionEvent).not.toHaveBeenCalled();
 });
+
+it.each(["refused", "failed", "cancelled"] as const)(
+  "rejects a waking owner notice when the event is %s",
+  async (outcome) => {
+    const runtime = ownerNoticeRuntime();
+    vi.mocked(runtime.system.enqueueSessionEvent).mockReturnValue({
+      id: "notice",
+      cancel: () => false,
+      accepted: Promise.resolve(
+        outcome === "refused" ? { ok: false, error: "admission refused" } : { ok: true },
+      ),
+      settled: Promise.resolve({
+        status: outcome === "refused" ? "failed" : outcome,
+        executionStarted: outcome !== "refused",
+        delivered: false,
+      }),
+    });
+    const notify = createReefOwnerNoticeHandler({ runtime, cfg: {}, handle: "bob" });
+    await expect(
+      notify({ text: "owner notice", contextKey: "reef:owner:bob", wakeAgent: true }),
+    ).rejects.toThrow(outcome === "refused" ? "admission refused" : `Reef owner notice ${outcome}`);
+    expect(runtime.system.enqueueSystemEvent).not.toHaveBeenCalled();
+  },
+);
 
 it("advances the full batch when a receipt notice fails", async () => {
   const order: string[] = [];
@@ -341,7 +357,7 @@ describe("ReefReceiptNotifier", () => {
   });
 });
 
-it("does not mark an overdue delivery notified until dispatch succeeds", async () => {
+it("does not mark an overdue delivery notified until its session event settles successfully", async () => {
   const marked = new Set<string>();
   const entry = {
     peer: "clawd",
@@ -356,19 +372,49 @@ it("does not mark an overdue delivery notified until dispatch succeeds", async (
       return fresh;
     }),
   };
-  const failing = vi.fn(async () => {
-    throw new Error("enqueue failed");
+  const runtime = ownerNoticeRuntime();
+  type Receipt = ReturnType<typeof runtime.system.enqueueSessionEvent>;
+  const accepted = createDeferred<Awaited<Receipt["accepted"]>>();
+  const settled = createDeferred<Awaited<Receipt["settled"]>>();
+  const submitted = createDeferred<void>();
+  vi.mocked(runtime.system.enqueueSessionEvent).mockImplementationOnce(() => {
+    submitted.resolve();
+    return {
+      id: "notice",
+      cancel: () => false,
+      accepted: accepted.promise,
+      settled: settled.promise,
+    };
   });
-
-  await expect(notifyOverdueReefDeliveries({ trust: store, ownerNotice: failing })).rejects.toThrow(
-    "enqueue failed",
-  );
+  const ownerNotice = createReefOwnerNoticeHandler({ runtime, cfg: {}, handle: "bob" });
+  const first = notifyOverdueReefDeliveries({ trust: store, ownerNotice });
+  const failure = expect(first).rejects.toThrow("delivery interrupted");
+  await submitted.promise;
   expect(store.markOutboundDeliveryOverdueNotified).not.toHaveBeenCalled();
-
-  const ownerNotice = vi.fn<Parameters<typeof notifyOverdueReefDeliveries>[0]["ownerNotice"]>(
-    async () => {},
-  );
+  accepted.resolve({ ok: true });
+  await accepted.promise;
+  expect(store.markOutboundDeliveryOverdueNotified).not.toHaveBeenCalled();
+  settled.resolve({
+    status: "failed",
+    executionStarted: true,
+    delivered: false,
+    error: "delivery interrupted",
+  });
+  await failure;
+  expect(store.markOutboundDeliveryOverdueNotified).not.toHaveBeenCalled();
   await notifyOverdueReefDeliveries({ trust: store, ownerNotice });
-  expect(ownerNotice).toHaveBeenCalledOnce();
   expect(marked.has(entry.id)).toBe(true);
+  expect(runtime.system.captureSessionEventTarget).toHaveBeenCalledTimes(2);
+  expect(runtime.system.enqueueSessionEvent).toHaveBeenCalledTimes(2);
+  expect(runtime.system.enqueueSessionEvent).toHaveBeenLastCalledWith(
+    expect.stringContaining(entry.id),
+    {
+      agentId: "main",
+      sessionKey: "agent:main:reef:direct:alice",
+      contextKey: `reef:delivery-overdue:${entry.peer}:${entry.id}`,
+      expectedTarget: await vi.mocked(runtime.system.captureSessionEventTarget).mock.results[1]!
+        .value,
+      createIfMissing: true,
+    },
+  );
 });

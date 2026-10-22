@@ -723,7 +723,7 @@ extensions/slack/src/monitor/context.ts	2
 extensions/slack/src/monitor/event-scope.ts	1
 extensions/slack/src/monitor/events/assistant.ts	1
 extensions/slack/src/monitor/events/channels.ts	1
-extensions/slack/src/monitor/events/interactions.block-actions.ts	12
+extensions/slack/src/monitor/events/interactions.block-actions.ts	9
 extensions/slack/src/monitor/events/interactions.modal.ts	1
 extensions/slack/src/monitor/events/message-subtype-handlers.ts	2
 extensions/slack/src/monitor/events/messages.ts	11
