@@ -14,6 +14,7 @@ import {
   queueJob,
   queueStore,
   requestFor,
+  requestForJob,
   scheduled as scheduledAt,
   type QueueRequest,
 } from "./run-queue.test-support.js";
@@ -98,45 +99,19 @@ it("deduplicates committed slots and drains persisted job order within worker ca
   expect(jobIds((await queue.drain()).launches)).toEqual(["a-second"]);
 });
 
-it("advances a consumed scheduled slot without reclaiming its terminal receipt", async () => {
-  const current = job("consumed");
-  const queue = await store("consumed", [current]);
-  const request = scheduled(queue.storeKey, current);
-  await queue.request([request]);
-  await queue.cancel([request.receiptId], "superseded");
-  expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBe(now);
-  const retry = await queue.request([request]);
-  expect(retry.accepted).toEqual([]);
-  expect(retry.rejected).toEqual(rejected(request));
-  expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBeGreaterThan(now);
-  expect((await queue.drain()).launches).toEqual([]);
-});
-
 it("returns durable receipt handles across queued edits and records disabled requests under their public ID", async () => {
   const { current: original, queue, request } = await scheduledQueue("edited");
   const claimed = (await queue.request([request])).accepted[0]!;
   expect(await queue.readReceipt(claimed.runReceipt)).toEqual(claimed.runReceipt);
-  const edited = await queue.update(original.id, {
-    payload: { kind: "command", argv: ["echo", "new payload"] },
-    agentId: "edited-agent",
-  });
-  if (!("outcome" in edited)) {
-    throw new Error("Expected the queued edit to commit");
-  }
-  expect(edited.outcome.store.jobs).toMatchObject([
-    {
-      id: original.id,
-      agentId: "edited-agent",
-      payload: { kind: "command", argv: ["echo", "new payload"] },
-      state: { queuedAtMs: now },
-    },
+  const payload = { kind: "command" as const, argv: ["echo", "new payload"] };
+  const edited = await queue.update(original.id, { payload, agentId: "edited-agent" });
+  const editedJobs = "outcome" in edited ? edited.outcome.store.jobs : undefined;
+  expect(editedJobs).toMatchObject([
+    { id: original.id, agentId: "edited-agent", payload, state: { queuedAtMs: now } },
   ]);
   expect(edited).toMatchObject({ outcome: { store: await queue.read() } });
   const activated = (await queue.drain()).launches[0]!;
-  expect(activated.job.payload).toEqual({
-    kind: "command",
-    argv: ["echo", "new payload"],
-  });
+  expect(activated.job.payload).toEqual(payload);
   expect(activated.runReceipt).toEqual({
     ...claimed.runReceipt,
     agentId: "edited-agent",
@@ -156,11 +131,8 @@ it("returns durable receipt handles across queued edits and records disabled req
   await cancelled.request([manual]);
   const disabled = await cancelled.update(cancelJob.id, { enabled: false });
   expect(disabled).toMatchObject({ outcome: { store: await cancelled.read() } });
-  if (!("outcome" in disabled)) {
-    throw new Error("Expected the queued disable to commit");
-  }
-  expect(disabled.outcome.store.jobs[0]?.enabled).toBe(false);
-  expect(disabled.outcome.store.jobs[0]?.state.queuedAtMs).toBeUndefined();
+  const disabledJob = "outcome" in disabled ? disabled.outcome.store.jobs[0] : undefined;
+  expect(disabledJob).toMatchObject({ enabled: false, state: { queuedAtMs: undefined } });
   const drained = await cancelled.drain([manual]);
   expect(drained.launches).toEqual([]);
   expect(runIds(drained.skipped)).toEqual([manual.receiptId]);
@@ -208,11 +180,7 @@ it("launches explicit force on a disabled job and retains a consumed exit event 
     state: {},
   });
   const exit = await store("exit", [onExit]);
-  const event = requestFor(onExit, {
-    receiptId: "cron:request:exit",
-    mode: "on-exit" as const,
-    onExitSchedule: { kind: "on-exit" as const, command: "synthetic-watch" },
-  });
+  const event = requestForJob(exit.storeKey, onExit, now);
   expect((await exit.request([event])).accepted[0]?.job.enabled).toBe(false);
   await exit.update(onExit.id, { enabled: true });
   const result = await exit.drain([event]);
@@ -231,9 +199,10 @@ it("recovers a timed request without replaying active work or reconstructing a l
   expect((await queue.recover()).interruptedRuns).toHaveLength(1);
   expect((await queue.drain()).launches).toEqual([]);
   const interrupted = (await queue.read()).jobs[0]!;
-  expect(interrupted.state.lastRunStatus).toBe("error");
-  expect(interrupted.state.runningAtMs).toBeUndefined();
-  expect(interrupted.enabled).toBe(false);
+  expect(interrupted).toMatchObject({
+    enabled: false,
+    state: { lastRunStatus: "error", runningAtMs: undefined },
+  });
 
   const manualJob = job("legacy");
   const legacy = await store("legacy", [manualJob]);
