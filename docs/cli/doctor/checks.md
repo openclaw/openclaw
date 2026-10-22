@@ -18,6 +18,7 @@ postures and maintenance modes documented on the other pages.
 - Standalone non-interactive mode skips prompts, not full provider-catalog or runtime-tool validation. Update-time optional checks can be [deferred with warnings](/cli/doctor/running#postures). Built checkout runs reuse available compiled plugin entries for these checks; intentional source overrides still execute source. See [Development debugging](</help/debugging#dev-profile-%2B-dev-gateway-(--dev)>).
 - `--lint` is stricter than `--non-interactive`: always read-only, never prompts, never applies safe migrations. Use `doctor --fix` or `doctor --repair` when you want doctor to make changes.
 - Doctor does not execute `exec` SecretRefs while checking secrets by default. Use `--allow-exec` (with or without `--lint`) only when you intentionally want doctor to run those configured secret resolvers.
+- An explicitly empty agent roster produces no workspace suggestions. Config validation still reports that at least one configured agent is required.
 
 ## Config writes and backups
 
