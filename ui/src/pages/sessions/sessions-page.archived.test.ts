@@ -1,17 +1,16 @@
-/* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+/* @vitest-environment jsdom */
+import { sessionRequest as mockSessionRequests } from "../../lib/sessions/hydration-family.test-support.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import {
-  createTestSessionCapability,
-  sessionsResult,
-} from "../../lib/sessions/session-capability.test-support.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   createContext,
+  createLiveSessionContext,
   createGateway,
   createRenderedPage,
   createSessions,
@@ -50,26 +49,16 @@ describe("sessions page archived deletion", () => {
       sessionId: "cloud-id",
     };
     const response = createDeferred<{ deleted: boolean }>();
-    const replies: Record<string, () => unknown> = {
+    const request = mockSessionRequests({
       "sessions.delete": () => response.promise,
       "sessions.list": () => sessionsResult([target]),
       "sessions.subscribe": () => ({ subscribed: true }),
-    };
-    const request = vi.fn(async (method: string) => {
-      const reply = replies[method];
-      if (!reply) {
-        throw new Error(`Unexpected Gateway method: ${method}`);
-      }
-      return reply();
     });
-    const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-    const sessions = createTestSessionCapability(gateway);
+    const { sessions, context } = createLiveSessionContext({
+      request,
+    } as unknown as GatewayBrowserClient);
     onTestFinished(() => sessions.dispose());
-    const page = await createRenderedPage(
-      createContext(gateway, sessions),
-      sessionsResult([target]),
-      "archived",
-    );
+    const page = await createRenderedPage(context, sessionsResult([target]), "archived");
     await sessions.refreshList({ agentId: "main", archivedFilter: "archived" });
     const checkbox = () =>
       page.querySelector<HTMLInputElement>(`input[aria-label="Select session: ${target.key}"]`);

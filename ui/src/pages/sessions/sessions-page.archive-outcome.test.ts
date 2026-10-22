@@ -1,18 +1,15 @@
-/* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+/* @vitest-environment jsdom */
+import { sessionRequest as mockSessionRequests } from "../../lib/sessions/hydration-family.test-support.ts";
 import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
 import "../../lib/toast-host.tsx";
-import {
-  createTestSessionCapability,
-  sessionsResult,
-} from "../../lib/sessions/session-capability.test-support.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
-  createContext,
-  createGateway,
+  createLiveSessionContext,
   createPage,
   createRenderedPage,
 } from "./sessions-page.test-support.ts";
@@ -35,20 +32,15 @@ async function setup(initial = row, selection = false) {
   let rows = [initial];
   const started = createDeferred();
   const pending = createDeferred<SessionPatchResult>();
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "sessions.list") {
-      return sessionsResult(rows, selection ? 2 : 1);
-    }
-    if (method === "sessions.patch") {
+  const request = mockSessionRequests({
+    "sessions.list": () => sessionsResult(rows, selection ? 2 : 1),
+    "sessions.patch": () => {
       started.resolve();
       return pending.promise;
-    }
-    throw new Error(`Unexpected request: ${method} ${String(params)}`);
+    },
   });
   const client = { request } as unknown as GatewayBrowserClient;
-  const gateway = createGateway(client);
-  const sessions = createTestSessionCapability(gateway.gateway);
-  const context = createContext(gateway.gateway, sessions);
+  const { connection: gateway, sessions, context } = createLiveSessionContext(client);
   const subscribe = vi.spyOn(sessions, "subscribeList");
   const patches = () => request.mock.calls.filter(([method]) => method === "sessions.patch");
   const page = selection

@@ -4,20 +4,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import { sessionRequest as mockSessionRequests } from "../../lib/sessions/hydration-family.test-support.ts";
 import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
 import {
   createSessionCapabilityHarness,
-  createTestSessionCapability,
   sessionChangedEvent,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
-  createContext,
-  createGateway,
+  createLiveSessionContext,
   createRenderedPage,
   type TestSessionsPage,
+  withNotifyingAgentSelection,
 } from "./sessions-page.test-support.ts";
 
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -48,15 +47,7 @@ const rows = (count: number, ascending = false): GatewaySessionRow[] =>
     updatedAt: ascending ? index : 100 - index,
   }));
 function listRequest<P>(list: (params?: P) => unknown, methods: Record<string, () => unknown>) {
-  return vi.fn(async (method: string, params?: P) => {
-    if (method === "sessions.list") {
-      return list(params);
-    }
-    if (Object.hasOwn(methods, method)) {
-      return methods[method]!();
-    }
-    throw new Error(`Unexpected request: ${method}`);
-  });
+  return mockSessionRequests({ "sessions.list": list, ...methods });
 }
 const subscribed = () => ({ subscribed: true });
 
@@ -65,9 +56,7 @@ async function mountPage(
   initial: SessionsListResult,
   deepLink: string | null = null,
 ) {
-  const connection = createGateway(client);
-  const sessions = createTestSessionCapability(connection.gateway);
-  const context = createContext(connection.gateway, sessions);
+  const { connection, sessions, context } = createLiveSessionContext(client);
   const page = await createRenderedPage(context, initial, "active", deepLink);
   cleanups.push(() => {
     page.remove();
@@ -107,15 +96,8 @@ async function mountTypingPage(initialResult = result("agent:main:initial")) {
     { "sessions.subscribe": subscribed },
   );
   const client = { request } as unknown as GatewayBrowserClient;
-  let notifyScope: Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0] = () =>
-    undefined;
-  const connection = createGateway(client);
-  const sessions = createTestSessionCapability(connection.gateway);
-  const context = createContext(connection.gateway, sessions);
-  context.agentSelection.subscribe = (listener) => {
-    notifyScope = listener;
-    return () => undefined;
-  };
+  const { connection, sessions, context } = createLiveSessionContext(client);
+  const { changeScope: setScope } = withNotifyingAgentSelection(context, "main");
   const page = await createRenderedPage(context, initialResult);
   const input = () => searchInput(page);
   cleanups.push(async () => {
@@ -134,10 +116,7 @@ async function mountTypingPage(initialResult = result("agent:main:initial")) {
     client,
     connection,
     context,
-    setScope(this: void, scopeId: string | null) {
-      context.agentSelection.state.scopeId = scopeId;
-      notifyScope(context.agentSelection.state);
-    },
+    setScope,
   };
 }
 
@@ -245,6 +224,14 @@ describe("Sessions page typing and detail ownership", () => {
     async (action) => {
       const { page, requests, pending, input, edit } = await mountTypingPage();
       click(page, ".sessions-filter-popover__trigger");
+      const group = page.querySelector<HTMLSelectElement>(".session-groupby__select")!;
+      const previousGroup = group.value;
+      cleanups.push(() => {
+        group.value = previousGroup;
+        group.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      group.value = "category";
+      group.dispatchEvent(new Event("change", { bubbles: true }));
       const limit = findInput(page, ".session-filter-input--limit");
       editInput(limit, "25");
       await advance();
@@ -255,17 +242,23 @@ describe("Sessions page typing and detail ownership", () => {
       const oldRequest = pending.at(-1)!;
       await page.updateComplete;
       input().focus();
+      const clear = page.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]')!;
+      expect(clear).toMatchObject({ hidden: false, disabled: false });
       if (action === "click") {
-        const clear = page.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]');
-        expect(clear).not.toBeNull();
-        clear!.click();
+        clear.focus();
+        clear.click();
       } else {
-        input().dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-        );
+        const event = new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        });
+        input().dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
       }
       await page.updateComplete;
       expect(document.activeElement).toBe(input());
+      expect(clear).toMatchObject({ hidden: true, disabled: true });
       expect([input().value, page.selectedSessions.size, page.result]).toEqual(["", 0, null]);
       const count = requests.length;
       await advance(200);
@@ -279,6 +272,20 @@ describe("Sessions page typing and detail ownership", () => {
       expect(findInput(page, ".session-filter-input--limit").value).toBe("25");
       expect(requests.at(-1)).toMatchObject({ limit: 25 });
       expect(page.result?.sessions[0]?.key).toBe("agent:main:cleared");
+      expect([page.groupBy, page.statusFilter, page.includeGlobal]).toEqual([
+        "category",
+        "active",
+        true,
+      ]);
+      const emptyEscape = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      input().dispatchEvent(emptyEscape);
+      expect(emptyEscape.defaultPrevented).toBe(true);
+      expect(page.querySelector(".sessions-filter-popover")?.matches(":popover-open")).toBe(false);
+      expect(requests).toHaveLength(count + 1);
     },
   );
 

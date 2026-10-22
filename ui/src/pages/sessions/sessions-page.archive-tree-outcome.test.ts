@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
@@ -8,18 +8,16 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { sessionRequest as mockSessionRequests } from "../../lib/sessions/hydration-family.test-support.ts";
 import "../../lib/toast-host.tsx";
-import {
-  createTestSessionCapability,
-  sessionsResult,
-} from "../../lib/sessions/session-capability.test-support.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   answerConfirmDialog,
   createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createContext, createGateway, createPage } from "./sessions-page.test-support.ts";
+import { createLiveSessionContext, createPage } from "./sessions-page.test-support.ts";
 
 async function setup(childCount: number, active = false) {
   const modal = createModalDialogTestFixture();
@@ -52,21 +50,17 @@ async function setup(childCount: number, active = false) {
         : { ok: true, key, agentId },
     ),
   });
-  const request = vi.fn(async (method: string, raw?: unknown) => {
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
-    if (method === "sessions.describe") {
-      return { session: structuredClone(serverRows[0]) };
-    }
-    if (method === "sessions.list") {
+  const request = mockSessionRequests({
+    "sessions.subscribe": () => ({ subscribed: true }),
+    "sessions.describe": () => ({ session: structuredClone(serverRows[0]) }),
+    "sessions.list": (raw) => {
       const query = raw as { spawnedBy?: string } | undefined;
       const visible = query?.spawnedBy
         ? serverRows.filter((row) => row.parentSessionKey === query.spawnedBy)
         : serverRows;
       return { ...sessionsResult(structuredClone(visible), 1), hasMore: false, nextOffset: null };
-    }
-    if (method === "sessions.patchMany") {
+    },
+    "sessions.patchMany": async (raw) => {
       const params = raw as SessionsPatchManyParams;
       const archived = params.patch.archived;
       if (typeof archived !== "boolean") {
@@ -89,8 +83,8 @@ async function setup(childCount: number, active = false) {
         restored.resolve(params);
       }
       return result;
-    }
-    if (method === "sessions.patch") {
+    },
+    "sessions.patch": () => {
       serverRows[0]!.archived = true;
       return {
         ok: true,
@@ -98,13 +92,11 @@ async function setup(childCount: number, active = false) {
         path: "",
         entry: { sessionId: root.sessionId, archivedAt: 1 },
       };
-    }
-    throw new Error("Unexpected request: " + method);
+    },
   });
   const client = { request } as unknown as GatewayBrowserClient;
-  const gateway = createGateway(client);
-  const sessions = createTestSessionCapability(gateway.gateway);
-  const page = await createPage(createContext(gateway.gateway, sessions));
+  const { connection: gateway, sessions, context } = createLiveSessionContext(client);
+  const page = await createPage(context);
   const toast = document.createElement("openclaw-toast-host");
   document.body.append(toast);
   onTestFinished(async () => {

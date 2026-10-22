@@ -85,7 +85,7 @@ describe("Sessions transcript search", () => {
     await page.updateComplete;
     expect(find("status")?.getAttribute("aria-busy")).toBe("true");
     response.resolve({
-      ...matches("launch code"),
+      ...matches("The <launch code> is ready."),
       indexing: true,
       truncated: true,
       archivedTranscriptsExcluded: 3,
@@ -94,7 +94,9 @@ describe("Sessions transcript search", () => {
     await page.updateComplete;
     expect(page.transcriptSearchQuery).toBe("launch code");
     expect(find("result-header strong")?.textContent).toBe(row.label);
-    expect(find("snippet")?.textContent).toBe("launch code");
+    expect(find("snippet")?.textContent).toBe("The <launch code> is ready.");
+    expect(find("result")?.textContent).toContain("Assistant");
+    expect(find("result")?.querySelector("launch")).toBeNull();
     expect(page.textContent).toContain(
       "3 archived transcripts excluded; open a session to restore its searchable history.",
     );
@@ -102,6 +104,11 @@ describe("Sessions transcript search", () => {
     expect(find("summary")?.textContent).toContain(t("sessionsView.transcriptSearchTruncated"));
     expect(find("status")?.getAttribute("aria-busy")).toBe("false");
     expect(page.result?.sessions.map(({ key }) => key)).toEqual([metadata.key]);
+    find("result")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(page.context.navigate).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ pathname: "/chat/main/content" }),
+    );
   });
 
   it("skips empty queries but submits search without method advertisement", async () => {
@@ -206,6 +213,11 @@ describe("Sessions transcript search", () => {
     await page.updateComplete;
     const form = find("form");
     const input = page.querySelector<HTMLInputElement>(".sessions-transcript-search__input input")!;
+    const expectControlsRetained = () => {
+      expect(find("form")).toBe(form);
+      expect(page.querySelector(".sessions-transcript-search__trigger")).toBe(trigger);
+      expect(page.querySelector(".sessions-transcript-search__input input")).toBe(input);
+    };
     page.updateTranscriptSearchQuery("needle");
     const pending = page.runTranscriptSearch();
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
@@ -220,31 +232,23 @@ describe("Sessions transcript search", () => {
     await pending;
     await page.updateComplete;
     expect(find("status")).toBeNull();
-    expect(find("form")).toBe(form);
-    expect(page.querySelector(".sessions-transcript-search__trigger")).toBe(trigger);
-    expect(page.querySelector(".sessions-transcript-search__input input")).toBe(input);
+    expectControlsRetained();
     expect(input.value).toBe("updated needle");
 
     await page.runTranscriptSearch();
     await vi.waitFor(() => expect(find("snippet")?.textContent).toBe("updated needle"));
-    expect(find("form")).toBe(form);
-    expect(page.querySelector(".sessions-transcript-search__trigger")).toBe(trigger);
-    expect(page.querySelector(".sessions-transcript-search__input input")).toBe(input);
+    expectControlsRetained();
 
     const repeated = page.runTranscriptSearch();
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
     await page.updateComplete;
     expect(find("status")?.getAttribute("aria-busy")).toBe("true");
     expect(find("snippet")).toBeNull();
-    expect(find("form")).toBe(form);
-    expect(page.querySelector(".sessions-transcript-search__trigger")).toBe(trigger);
-    expect(page.querySelector(".sessions-transcript-search__input input")).toBe(input);
+    expectControlsRetained();
     replacement.resolve(matches("replacement needle"));
     await repeated;
     await vi.waitFor(() => expect(find("snippet")?.textContent).toBe("replacement needle"));
-    expect(find("form")).toBe(form);
-    expect(page.querySelector(".sessions-transcript-search__trigger")).toBe(trigger);
-    expect(page.querySelector(".sessions-transcript-search__input input")).toBe(input);
+    expectControlsRetained();
   });
 
   it("searches changed membership without waiting for the metadata list", async () => {
