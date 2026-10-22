@@ -56,23 +56,18 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function createEnvSecretRefConfig(params: {
-  field: "accessToken" | "password";
-  provider?: string;
-  secrets?: CoreConfig["secrets"];
-}): CoreConfig {
-  const account = {
-    homeserver: "https://matrix.example.org",
-    userId: "@bot:example.org",
-    [params.field]: {
-      source: "env",
-      provider: params.provider ?? "default",
-      id: "MATRIX_TEST_SECRET",
-    },
-  };
+function secretConfig(
+  field: "accessToken" | "password",
+  provider = "default",
+  secrets?: CoreConfig["secrets"],
+): CoreConfig {
   return {
-    ...matrixConfig(account),
-    secrets: params.secrets,
+    ...matrixConfig({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      [field]: { source: "env", provider, id: "MATRIX_TEST_SECRET" },
+    }),
+    secrets,
   };
 }
 
@@ -102,13 +97,9 @@ describe("Matrix auth/config live surfaces", () => {
   });
 
   it("resolves password from supplied env with a default alias declared as exec", () => {
-    const cfg = createEnvSecretRefConfig({
-      field: "password",
-      provider: "shared",
-      secrets: {
-        defaults: { env: "shared" },
-        providers: { shared: { source: "exec", command: "/unused/matrix-secret-command" } },
-      },
+    const cfg = secretConfig("password", "shared", {
+      defaults: { env: "shared" },
+      providers: { shared: { source: "exec", command: "/unused/matrix-secret-command" } },
     });
     expect(
       resolveDefaultMatrixAuthContext(cfg, { MATRIX_TEST_SECRET: " supplied-secret " }, "default")
@@ -135,7 +126,7 @@ describe("Matrix auth/config live surfaces", () => {
     vi.stubEnv("MATRIX_ACCESS_TOKEN", "ambient-token");
     vi.stubEnv("MATRIX_PASSWORD", "ambient-password");
     vi.stubEnv("MATRIX_TEST_SECRET", "ambient-secret");
-    const cfg = createEnvSecretRefConfig({ field: "accessToken" });
+    const cfg = secretConfig("accessToken");
     expect(() =>
       resolveDefaultMatrixAuthContext(cfg, {
         MATRIX_TEST_SECRET: undefined,
@@ -148,13 +139,9 @@ describe("Matrix auth/config live surfaces", () => {
     [["MATRIX_TEST_SECRET"], true],
     [[], false],
   ] as const)("honors explicit env allowlist %j (allowed: %s)", (allowlist, allowed) => {
-    const cfg = createEnvSecretRefConfig({
-      field: "password",
-      provider: "shared",
-      secrets: {
-        defaults: { env: "shared" },
-        providers: { shared: { source: "env", allowlist: [...allowlist] } },
-      },
+    const cfg = secretConfig("password", "shared", {
+      defaults: { env: "shared" },
+      providers: { shared: { source: "env", allowlist: [...allowlist] } },
     });
     const resolve = () =>
       resolveDefaultMatrixAuthContext(cfg, { MATRIX_TEST_SECRET: "env-secret" });
@@ -169,12 +156,8 @@ describe("Matrix auth/config live surfaces", () => {
   it.each([{ source: "file", path: "/unused/matrix-secret.json" }, undefined] as const)(
     "rejects non-default alias with declaration %j",
     (declaration) => {
-      const cfg = createEnvSecretRefConfig({
-        field: "accessToken",
-        provider: "other",
-        secrets: {
-          providers: declaration ? { other: declaration } : undefined,
-        },
+      const cfg = secretConfig("accessToken", "other", {
+        providers: declaration ? { other: declaration } : undefined,
       });
 
       expect(() =>

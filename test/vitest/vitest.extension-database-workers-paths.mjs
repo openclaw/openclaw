@@ -397,7 +397,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/matrix/src/matrix/sdk/crypto-store-ownership.process.test.ts",
   "extensions/matrix/src/matrix/monitor/index.credentials.test.ts",
   "extensions/matrix/src/matrix/client/file-sync-store.test.ts",
-  "extensions/matrix/src/matrix/client/file-sync-store.sdk.test.ts",
   "extensions/matrix/src/matrix/monitor/handler.restart.test.ts",
   "extensions/matrix/src/matrix/monitor/ingress.test.ts",
   "extensions/matrix/src/matrix/client/storage.test.ts",
