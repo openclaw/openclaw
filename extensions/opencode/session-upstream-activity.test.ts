@@ -163,6 +163,21 @@ function message(
   return { info: { id, role: "user", time: { created: 1_700_000_000_000 + offset } }, parts };
 }
 
+type Part = StatefulOpenCodeSession["messages"][number]["parts"][number];
+const part = (type: string, fields: Omit<Part, "id" | "type"> = {}): Part => ({
+  id: `part-${type}-${fields.text ?? fields.filename ?? ""}`,
+  type,
+  ...fields,
+});
+const text = (value: string, fields: Omit<Part, "id" | "type" | "text"> = {}) =>
+  part("text", { text: value, ...fields });
+const changed = (humanTurns: number, seq?: number, lastHumanMessageId?: string | null) => [
+  expect.objectContaining({
+    humanTurns,
+    ...(seq === undefined ? {} : { nextMarker: { seq, lastHumanMessageId } }),
+  }),
+];
+
 function activity(seq: number, lastHumanMessageId: string | null, humanTurns: number) {
   return {
     kind: "activity",
@@ -172,10 +187,10 @@ function activity(seq: number, lastHumanMessageId: string | null, humanTurns: nu
   };
 }
 
-function textMessage(id: string, role: string, text: string, offset = 0) {
+function textMessage(id: string, role: string, value: string, offset = 0) {
   return {
     info: { id, role, time: { created: 1_700_000_000_000 + offset } },
-    parts: [{ id: `part-${id}`, type: "text", text }],
+    parts: [text(value)],
   };
 }
 
@@ -283,51 +298,28 @@ describe("OpenCode session upstream activity", () => {
       let currentMarker: Probe["marker"] = { seq: 1, lastHumanMessageId: null };
       const user = message("msg_002", [], 1000);
       session.messages.push(user);
-      session.seq = 2;
-      await fixture.writeState({ sessions: [session] });
-      let outcomes = await checkActivity(currentMarker);
-      expect(outcomes).toEqual([expect.objectContaining({ humanTurns: 0 })]);
-      currentMarker = markerFrom(outcomes[0]);
-
-      user.parts.push({ id: "part-file", type: "file" });
-      session.seq = 3;
-      await fixture.writeState({ sessions: [session] });
-      outcomes = await checkActivity(currentMarker);
-      expect(outcomes).toEqual([expect.objectContaining({ humanTurns: 0 })]);
-      currentMarker = markerFrom(outcomes[0]);
-
-      user.parts.push({ id: "part-text", type: "text", text: "arrived in stages" });
-      session.seq = 4;
-      await fixture.writeState({ sessions: [session] });
-      outcomes = await checkActivity(currentMarker);
-      expect(outcomes).toEqual([
-        expect.objectContaining({
-          humanTurns: 1,
-          nextMarker: { seq: 4, lastHumanMessageId: "msg_002" },
-        }),
-      ]);
-      currentMarker = markerFrom(outcomes[0]);
-
-      user.parts.push({ id: "part-late", type: "text", text: "late detail" });
-      session.seq = 5;
-      await fixture.writeState({ sessions: [session] });
-      await expect(checkActivity(currentMarker)).resolves.toEqual([
-        expect.objectContaining({
-          humanTurns: 0,
-          nextMarker: { seq: 5, lastHumanMessageId: "msg_002" },
-        }),
-      ]);
+      const stages = [
+        { addition: [], expected: changed(0) },
+        { addition: [part("file")], expected: changed(0) },
+        { addition: [text("arrived in stages")], expected: changed(1, 4, "msg_002") },
+        { addition: [text("late detail")], expected: changed(0, 5, "msg_002") },
+      ];
+      for (const [index, { addition, expected }] of stages.entries()) {
+        user.parts.push(...addition);
+        session.seq = index + 2;
+        await fixture.writeState({ sessions: [session] });
+        const outcomes = await checkActivity(currentMarker);
+        expect(outcomes).toEqual(expected);
+        currentMarker = markerFrom(outcomes[0]);
+      }
     },
   );
 
   itWithCli("suppresses compaction replay text duplicated from an earlier user turn", async () => {
     const session = openCodeSession(9, [
-      message("msg_001", [
-        { id: "part-hidden", type: "text", text: "hidden", ignored: true },
-        { id: "part-visible", type: "text", text: "please keep going" },
-      ]),
+      message("msg_001", [text("hidden", { ignored: true }), text("please keep going")]),
       textMessage("msg_002", "assistant", "working", 1000),
-      message("msg_003", [{ id: "part-compact", type: "compaction" }], 2000),
+      message("msg_003", [part("compaction")], 2000),
       textMessage("msg_004", "assistant", "summary", 3000),
       textMessage("msg_005", "user", "  please   keep going ", 4000),
     ]);
@@ -339,16 +331,9 @@ describe("OpenCode session upstream activity", () => {
 
   itWithCli("normalizes media placeholders when suppressing compaction replay", async () => {
     const session = openCodeSession(7, [
-      message("msg_001", [
-        {
-          id: "part-image",
-          type: "file",
-          mime: "image/png",
-          filename: "screen.png",
-        },
-      ]),
+      message("msg_001", [part("file", { mime: "image/png", filename: "screen.png" })]),
       textMessage("msg_002", "assistant", "working", 1000),
-      message("msg_003", [{ id: "part-compact", type: "compaction" }], 2000),
+      message("msg_003", [part("compaction")], 2000),
       textMessage("msg_004", "assistant", "summary", 3000),
       textMessage("msg_005", "user", "[Attached image/png: screen.png]", 4000),
     ]);
@@ -364,26 +349,16 @@ describe("OpenCode session upstream activity", () => {
       ...Array.from({ length: 50 }, (_, index) =>
         message(
           `msg_${String(index + 2).padStart(3, "0")}`,
-          [
-            {
-              id: `part-${String(index)}`,
-              type: "text",
-              text: "internal",
-              synthetic: true,
-            },
-          ],
+          [text("internal", { synthetic: true })],
           1000 + index,
         ),
       ),
       textMessage("msg_052", "user", "repeat me", 52000),
     ]);
     await installStatefulOpenCode([session]);
-    await expect(checkActivity({ seq: 1, lastHumanMessageId: "msg_001" })).resolves.toEqual([
-      expect.objectContaining({
-        humanTurns: 1,
-        nextMarker: { seq: 80, lastHumanMessageId: "msg_052" },
-      }),
-    ]);
+    await expect(checkActivity({ seq: 1, lastHumanMessageId: "msg_001" })).resolves.toEqual(
+      changed(1, 80, "msg_052"),
+    );
   });
 
   itWithCli(
@@ -391,37 +366,11 @@ describe("OpenCode session upstream activity", () => {
     async () => {
       const session = openCodeSession(12, [
         textMessage("msg_001", "assistant", "ready"),
-        message(
-          "msg_002",
-          [{ id: "part-ignored", type: "text", text: "hidden", ignored: true }],
-          1000,
-        ),
-        message(
-          "msg_003",
-          [{ id: "part-synthetic", type: "text", text: "hidden", synthetic: true }],
-          2000,
-        ),
+        message("msg_002", [text("hidden", { ignored: true })], 1000),
+        message("msg_003", [text("hidden", { synthetic: true })], 2000),
         textMessage("msg_004", "user", "The following tool was executed by the user", 3000),
-        message(
-          "msg_005",
-          [
-            { id: "part-text", type: "text", text: "looks human" },
-            { id: "part-compaction", type: "compaction" },
-          ],
-          4000,
-        ),
-        message(
-          "msg_006",
-          [
-            {
-              id: "part-continue",
-              type: "text",
-              text: "continue",
-              metadata: { compaction_continue: true },
-            },
-          ],
-          5000,
-        ),
+        message("msg_005", [text("looks human"), part("compaction")], 4000),
+        message("msg_006", [text("continue", { metadata: { compaction_continue: true } })], 5000),
       ]);
       await installStatefulOpenCode([session]);
       await expect(checkActivity({ seq: 1, lastHumanMessageId: null })).resolves.toEqual([
@@ -436,14 +385,12 @@ describe("OpenCode session upstream activity", () => {
       message(
         "msg_002",
         [
-          { id: "part-text", type: "text", text: "@notes.ts" },
-          {
-            id: "part-file",
-            type: "file",
+          text("@notes.ts"),
+          part("file", {
             mime: "text/plain",
             filename: "notes.ts",
             source: { text: { value: "@notes.ts", start: 0, end: 9 } },
-          },
+          }),
         ],
         1000,
       ),
@@ -458,14 +405,7 @@ describe("OpenCode session upstream activity", () => {
     "keeps real text mixed with ignored text and suppresses OpenClaw self-echo",
     async () => {
       const session = openCodeSession(4, [
-        message(
-          "msg_001",
-          [
-            { id: "part-hidden", type: "text", text: "hidden", ignored: true },
-            { id: "part-real", type: "text", text: "real external turn" },
-          ],
-          1000,
-        ),
+        message("msg_001", [text("hidden", { ignored: true }), text("real external turn")], 1000),
       ]);
       const fixture = await installStatefulOpenCode([session]);
       await expect(checkActivity({ seq: 0, lastHumanMessageId: null })).resolves.toEqual([
@@ -473,12 +413,7 @@ describe("OpenCode session upstream activity", () => {
       ]);
       await expect(
         checkActivity({ seq: 0, lastHumanMessageId: null }, ["real external turn"]),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          humanTurns: 0,
-          nextMarker: { seq: 4, lastHumanMessageId: "msg_001" },
-        }),
-      ]);
+      ).resolves.toEqual(changed(0, 4, "msg_001"));
 
       session.messages.push(textMessage("msg_002", "assistant", "summary", 2000));
       session.seq = 5;
