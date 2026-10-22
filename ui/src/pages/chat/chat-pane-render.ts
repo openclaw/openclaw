@@ -43,6 +43,7 @@ import {
   createChatPaneSendActions,
   createChatPaneRunRecoveryActions,
   dismissChatError,
+  readChatSessionAccess,
   resolveChatPaneFollowUpMode,
 } from "./chat-pane-state.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
@@ -144,13 +145,19 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const placementStartup = this.context.placementStartup.get(state.sessionKey);
     const pendingReason = chatSendPendingReason(state, state.sessionKey, placementStartup !== null);
     const runActive = hasDirectSessionRun(state);
+    const gatewaySnapshot = this.context.gateway.snapshot;
+    const sessionAccess = readChatSessionAccess(gatewaySnapshot, {
+      sessionKey: state.sessionKey,
+      agentId: currentAgentId,
+      sessionId: state.currentSessionId || selectedSession?.sessionId,
+    });
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog,
+      access: sessionAccess,
       listLoading: state.sessionsLoading,
       sessionKey: `${currentAgentId ?? ""}\0${state.sessionKey}`,
       session: selectedSession,
     });
-    const gatewaySnapshot = this.context.gateway.snapshot;
     const mainKey = resolveUiConfiguredMainKey({
       agentsList: this.context.agents.state.agentsList,
       hello: gatewaySnapshot.hello,
@@ -165,6 +172,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
     const multiIdentity = this.hasMultipleIdentities();
     const suggestionViewer =
+      sessionAccess !== "revoked" &&
       multiIdentity &&
       !selectedSessionArchived &&
       hasWriteScope &&
@@ -180,6 +188,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       : null;
     const modelRequiredReason = catalogKey || suggestionViewer ? undefined : requiredReason;
     const typingEnabled =
+      sessionAccess !== "revoked" &&
       multiIdentity &&
       hasWriteScope &&
       !catalogKey &&

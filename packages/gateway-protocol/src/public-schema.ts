@@ -236,6 +236,7 @@ export {
   SessionPublicShareSchema,
   SessionPublicShareSetParamsSchema,
   SessionPublicShareSetResultSchema,
+  SessionAccessChangedEventSchema,
   SessionSharingActionSchema,
   SessionSharingEvidenceEventSchema,
   SessionSharingEventSchema,

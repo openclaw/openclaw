@@ -34,6 +34,7 @@ import type {
   GatewayBufferedAmountFn,
   GatewayPluginEventBroadcastFn,
   GatewayPluginEventScope,
+  SessionEventRecipientCheck,
 } from "./server-broadcast-types.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
@@ -211,13 +212,7 @@ export function createGatewayBroadcaster(params: {
   ) => ((client: GatewayWsClient) => SessionEventProjection | undefined) | undefined;
   sessionMessageSubscribers?: SessionMessageSubscriberRegistry;
   onSessionDeliveryLost?: (client: GatewayWsClient) => void;
-  canReceiveSessionEvent?: (
-    client: GatewayWsClient,
-    sessionKeys: readonly string[],
-    agentId?: string,
-    event?: string,
-    payload?: unknown,
-  ) => boolean;
+  canReceiveSessionEvent?: SessionEventRecipientCheck;
   onBroadcast?: (event: string, payload: unknown, opts?: GatewayBroadcastOpts) => void;
 }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
@@ -404,11 +399,14 @@ export function createGatewayBroadcaster(params: {
         }
       }
       if (
-        // The question owner consumes prepared sharing and original-source facts together.
-        !questionRecipient &&
-        sessionKeys.length > 0 &&
-        params.canReceiveSessionEvent &&
-        !params.canReceiveSessionEvent(c, sessionKeys, agentId, event, payload)
+        // Access loss needs the connection owner's exact admission even without
+        // keys; ordinary events still consume the question owner's prepared facts.
+        event === "session.access.changed"
+          ? !params.canReceiveSessionEvent?.(c, sessionKeys, agentId, event, payload)
+          : !questionRecipient &&
+            sessionKeys.length > 0 &&
+            params.canReceiveSessionEvent &&
+            !params.canReceiveSessionEvent(c, sessionKeys, agentId, event, payload)
       ) {
         continue;
       }

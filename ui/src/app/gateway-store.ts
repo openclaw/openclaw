@@ -35,6 +35,8 @@ import {
   createGatewayMetadataObserver,
   createGatewayEventObserver,
   notifyGatewayObservers,
+  projectGatewaySessionAccess,
+  projectGatewayUsagePublications,
 } from "./gateway-observers.ts";
 import { readSuspensionPhase } from "./gateway-readiness.ts";
 import { createAvailabilityIndicators } from "./gateway-store.availability.ts";
@@ -188,6 +190,7 @@ export function createApplicationGateway(
       pluginCapabilities: null,
       canvasPluginSurfaceUrl: null,
       selfUser: undefined,
+      sessionAccess: undefined,
       lastError: null,
       lastErrorCode: null,
       lastErrorAuthReason: null,
@@ -218,7 +221,14 @@ export function createApplicationGateway(
   };
   const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
     const eventClient = client;
-    if (
+    if (event.event === "session.access.changed") {
+      if (isCurrentClient(eventClient) && snapshot.phase === "connected") {
+        const sessionAccess = projectGatewaySessionAccess(snapshot, event.payload);
+        if (sessionAccess) {
+          setSnapshot({ sessionAccess });
+        }
+      }
+    } else if (
       (event.event === "plugins.changed" || event.event === "plugins.controlUi.changed") &&
       eventClient
     ) {
@@ -237,27 +247,9 @@ export function createApplicationGateway(
           }
         });
     } else if (event.event === "chat.metadata.changed") {
-      const publication = asOptionalRecord(event.payload);
-      const agentId = publication?.agentId;
-      const usageUpdatedAt = publication?.usageUpdatedAt;
-      if (
-        typeof agentId === "string" &&
-        typeof usageUpdatedAt === "number" &&
-        usageUpdatedAt > (snapshot.usagePublications?.[agentId]?.usageUpdatedAt ?? 0)
-      ) {
-        setSnapshot({
-          usagePublications: {
-            ...snapshot.usagePublications,
-            [agentId]: {
-              usageUpdatedAt,
-              committedAt:
-                publication?.usageRefreshFailed === true
-                  ? (snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
-                  : usageUpdatedAt,
-              usageRefreshFailed: publication?.usageRefreshFailed === true || undefined,
-            },
-          },
-        });
+      const usagePublications = projectGatewayUsagePublications(snapshot, event.payload);
+      if (usagePublications) {
+        setSnapshot({ usagePublications });
       }
     } else if (event.event === "gateway.suspension") {
       const suspensionPhase = readSuspensionPhase(event.payload);
