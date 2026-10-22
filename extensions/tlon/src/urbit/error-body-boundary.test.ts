@@ -87,15 +87,6 @@ describe("tlon error body boundary", () => {
     expect(message).toContain("invalid session");
     expect(message).not.toContain(COOKIE);
   }
-  async function subscribe(json: boolean) {
-    const { baseUrl } = await serve(reflectedCookie(json));
-    const client = new UrbitSSEClient(baseUrl, COOKIE, { ship: "~zod" });
-    client.isConnected = true;
-    const errors: unknown[] = [];
-    await client.subscribe({ app: "test", path: "/test", err: (error) => errors.push(error) });
-    expect(errors).toHaveLength(1);
-    expectRedacted(errors[0], "Subscribe");
-  }
   afterEach(async () => {
     vi.restoreAllMocks();
     await new Promise<void>((resolve) => {
@@ -113,21 +104,19 @@ describe("tlon error body boundary", () => {
     expect(Buffer.byteLength(msg, "utf8")).toBeLessThan(32 * 1024);
     expect(msg).toContain("X");
   });
-  it("redacts a reflected session cookie from poke error bodies", async () => {
-    const err = await poke(reflectedCookie(true));
-    expect(err).toBeInstanceOf(UrbitHttpError);
-    expectRedacted(err, "Poke");
+  it.each([true, false])("redacts reflected cookies from poke (JSON: %s)", async (json) => {
+    const error = await poke(reflectedCookie(json));
+    expect(error).toBeInstanceOf(UrbitHttpError);
+    expectRedacted(error, "Poke");
   });
-  it("redacts a bare reflected session cookie from poke error bodies", async () => {
-    const err = await poke(reflectedCookie(false));
-    expect(err).toBeInstanceOf(UrbitHttpError);
-    expectRedacted(err, "Poke");
-  });
-  it("redacts a bare reflected session cookie from subscribe error bodies", async () => {
-    await subscribe(false);
-  });
-  it("redacts a reflected session cookie from subscribe error JSON", async () => {
-    await subscribe(true);
+  it.each([true, false])("redacts reflected cookies from subscribe (JSON: %s)", async (json) => {
+    const { baseUrl } = await serve(reflectedCookie(json));
+    const client = new UrbitSSEClient(baseUrl, COOKIE, { ship: "~zod" });
+    client.isConnected = true;
+    const errors: unknown[] = [];
+    await client.subscribe({ app: "test", path: "/test", err: (error) => errors.push(error) });
+    expect(errors).toHaveLength(1);
+    expectRedacted(errors[0], "Subscribe");
   });
   it("parses a normal scry response over HTTP", async () => {
     await expect(

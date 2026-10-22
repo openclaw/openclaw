@@ -20,17 +20,6 @@ function queueResponse(response: Response, release: () => Promise<void>) {
   vi.mocked(urbitFetch).mockResolvedValueOnce({ response, finalUrl, release });
 }
 
-function mockGuardedResponse(response: Response) {
-  const state = { bodyUsedAtRelease: undefined as boolean | undefined };
-  queueResponse(response, async () => {
-    if (!response.bodyUsed) {
-      void response.body?.cancel().catch(() => undefined);
-    }
-    state.bodyUsedAtRelease = response.bodyUsed;
-  });
-  return state;
-}
-
 describe("Urbit channel operations", () => {
   beforeEach(() => {
     vi.mocked(urbitFetch).mockReset();
@@ -46,17 +35,14 @@ describe("Urbit channel operations", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels the unread channel creation error body before release", async () => {
-    const state = mockGuardedResponse(new Response("ship exploded", { status: 500 }));
-    await expect(open()).rejects.toThrow("Channel creation");
-    expect(state.bodyUsedAtRelease).toBe(true);
-  });
-
-  it("cancels the unread channel activation error body before release", async () => {
-    mockGuardedResponse(new Response(null, { status: 204 }));
-    const wakeState = mockGuardedResponse(new Response("ship exploded", { status: 500 }));
-    await expect(open()).rejects.toThrow("Channel activation");
-    expect(wakeState.bodyUsedAtRelease).toBe(true);
+  it.each(["creation", "activation"])("releases failed channel %s", async (step) => {
+    if (step === "activation") {
+      queueResponse(new Response(null, { status: 204 }), async () => {});
+    }
+    const release = vi.fn(async () => {});
+    queueResponse(new Response("ship exploded", { status: 500 }), release);
+    await expect(open()).rejects.toThrow(`Channel ${step}`);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("releases promptly when error body cancellation never settles", async () => {

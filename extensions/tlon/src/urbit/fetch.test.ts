@@ -16,12 +16,6 @@ function mockResponse(response: Response, release = vi.fn(async () => {}), refre
   vi.mocked(fetchWithSsrFGuard).mockResolvedValue(guarded);
   return release;
 }
-async function expectReleased(response: Response) {
-  const release = mockResponse(response);
-  const guarded = await urbitFetch(fetchOptions);
-  await expect(guarded.release()).resolves.toBeUndefined();
-  expect(release).toHaveBeenCalledOnce();
-}
 const streamResponse = (source: UnderlyingSource<Uint8Array>) =>
   new Response(new ReadableStream(source));
 
@@ -83,8 +77,21 @@ describe("urbitFetch guarded response ownership", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("releases a successful response without a body", async () => {
-    await expectReleased(new Response(null, { status: 204 }));
+  it.each([
+    ["without a body", () => new Response(null, { status: 204 })],
+    [
+      "when cancellation rejects",
+      () =>
+        streamResponse({
+          cancel() {
+            throw new Error("cancel failed");
+          },
+        }),
+    ],
+  ] as const)("releases %s", async (_name, response) => {
+    const release = mockResponse(response());
+    await expect((await urbitFetch(fetchOptions)).release()).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("releases promptly when a retained response clone keeps cancellation pending", async () => {
@@ -104,15 +111,5 @@ describe("urbitFetch guarded response ownership", () => {
     } finally {
       void clone.body?.cancel().catch(() => undefined);
     }
-  });
-
-  it("still releases when response cancellation rejects", async () => {
-    await expectReleased(
-      streamResponse({
-        cancel() {
-          throw new Error("cancel failed");
-        },
-      }),
-    );
   });
 });

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UrbitSSEClient } from "./sse-client.js";
 const proofCookie = "urbauth-~zod=synthetic-reconnect-proof";
 const runningServers: Server[] = [];
+const cleanups: Array<() => void | Promise<void>> = [];
 function readBody(request: IncomingMessage, receive: (body: string) => void) {
   const chunks: Buffer[] = [];
   request.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -49,6 +50,9 @@ function trackConnectTimeout() {
   };
 }
 afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    await cleanup();
+  }
   vi.useRealTimers();
   vi.restoreAllMocks();
   await Promise.all(
@@ -241,6 +245,7 @@ async function startReconnectFixture(holdStreamAfter = Number.POSITIVE_INFINITY)
       },
     },
   });
+  cleanups.push(() => client.close());
   const reconnectSpy = vi.spyOn(client, "attemptReconnect");
   return {
     client,
@@ -268,66 +273,52 @@ describe("UrbitSSEClient real reconnect shutdown lifecycle", () => {
     signal,
   }) => {
     const proof = await startReconnectFixture(1);
-    try {
-      await proof.client.connect();
-      proof.client.reconnectAttempts = 10;
-      const reconnect = proof.client.attemptReconnect();
-      expect(proof.logs.some((message) => message.includes("Waiting 10s"))).toBe(true);
-      const requestsBeforeStop = proof.requests.length;
-      proof.client.stopReceiving();
-      await withinTest(reconnect, signal);
-      expect(proof.onReconnect).not.toHaveBeenCalled();
-      expect(proof.requests).toHaveLength(requestsBeforeStop);
-      expect(proof.logs.some((message) => message.includes("reset, resuming"))).toBe(false);
-    } finally {
-      await proof.client.close();
-    }
+    await proof.client.connect();
+    proof.client.reconnectAttempts = 10;
+    const reconnect = proof.client.attemptReconnect();
+    expect(proof.logs.some((message) => message.includes("Waiting 10s"))).toBe(true);
+    const requestsBeforeStop = proof.requests.length;
+    proof.client.stopReceiving();
+    await withinTest(reconnect, signal);
+    expect(proof.onReconnect).not.toHaveBeenCalled();
+    expect(proof.requests).toHaveLength(requestsBeforeStop);
+    expect(proof.logs.some((message) => message.includes("reset, resuming"))).toBe(false);
   });
   it("settles a real pending reconnect when the public client closes", async ({ signal }) => {
     const proof = await startReconnectFixture();
-    try {
-      await proof.client.subscribe({ app: "chat", path: "/inbox" });
-      await proof.client.connect();
-      const { reconnect } = await proof.pendingReconnect(signal);
-      expect(proof.channelExists()).toBe(true);
-      const actionsBeforeClose = proof.actions.length;
-      await proof.client.close();
-      const requestsAfterClose = proof.requests.length;
-      await withinTest(reconnect, signal);
-      expect(proof.onReconnect).not.toHaveBeenCalled();
-      expect(proof.requests).toHaveLength(requestsAfterClose);
-      expect(proof.channelExists()).toBe(false);
-      expect(proof.actions.slice(actionsBeforeClose)).toEqual([{ action: "delete" }]);
-      expect(proof.requests.some((request) => request.startsWith("DELETE /~/channel/"))).toBe(
-        false,
-      );
-    } finally {
-      await proof.client.close();
-    }
+    await proof.client.subscribe({ app: "chat", path: "/inbox" });
+    await proof.client.connect();
+    const { reconnect } = await proof.pendingReconnect(signal);
+    expect(proof.channelExists()).toBe(true);
+    const actionsBeforeClose = proof.actions.length;
+    await proof.client.close();
+    const requestsAfterClose = proof.requests.length;
+    await withinTest(reconnect, signal);
+    expect(proof.onReconnect).not.toHaveBeenCalled();
+    expect(proof.requests).toHaveLength(requestsAfterClose);
+    expect(proof.channelExists()).toBe(false);
+    expect(proof.actions.slice(actionsBeforeClose)).toEqual([{ action: "delete" }]);
+    expect(proof.requests.some((request) => request.startsWith("DELETE /~/channel/"))).toBe(false);
   });
   it("does not reopen the stream when stopped during reauthentication", async ({ signal }) => {
     const proof = await startReconnectFixture(2);
     const authenticating = Promise.withResolvers<void>();
     const authenticated = Promise.withResolvers<void>();
+    cleanups.push(() => authenticated.resolve());
     proof.onReconnect.mockImplementation(async () => {
       authenticating.resolve();
       await authenticated.promise;
       proof.client.updateCookie(proofCookie);
     });
-    try {
-      await proof.client.connect();
-      const { reconnect } = await proof.pendingReconnect(signal);
-      await vi.advanceTimersByTimeAsync(1_000);
-      await withinTest(authenticating.promise, signal);
-      proof.client.stopReceiving();
-      const requestsAfterStop = proof.requests.length;
-      authenticated.resolve();
-      await withinTest(reconnect, signal);
-      expectStopped(proof.client, proof.requests, requestsAfterStop);
-    } finally {
-      authenticated.resolve();
-      await proof.client.close();
-    }
+    await proof.client.connect();
+    const { reconnect } = await proof.pendingReconnect(signal);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await withinTest(authenticating.promise, signal);
+    proof.client.stopReceiving();
+    const requestsAfterStop = proof.requests.length;
+    authenticated.resolve();
+    await withinTest(reconnect, signal);
+    expectStopped(proof.client, proof.requests, requestsAfterStop);
   });
   it.for(["stream", "create"] as const)(
     "does not resume a stopped reconnect after pending %s headers",
@@ -360,23 +351,19 @@ describe("UrbitSSEClient real reconnect shutdown lifecycle", () => {
   it("still reconnects an uninterrupted authenticated SSE stream", async ({ signal }) => {
     const proof = await startReconnectFixture(2);
     const channelId = proof.client.channelId;
-    try {
-      await proof.client.connect();
-      const { reconnect } = await proof.pendingReconnect(signal);
-      await vi.advanceTimersByTimeAsync(999);
-      expect(proof.onReconnect).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      await withinTest(reconnect, signal);
-      expect(proof.onReconnect).toHaveBeenCalledOnce();
-      expect(proof.requests.filter((request) => request.startsWith("GET /~/channel/"))).toEqual([
-        `GET /~/channel/${channelId}`,
-        `GET /~/channel/${channelId}`,
-      ]);
-      expect(proof.client.channelId).toBe(channelId);
-      expect(proof.client.reconnectAttempts).toBe(0);
-      expect(proof.unauthorizedRequests()).toBe(0);
-    } finally {
-      await proof.client.close();
-    }
+    await proof.client.connect();
+    const { reconnect } = await proof.pendingReconnect(signal);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(proof.onReconnect).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await withinTest(reconnect, signal);
+    expect(proof.onReconnect).toHaveBeenCalledOnce();
+    expect(proof.requests.filter((request) => request.startsWith("GET /~/channel/"))).toEqual([
+      `GET /~/channel/${channelId}`,
+      `GET /~/channel/${channelId}`,
+    ]);
+    expect(proof.client.channelId).toBe(channelId);
+    expect(proof.client.reconnectAttempts).toBe(0);
+    expect(proof.unauthorizedRequests()).toBe(0);
   });
 });

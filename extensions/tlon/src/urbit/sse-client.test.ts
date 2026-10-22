@@ -82,23 +82,18 @@ describe("UrbitSSEClient", () => {
     });
   });
   describe("event acking", () => {
-    it("logs malformed SSE JSON with an owned parser error", async () => {
+    it.each([
+      ["malformed", "Tlon Urbit SSE event was malformed JSON"],
+      ["oversized", "Tlon Urbit SSE payload exceeds 16 MiB limit"],
+    ])("logs rejected %s SSE JSON", async (kind, message) => {
+      const json =
+        kind === "malformed"
+          ? "{not json"
+          : '{"json":{"ok":true,"x":"' + "A".repeat(16 * 1024 * 1024) + '"}}';
       const logger = { error: vi.fn() };
       client.logger = logger;
-      await client.processEvent("id: 1\ndata: {not json");
-      expect(logger.error).toHaveBeenCalledWith(
-        "Error parsing SSE event: Error: Tlon Urbit SSE event was malformed JSON",
-      );
-    });
-    it("guards JSON.parse against oversized SSE payload to prevent OOM", async () => {
-      const errors: string[] = [];
-      client.logger = { error: (msg) => errors.push(msg) };
-      const hugeJson = '{"json":{"ok":true,"x":"' + "A".repeat(16 * 1024 * 1024) + '"}}';
-      await client.processEvent(`id: 1\ndata: ${hugeJson}`);
-      expect(errors).toHaveLength(1);
-      expect(errors[0]).toBe(
-        "Error parsing SSE event: Error: Tlon Urbit SSE payload exceeds 16 MiB limit",
-      );
+      await client.processEvent(`id: 1\ndata: ${json}`);
+      expect(logger.error.mock.calls).toEqual([[`Error parsing SSE event: Error: ${message}`]]);
     });
     describe("stream buffer bounding", () => {
       it("rejects oversized stream buffer before unbounded accumulation", async () => {
