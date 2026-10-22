@@ -1,4 +1,5 @@
 import { readGoalContinuationContext } from "../../auto-reply/reply/goal-continuation-return.js";
+import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runHostPreparedIsolatedCompletion } from "../host-prepared-isolated-completion.js";
 import { BUILTIN_AGENT_HARNESS_METADATA } from "./builtin-openclaw-metadata.js";
@@ -96,7 +97,7 @@ export function createOpenClawAgentHarness(): AgentHarnessV2 {
         currentInboundContext: params.currentInboundContext,
       });
       const attempt = {
-        ...(params as EmbeddedRunAttemptParams),
+        ...(params as EmbeddedRunAttemptInternalParams),
         ...(currentInboundContext ? { currentInboundContext } : {}),
         supportsTurnScopedToolRestrictions: harnessSupportsTurnScopedToolRestrictions(harness),
       };

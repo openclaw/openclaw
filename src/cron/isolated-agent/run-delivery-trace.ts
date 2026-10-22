@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 /** Delivery planning, prompt policy, and delivery trace construction for cron runs. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -317,15 +318,14 @@ export async function resolveCronDeliveryContext(params: {
   };
 }
 
-/** Adds delivery guidance for the run's final tool surface to the prompt. */
-export function finalizeCronPromptForResolvedTools(params: {
-  prompt: string;
+/** Keeps tool-dependent delivery guidance outside the admitted user prompt. */
+export function resolveCronRuntimeContextForTools(params: {
   messageToolAvailable: boolean;
   deliveryRequested: boolean;
   resolvedDelivery: SourceDeliveryPlan["target"] & { ok: boolean };
   sourceDelivery: SourceDeliveryPlan;
   messageToolFormatPrompt?: string;
-}): string {
+}): RuntimeContextFragment[] {
   const { sourceDelivery, resolvedDelivery } = params;
   const messageToolAvailable = sourceDelivery.messageTool.enabled && params.messageToolAvailable;
   if (sourceDelivery.sourceReplyDeliveryMode === "message_tool_only" && !messageToolAvailable) {
@@ -333,23 +333,24 @@ export function finalizeCronPromptForResolvedTools(params: {
       "Cron source delivery requires the message tool, but the selected runtime does not expose it. Allow the message tool, choose a compatible runtime, or use automatic delivery.",
     );
   }
-  let promptWithDeliveryGuidance = params.prompt;
+  let deliveryGuidance: string | undefined;
   if (params.deliveryRequested) {
     if (messageToolAvailable) {
       const targetHint =
         sourceDelivery.messageTool.requireExplicitTarget || !resolvedDelivery.ok
           ? "with an explicit target"
           : "for the current chat";
-      promptWithDeliveryGuidance =
-        `${params.prompt}\n\nUse the message tool if you need to notify the user directly ${targetHint}. If you do not send directly, your final plain-text reply will be delivered automatically. When relying on automatic delivery, write only the exact user-facing message to send. Do not narrate the automatic delivery itself or say things like "Sent the user...", "I sent...", or "I asked them...".`.trim();
+      deliveryGuidance =
+        `Use the message tool if you need to notify the user directly ${targetHint}. If you do not send directly, your final plain-text reply will be delivered automatically. When relying on automatic delivery, write only the exact user-facing message to send. Do not narrate the automatic delivery itself or say things like "Sent the user...", "I sent...", or "I asked them...".`.trim();
     } else {
-      promptWithDeliveryGuidance =
-        `${params.prompt}\n\nYour response will be delivered automatically. Write only the exact user-facing message to send; do not narrate the automatic delivery itself or say things like "Sent the user...", "I sent...", or "I asked them...". If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+      deliveryGuidance =
+        `Your response will be delivered automatically. Write only the exact user-facing message to send; do not narrate the automatic delivery itself or say things like "Sent the user...", "I sent...", or "I asked them...". If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
     }
   }
   // The message-tool contract waits for the final tool surface: a runtime without
   // `message` must not be told how to format sends it cannot make.
-  const appended = [
+  const context = [
+    deliveryGuidance,
     buildCronDeliveryTargetRuntimeContext({
       resolvedDeliveryOk: resolvedDelivery.ok,
       messageToolAvailable,
@@ -358,7 +359,5 @@ export function finalizeCronPromptForResolvedTools(params: {
     }),
     messageToolAvailable ? params.messageToolFormatPrompt : undefined,
   ].filter(Boolean);
-  return appended.length
-    ? `${promptWithDeliveryGuidance}\n\n${appended.join("\n\n")}`.trim()
-    : promptWithDeliveryGuidance;
+  return context.length ? [{ kind: "runtime-instruction", text: context.join("\n\n") }] : [];
 }

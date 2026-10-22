@@ -58,7 +58,6 @@ async function buildCliTurnAppendContext(
     isNewSession: boolean;
     systemPrompt: string;
     context: readonly (string | undefined)[];
-    runtimeContextFragments?: RunCliAgentParams["runtimeContextFragments"];
     sessionTarget?: RunCliAgentParams["sessionTarget"];
     thinkLevel?: ThinkLevel;
     requesterProfileId?: string;
@@ -81,9 +80,6 @@ async function buildCliTurnAppendContext(
   await prepareActiveNodeContext(params.requesterProfileId);
   return [
     ...params.context,
-    params.runtimeContextFragments?.length
-      ? labelRuntimeContextText(projectRuntimeContextFragments(params.runtimeContextFragments))
-      : undefined,
     buildProactiveSubagentOrchestrationSection({
       enabled: params.thinkLevel === "ultra",
       hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
@@ -114,6 +110,7 @@ export async function prepareCliTurnPromptContext(
     backendId: string;
     runtimeFactsInTurn?: boolean;
     deliveryGuidance?: string;
+    runtimeContextFragments?: RunCliAgentParams["runtimeContextFragments"];
     prependContext: readonly (string | undefined)[];
     hookResult?: ResolvedPromptBuildHookResult;
   },
@@ -134,7 +131,10 @@ export async function prepareCliTurnPromptContext(
   let systemPrompt = runtimeFacts?.remainingPrompt ?? params.systemPrompt;
   let prependContext = "";
   // Optional context failures must not erase Runtime facts or delivery instructions.
-  let appendContext = [runtimeFacts?.relocatable, params.deliveryGuidance]
+  const producerContext = params.runtimeContextFragments?.length
+    ? labelRuntimeContextText(projectRuntimeContextFragments(params.runtimeContextFragments))
+    : undefined;
+  let appendContext = [runtimeFacts?.relocatable, params.deliveryGuidance, producerContext]
     .filter((value): value is string => Boolean(value?.trim()))
     .join("\n\n");
   try {
@@ -144,7 +144,12 @@ export async function prepareCliTurnPromptContext(
     const preparedAppendContext = await buildCliTurnAppendContext({
       ...params,
       systemPrompt,
-      context: [runtimeFacts?.relocatable, ...params.context, params.deliveryGuidance],
+      context: [
+        runtimeFacts?.relocatable,
+        ...params.context,
+        params.deliveryGuidance,
+        producerContext,
+      ],
     });
     prependContext = preparedPrependContext;
     appendContext = preparedAppendContext;

@@ -17,9 +17,13 @@ type DispatchCase = {
   retryPreparation?: "omit" | "mutate" | "change-cwd";
   cancelTrajectory?: boolean;
   preparedAuth?: "explicit-header" | "no-auth";
+  finalizer?: "string" | "context" | "both";
 };
 
 export const dispatchCases: DispatchCase[] = [
+  { agentId: "main", finalizer: "string" },
+  { agentId: "main", finalizer: "context" },
+  { agentId: "main", finalizer: "both" },
   ...(["explicit-header", "no-auth"] as const).map((preparedAuth) => ({
     agentId: "main",
     preparedAuth,

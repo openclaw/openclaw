@@ -15,8 +15,8 @@ import { isCronWithinActiveHours } from "./active-hours.js";
 import { isCronExecutionIdle } from "./execution-idle.js";
 import {
   buildCronDeliveryTrace,
-  finalizeCronPromptForResolvedTools,
   resolveCronDeliveryContext,
+  resolveCronRuntimeContextForTools,
 } from "./isolated-agent/run-delivery-trace.js";
 import { appendCronJobScratchPrompt, buildCronCommandBody } from "./run-prompt.js";
 import { isCronScratchEffectivelyEmpty } from "./scratch-contract.js";
@@ -249,9 +249,9 @@ export async function runCronSessionTurn(
           noticesStarted = true;
         },
         sourceDelivery: delivery?.sourceDelivery,
-        finalizePromptForResolvedTools: delivery
+        resolveRuntimeContextForTools: delivery
           ? (candidate) =>
-              finalizeCronPromptForResolvedTools({
+              resolveCronRuntimeContextForTools({
                 ...candidate,
                 deliveryRequested: delivery.deliveryRequested,
                 resolvedDelivery: delivery.resolvedDelivery,

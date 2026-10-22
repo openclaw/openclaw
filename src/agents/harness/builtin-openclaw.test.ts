@@ -46,9 +46,11 @@ describe("createOpenClawAgentHarness", () => {
         expect(scope.getStore()).toBe(owner);
       });
       harness.supportsTurnScopedToolRestrictions = liveSupport;
+      const resolveRuntimeContextForTools = vi.fn(() => []);
       const params = {
         thinkLevel: "ultra",
         onAgentEvent,
+        resolveRuntimeContextForTools,
         supportsTurnScopedToolRestrictions: true,
       };
       const pending = scope.run(owner, () => harness.runAttempt(params as never));
@@ -59,9 +61,11 @@ describe("createOpenClawAgentHarness", () => {
       expect(runEmbeddedAttempt).toHaveBeenCalledWith({
         thinkLevel: "ultra",
         onAgentEvent,
+        resolveRuntimeContextForTools,
         supportsTurnScopedToolRestrictions: liveSupport,
       });
       expect(onAgentEvent).toHaveBeenCalledTimes(2);
+      expect(resolveRuntimeContextForTools).not.toHaveBeenCalled();
     },
   );
 

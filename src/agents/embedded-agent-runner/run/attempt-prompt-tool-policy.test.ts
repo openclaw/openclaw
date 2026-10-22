@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logDecisionToolPrefilter } from "../../../decisions/diagnostics.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
@@ -7,6 +7,7 @@ import {
   applyPromptBuildToolsAllow,
   applyResolvedToolPromptFinalizer,
   createPromptBuildToolPolicy,
+  prepareEmbeddedAttemptPromptDispatch,
 } from "./attempt-prompt-support.js";
 
 // mock-isolation: Observe policy facts without creating the process-global logger or warning budget.
@@ -15,6 +16,50 @@ vi.mock("../../../decisions/diagnostics.js", () => ({
 }));
 
 beforeEach(() => void vi.mocked(logDecisionToolPrefilter).mockClear());
+
+describe("prepareEmbeddedAttemptPromptDispatch", () => {
+  const preparedPrompt = { prompt: "prepared", transcriptPrompt: "prepared transcript" };
+  const currentInboundContext = { text: "Existing inbound.", resumableText: "Existing resume." };
+
+  it.each([undefined, "", "caller transcript"])(
+    "consumes plugin callbacks once with transcript pin %j",
+    (transcriptPrompt) => {
+      const finalizePromptForResolvedTools = vi.fn(
+        ({ prompt }: { prompt: string }) => `${prompt}:finalized`,
+      );
+      const resolveRuntimeContextForTools = vi.fn(() => [
+        { kind: "runtime-instruction" as const, text: "Delivery context." },
+      ]);
+      const result = prepareEmbeddedAttemptPromptDispatch({
+        ownsTransport: true,
+        preparedPrompt,
+        params: {
+          transcriptPrompt,
+          currentInboundContext,
+          finalizePromptForResolvedTools,
+          resolveRuntimeContextForTools,
+        },
+      });
+      expect(result.prompt).toBe("prepared:finalized");
+      expect(result.transcriptPrompt).toBe(
+        transcriptPrompt === undefined ? "prepared" : "prepared transcript",
+      );
+      expect(result.finalizePromptForResolvedTools).toBeUndefined();
+      expect(result.resolveRuntimeContextForTools).toBeUndefined();
+      expect(finalizePromptForResolvedTools).toHaveBeenCalledExactlyOnceWith({
+        prompt: "prepared",
+        messageToolAvailable: false,
+      });
+      expect(resolveRuntimeContextForTools).toHaveBeenCalledExactlyOnceWith({
+        messageToolAvailable: false,
+      });
+      expect(result.currentInboundContext?.text).toContain("Existing inbound.");
+      expect(result.currentInboundContext?.text.match(/Delivery context/g)).toHaveLength(1);
+      expect(result.currentInboundContext?.resumableText).toContain("Delivery context.");
+      expect(currentInboundContext.text).toBe("Existing inbound.");
+    },
+  );
+});
 
 const named = (...names: string[]) => names.map((name) => ({ name }));
 

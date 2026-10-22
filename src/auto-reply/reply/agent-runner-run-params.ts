@@ -159,8 +159,8 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     resolvedModelSelection: params.resolvedModelSelection,
     modelFallbacksOverride: params.modelFallbacksOverride,
     prompt: turn.commandBody,
-    finalizePromptForResolvedTools:
-      turn.followupRun.run.scheduledAutomation?.finalizePromptForResolvedTools,
+    resolveRuntimeContextForTools:
+      turn.followupRun.run.scheduledAutomation?.resolveRuntimeContextForTools,
     transcriptPrompt: turn.transcriptCommandBody,
     media: turn.followupRun.media,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,

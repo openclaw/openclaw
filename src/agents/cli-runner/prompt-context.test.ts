@@ -82,13 +82,30 @@ it.each<[CliReusableSession, CliHistoryWriter | undefined, string]>([
 const runtimeFacts = "Runtime: session=agent:main:private-probe | channel=cli";
 const systemPrompt = `${stable}\n<!-- OPENCLAW-RELOCATABLE-BOUNDARY -->\n${runtimeFacts}\n<!-- /OPENCLAW-RELOCATABLE-BOUNDARY -->`;
 
-it("preserves private Runtime facts when optional turn context fails", async () => {
-  vi.spyOn(media, "buildMediaTaskRuntimeContext").mockRejectedValueOnce(new Error("unavailable"));
-  const guidance = "Reply in this conversation.";
-  const turn = await prepare({ systemPrompt, deliveryGuidance: guidance });
-  expect(turn).toMatchObject({ systemPrompt: stable, prompt: "Hello" });
-  expect(turn.promptContext?.appendContext).toBe(`${runtimeFacts}\n\n${guidance}`);
-});
+it.each([false, true])(
+  "preserves producer delivery context when optional turn context fails (private=%s)",
+  async (privateContext) => {
+    vi.spyOn(media, "buildMediaTaskRuntimeContext").mockRejectedValueOnce(
+      new Error("snapshot unavailable"),
+    );
+    const turn = await prepare({
+      systemPrompt,
+      privateContext,
+      runtimeFactsInTurn: true,
+      deliveryGuidance: "Reply in this conversation.",
+      runtimeContextFragments: [
+        { kind: "runtime-instruction", text: "Cron result is delivered automatically." },
+      ],
+    });
+    expect(turn.systemPrompt).toBe(stable);
+    if (privateContext) {
+      expect(turn.prompt).toBe("Hello");
+    }
+    const context = turn.promptContext?.appendContext ?? turn.prompt;
+    expect(context).toContain(`${runtimeFacts}\n\nReply in this conversation.`);
+    expect(context).toContain("Cron result is delivered automatically.");
+  },
+);
 
 it("lets a whole-system hook replacement remove ordinary Claude Runtime facts", async () => {
   const turn = await prepare({

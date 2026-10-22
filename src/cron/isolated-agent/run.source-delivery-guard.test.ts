@@ -6,7 +6,7 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
-import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
+import { resolveCronRuntimeContextForTools } from "./run-delivery-trace.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import * as harness from "./run.test-harness.js";
 import { resolveCronSourceDeliveryPlan } from "./source-delivery-plan.js";
@@ -115,8 +115,7 @@ describe("cron source delivery policy", () => {
     });
     sourceDelivery.sourceReplyDeliveryMode = "message_tool_only";
     expect(() =>
-      finalizeCronPromptForResolvedTools({
-        prompt: "send a message",
+      resolveCronRuntimeContextForTools({
         messageToolAvailable: false,
         deliveryRequested: true,
         resolvedDelivery: { ok: true, channel: "messagechat", to: "123" },

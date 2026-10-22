@@ -196,12 +196,10 @@ export async function runAgentHarnessSettledTurnFinalization(
 }
 
 export async function runAgentHarnessAttempt(
-  params: EmbeddedRunAttemptParams,
+  params: EmbeddedRunAttemptInternalParams,
   nativeSessionRuntime?: import("../embedded-agent-runner/run/model-setup.js").PreparedNativeSessionRuntime,
 ): Promise<EmbeddedRunAttemptResult> {
-  let internalParams = params as EmbeddedRunAttemptParams & {
-    systemAgentTool?: SystemAgentToolOptions;
-  };
+  let internalParams = params;
   if (nativeSessionRuntime) {
     await nativeSessionRuntime.assertCurrent();
   } else {
@@ -545,7 +543,7 @@ async function runAgentHarnessOperation<T>(
 }
 
 function withoutInternalHarnessAuthority(
-  params: EmbeddedRunAttemptParams,
+  params: EmbeddedRunAttemptInternalParams,
   harness: AgentHarness,
   builtIn: boolean,
   ownerPluginId: string | undefined,

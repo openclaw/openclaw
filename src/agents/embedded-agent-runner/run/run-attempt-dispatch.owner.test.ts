@@ -177,6 +177,7 @@ it.each(dispatchCases)(
     retryPreparation,
     cancelTrajectory,
     preparedAuth,
+    finalizer,
   }) => {
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
@@ -304,6 +305,16 @@ it.each(dispatchCases)(
           { sessionId: `${agentId}-global`, updatedAt: 1 },
         );
       }
+      const finalize = vi.fn(
+        ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) => {
+          expect(messageToolAvailable).toBe(false);
+          return `${prompt}:finalized`;
+        },
+      );
+      const resolveContext = vi.fn((context: { messageToolAvailable: boolean }) => {
+        expect(context.messageToolAvailable).toBe(false);
+        return [{ kind: "runtime-instruction" as const, text: "Delivery context." }];
+      });
       const admission = prepareAgentRunAdmission({
         cfg: config,
         facts: {
@@ -413,6 +424,19 @@ it.each(dispatchCases)(
           : {}),
         sessionFile: "global",
         prompt: remoteSkills ? "Use the skill at /host/skills/demo/SKILL.md." : "hello",
+        ...(finalizer
+          ? {
+              currentInboundContext: {
+                text: "Existing inbound context.",
+                resumableText: "Existing resumed context.",
+              },
+              runtimeContextFragments: [
+                { kind: "runtime-instruction" as const, text: "Existing context." },
+              ],
+              ...(finalizer !== "context" ? { finalizePromptForResolvedTools: finalize } : {}),
+              ...(finalizer !== "string" ? { resolveRuntimeContextForTools: resolveContext } : {}),
+            }
+          : {}),
         ...(skillsSnapshot ? { skillsSnapshot } : {}),
         ...(remoteSkills
           ? {
@@ -842,6 +866,39 @@ it.each(dispatchCases)(
         restorePlacement();
         admission.close();
         restoreSandbox();
+        for (const [entry] of runAttempt.mock.calls) {
+          expect(entry).not.toHaveProperty("resolveRuntimeContextForTools");
+        }
+        if (finalizer) {
+          expect(runAttempt).toHaveBeenCalledOnce();
+          const [received] = runAttempt.mock.calls[0]!;
+          if (finalizer !== "context") {
+            expect(finalize).toHaveBeenCalledBefore(runAttempt);
+          }
+          if (finalizer !== "string") {
+            expect(resolveContext).toHaveBeenCalledBefore(runAttempt);
+          }
+          expect(received.prompt).toBe(finalizer === "context" ? "hello" : "hello:finalized");
+          expect(finalize).toHaveBeenCalledTimes(finalizer === "context" ? 0 : 1);
+          expect(resolveContext).toHaveBeenCalledTimes(finalizer === "string" ? 0 : 1);
+          expect(received.transcriptPrompt).toBe("hello");
+          expect(received.finalizePromptForResolvedTools).toBeUndefined();
+          expect(received.runtimeContextFragments).toEqual([
+            { kind: "runtime-instruction", text: "Existing context." },
+          ]);
+          const { text, resumableText } = received.currentInboundContext ?? {};
+          if (finalizer !== "string") {
+            expect(text).toContain("Delivery context.");
+            expect(text?.match(/Delivery context/g)).toHaveLength(1);
+            expect(resumableText).toContain("Delivery context.");
+          } else {
+            expect(text).toBe("Existing inbound context.\n\nExisting context.");
+            expect(resumableText).toBe("Existing resumed context.\n\nExisting context.");
+          }
+          expect(text).toContain("Existing inbound context.");
+          expect(text?.match(/Existing context\./g)).toHaveLength(1);
+          expect(resumableText?.match(/Existing context\./g)).toHaveLength(1);
+        }
       }
     });
   },

@@ -5,8 +5,11 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
-import { finalizeCronPromptForResolvedTools } from "../../cron/isolated-agent/run-delivery-trace.js";
+import type {
+  RunCliAgentInternalParams,
+  RunEmbeddedAgentInternalParams,
+} from "../../agents/embedded-agent-runner/run/internal-params.js";
+import { resolveCronRuntimeContextForTools } from "../../cron/isolated-agent/run-delivery-trace.js";
 import { resolveCronSourceDeliveryPlan } from "../../cron/isolated-agent/source-delivery-plan.js";
 import * as cronInference from "../../cron/run-inference.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
@@ -132,7 +135,7 @@ describe("ordinary session event execution", () => {
   });
 
   it.each(["embedded", "cli"] as const)(
-    "retains scheduled destination guidance in the %s turn without changing the system prefix",
+    "retains scheduled destination context in the %s turn without changing the task or system prefix",
     async (runtime) => {
       const followupRun = createFollowupRun();
       const automation = createScheduledAutomation();
@@ -147,8 +150,8 @@ describe("ordinary session event execution", () => {
         deliveryPlan: { source: "delivery", mode: "announce", requested: true },
         resolvedDelivery,
       });
-      automation.finalizePromptForResolvedTools = (params) =>
-        finalizeCronPromptForResolvedTools({
+      automation.resolveRuntimeContextForTools = (params) =>
+        resolveCronRuntimeContextForTools({
           ...params,
           deliveryRequested: true,
           resolvedDelivery,
@@ -157,26 +160,27 @@ describe("ordinary session event execution", () => {
       followupRun.run.scheduledAutomation = automation;
       followupRun.run.extraSystemPrompt = "Existing shared session instructions";
       followupRun.run.extraSystemPromptStatic = "Stable shared session instructions";
-      const observed: { prompt: string; messageToolAvailable: boolean }[] = [];
+      const observed: { prompt: string; context: string; messageToolAvailable: boolean }[] = [];
       let observedSystemPrompt: string | undefined;
       let observedStaticSystemPrompt: string | undefined;
       const inspectCandidate = async (
-        params: RunEmbeddedAgentInternalParams | RunCliAgentParams,
+        params: RunEmbeddedAgentInternalParams | RunCliAgentInternalParams,
       ) => {
+        expect(params.finalizePromptForResolvedTools).toBeUndefined();
         for (const messageToolAvailable of [true, false]) {
-          const prompt =
-            params.finalizePromptForResolvedTools?.({
-              prompt: params.prompt,
-              messageToolAvailable,
-            }) ?? params.prompt;
-          observed.push({ prompt, messageToolAvailable });
+          const fragments = params.resolveRuntimeContextForTools?.({ messageToolAvailable });
+          observed.push({
+            prompt: params.prompt,
+            context: fragments?.map((fragment) => fragment.text).join("\n\n") ?? "",
+            messageToolAvailable,
+          });
         }
         observedSystemPrompt = params.extraSystemPrompt;
         return { payloads: [{ text: "done" }], meta: {} };
       };
       if (runtime === "cli") {
         useCliFallback(followupRun);
-        state.runCliAgentMock.mockImplementationOnce((params: RunCliAgentParams) => {
+        state.runCliAgentMock.mockImplementationOnce((params: RunCliAgentInternalParams) => {
           observedStaticSystemPrompt = params.extraSystemPromptStatic;
           return inspectCandidate(params);
         });
@@ -186,13 +190,13 @@ describe("ordinary session event execution", () => {
       const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
       expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
       expect(observed).toHaveLength(2);
-      for (const { prompt, messageToolAvailable } of observed) {
-        expect(prompt).toContain("fix it");
-        expect(prompt).toContain("delivered automatically");
+      for (const { prompt, context, messageToolAvailable } of observed) {
+        expect(prompt).toBe("fix it");
+        expect(context).toContain("delivered automatically");
         if (messageToolAvailable) {
-          expect(prompt).toContain('"target":"scheduled-chat"');
+          expect(context).toContain('"target":"scheduled-chat"');
         } else {
-          expect(prompt).not.toContain("Message delivery destination metadata");
+          expect(context).not.toContain("Message delivery destination metadata");
         }
       }
       expect(observedSystemPrompt).toBe("Existing shared session instructions");

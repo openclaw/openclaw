@@ -6,7 +6,9 @@ import type { Model } from "../../../llm/types.js";
 import type { ReplyExecutionSelection } from "../../../sessions/session-controller.execution-selection.js";
 import type { SessionControllerWatchdogAttempt } from "../../../sessions/session-controller.watchdog.js";
 import type { PreparedTtsPreferences } from "../../../tts/tts-preferences.js";
+import type { RunCliAgentParams } from "../../cli-runner/types.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
+import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
 import type { ModelFallbackRouteResolution } from "../../model-fallback.types.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
 import type { ReplyDeliveryFactsObserver } from "../../reply-completion.js";
@@ -48,6 +50,10 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Pure run-bound guidance, resolved by the host against the final callable tool surface. */
+  resolveRuntimeContextForTools?: (params: {
+    messageToolAvailable: boolean;
+  }) => RuntimeContextFragment[];
   /** Original admitted settings, retained by the host across private runtime selection. */
   executionSelection?: ReplyExecutionSelection;
   /** The logical run already invoked model routing before preparing its candidate chain. */
@@ -104,6 +110,8 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     RunEmbeddedAgentInternalParams,
     | "onContextAccountingEvent"
     | "onCompactionRequestBudget"
+    | "resolveRuntimeContextForTools"
+    | "systemAgentTool"
     | "runCleanupSettlement"
     | "executionSelection"
   > & {
@@ -123,3 +131,7 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
 export type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {
   sessionFile: string;
 };
+
+/** CLI preparation consumes the resolver before handing a request to a backend. */
+export type RunCliAgentInternalParams = RunCliAgentParams &
+  Pick<RunEmbeddedAgentInternalParams, "resolveRuntimeContextForTools">;
