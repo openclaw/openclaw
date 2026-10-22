@@ -5,16 +5,16 @@ import { createGateway, createSessions, mountSidebar } from "../test-helpers/app
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 
-const narration = vi.hoisted(() => ({ create: vi.fn() }));
+const narration = vi.hoisted(() => ({
+  create: vi.fn().mockImplementationOnce(() => {
+    throw new Error("Narration chunk unavailable");
+  }),
+}));
 
 // mock-isolation: fail optional narration initialization without replacing the sidebar owner.
 vi.mock("./app-sidebar-session-narration.ts", async (original) => {
   const module = await original<typeof import("./app-sidebar-session-narration.ts")>();
-  narration.create
-    .mockImplementationOnce(() => {
-      throw new Error("Narration chunk unavailable");
-    })
-    .mockImplementation(module.createSidebarNarration);
+  narration.create.mockImplementation(module.createSidebarNarration);
   return { ...module, createSidebarNarration: narration.create };
 });
 
