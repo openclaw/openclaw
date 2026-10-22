@@ -30,10 +30,9 @@ export function canonicalSessionKeyMigrationRequiredError(
 /** One validator serves full Doctor scans, pending rows, and canonical writer inputs. */
 export function validateCanonicalSessionRow(
   row: CanonicalSessionValidationRow,
-  mode: "admission" | "read" = "admission",
 ): SessionEntry | undefined {
   const record =
-    row.entry_valid === 1 || (mode === "read" && row.entry_valid === 0)
+    row.entry_valid === 1
       ? parseSqliteSessionEntryRecord({
           entry_json: row.entry_json,
           current_session_id: row.current_session_id,
@@ -42,7 +41,6 @@ export function validateCanonicalSessionRow(
   return validateCanonicalSessionRowEntry(
     row,
     record ? projectCanonicalSessionEntryShape(record) : null,
-    mode,
   );
 }
 

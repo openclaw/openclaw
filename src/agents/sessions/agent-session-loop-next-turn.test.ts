@@ -57,8 +57,8 @@ const imageQueues = [
 const toolResult = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
 const makeTool = (
   name: string,
-  execute: ToolDefinition["execute"] = async () => toolResult("done"),
-): ToolDefinition => ({
+  execute: AgentTool["execute"] = async () => toolResult("done"),
+): AgentTool => ({
   name,
   label: name,
   description: name,
@@ -66,7 +66,7 @@ const makeTool = (
   execute,
 });
 const textStream = (model: Model, text = "done") =>
-  createAssistantResultStream(createAssistant(model, [{ type: "text", text }]));
+  createAssistantResultStream(createAssistant(model, text));
 
 function heldResponse(model: Model, signal?: AbortSignal) {
   const stream = createAssistantMessageEventStream();
@@ -88,7 +88,7 @@ function heldResponse(model: Model, signal?: AbortSignal) {
       stream.push({
         type: "done",
         reason: "stop",
-        message: createAssistant(model, [{ type: "text", text }]),
+        message: createAssistant(model, text),
       });
       stream.end();
     },
@@ -428,24 +428,23 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         steering: readonly string[];
         followUp: readonly string[];
       }> = [];
+      const recordQueue = (type: "queue_update" | "image_message_start") => {
+        queueEvents.push({
+          type,
+          steering: [...session.getSteeringMessages()],
+          followUp: [...session.getFollowUpMessages()],
+        });
+      };
       session.subscribe((event) => {
         if (event.type === "queue_update") {
-          queueEvents.push({
-            type: "queue_update",
-            steering: [...session.getSteeringMessages()],
-            followUp: [...session.getFollowUpMessages()],
-          });
+          recordQueue("queue_update");
         } else if (
           event.type === "message_start" &&
           event.message.role === "user" &&
           Array.isArray(event.message.content) &&
           event.message.content.some((part) => part.type === "image")
         ) {
-          queueEvents.push({
-            type: "image_message_start",
-            steering: [...session.getSteeringMessages()],
-            followUp: [...session.getFollowUpMessages()],
-          });
+          recordQueue("image_message_start");
         }
       });
       const initialPrompt = session.prompt("describe the next image");
@@ -813,13 +812,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
 
   it("preserves explicit updates from an existing next-turn hook", async () => {
     const hookModel = { ...testModel, id: "hook-model" };
-    const hookTool: AgentTool = {
-      name: "hook_tool",
-      label: "Hook tool",
-      description: "provided by the existing turn hook",
-      parameters: Type.Object({}),
-      execute: async () => ({ content: [{ type: "text", text: "done" }], details: {} }),
-    };
+    const hookTool = makeTool("hook_tool");
     const hookContext = {
       systemPrompt: "hook prompt",
       messages: [],
@@ -838,7 +831,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     if (!contextualHook) {
       throw new Error("context-aware next-turn hook was not installed");
     }
-    const message = createAssistant(testModel, [{ type: "text", text: "turn complete" }]);
+    const message = createAssistant(testModel, "turn complete");
     const newMessages = [message];
 
     const firstUpdate = await contextualHook({
@@ -867,13 +860,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
   });
 
   it("preserves fields omitted by an existing next-turn context replacement", async () => {
-    const sessionTool: AgentTool = {
-      name: "session_tool",
-      label: "Session tool",
-      description: "available in session state",
-      parameters: Type.Object({}),
-      execute: async () => toolResult("done"),
-    };
+    const sessionTool = makeTool("session_tool");
     const initialHook = vi.fn(() => ({
       context: { systemPrompt: "stale prompt", messages: [], tools: [sessionTool] },
     }));
@@ -884,7 +871,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     session.setActiveToolsByName([sessionTool.name]);
     session.agent.prepareNextTurn = initialHook;
     session.agent.prepareNextTurn = replacementHook;
-    const message = createAssistant(testModel, [{ type: "text", text: "turn complete" }]);
+    const message = createAssistant(testModel, "turn complete");
     const contextualHook = session.agent.prepareNextTurnWithContext;
     if (!contextualHook) {
       throw new Error("context-aware next-turn hook was not installed");

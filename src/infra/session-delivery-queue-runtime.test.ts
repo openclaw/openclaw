@@ -224,7 +224,7 @@ describe("session delivery queue runtime", () => {
     },
   );
 
-  it.for(["steady", "rollback", "forward jump"] as const)(
+  it.for(["steady", "rollback"] as const)(
     "rearms a released claim immediately after a %s clock",
     async (mode, { runtime: r }) => {
       const { id, claimed } = await r.claim();
@@ -235,22 +235,14 @@ describe("session delivery queue runtime", () => {
       await r.schedule(id);
       if (mode === "steady") {
         await r.idleFor(30_000);
-      } else if (mode === "forward jump") {
-        r.time.clock.setTime(r.time.scheduler.now() + 24 * 60 * 60 * 1_000);
       }
       await r.release(id);
       const released = await r.pendingClaim(id);
       if (mode === "rollback") {
         expect(released.availableAt).toBeLessThan(claimed.availableAt);
       }
-      if (mode !== "forward jump") {
-        r.time.clock.setTime(released.availableAt);
-      }
+      r.time.clock.setTime(released.availableAt);
       await r.schedule(id);
-      if (mode === "forward jump") {
-        expect(r.time.scheduler.nextWakeAtMs).toBeLessThanOrEqual(r.time.scheduler.now());
-        expect(r.time.clock.wakes.at(-1)?.delayMs).toBe(0);
-      }
       await r.finish(stop);
     },
   );

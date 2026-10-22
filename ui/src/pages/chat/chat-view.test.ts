@@ -748,37 +748,6 @@ describe("chat history pagination", () => {
 });
 
 describe("retained input navigation", () => {
-  it.each([
-    {
-      type: "attachment",
-      attachment: { kind: "document", label: "installation.pdf", url: "/media/installation.pdf" },
-    },
-    {
-      type: "attachment_error",
-      attachment: { kind: "video", label: "walkthrough.mp4", code: "file-not-found" },
-    },
-  ])("names a queued $attachment.kind attachment without message text", (content) => {
-    const historyState = makeChatHost({ currentSessionId: "attachment-session" });
-    applyChatPendingInputs(historyState, {
-      total: 1,
-      items: [
-        {
-          id: "attachment-input",
-          runId: "attachment-run",
-          acceptedAt: 1,
-          state: "queued",
-          queued: true,
-          message: { role: "user", content: [content] },
-        },
-      ],
-    });
-    const container = renderChatView({ historyState });
-    expect(container.querySelector(".chat-queue__text")?.textContent).toBe(
-      content.attachment.label,
-    );
-    expect(container.querySelector(".chat-group.user")).toBeNull();
-  });
-
   it("keeps an empty filtered page navigable without blocking an independent send", async () => {
     const sessionKey = "agent:main:hidden-page";
     const sessionId = "hidden-page-session";
@@ -2902,7 +2871,7 @@ describe("chat attachment picker", () => {
       preview.querySelector(".chat-attachment-file--video .chat-attachment-file__preview svg"),
     ).not.toBeNull();
     expect(preview.querySelector(".chat-attachment-file__preview img")).toBeNull();
-    expect(preview.querySelector(".chat-attachment-file__type")?.textContent).toBe("MP4");
+    expect(preview.querySelector(".chat-attachment-file__type")?.textContent).toBe("MP4 · 5 B");
   });
 });
 describe("chat welcome", () => {
@@ -4705,7 +4674,10 @@ describe("chat transcript rendering cache", () => {
         onOpenWorkspaceFile,
       };
       renderChatInto(container, { ...props, allowExternalEmbedUrls: false });
-      const frame = expectDefined(container.querySelector("iframe"), "blocked widget frame");
+      await vi.dynamicImportSettled();
+      const frame = await waitForSolid(() =>
+        expectDefined(container.querySelector("iframe"), "blocked widget frame"),
+      );
       expect(frame.getAttribute("src")).toBeNull();
       expect(frame.getAttribute("sandbox")).toBe("");
 

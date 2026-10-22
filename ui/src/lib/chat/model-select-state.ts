@@ -487,8 +487,8 @@ export function resolveChatFastModeSelectState(
   const requestedTier =
     effectiveMode === "ultrafast" ? "ultrafast" : active ? "priority" : undefined;
   const observation = selectedEntries
-    .map(({ runtime }) => runtime?.serviceTierObservation)
-    .find((value) => value && value.requestedTier === requestedTier);
+    .flatMap(({ runtime }) => runtime?.serviceTierObservations ?? [])
+    .find((value) => value.requestedTier === requestedTier);
   return {
     active,
     currentOverride,

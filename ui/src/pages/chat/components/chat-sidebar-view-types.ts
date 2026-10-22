@@ -19,6 +19,8 @@ import type {
 
 type SessionWorkspaceView = ReturnType<typeof createSessionWorkspaceProps>;
 type SessionWorkspaceOptionalKey =
+  | "readState"
+  | "readResult"
   | "transcriptAttachments"
   | "presentation"
   | "folderView"
@@ -26,7 +28,6 @@ type SessionWorkspaceOptionalKey =
   | "mobileNavigation"
   | "onToggleMobileGroup"
   | "onMobileScroll"
-  | "onSearchFocus"
   | "connected"
   | "directories"
   | "onToggleDirectory"
@@ -52,6 +53,7 @@ export type FileReaderWorkspace = {
 };
 
 export type ChatDetailPanelProps = {
+  attachmentChat?: import("./chat-composer-types.ts").ChatComposerProps;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   panelPresentation?: "desktop" | "mobile";
   panelActive?: boolean;

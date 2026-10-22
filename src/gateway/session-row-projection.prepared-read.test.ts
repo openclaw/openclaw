@@ -21,6 +21,7 @@ import {
   createTestProjection,
   holdForeground,
 } from "./session-row-projection.read-fixture.test-support.js";
+import { requestSessionRow } from "./session-row-projection.test-support.js";
 import { replaceSessionRowFacts } from "./session-utils-row.js";
 import { projectWorkerSessionPlacement } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
@@ -87,14 +88,15 @@ function describeSession(
   respond = vi.fn(),
 ) {
   const completion = Promise.resolve(
-    sessionByKeyReadHandlers["sessions.describe"]!({
-      req: { type: "req", id, method: "sessions.describe" },
-      params: { key },
-      client: null,
+    requestSessionRow(
+      sessionByKeyReadHandlers["sessions.describe"]!,
       context,
-      isWebchatConnect: () => false,
+      "sessions.describe",
+      { key },
       respond,
-    }),
+      null,
+      id,
+    ),
   );
   return { respond, completion };
 }

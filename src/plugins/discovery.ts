@@ -41,7 +41,6 @@ import {
   loadPluginManifest,
   type PluginManifest,
   resolvePackageExtensionEntries,
-  type PackageExtensionResolution,
   type PackageManifest,
 } from "./manifest.js";
 import {
@@ -342,22 +341,6 @@ function readPackageManifest(
   return parsed.ok && isRecord(parsed.value) ? (parsed.value as PackageManifest) : null;
 }
 
-function deriveIdHint(params: {
-  filePath: string;
-  manifestId?: string;
-  packageName?: string;
-  fallbackId: string;
-  hasMultipleExtensions: boolean;
-}): string {
-  const base = path.basename(params.filePath, path.extname(params.filePath));
-  // Channel ids own transport diagnostics; package candidates retain their shipped plugin identity.
-  const pluginId =
-    normalizeOptionalString(params.manifestId) ??
-    derivePackagePluginIdHint(params.packageName) ??
-    params.fallbackId;
-  return params.hasMultipleExtensions ? `${pluginId}/${base}` : pluginId;
-}
-
 function derivePackagePluginIdHint(packageName: unknown): string | undefined {
   const rawPackageName = normalizeOptionalString(packageName);
   if (!rawPackageName) {
@@ -377,15 +360,18 @@ function derivePackagePluginIdHint(packageName: unknown): string | undefined {
 export function resolvePluginPackageEntries(
   params: Parameters<typeof resolvePackageRuntimeExtensions>[0] & { manifestId?: string },
 ): Array<{ idHint: string; entryPath: string; source: string }> {
-  const entryIdSources = groupPluginRecords(resolvePackageRuntimeExtensions(params), (entry) =>
-    deriveIdHint({
-      filePath: entry.source,
-      manifestId: params.manifestId,
-      packageName: params.manifest?.name,
-      fallbackId: path.basename(params.packageDir),
-      hasMultipleExtensions: params.extensions.length > 1,
-    }),
-  );
+  const entryIdSources = groupPluginRecords(resolvePackageRuntimeExtensions(params), (entry) => {
+    const filePath = entry.source;
+    const manifestId = params.manifestId;
+    const packageName = params.manifest?.name;
+    const fallbackId = path.basename(params.packageDir);
+    const hasMultipleExtensions = params.extensions.length > 1;
+    const base = path.basename(filePath, path.extname(filePath));
+    // Channel ids own transport diagnostics; package candidates retain their shipped plugin identity.
+    const pluginId =
+      normalizeOptionalString(manifestId) ?? derivePackagePluginIdHint(packageName) ?? fallbackId;
+    return hasMultipleExtensions ? `${pluginId}/${base}` : pluginId;
+  });
   const entries: Array<{ idHint: string; entryPath: string; source: string }> = [];
   for (const [idHint, sources] of entryIdSources) {
     // Entry ids derive from basenames; colliding entries must not silently vanish in the registry.
@@ -406,27 +392,6 @@ export function resolvePluginPackageEntries(
     }
   }
   return entries;
-}
-
-function pushInvalidPackageExtensionDiagnostic(params: {
-  resolution: PackageExtensionResolution;
-  source: string;
-  pluginId?: string;
-  diagnostics: PluginDiagnostic[];
-}): boolean {
-  if (params.resolution.status !== "invalid" && params.resolution.status !== "empty") {
-    return false;
-  }
-  params.diagnostics.push({
-    level: "error",
-    source: params.source,
-    message:
-      params.resolution.status === "invalid"
-        ? params.resolution.error
-        : "package.json openclaw.extensions is empty",
-    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
-  });
-  return true;
 }
 
 function isSourceCheckoutExtensionsDir(extensionsDir: string): boolean {
@@ -655,14 +620,16 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       return true;
     }
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
-    if (
-      pushInvalidPackageExtensionDiagnostic({
-        resolution: extensionResolution,
+    if (extensionResolution.status === "invalid" || extensionResolution.status === "empty") {
+      diagnostics.push({
+        level: "error",
         source: dir,
-        pluginId: pluginIdHint,
-        diagnostics,
-      })
-    ) {
+        message:
+          extensionResolution.status === "invalid"
+            ? extensionResolution.error
+            : "package.json openclaw.extensions is empty",
+        ...(pluginIdHint ? { pluginId: pluginIdHint } : {}),
+      });
       return true;
     }
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];

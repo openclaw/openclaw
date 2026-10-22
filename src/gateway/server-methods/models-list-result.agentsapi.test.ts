@@ -12,9 +12,10 @@ import {
 } from "../../plugins/runtime.js";
 import type { OpenClawPluginDefinition } from "../../plugins/types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   listModels,
+  modelAuthStore,
+  withModelsListState,
   WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 
@@ -77,13 +78,7 @@ function configuration(): OpenClawConfig {
 it("accepts shared host tuning without changing normal OpenClaw selection", async () => {
   const previous = captureActivePluginRegistrySnapshot();
   onTestFinished(() => restoreActivePluginRegistrySnapshot(previous));
-  await withOpenClawTestState(
-    {
-      layout: "state-only",
-      prefix: "agentsapi-picker-",
-      agentEnv: "main",
-      env: WITHOUT_OPENAI_ENV_AUTH,
-    },
+  await withModelsListState(
     async (state) => {
       const cfg = configuration();
       const original = structuredClone(cfg);
@@ -104,16 +99,13 @@ it("accepts shared host tuning without changing normal OpenClaw selection", asyn
         workspaceDir: state.workspaceDir,
         pluginRegistry: registry,
         catalog: [route],
-        preparedAuthStore: {
-          version: 1,
-          profiles: {
-            "openai:fixture": {
-              type: "api_key",
-              provider: "openai",
-              key: "synthetic-test-key",
-            },
+        preparedAuthStore: modelAuthStore({
+          "openai:fixture": {
+            type: "api_key",
+            provider: "openai",
+            key: "synthetic-test-key",
           },
-        },
+        }),
       });
       expect(result.models.find((model) => model.id === modelId)?.runtimeChoices).toEqual(
         expect.arrayContaining([
@@ -130,8 +122,7 @@ it("accepts shared host tuning without changing normal OpenClaw selection", asyn
           modelId,
           agentHarnessRuntimeOverride,
         }).selectedHarnessId;
-      expect(select()).toBe("openclaw");
-      expect(select("agentsapi")).toBe("agentsapi");
+      expect([select(), select("agentsapi")]).toEqual(["openclaw", "agentsapi"]);
       const selectPrepared = (
         config: OpenClawConfig,
         requestTransportOverrides: "none" | "present" = "none",
@@ -179,5 +170,6 @@ it("accepts shared host tuning without changing normal OpenClaw selection", asyn
       registry.agentHarnesses[0]!.harness = harness;
       expect(cfg).toEqual(original);
     },
+    { agentEnv: "main", env: WITHOUT_OPENAI_ENV_AUTH },
   );
 });

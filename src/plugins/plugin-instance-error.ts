@@ -1,5 +1,10 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
+/** A failed dependency link never constitutes a prepared plugin capture. */
+export class PluginDependencyLinkError extends Error {
+  override name = "PluginDependencyLinkError";
+}
+
 /** A retired instance cannot admit a fresh invocation. */
 export class PluginInstanceUnavailableError extends Error {
   constructor(pluginId?: string) {

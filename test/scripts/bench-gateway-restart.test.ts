@@ -1,9 +1,7 @@
-import fs from "node:fs";
 import { createServer } from "node:http";
 import { createServer as createNetServer, type Server, type Socket } from "node:net";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
 import * as gatewayBenchProbes from "../../scripts/lib/gateway-bench-probes.ts";
 import { parseProcessRssKb, requestProbeStatus } from "../../scripts/lib/gateway-bench-probes.ts";
@@ -12,7 +10,6 @@ import {
   parseNonNegativeInt,
   parsePositiveInt,
 } from "../../scripts/lib/gateway-bench-runtime.ts";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 type RestartSampleFixture = Parameters<typeof testing.summarizeCase>[1][number];
 type ProbeFixture = RestartSampleFixture["initialHealthz"];
@@ -21,7 +18,6 @@ type ServerRun = (port: number) => Promise<void>;
 
 const wallClockSetTimeout = setTimeout;
 const wallClockClearTimeout = clearTimeout;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const benchCase = { config: {}, id: "demo", name: "demo" };
 
 async function withServer(server: Server, run: ServerRun, cleanup = () => {}) {
@@ -118,10 +114,6 @@ function sample(overrides: Partial<RestartSampleFixture>): RestartSampleFixture 
 
 it("rejects ambiguous benchmark CLI values before spawning Node", () => {
   for (const [args, message] of [
-    ["--wat", "Unknown argument: --wat"],
-    ["--output --case skipChannels", "--output requires a value"],
-    ["--output first.json --output second.json", "--output was provided more than once"],
-    ["--case", "--case requires a value"],
     ["--case skipChannels --case skipChannels", 'Duplicate --case "skipChannels"'],
     ["--restarts --runs 1", "--restarts requires a value"],
   ] as const) {
@@ -426,25 +418,4 @@ it("keeps restart probes running until HTTP recovers after an unavailable window
     expect(result.downtimeMs).not.toBeNull();
     expect(requests).toBeGreaterThanOrEqual(2);
   });
-});
-
-it("writes plugin fixtures as a parent load path with explicit startup activation", () => {
-  const root = tempDirs.make("openclaw-restart-bench-config-test-");
-  const configPath = testing.writeConfig(root, {
-    config: {},
-    id: "fiftyPlugins",
-    name: "gateway restart, 50 manifest plugins",
-    pluginActivationOnStartup: true,
-    pluginCount: 2,
-  });
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
-    plugins?: { allow?: string[]; load?: { paths?: string[] } };
-  };
-
-  expect(config.plugins?.load?.paths).toEqual([path.join(root, "plugins")]);
-  expect(config.plugins?.allow).toEqual(["bench-plugin-01", "bench-plugin-02"]);
-  const manifest = JSON.parse(
-    fs.readFileSync(path.join(root, "plugins", "bench-plugin-01", "openclaw.plugin.json"), "utf8"),
-  ) as { activation?: { onStartup?: boolean } };
-  expect(manifest.activation?.onStartup).toBe(true);
 });

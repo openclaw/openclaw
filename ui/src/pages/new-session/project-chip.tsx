@@ -1,4 +1,6 @@
+import { createDeferred } from "@solidjs/signals";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
+import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -90,6 +92,41 @@ export function ProjectChip(props: {
       projectSearchAvailable,
       projectAddAvailable,
     };
+  });
+  const projectSource = createMemo(
+    () => {
+      const browser = props.params.place.browser;
+      const projects = browser.projects;
+      return { browser, pending: browser.projectRead, projects };
+    },
+    {
+      equals: (previous, next) =>
+        previous.browser === next.browser &&
+        previous.pending === next.pending &&
+        (next.pending !== null || previous.projects === next.projects),
+    },
+  );
+  const projectsReady = createMemo(() => props.params.place.browser.projectsReady);
+  const projects = createDeferred<readonly ProjectRecord[]>((previous) => {
+    const source = projectSource();
+    // A picker mounted during a shared refresh starts with the accepted rows.
+    if (previous === undefined && projectsReady()) {
+      return source.projects;
+    }
+    return source.pending ? source.pending.then(() => source.browser.projects) : source.projects;
+  });
+  const localProjects = createMemo(() => {
+    // Retired catalogs clear immediately; a live refresh keeps local filtering responsive.
+    const accepted = !props.nativeTerminal && projectsReady() ? projects() : [];
+    const query = view().query.toLowerCase();
+    return query
+      ? accepted.filter((project) =>
+          [project.displayName, project.originUrl ?? "", project.repoRoot ?? ""]
+            .join("\n")
+            .toLowerCase()
+            .includes(query),
+        )
+      : accepted;
   });
   const projectSearchRead = createMemo(() => props.params.place.browser.projectSearchRead);
   const projectSearchResult = createMemo(() => {
@@ -254,8 +291,8 @@ export function ProjectChip(props: {
               })}
             />
           </label>
-          {
-            <For each={props.state.localProjects} keyed={(project) => project.id}>
+          <Loading on={projectsReady()}>
+            <For each={localProjects()} keyed={(project) => project.id}>
               {(project) => {
                 const icon = <Icon name="gitBranch" />;
                 return (
@@ -273,7 +310,7 @@ export function ProjectChip(props: {
                 );
               }}
             </For>
-          }
+          </Loading>
           {view().cloneInput && view().projectAddAvailable ? (
             <SessionMenuItem
               item={{

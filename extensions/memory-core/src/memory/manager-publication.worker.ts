@@ -404,7 +404,6 @@ function createPublicationBackend(
                   admission: {
                     hasIndex: true,
                     ftsAvailable: published.value.ftsAvailable,
-                    schemaVersion: getAdmittedSqliteSchemaFacts(db)?.userVersion,
                     identity: readOpenClawAgentDatabaseIdentity({ db }),
                     facts: published.facts,
                   },

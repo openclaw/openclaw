@@ -1,18 +1,19 @@
 import { getObserver } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
-import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
+import { createMemo, lazy, Loading, Show } from "solid-js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { patchSettings } from "../app/settings.ts";
-import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { registerAgentCreationEnglish } from "../i18n/locales/en-agent-creation.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type { IdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
-import { projectOverlays } from "../lib/reactive/application.ts";
+import { projectGateway, projectOverlays } from "../lib/reactive/application.ts";
+import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
+import { projectTheme } from "../lib/reactive/theme.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
@@ -49,7 +50,6 @@ import {
 } from "./app-sidebar-session-menu-renderers.tsx";
 import "../styles/sidebar-menus.css";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
 import { canRetryGatewayStatus } from "./gateway-status.ts";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import {
@@ -65,7 +65,24 @@ import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
 import type { MenuEntry } from "./solid/menu.tsx";
 
-export function renderSidebarMenus(
+export { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
+
+const AgentCreateDialog = lazy(() => import("./agent-create-dialog.tsx"), {
+  export: "AgentCreateDialog",
+});
+
+registerAgentCreationEnglish();
+
+export function SidebarMenusRenderer(props: {
+  menus: SidebarMenus;
+  host: SidebarMenusOwner;
+  avatars: IdentityAvatars;
+  revision: () => number;
+}) {
+  return <>{renderSidebarMenus(props.menus, props.host, props.avatars, props.revision)}</>;
+}
+
+function renderSidebarMenus(
   menus: SidebarMenus,
   view: SidebarMenusOwner,
   agentMenuAvatars: IdentityAvatars,
@@ -95,13 +112,15 @@ export function renderSidebarMenus(
         )
       }
     </Show>,
+    <Show when={projected.agentCreateDialogOpen}>
+      {renderSidebarAgentCreateDialogForMenus(projected, view)}
+    </Show>,
     <Show when={projected.identityMenuPosition} keyed>
       {(menu) => renderSidebarIdentityMenuForMenus(projected, view, menu)}
     </Show>,
     <Show when={projected.sessionMenu} keyed>
       {(menu) => renderSidebarSessionMenuForMenus(projected, view, menu)}
     </Show>,
-    projected.catalogMenuView.render(CatalogSessionMenu),
     <Show when={projected.sessionGroupMenu} keyed>
       {(menu) => renderSidebarSessionGroupMenuForMenus(projected, view, menu)}
     </Show>,
@@ -243,7 +262,7 @@ export function renderSidebarRailPinMenuForMenus(
   );
 }
 
-function renderSidebarAgentMenuForMenus(
+export function renderSidebarAgentMenuForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
   position: NonNullable<SidebarMenus["agentMenuPosition"]>,
@@ -252,9 +271,17 @@ function renderSidebarAgentMenuForMenus(
   const trigger = menus.triggers.get("agent");
   const menuRef = menus.menuRef("agent");
   const chipAgent = createMemo(() => host.activeChipAgent());
-  const activeName = createMemo(() => {
-    const current = chipAgent();
-    return current.agent ? normalizeAgentLabel(current.agent, current.identity) : "";
+  const agents = createMemo(() => {
+    const source = host.sessionDataContext?.agents;
+    return source && projectAgents(source);
+  });
+  const gateway = createMemo(() => {
+    const source = host.sessionDataContext?.gateway;
+    return source && projectGateway(source);
+  });
+  const preferences = createMemo(() => {
+    const source = host.sessionDataContext?.theme;
+    return source && projectTheme(source).preferences;
   });
   return (
     <SidebarAgentMenu
@@ -263,21 +290,26 @@ function renderSidebarAgentMenuForMenus(
         ref: menuRef,
         basePath: host.basePath,
         activeId: chipAgent().agent ? chipAgent().activeId : "",
-        activeName: activeName(),
         agents: chipAgent().agents,
         identities: chipAgent().identities,
-        pinnedAgentIds: host.pinnedAgentIds,
-        onTogglePinnedAgent: async (agentId) => {
-          if (host.sessionDataContext) {
-            togglePinnedAgent(host.sessionDataContext.navigation, agentId);
-            await menus.commit();
-          }
-        },
-        rosterMode: host.sidebarAgentsMode === "roster",
+        pendingAgent: agents()?.read().pendingAgent,
+        recentlyCreatedAgentId:
+          agents()?.read().recentlyCreatedAgentId ??
+          preferences()?.read().sidebarRecentlyCreatedAgentId,
+        rosterMode: host.sidebarAgentsMode === "roster" && !chipAgent().pending,
+        creationDisabledReason: canCallGatewayMethod(
+          gateway()?.read().snapshot,
+          "agents.create",
+          "operator.admin",
+        )
+          ? null
+          : t("agentChip.creationUnavailable"),
         onShowAllAgents: () => {
           host.navigationView = "sessions";
           host.sessionDataContext?.navigation.update({ navCollapsed: false });
           patchSettings({ sidebarAgentsMode: "roster" });
+          host.sessionDataContext?.agentSelection.setScope(null);
+          host.onNavigate?.("sessions");
           void menus.commit().then((committed) => {
             if (!committed) {
               return;
@@ -285,7 +317,6 @@ function renderSidebarAgentMenuForMenus(
             menus.focusAgentRoster?.();
           });
         },
-        connected: host.connected,
         resolveAvatarUrl: (url) => avatars().resolve(url),
         avatarErrorHandler: (url) => avatars().imageErrorHandler(url),
         openMode: menus.agentMenuMode,
@@ -299,7 +330,12 @@ function renderSidebarAgentMenuForMenus(
           }
           host.switchChipAgent(agentId);
         },
-        onAskCapabilities: (agentId) => host.askAgentCapabilities(agentId),
+        onCreateAgent: () => {
+          if (host.sessionDataContext) {
+            menus.closeAgentMenu();
+            menus.openAgentCreateDialog();
+          }
+        },
         anchor: trigger ?? undefined,
         onClose: (restoreFocus) => {
           if (menus.agentMenuPosition !== position) {
@@ -310,6 +346,30 @@ function renderSidebarAgentMenuForMenus(
         onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
       }}
     />
+  );
+}
+
+export function renderSidebarAgentCreateDialogForMenus(
+  menus: SidebarMenus,
+  host: SidebarMenusOwner,
+): JSX.Element | null {
+  const context = host.sessionDataContext;
+  if (!context) {
+    return null;
+  }
+  return (
+    <Loading>
+      <AgentCreateDialog
+        context={context}
+        onCancel={() => menus.closeAgentCreateDialog()}
+        onCreate={(identity) => {
+          menus.closeAgentCreateDialog();
+          void import("../app/create-agent.ts").then(({ createApplicationAgent }) =>
+            createApplicationAgent(context, identity),
+          );
+        }}
+      />
+    </Loading>
   );
 }
 

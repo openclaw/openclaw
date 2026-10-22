@@ -30,10 +30,8 @@ import "../../../components/solid/person-reference.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
-import { ChatClawHubCard } from "./chat-clawhub-card.tsx";
 import { ActivityOperation } from "./chat-message-activity-operation.tsx";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
-import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import type {
   ActivityOperationProps,
   GroupedMessageOptions,
@@ -43,7 +41,12 @@ import {
   type GroupedMessagePresentation,
 } from "./chat-message-bubble-presentation.ts";
 import { MessageWorkContext } from "./chat-message-context-view.tsx";
-import { MessageImages } from "./chat-message-images-solid.tsx";
+import {
+  AssistantAttachments,
+  ChatClawHubCard,
+  MessageAttachment,
+  MessageImages,
+} from "./chat-message-deferred.tsx";
 import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
@@ -492,6 +495,7 @@ function BubbleContents(props: ContentProps) {
         onOpenSidebar={props.onOpenSidebar}
         onAssistantAttachmentLoaded={props.options.onAssistantAttachmentLoaded}
         inlinePlayback={props.state().normalizedRole === "assistant"}
+        inlineComments={props.state().inlineComments}
       />
       <Show when={props.state().isStandaloneToolMessage}>
         <AssistantViews {...props} />

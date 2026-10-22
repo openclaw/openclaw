@@ -96,6 +96,7 @@ function assembleFileFlush(options: OpenClawCodingToolsOptions = {}) {
     ...options,
   });
 }
+const names = (tools: AnyAgentTool[]) => tools.map((tool) => tool.name).toSorted();
 
 describe("memory flush writer availability", () => {
   afterEach(() => {
@@ -109,7 +110,7 @@ describe("memory flush writer availability", () => {
     const undeclared = persistenceTool("memory-provider", "delete_memory");
     const { assembled, save } = assembleProviderFlush([foreign, owned, undeclared]);
 
-    expect(assembled.map((tool) => tool.name).toSorted()).toEqual(["read", "save_memory"]);
+    expect(names(assembled)).toEqual(["read", "save_memory"]);
     await save();
     expect(owned.execute).toHaveBeenCalledOnce();
     expect(foreign.execute).not.toHaveBeenCalled();
@@ -127,11 +128,7 @@ describe("memory flush writer availability", () => {
       { lookupToolNames: ["find_memory", "get_memory"] },
     );
 
-    expect(assembled.map((tool) => tool.name).toSorted()).toEqual([
-      "find_memory",
-      "read",
-      "save_memory",
-    ]);
+    expect(names(assembled)).toEqual(["find_memory", "read", "save_memory"]);
     expect(warnings).toEqual([
       expect.stringContaining(
         'plugin "memory-provider" flush cannot check for existing memory: get_memory',
@@ -151,10 +148,7 @@ describe("memory flush writer availability", () => {
           return assembleFileFlush({ includeToolSearchControls: true });
         },
       );
-      expect(tools.map((tool) => tool.name).toSorted()).toEqual([
-        "read",
-        arm === "provider" ? "save_memory" : "write",
-      ]);
+      expect(names(tools)).toEqual(["read", arm === "provider" ? "save_memory" : "write"]);
     },
   );
 
@@ -185,8 +179,7 @@ describe("memory flush writer availability", () => {
     const options = vi.mocked(createOpenClawTools).mock.lastCall?.[0];
     const { context } = resolveOpenClawPluginToolInputs({ options });
 
-    expect(context.sessionKey).toBe(flushKey);
-    expect(context.senderIsOwner).toBe(false);
+    expect(context).toMatchObject({ sessionKey: flushKey, senderIsOwner: false });
     expect(context.memoryAudience).toEqual({ kind: "owner-private", agentId: "main" });
     expect(() => assertMemoryAudienceSession(context.memoryAudience!, flushKey)).not.toThrow();
     expect(() => assertMemoryAudienceSession(context.memoryAudience!, sourceKey)).toThrow(

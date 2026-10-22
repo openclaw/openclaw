@@ -18,7 +18,7 @@ type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtit
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
-  "agents-home",
+  "claws",
   "dashboards",
   "usage",
   "cron",
@@ -289,7 +289,6 @@ function navigationPresentation(icon: IconName, key: string): NavigationPresenta
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
   settings: ["settings", "nav.settings", "common.settingsSections"],
-  "agents-home": navigationPresentation("bot", "agentsHome"),
   claws: navigationPresentation("bot", "claws"),
   agents: navigationPresentation("bot", "agents"),
   activity: navigationPresentation("activity", "activity"),

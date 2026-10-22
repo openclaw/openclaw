@@ -1,4 +1,13 @@
-import { For, Show, action, createMemo, createOptimistic, createSignal } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+} from "solid-js";
 import { SettingsRow, SettingsSection } from "../components/solid/settings-ui.tsx";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -8,7 +17,7 @@ import { CustomPluginUiDisabled } from "./control-ui-disabled.solid.tsx";
 export function PluginManager() {
   const context = useApplication();
   const [reloading, setReloading] = createOptimistic(false);
-  const [reloadError, setReloadError] = createSignal("");
+  const [reloadRead, setReloadRead] = createSignal<Promise<void> | null>(null);
   const source = projectOwner(context.plugins, (runtime) => runtime);
   const reload = action(function* () {
     setReloading(true);
@@ -40,10 +49,10 @@ export function PluginManager() {
                     type="button"
                     disabled={reloading()}
                     onClick={() => {
-                      setReloadError("");
-                      void reload().catch((error: unknown) => {
-                        setReloadError(error instanceof Error ? error.message : String(error));
-                      });
+                      const read = reload();
+                      // The settings surface can disappear before this action settles.
+                      void read.catch(() => undefined);
+                      void setReloadRead(read);
                     }}
                   >
                     {t("pluginUi.reload")}
@@ -108,11 +117,30 @@ export function PluginManager() {
               />
             )}
           </For>
-          <Show when={!reloading() && reloadError()}>
-            <SettingsRow title={reloadError()} role="alert" carapace />
-          </Show>
+          <For each={!reloading() && reloadRead() ? [reloadRead()!] : []}>
+            {(read) => (
+              <Errored
+                fallback={(error) => {
+                  const message = () => {
+                    const value = error();
+                    return value instanceof Error ? value.message : String(value);
+                  };
+                  return <SettingsRow title={message()} role="alert" carapace />;
+                }}
+              >
+                <Loading>
+                  <ReloadCompletion read={read} />
+                </Loading>
+              </Errored>
+            )}
+          </For>
         </SettingsSection>
       </Show>
     </openclaw-plugin-manager>
   );
+}
+
+function ReloadCompletion(props: { read: Promise<void> }) {
+  const completion = createMemo(() => props.read.then(() => null));
+  return <>{completion()}</>;
 }

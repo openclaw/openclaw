@@ -37,6 +37,7 @@ import {
   sessionClientCredentialPath,
 } from "./session-message-client.test-support.js";
 import { registerCronSessionCompletionEventTests } from "./session-message-cron.test-support.js";
+import { findWatchedPresenceEntry, getConnId } from "./session-message-presence.test-support.js";
 import { registerRecoveredSubagentSessionEventTest } from "./session-message-subagent.test-support.js";
 import { createWorkerFanoutFixture } from "./session-message-worker.test-support.js";
 import { seedCompletedSessionTranscript } from "./session-row-fixtures.test-support.js";
@@ -228,6 +229,19 @@ function matchingEvent(event: string, fields: Record<string, unknown> = {}) {
   };
 }
 
+function collectEventPayloads(ws: GatewayWs, event: string, fields: Record<string, unknown> = {}) {
+  const messages: Record<string, unknown>[] = [];
+  const matches = matchingEvent(event, fields);
+  const listener = (data: RawData) => {
+    const frame = JSON.parse(rawDataToString(data));
+    if (matches(frame)) {
+      messages.push(requireRecord(frame.payload, "event payload"));
+    }
+  };
+  ws.on("message", listener);
+  return { messages, [Symbol.dispose]: () => ws.off("message", listener) };
+}
+
 function waitForSessionMessageEvent(ws: GatewayWs, sessionKey: string, timeoutMs?: number) {
   return onceMessage(ws, matchingEvent("session.message", { sessionKey }), timeoutMs);
 }
@@ -327,7 +341,7 @@ describe("session.message websocket events", () => {
     const watchedWs = await harness.openWs();
     const instanceId = "presence-watched-sessions";
     try {
-      await connectOk(observerWs, { scopes: ["operator.read"] });
+      const observerConnId = getConnId(await connectOk(observerWs, { scopes: ["operator.read"] }));
       const watchedHello = await connectOk(watchedWs, {
         scopes: ["operator.read"],
         client: {
@@ -343,20 +357,7 @@ describe("session.message websocket events", () => {
       ).snapshot?.stateVersion?.presence;
       expect(initialPresenceVersion).toEqual(expect.any(Number));
 
-      const findWatchedEntry = (message: unknown) => {
-        const record = requireRecord(message, "presence event");
-        if (record.event !== "presence") {
-          return undefined;
-        }
-        const payload = requireRecord(record.payload, "presence payload");
-        const presence = Array.isArray(payload.presence) ? payload.presence : [];
-        return presence.find(
-          (entry): entry is Record<string, unknown> =>
-            Boolean(entry) &&
-            typeof entry === "object" &&
-            (entry as { instanceId?: unknown }).instanceId === instanceId,
-        );
-      };
+      const findWatchedEntry = (message: unknown) => findWatchedPresenceEntry(message, instanceId);
       const declaredKeys = ["agent:main:watch-00", "agent:main:watch-01"];
       const replacementKey = "agent:main:replacement";
       const storePath = await createSessionStoreFile();
@@ -383,6 +384,7 @@ describe("session.message websocket events", () => {
       const declaredEvent = await declaredPresence;
       const declaredEntry = findWatchedEntry(declaredEvent);
       expect(declaredEntry?.watchedSessions).toEqual(declaredKeys);
+      expect(declaredEntry?.deviceId).toEqual(expect.any(String));
       const ownerProfile = (await listProfiles()).find((profile) => profile.emails.length === 0);
       expect(ownerProfile).toBeDefined();
       expect(declaredEntry?.user).toEqual({
@@ -464,19 +466,30 @@ describe("session.message websocket events", () => {
         return Array.isArray(entry?.watchedSessions) && entry.watchedSessions[0] === replacementKey;
       });
       await rpcReq(watchedWs, "sessions.viewers.set", { sessionKeys: [replacementKey] });
-      await redeclaredPresence;
+      const redeclaredEvent = await redeclaredPresence;
 
+      // The live same-device observer keeps its row; the disconnected tab is removed.
       const disconnectPresence = onceMessage(observerWs, (message) => {
-        // A live sibling with the same signed device keeps the closed tab out of the roster.
-        const record = requireRecord(message, "presence event");
-        return record.event === "presence" && findWatchedEntry(record) === undefined;
+        return (
+          message.type === "event" &&
+          message.event === "presence" &&
+          findWatchedEntry(message) === undefined
+        );
       });
       watchedWs.close();
       const disconnectedEvent = await disconnectPresence;
-      expect(findWatchedEntry(disconnectedEvent)).toBeUndefined();
-      const hiddenPresenceVersion = hiddenEvent.stateVersion?.presence;
+      expect(requireRecord(disconnectedEvent.payload, "presence payload").presence).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            connectionId: observerConnId,
+            deviceId: declaredEntry?.deviceId,
+            reason: "connect",
+          }),
+        ]),
+      );
+      const redeclaredPresenceVersion = redeclaredEvent.stateVersion?.presence;
       expect(disconnectedEvent.stateVersion?.presence).toBeGreaterThan(
-        typeof hiddenPresenceVersion === "number" ? hiddenPresenceVersion : 0,
+        typeof redeclaredPresenceVersion === "number" ? redeclaredPresenceVersion : 0,
       );
     } finally {
       observerWs.close();
@@ -1034,33 +1047,14 @@ describe("session.message websocket events", () => {
         expect(subscription.ok).toBe(true);
       }
 
-      const observedByClient: Array<
-        Array<{ messageId: unknown; messageSeq: unknown; sessionKey: unknown }>
-      > = [[], []];
-      for (const [clientIndex, ws] of [webWs, tuiWs].entries()) {
-        const observed = observedByClient[clientIndex];
-        if (!observed) {
-          throw new Error(`missing committed-turn observer for client ${clientIndex}`);
-        }
-        ws.on("message", (data: RawData) => {
-          const frame = JSON.parse(rawDataToString(data)) as {
-            event?: string;
-            payload?: { messageId?: unknown; messageSeq?: unknown; sessionKey?: unknown };
-            type?: string;
-          };
-          if (
-            frame.type === "event" &&
-            frame.event === "session.message" &&
-            frame.payload?.sessionKey === sessionKey
-          ) {
-            observed.push({
-              messageId: frame.payload.messageId,
-              messageSeq: frame.payload.messageSeq,
-              sessionKey: frame.payload.sessionKey,
-            });
-          }
-        });
-      }
+      using webEvents = collectEventPayloads(webWs, "session.message", { sessionKey });
+      using tuiEvents = collectEventPayloads(tuiWs, "session.message", { sessionKey });
+      const observedByClient = [webEvents.messages, tuiEvents.messages];
+      const position = (payload: Record<string, unknown>) => ({
+        messageId: payload.messageId,
+        messageSeq: payload.messageSeq,
+        sessionKey: payload.sessionKey,
+      });
 
       // Install every real socket listener before the one SQLite commit can broadcast.
       const deliveriesByClient = [webWs, tuiWs].map((ws) =>
@@ -1081,7 +1075,7 @@ describe("session.message websocket events", () => {
 
       for (const [clientIndex, clientDeliveries] of deliveriesByClient.entries()) {
         const frames = await Promise.all(clientDeliveries);
-        expect(observedByClient[clientIndex]).toEqual(
+        expect(observedByClient[clientIndex]?.map(position)).toEqual(
           committedMessages.map(({ id }, index) => ({
             messageId: id,
             messageSeq: index + 2,
@@ -1089,14 +1083,7 @@ describe("session.message websocket events", () => {
           })),
         );
         expect(
-          frames.map((frame) => {
-            const payload = requireRecord(frame.payload, "committed session event");
-            return {
-              messageId: payload.messageId,
-              messageSeq: payload.messageSeq,
-              sessionKey: payload.sessionKey,
-            };
-          }),
+          frames.map((frame) => position(requireRecord(frame.payload, "committed session event"))),
         ).toEqual(
           committedMessages.map(({ id }, index) => ({
             messageId: id,
@@ -1216,17 +1203,13 @@ describe("session.message websocket events", () => {
           const committed = await persistSessionTranscriptTurn(
             { agentId: "main", sessionId, sessionKey, storePath },
             {
-              messages: ["first", "second"].map((name, index) => ({
-                eventId: `identity-only-${name}`,
-                message: {
-                  content: [
-                    { type: "text", text: `Identity-only committed message ${index + 1}.` },
-                  ],
-                  idempotencyKey: `identity-only-${name}:user`,
-                  role: "user",
-                  timestamp: 1_700_000_000_000 + index,
-                },
-              })),
+              messages: ["first", "second"].map((name, index) =>
+                userTurn(
+                  `identity-only-${name}`,
+                  `Identity-only committed message ${index + 1}.`,
+                  1_700_000_000_000 + index,
+                ),
+              ),
               updateMode: "file-only",
             },
           );
@@ -1562,86 +1545,90 @@ describe("session.message websocket events", () => {
     });
   });
 
-  test("routes selected-agent global transcript updates to matching message subscribers", async () => {
-    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, work: {} } };
-    testState.agentConfig = { sessionStore: { agentId: "work" } };
-    const transcriptMessage = textMessage("work selected global prompt", "user");
-    const { transcriptPath } = await createTranscriptSession(
-      "global",
-      "sess-work-global",
-      "msg-work-global",
-      transcriptMessage,
-      { goal: activeGoal("goal-work-global", "Finish work global task", 5) },
-      "work",
-    );
+  test.each([undefined, "main", "work"])(
+    "routes global transcript updates for agent %s to matching and legacy subscribers",
+    async (agentId) => {
+      const selected = agentId === "work";
+      if (selected) {
+        testState.agentsConfig = { ownership: "explicit", entries: { main: {}, work: {} } };
+        testState.agentConfig = { sessionStore: { agentId: "work" } };
+      }
+      const transcriptMessage = textMessage("global prompt", selected ? "user" : "assistant");
+      const goal = selected
+        ? activeGoal("goal-work-global", "Finish work global task", 5)
+        : undefined;
+      const { transcriptPath } = await createTranscriptSession(
+        "global",
+        "sess-global",
+        "msg-global",
+        transcriptMessage,
+        goal ? { goal } : {},
+        agentId,
+      );
 
-    const workWs = await harness.openWs();
-    const mainWs = await harness.openWs();
-    const bareWs = await harness.openWs();
-    try {
-      await connectOk(workWs, { scopes: ["operator.read"] });
-      await connectOk(mainWs, { scopes: ["operator.read"] });
-      await connectOk(bareWs, { scopes: ["operator.read"] });
-      expect(
-        await rpcReq(workWs, "sessions.messages.subscribe", {
+      const workWs = await harness.openWs();
+      const mainWs = await harness.openWs();
+      const bareWs = await harness.openWs();
+      try {
+        await connectOk(workWs, { scopes: ["operator.read"] });
+        await connectOk(mainWs, { scopes: ["operator.read"] });
+        await connectOk(bareWs, { scopes: ["operator.read"] });
+        const work = await rpcReq(workWs, "sessions.messages.subscribe", {
           key: "global",
           agentId: "work",
-        }),
-      ).toMatchObject({ ok: true, payload: { key: "global", subscribed: true } });
-      expect(
-        await rpcReq(mainWs, "sessions.messages.subscribe", {
+        });
+        const main = await rpcReq(mainWs, "sessions.messages.subscribe", {
           key: "global",
           agentId: "main",
-        }),
-      ).toMatchObject({ ok: false });
-      expect(
-        await rpcReq(bareWs, "sessions.messages.subscribe", {
-          key: "global",
-        }),
-      ).toMatchObject({ ok: true, payload: { key: "global", subscribed: true } });
+        });
+        const bare = await rpcReq(bareWs, "sessions.messages.subscribe", { key: "global" });
+        if (selected) {
+          expect(work).toMatchObject({ ok: true, payload: { key: "global", subscribed: true } });
+          expect(main).toMatchObject({ ok: false });
+          expect(bare).toMatchObject({ ok: true, payload: { key: "global", subscribed: true } });
+        }
 
-      const workMessagePromise = waitForSessionMessageEvent(workWs, "global");
-      const mainMessagePromise = expectNoMessageWithin({
-        watch: (timeoutMs) => waitForSessionMessageEvent(mainWs, "global", timeoutMs),
-        timeoutMs: 250,
-      });
-      const bareMessagePromise = waitForSessionMessageEvent(bareWs, "global");
-      emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
-        sessionKey: "global",
-        agentId: "work",
-        message: transcriptMessage,
-        messageId: "msg-work-global",
-      });
+        const matchingWs = selected ? workWs : mainWs;
+        const otherWs = selected ? mainWs : workWs;
+        const messagePromise = waitForSessionMessageEvent(matchingWs, "global");
+        const noMessagePromise = expectNoMessageWithin({
+          watch: (timeoutMs) => waitForSessionMessageEvent(otherWs, "global", timeoutMs),
+          timeoutMs: 250,
+        });
+        const bareMessagePromise = waitForSessionMessageEvent(bareWs, "global");
+        emitSessionTranscriptUpdate({
+          sessionFile: transcriptPath,
+          sessionKey: "global",
+          ...(agentId ? { agentId } : {}),
+          message: transcriptMessage,
+          messageId: "msg-global",
+        });
 
-      const [workMessage, , bareMessage] = await Promise.all([
-        workMessagePromise,
-        mainMessagePromise,
-        bareMessagePromise,
-      ]);
-      expectRecordFields(workMessage.payload, {
-        sessionKey: "global",
-        agentId: "work",
-        messageId: "msg-work-global",
-        goal: {
-          ...activeGoal("goal-work-global", "Finish work global task", 5),
-          tokenStartFresh: true,
-        },
-      });
-      expectRecordFields(bareMessage.payload, {
-        sessionKey: "global",
-        agentId: "work",
-        messageId: "msg-work-global",
-      });
-    } finally {
-      workWs.close();
-      mainWs.close();
-      bareWs.close();
-      testState.agentsConfig = undefined;
-      testState.agentConfig = undefined;
-      testState.sessionStorePath = undefined;
-    }
-  });
+        const [message, , bareMessage] = await Promise.all([
+          messagePromise,
+          noMessagePromise,
+          bareMessagePromise,
+        ]);
+        const expected = {
+          sessionKey: "global",
+          agentId,
+          messageId: "msg-global",
+        };
+        expectRecordFields(message.payload, {
+          ...expected,
+          ...(goal ? { goal: { ...goal, tokenStartFresh: true } } : {}),
+        });
+        expectRecordFields(bareMessage.payload, expected);
+      } finally {
+        workWs.close();
+        mainWs.close();
+        bareWs.close();
+        testState.agentsConfig = undefined;
+        testState.agentConfig = undefined;
+        testState.sessionStorePath = undefined;
+      }
+    },
+  );
 
   test("routes a subscribed global observer event through the real gateway socket once", async () => {
     testState.agentsConfig = { ownership: "explicit", entries: { main: {}, work: {} } };
@@ -1716,76 +1703,6 @@ describe("session.message websocket events", () => {
       testState.sessionStorePath = undefined;
     }
   });
-
-  test.each([
-    { label: "unscoped", agentId: undefined },
-    { label: "default-agent scoped", agentId: "main" },
-  ])(
-    "routes $label global transcript events to matching and legacy subscribers",
-    async ({ agentId }) => {
-      const transcriptMessage = textMessage("default global prompt");
-      const { transcriptPath } = await createTranscriptSession(
-        "global",
-        "sess-default-global",
-        "msg-default-global",
-        transcriptMessage,
-        {},
-        agentId,
-      );
-
-      const workWs = await harness.openWs();
-      const mainWs = await harness.openWs();
-      const bareWs = await harness.openWs();
-      try {
-        await connectOk(workWs, { scopes: ["operator.read"] });
-        await connectOk(mainWs, { scopes: ["operator.read"] });
-        await connectOk(bareWs, { scopes: ["operator.read"] });
-        await rpcReq(workWs, "sessions.messages.subscribe", {
-          key: "global",
-          agentId: "work",
-        });
-        await rpcReq(mainWs, "sessions.messages.subscribe", {
-          key: "global",
-          agentId: "main",
-        });
-        await rpcReq(bareWs, "sessions.messages.subscribe", {
-          key: "global",
-        });
-
-        const mainMessagePromise = waitForSessionMessageEvent(mainWs, "global");
-        const bareMessagePromise = waitForSessionMessageEvent(bareWs, "global");
-        const workMessagePromise = expectNoMessageWithin({
-          watch: (timeoutMs) => waitForSessionMessageEvent(workWs, "global", timeoutMs),
-          timeoutMs: 250,
-        });
-        emitSessionTranscriptUpdate({
-          sessionFile: transcriptPath,
-          sessionKey: "global",
-          ...(agentId ? { agentId } : {}),
-          message: transcriptMessage,
-          messageId: "msg-default-global",
-        });
-
-        const mainMessage = await mainMessagePromise;
-        const bareMessage = await bareMessagePromise;
-        await workMessagePromise;
-        expectRecordFields(mainMessage.payload, {
-          sessionKey: "global",
-          messageId: "msg-default-global",
-        });
-        expectRecordFields(bareMessage.payload, {
-          sessionKey: "global",
-          messageId: "msg-default-global",
-        });
-        expect((mainMessage.payload as { agentId?: unknown }).agentId).toBe(agentId);
-        expect((bareMessage.payload as { agentId?: unknown }).agentId).toBe(agentId);
-      } finally {
-        workWs.close();
-        mainWs.close();
-        bareWs.close();
-      }
-    },
-  );
 
   test("includes spawnedBy metadata on session.message transcript events", async () => {
     const transcriptMessage = textMessage("spawn metadata snapshot");
@@ -1931,22 +1848,7 @@ describe("session.message websocket events", () => {
         sessionKey,
       });
     const ws = await harness.openWs();
-    const workerChats: Record<string, unknown>[] = [];
-    const collectWorkerChats = (data: RawData) => {
-      const message = JSON.parse(rawDataToString(data)) as {
-        type?: string;
-        event?: string;
-        payload?: Record<string, unknown>;
-      };
-      if (
-        message.type === "event" &&
-        message.event === "chat" &&
-        message.payload?.runId === "worker"
-      ) {
-        workerChats.push(message.payload);
-      }
-    };
-    ws.on("message", collectWorkerChats);
+    using workerChats = collectEventPayloads(ws, "chat", { runId: "worker" });
     try {
       await connectOk(ws, { scopes: ["operator.read"] });
       const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
@@ -2016,7 +1918,7 @@ describe("session.message websocket events", () => {
           expect(await push()).toEqual({ ok: true, result: { ackedSeq: 1 } });
         },
       });
-      expect(workerChats).toHaveLength(1);
+      expect(workerChats.messages).toHaveLength(1);
 
       claimAgentRunContext("local", {
         sessionKey,
@@ -2045,7 +1947,6 @@ describe("session.message websocket events", () => {
     } finally {
       receiver.clear();
       clearAgentRunContext("local");
-      ws.off("message", collectWorkerChats);
       ws.close();
       await source.release();
     }

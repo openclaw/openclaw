@@ -1,6 +1,7 @@
 import { Show, Switch, Match, createMemo } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { ConfigError } from "../../components/config-error.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import {
@@ -19,11 +20,13 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AgentMemoryPanel } from "./memory/memory-panel.tsx";
+import { AgentCron } from "./panel-cron.tsx";
 import { AgentFiles } from "./panels-files.tsx";
 import { AgentOverview } from "./panels-overview.tsx";
 import { AgentSkills } from "./panels-skills.tsx";
-import { AgentChannels, AgentCron } from "./panels-status-files.tsx";
+import { AgentChannels } from "./panels-status-files.tsx";
 import { AgentTools } from "./panels-tools-skills.tsx";
+import { AgentReadNotice, createAgentReadPending } from "./read-status.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 registerEnglishCatalog(registerPluginManagementEnglish);
@@ -65,6 +68,7 @@ export function AgentsPageHeader() {
 }
 
 export function Agents(props: AgentsProps) {
+  const rosterPending = createAgentReadPending(() => props.listRead);
   const config = () => currentConfigObject(props.config);
   const defaultId = () =>
     props.readData().agentsList?.selectionRequired
@@ -113,7 +117,7 @@ export function Agents(props: AgentsProps) {
             >
               <button
                 class="btn btn--sm btn--ghost agents-create-btn"
-                disabled={props.loading || !props.access.canCreateAgent}
+                disabled={rosterPending() || !props.access.canCreateAgent}
                 title={!props.access.canCreateAgent ? t("custodian.accessRequired") : undefined}
                 onClick={() => props.onCreateAgent()}
               >
@@ -165,18 +169,14 @@ export function Agents(props: AgentsProps) {
             </Show>
             <button
               class="btn btn--sm agents-refresh-btn"
-              disabled={props.loading}
+              disabled={rosterPending()}
               onClick={() => props.onRefresh()}
             >
-              {t(props.loading ? "common.loading" : "common.refresh")}
+              {t(rosterPending() ? "common.loading" : "common.refresh")}
             </button>
           </div>
         </div>
-        <Show when={props.error}>
-          <div class="callout danger" style={{ "margin-top": "8px" }}>
-            {props.error}
-          </div>
-        </Show>
+        <AgentReadNotice request={props.listRead} style={{ "margin-top": "8px" }} />
       </section>
       <section class="agents-main">
         <div class="settings-group">
@@ -222,10 +222,14 @@ export function Agents(props: AgentsProps) {
                 role="tabpanel"
                 aria-labelledby={`agents-tab-${props.readData().agentsPanel}`}
               >
-                <Show when={props.config.lastError}>
-                  <div class="callout danger" role="alert">
-                    {props.config.lastError}
-                  </div>
+                <Show when={!props.config.configSaving}>
+                  <ConfigError message={props.config.lastError}>
+                    {(message) => (
+                      <div class="callout danger" role="alert">
+                        {message}
+                      </div>
+                    )}
+                  </ConfigError>
                 </Show>
                 <Switch>
                   <Match when={props.readData().agentsPanel === "overview"}>

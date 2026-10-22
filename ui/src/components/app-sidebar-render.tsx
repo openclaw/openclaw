@@ -615,8 +615,8 @@ export function renderAppSidebarPluginTab(
     />
   );
   return (
-    <Show when={routeId()} fallback={link}>
-      {(route) => host.sidebarMenus.renderRoute(route(), host)}
+    <Show when={routeId()} fallback={link} keyed>
+      {(route) => host.sidebarMenus.renderRoute(route, host)}
     </Show>
   );
 }

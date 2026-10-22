@@ -79,6 +79,7 @@ function openFile(
     sessionKey?: string;
     disposition?: "pinned" | "preview";
     intent?: "navigate";
+    messageEntryId?: string;
   } = {},
 ) {
   const requestPath = opts.requestPath ?? path;
@@ -87,16 +88,20 @@ function openFile(
     ? parseAgentSessionKey(opts.sessionKey)?.agentId
     : workspace.agentId;
   const viewingSession = sessionKey === workspace.sessionKey;
+  // A message-qualified read selects that message's original files, read-only.
+  const messageFile = opts.messageEntryId ? { messageEntryId: opts.messageEntryId } : {};
   const draftScope = state.sessionWorkspaceDraftScope;
   const draftContext = state.sessionWorkspaceDraftContext;
   const gatewayUrl = state.settings?.gatewayUrl ?? "";
   return openWorkspaceItem(
     state,
     workspace,
-    viewingSession ? `file:${requestPath}` : JSON.stringify(["file", sessionKey, requestPath]),
+    viewingSession && !opts.messageEntryId
+      ? `file:${requestPath}`
+      : JSON.stringify(["file", sessionKey, requestPath, opts.messageEntryId]),
     async () => {
       try {
-        return await state.sessions.getFile(sessionKey, requestPath, { agentId });
+        return await state.sessions.getFile(sessionKey, requestPath, { agentId, ...messageFile });
       } catch (error) {
         const details = error instanceof GatewayRequestError ? error.details : null;
         if (
@@ -134,7 +139,7 @@ function openFile(
       const download = (signal: AbortSignal) =>
         downloadSessionFile(
           state,
-          { sessionKey: result.sessionKey, agentId, path: requestPath },
+          { sessionKey: result.sessionKey, agentId, path: requestPath, ...messageFile },
           signal,
         );
       if (file.previewKind === "image") {
@@ -241,6 +246,7 @@ function openFile(
             fetchLatest: async () => {
               const latest = await state.sessions.getFile(result.sessionKey, requestPath, {
                 agentId,
+                ...messageFile,
               });
               // A hash-conflict recovery still belongs to the file source that was opened.
               if (
@@ -280,6 +286,7 @@ function openFile(
           sessionKey: result.sessionKey,
           agentId,
           path: filePath,
+          ...messageFile,
         },
         draftKey: [
           gatewayUrl,
@@ -345,6 +352,7 @@ export function openSessionWorkspaceFile(
     line: target.line,
     sessionKey: target.sessionKey,
     disposition,
+    messageEntryId: target.messageEntryId,
   });
 }
 
@@ -470,8 +478,6 @@ export function createSessionWorkspaceProps(
     presentation?: "desktop" | "mobile";
     openIntent?: "navigate";
     transcriptAttachments?: TranscriptAttachments;
-    /** Mobile host owns persistent expansion on editable focus. */
-    onSearchFocus?: () => void;
     draftScope?: string;
     draftContext?: SessionWorkspaceHost["sessionWorkspaceDraftContext"];
     expanded?: boolean;
@@ -543,7 +549,6 @@ export function createSessionWorkspaceProps(
         mobile.scrollTop = top;
       }
     },
-    onSearchFocus: options?.onSearchFocus,
     directories: workspace.directories,
     onToggleDirectory: (path: string) => {
       const tree = workspace.tree!;
@@ -585,6 +590,8 @@ export function createSessionWorkspaceProps(
       }
     },
     sessionKey: state.sessionKey,
+    readState: workspace,
+    readResult: workspace.readResult,
     list: workspace.list?.sessionKey === state.sessionKey ? workspace.list : null,
     loading: workspace.loading,
     error: workspace.error ?? workspace.artifacts?.error ?? null,

@@ -18,6 +18,7 @@ import {
   type OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { registerMemoryCoreCli } from "./cli-metadata.js";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
@@ -31,7 +32,7 @@ import {
   type MemoryToolOptions,
 } from "./src/memory-tool-contract.js";
 import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
-import { hasMemoryIndexingBeenLive, prepareMemoryManagerReload } from "./src/memory/lifecycle.js";
+import { prepareMemoryManagerReload, retainMemoryIndexingAgents } from "./src/memory/lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { registerSessionBackfillGatewayMethods } from "./src/session-backfill-gateway.js";
 
@@ -261,15 +262,15 @@ export default definePluginEntry({
         id: "memory-core-index",
         reload: { configPrefixes: ["memory.search", "agents", "models.providers"] },
         start({ config, logger }) {
-          // Cold start stays demand-driven: opening every agent's index starts its
-          // transcript and index workers before any search or turn needs them.
-          // Restarts after a manager ran restore watching without a search.
-          if (!hasMemoryIndexingBeenLive()) {
+          // Restore watched indexes without opening untouched agents' databases
+          // and workers just because another agent used memory before this reload.
+          const agentIds = retainMemoryIndexingAgents(listAgentIds(config));
+          if (agentIds.length === 0) {
             return;
           }
           const activate = async () => {
             await Promise.all(
-              listAgentIds(config).map(async (agentId) => {
+              agentIds.map(async (agentId) => {
                 const { error } = await memoryRuntime
                   .getMemorySearchManager({ cfg: config, agentId })
                   .catch((cause: unknown) => ({ error: String(cause) }));
@@ -422,20 +423,6 @@ export default definePluginEntry({
       },
     });
 
-    api.registerCli(
-      async ({ program }) => {
-        const { registerMemoryCli } = await import("./cli.js");
-        registerMemoryCli(program, host);
-      },
-      {
-        descriptors: [
-          {
-            name: "memory",
-            description: "Search, inspect, and reindex memory files",
-            hasSubcommands: true,
-          },
-        ],
-      },
-    );
+    registerMemoryCoreCli(api, host);
   },
 });

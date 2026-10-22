@@ -13,7 +13,7 @@ registerEnglishCatalog(registerSessionOrganizationEnglish);
 
 export type ChatDetailsMobileProcessesProps = {
   /** The session host retains the native ProcessesPanelData projection and its demand. */
-  data: Pick<ProcessesPanelData["snapshot"], "rows" | "error" | "loading"> &
+  data: Pick<ProcessesPanelData["snapshot"], "rows" | "error" | "errorKind" | "loading"> &
     Pick<ProcessesPanelData, "refresh">;
   presented: boolean;
   onOpen?: () => void;
@@ -28,7 +28,7 @@ export function ChatDetailsMobileProcesses(props: ChatDetailsMobileProcessesProp
   );
   return (
     <div class="chat-details-mobile-processes">
-      <Show when={rows().length === 0 && props.data.error}>
+      <Show when={rows().length === 0 && props.data.errorKind !== "read" && props.data.error}>
         <div class="chat-details-mobile-processes__error" role="status">
           <span>{t("chat.sessionDetails.processesError")}</span>
           <button

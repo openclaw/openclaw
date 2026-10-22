@@ -1,5 +1,6 @@
 import { Format } from "typebox/format";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import * as schemaDefaults from "../shared/json-schema-defaults.js";
 import {
   validateJsonSchemaValue,
   validatePluginSchemaValue,
@@ -86,4 +87,53 @@ it("keeps cached checks and error details on the same plugin format semantics", 
   expect(Format.Entries()).toEqual(formats);
   expect(Format.Get("email")?.("not an email")).toBe(false);
   expect(Format.Get("uuid")?.("not a uuid")).toBe(false);
+});
+
+it("admits equivalent immutable schemas once while detecting mutable descendants", () => {
+  const readSchema = Object.freeze({
+    type: "object",
+    properties: Object.freeze({ action: Object.freeze({ const: "read" }) }),
+  });
+  const sameReadSchema = Object.freeze({
+    type: "object",
+    properties: Object.freeze({ action: Object.freeze({ const: "read" }) }),
+  });
+  const mutableSchema = Object.freeze({
+    type: "object",
+    properties: { value: { type: "string" } },
+  });
+  const stringify = vi.spyOn(JSON, "stringify");
+  const admitSchema = vi.spyOn(schemaDefaults, "findJsonSchemaShapeError");
+  try {
+    for (const type of ["string", "number"]) {
+      expect(validateJsonSchemaValue({ schema: readSchema, value: { action: "read" } }).ok).toBe(
+        true,
+      );
+      mutableSchema.properties.value.type = type;
+      expect(validateJsonSchemaValue({ schema: mutableSchema, value: { value: "text" } }).ok).toBe(
+        type === "string",
+      );
+      expect(
+        validateJsonSchemaValue({ schema: sameReadSchema, value: { action: "read" } }).ok,
+      ).toBe(true);
+    }
+    for (const work of [stringify, admitSchema]) {
+      expect(
+        [readSchema, sameReadSchema, mutableSchema].map(
+          (schema) => work.mock.calls.filter(([value]) => value === schema).length,
+        ),
+      ).toEqual([1, 1, 2]);
+    }
+
+    for (let index = 0; index < 2; index++) {
+      expect(
+        validateJsonSchemaValue({ schema: readSchema, value: { action: "read" }, cache: false }).ok,
+      ).toBe(true);
+    }
+    expect(stringify.mock.calls.filter(([value]) => value === readSchema)).toHaveLength(3);
+    expect(admitSchema.mock.calls.filter(([value]) => value === readSchema)).toHaveLength(3);
+  } finally {
+    admitSchema.mockRestore();
+    stringify.mockRestore();
+  }
 });

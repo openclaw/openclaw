@@ -24,7 +24,6 @@ function makeStateWithMocks(
     cronEnabled: true,
     log: { debug() {}, info() {}, warn() {}, error() {} },
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
     enqueueSessionEvent,
     resolveOriginDeliveryContext: resolveOrigin,

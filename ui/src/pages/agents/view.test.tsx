@@ -5,7 +5,7 @@ import type { ChannelAccountSnapshot, CronJob } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
-import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
+import { createInitialCronState } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
@@ -15,6 +15,7 @@ import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSkill } from "../skills/view.test-support.ts";
+import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
 import {
   createAgentViewTestProps as createProps,
@@ -65,6 +66,7 @@ function renderFiles(
         return { ...createProps().readData(), ...this };
       },
       agentId: "alpha",
+      listRead: null,
       agentFileConflict: null,
       canWrite: true,
       agentFilesLoading: false,
@@ -111,6 +113,18 @@ function expectAgentTab(container: Element, text: string): HTMLElement & { disab
 }
 
 describe("renderAgents", () => {
+  it("announces an agent list failure as an alert", async () => {
+    const container = document.createElement("div");
+    renderView({ listRead: Promise.resolve({ error: "Agent list unavailable" }) }, container);
+    await waitForSolid(() =>
+      expect(
+        Array.from(container.querySelectorAll('[role="alert"]'), (alert) =>
+          alert.textContent?.trim(),
+        ),
+      ).toEqual(["Agent list unavailable"]),
+    );
+  });
+
   it("renders the selected agent's tool catalog loading state", () => {
     const container = document.createElement("div");
     const props = createProps();
@@ -218,8 +232,12 @@ describe("renderAgents", () => {
   });
 
   it("shows a rejected agent jobs refresh beside retained jobs without hiding scheduler feedback", async () => {
-    const client = createTestGatewayClient(async () => {
-      throw new Error("Agent jobs could not be refreshed.");
+    const client = createTestGatewayClient(async (method) => {
+      throw new Error(
+        method === "cron.status"
+          ? "Scheduler status is unavailable."
+          : "Agent jobs could not be refreshed.",
+      );
     });
     const cronState = {
       ...createInitialCronState({ client, connected: true }),
@@ -228,15 +246,20 @@ describe("renderAgents", () => {
       cronJobs: [createCronJob("retained-job", { name: "Retained reminder" })],
     };
     const container = document.createElement("div");
+    const presenter = createAgentCronPresenter({
+      currentState: () => cronState,
+      readState: () => cronState,
+      canCall: () => true,
+      publish: () => renderCurrent(),
+    });
     const renderCurrent = (): void => {
       renderView(
         {
           selectedAgentId: "alpha",
           cron: {
             ...createProps().cron,
-            onRefresh: () => {
-              void loadCronJobsPage(cronState, { tableFilters: true }).then(renderCurrent);
-            },
+            read: presenter.read,
+            onRefresh: presenter.onRefresh,
           },
           readData: () => ({ ...createProps().readData(), agentsPanel: "cron", cron: cronState }),
         },
@@ -294,17 +317,20 @@ describe("renderAgents", () => {
       cronJobsNextOffset: 50,
     };
     const container = document.createElement("div");
+    const presenter = createAgentCronPresenter({
+      currentState: () => cronState,
+      readState: () => cronState,
+      canCall: () => true,
+      publish: () => renderCurrentPage(),
+    });
     const renderCurrentPage = (): void => {
       renderView(
         {
           selectedAgentId: "alpha",
           cron: {
             ...createProps().cron,
-            onLoadMore: () => {
-              const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
-              renderCurrentPage();
-              void nextPage.then(renderCurrentPage);
-            },
+            read: presenter.read,
+            onLoadMore: presenter.onLoadMore,
           },
           readData: () => ({
             ...createProps().readData(),
@@ -550,8 +576,6 @@ describe("renderAgents", () => {
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          agentSkillsLoading: false,
-          agentSkillsError: null,
           agentSkillsAgentId: "alpha",
         }),
       },
@@ -573,8 +597,6 @@ describe("renderAgents", () => {
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          agentSkillsLoading: false,
-          agentSkillsError: null,
           agentSkillsAgentId: "beta",
         }),
       },
@@ -601,7 +623,7 @@ describe("renderAgents", () => {
           readChannels: () => ({
             ...createProps().readChannels(),
             channelsSnapshot: null,
-            channelsLoading: false,
+            channelsRead: null,
             channelsError: null,
             channelsLastSuccess: null,
           }),
@@ -656,7 +678,7 @@ describe("renderAgentChannels", () => {
             channelAccounts: { discord: accounts },
             channelDefaultAccountId: { discord: "default" },
           },
-          channelsLoading: false,
+          channelsRead: null,
           channelsError: null,
           channelsLastSuccess: Date.now(),
         }),
@@ -958,24 +980,24 @@ describe("renderAgents toolbar", () => {
   });
 });
 
-it("surfaces agent config save errors in the active panel", () => {
+it("retires agent config errors during save and retains all owner error messages", () => {
   const container = document.createElement("div");
-  renderView(
-    {
-      config: {
-        configForm: { agents: { entries: { beta: {} } } },
-        configSnapshot: null,
-        configLoading: false,
-        configSaving: false,
-        configFormDirty: true,
-        lastError: "mock validation failure",
-      },
-    },
-    container,
-  );
-
-  const alert = container.querySelector('[role="alert"]');
-  expect(alert?.textContent).toContain("mock validation failure");
+  const failedConfig = {
+    configForm: { agents: { entries: { beta: {} } } },
+    configSnapshot: null,
+    configLoading: false,
+    configSaving: false,
+    configFormDirty: true,
+    lastError: "mock validation failure",
+  };
+  renderView({ config: failedConfig }, container);
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(failedConfig.lastError);
+  renderView({ config: { ...failedConfig, configSaving: true, lastError: null } }, container);
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  for (const lastError of [failedConfig.lastError, "Config could not be loaded"]) {
+    renderView({ config: { ...failedConfig, lastError } }, container);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(lastError);
+  }
 });
 
 it.each([

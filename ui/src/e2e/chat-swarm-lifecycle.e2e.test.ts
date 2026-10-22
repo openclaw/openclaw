@@ -91,6 +91,14 @@ suite.define(() => {
             "sessions.describe": { session: parent },
           },
         });
+        const publishParent = async (session: typeof parent) => {
+          await gateway.setMethodResponse("sessions.describe", { session });
+          await gateway.setMethodResponse(
+            "sessions.list",
+            chatSessionListResponse([session, ...children]),
+          );
+          await gateway.emitGatewayEvent("sessions.changed", changeEvent);
+        };
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const widget = page.locator('[data-test-id="chat-swarm"]');
         const disclosure = widget.locator("details");
@@ -112,12 +120,7 @@ suite.define(() => {
             children: children.map((child) => ({ sessionKey: child.key, status: "done" })),
           }),
         };
-        await gateway.setMethodResponse("sessions.describe", { session: completedParent });
-        await gateway.setMethodResponse(
-          "sessions.list",
-          chatSessionListResponse([completedParent, ...children]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", changeEvent);
+        await publishParent(completedParent);
         await expectCount(
           widget.locator(".chat-swarm__tasks .chat-swarm__task-icon--done"),
           viewport.count,
@@ -178,12 +181,7 @@ suite.define(() => {
           hasActiveRun: false,
           updatedAt: 3,
         };
-        await gateway.setMethodResponse("sessions.describe", { session: settledParent });
-        await gateway.setMethodResponse(
-          "sessions.list",
-          chatSessionListResponse([settledParent, ...children]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", changeEvent);
+        await publishParent(settledParent);
         try {
           await expectVisible(
             widget.getByText("Child runs finished. Check the conversation for the final response."),

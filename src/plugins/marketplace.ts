@@ -78,11 +78,6 @@ type LoadedMarketplace = {
 
 type MarketplaceManifestOrigin = "local" | "remote";
 
-type ResolvedLocalMarketplaceSource = {
-  manifestPath: string;
-  rootDir: string;
-};
-
 type KnownMarketplaceRecord = {
   installLocation?: string;
   source?: unknown;
@@ -552,17 +547,6 @@ async function loadMarketplace(params: {
     };
   };
 
-  const loadResolvedLocalMarketplace = async (
-    local: ResolvedLocalMarketplaceSource,
-    sourceLabel: string,
-  ): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> =>
-    loadMarketplaceFromManifestFile({
-      manifestPath: local.manifestPath,
-      sourceLabel,
-      rootDir: local.rootDir,
-      origin: "local",
-    });
-
   // Resolve aliases against one snapshot so a cycle cannot retain a plugin lifecycle lease.
   const knownMarketplaces = await readClaudeKnownMarketplaces();
   const visitedKnownMarketplaces = new Set<string>();
@@ -584,7 +568,11 @@ async function loadMarketplace(params: {
     if (known.installLocation) {
       const local = await resolveLocalMarketplaceSource(known.installLocation);
       if (local?.ok) {
-        return await loadResolvedLocalMarketplace(local, source);
+        return await loadMarketplaceFromManifestFile({
+          ...local,
+          sourceLabel: source,
+          origin: "local",
+        });
       }
     }
 
@@ -601,7 +589,11 @@ async function loadMarketplace(params: {
   }
 
   if (local?.ok) {
-    return await loadResolvedLocalMarketplace(local, local.manifestPath);
+    return await loadMarketplaceFromManifestFile({
+      ...local,
+      sourceLabel: local.manifestPath,
+      origin: "local",
+    });
   }
 
   const cloned = await cloneMarketplaceRepo({
@@ -710,10 +702,9 @@ async function downloadUrlToTempFile(
       error: string;
     }
 > {
-  let sourceFileName = "plugin.tgz";
   let workspace: TempWorkspace | undefined;
   try {
-    sourceFileName = resolveSafeMarketplaceDownloadFileName(url, sourceFileName);
+    const sourceFileName = resolveSafeMarketplaceDownloadFileName(url, "plugin.tgz");
     const downloadTimeoutMs = resolveMarketplaceDownloadTimeoutMs(timeoutMs);
     const { response, finalUrl, release } = await fetchWithSsrFGuard({
       url,
@@ -1026,9 +1017,16 @@ export async function installPluginFromMarketplace(
 
   let installCleanup: (() => Promise<void>) | undefined;
   try {
-    const entry = loaded.marketplace.manifest.plugins.find(
+    const entries = loaded.marketplace.manifest.plugins.filter(
       (plugin) => plugin.name === params.plugin,
     );
+    if (entries.length > 1) {
+      return {
+        ok: false,
+        error: `plugin "${params.plugin}" is ambiguous in marketplace ${loaded.marketplace.sourceLabel}: ${entries.length} entries share this name; remove or rename the duplicate entries`,
+      };
+    }
+    const [entry] = entries;
     if (!entry) {
       const known = loaded.marketplace.manifest.plugins.map((plugin) => plugin.name).toSorted();
       return {

@@ -12,7 +12,8 @@ const { emitAgentEvent, registerAgentEventLifecycleRotationHandler } = vi.hoiste
 }));
 
 // mock-isolation: Keep emitted lifecycle events and rotation handlers inside this fixture.
-vi.mock("../../infra/agent-events.js", () => ({
+vi.mock("../../infra/agent-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-events.js")>()),
   emitAgentEvent,
   registerAgentEventLifecycleRotationHandler,
 }));

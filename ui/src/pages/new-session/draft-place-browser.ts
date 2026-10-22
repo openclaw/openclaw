@@ -182,6 +182,10 @@ export class DraftPlaceBrowser {
     return this.projectCatalog?.loading ?? false;
   }
 
+  get projectRead(): Promise<void> | null {
+    return this.projectCatalog?.pendingRead ?? null;
+  }
+
   get projectRecents(): readonly ProjectRecent[] | undefined {
     return this.projectCatalog?.snapshot.result?.recents;
   }
@@ -446,6 +450,8 @@ export class DraftPlaceBrowser {
       this.browserProjectPath === path &&
       client === this.gateway.client;
     this.browser.error = null;
+    // Retire the preceding directory error without hiding reads started during registration.
+    this.browser.readCompletion = null;
     this.callbacks.changed();
     try {
       const project = await client.request<ProjectsRegisterResult>("projects.register", { path });

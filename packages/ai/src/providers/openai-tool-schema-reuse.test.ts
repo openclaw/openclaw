@@ -5,6 +5,7 @@ import type { Tool } from "../types.js";
 import type { ToolSchemaModelCompat } from "./agent-tools-parameter-schema.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 import { prepareOpenAITools } from "./openai-tool-projection.js";
+import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
 import { normalizeOpenAIStrictToolParameters as normalize } from "./openai-tool-schema.js";
 import {
   getPublishedRuntimeToolInputSchema as publication,
@@ -12,6 +13,7 @@ import {
   publishRuntimeToolInputSchema,
 } from "./tool-schema-json-projection.js";
 import { withPreparedToolSchemaNormalization as withPrepared } from "./tool-schema-normalization-cache.js";
+import { normalizeToolSchema } from "./tool-schema-normalization.js";
 
 const descriptor = { name: "choose", description: "Choose" };
 const choose = (parameters: Tool["parameters"]): Tool => ({ ...descriptor, parameters });
@@ -43,6 +45,40 @@ function normalizePrepared(tools: Tool[], modelCompat: ToolSchemaModelCompat) {
   const parameters = expectDefined(projection.tools[0], "projected tool").parameters;
   return withPrepared(schemas, () => normalize(parameters, true, modelCompat));
 }
+
+it("prepares published compatibility and union dialects once without sharing their policy", () => {
+  const source = {
+    type: "object",
+    properties: {
+      action: { description: null, anyOf: [{ const: "read" }, { const: "write" }] },
+    },
+  };
+  const { schema } = publishRuntimeToolInputSchema(source);
+  assert(isRecord(schema));
+  const compat = normalizeOpenAIStrictCompatSchema(schema);
+  const moonshot = normalizeToolSchema(schema, "moonshot");
+  expect(compat).not.toHaveProperty("properties.action.description");
+  expect(compat).not.toHaveProperty("properties.action.anyOf.0.type");
+  expect(moonshot).toHaveProperty("properties.action.description", null);
+  expect(moonshot).toHaveProperty("properties.action.anyOf.0.type", "string");
+  for (let index = 0; index < 3; index++) {
+    expect(normalizeOpenAIStrictCompatSchema(schema)).toBe(compat);
+    expect(normalizeToolSchema(schema, "moonshot")).toBe(moonshot);
+  }
+  expect(publication(compat)).toBeDefined();
+  expect(publication(moonshot)).toBeDefined();
+  source.properties.action.anyOf[0] = { const: "delete" };
+  expect(normalizeOpenAIStrictCompatSchema(source)).toHaveProperty(
+    "properties.action.anyOf.0.const",
+    "delete",
+  );
+  const refreshed = publishRuntimeToolInputSchema(source).schema;
+  expect(normalizeOpenAIStrictCompatSchema(refreshed)).toHaveProperty(
+    "properties.action.anyOf.0.const",
+    "delete",
+  );
+  expect(compat).toHaveProperty("properties.action.anyOf.0.const", "read");
+});
 
 it("publishes detached immutable schemas while source edits require a new publication", () => {
   const source = actionSchema();

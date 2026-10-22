@@ -16,7 +16,6 @@ import {
   resolveCodexAppServerProtocolSource,
   resolveCodexProtocolCargoTargetDir,
   resolveCodexProtocolMinFreeBytes,
-  resolveCodexProtocolPnpmCommand,
   selectedCodexAppServerJsonSchemas,
   validateCodexProtocolSourceVersion,
   validateCodexProtocolGenerationHeadroom,
@@ -235,29 +234,6 @@ version = "9.9.9"
     [{ CARGO_BUILD_TARGET_DIR: "/cache/build-target" }, path.resolve("/cache/build-target")],
   ] as const)("resolves Cargo target directory %j", (env, expected) => {
     expect(resolveCodexProtocolCargoTargetDir("/codex", env)).toBe(expected);
-  });
-
-  it("wraps Windows pnpm formatting through cmd.exe without shell mode", () => {
-    expect(
-      resolveCodexProtocolPnpmCommand(
-        ["exec", "oxfmt", "--write", "--threads=1", String.raw`C:\tmp\generated types`],
-        {
-          comSpec: String.raw`C:\Windows\System32\cmd.exe`,
-          npmExecPath: String.raw`C:\Program Files\nodejs\pnpm.cmd`,
-          platform: "win32",
-        },
-      ),
-    ).toEqual({
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        String.raw`""C:\Program Files\nodejs\pnpm.cmd" exec oxfmt --write --threads=1 "C:\tmp\generated types""`,
-      ],
-      command: String.raw`C:\Windows\System32\cmd.exe`,
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
   });
 
   it("uses OPENCLAW_CODEX_REPO when provided", async () => {

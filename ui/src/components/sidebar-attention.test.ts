@@ -216,8 +216,14 @@ describe("sidebar attention refresh ownership", () => {
     return { element, provider, store, trigger };
   }
 
-  it("keeps the plain attention panel inside its top-layer menu surface", async () => {
+  it("prewarms without opening and keeps the attention panel inside its top-layer menu surface", async () => {
     const { element, trigger } = await mountAttention();
+    trigger.focus();
+    await vi.dynamicImportSettled();
+    flush();
+    expect(issues(element, "panel")).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
     trigger.click();
     await vi.dynamicImportSettled();
     flush();

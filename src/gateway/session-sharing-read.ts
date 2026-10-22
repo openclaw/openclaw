@@ -367,7 +367,7 @@ export function prepareProjectedSessionSharing(params: {
       isMember,
     }),
     policy,
-    get cacheKey() {
+    getCacheKey() {
       return (cacheKey ??= JSON.stringify([
         actor,
         identity?.id,

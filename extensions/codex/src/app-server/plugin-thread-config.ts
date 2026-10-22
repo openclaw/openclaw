@@ -10,6 +10,7 @@ import {
 } from "./config.js";
 import { ensureCodexPluginActivation } from "./plugin-activation.js";
 import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
+import { buildCodexAppReadOnlyTools, type CodexAppReadOnlyTools } from "./plugin-app-read-only.js";
 import {
   readCodexPluginInventory,
   toCodexPluginOwnedAccountApp,
@@ -75,7 +76,7 @@ type BuildCodexPluginThreadConfigParams = {
 
 // Admission changes must rebuild existing bindings too, or older bindings can
 // bypass updated app approval checks after the gateway has been upgraded.
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 15;
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 16;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): boolean {
@@ -299,13 +300,20 @@ export async function buildCodexPluginThreadConfig(
         continue;
       }
       provisionalAppIds.add(app.id);
+      // Native tools are scoped to the app, not to the owning plugin. A second
+      // enabled owner must not remove a read-only cap through iteration order.
+      const readOnlyPolicy =
+        record.policy.readOnly || policyApps[app.id]?.readOnlyTools !== undefined
+          ? { readOnlyTools: buildCodexAppReadOnlyTools(admissionConfig.config, app) }
+          : {};
       apps[app.id] = buildEnabledAppConfig(
-        record.policy,
+        { ...record.policy, ...readOnlyPolicy },
         record.policy.destructiveApprovalMode === "ask"
           ? buildCodexAppApprovalOverrides(admissionConfig.config, app)
           : undefined,
       );
       policyApps[app.id] = {
+        ...readOnlyPolicy,
         configKey: record.policy.configKey,
         marketplaceName: record.policy.marketplaceName,
         pluginName: record.policy.pluginName,
@@ -450,6 +458,7 @@ function buildEnabledAppConfig(
   policy: {
     allowDestructiveActions: boolean;
     allowOpenWorld?: boolean;
+    readOnlyTools?: CodexAppReadOnlyTools;
     destructiveApprovalMode?: CodexPluginDestructiveApprovalMode;
   },
   approvalOverrides: JsonObject = {},
@@ -459,6 +468,15 @@ function buildEnabledAppConfig(
     enabled: true,
     destructive_enabled: policy.allowDestructiveActions,
     open_world_enabled: policy.allowOpenWorld !== false,
+    ...(policy.readOnlyTools !== undefined
+      ? {
+          default_tools_enabled: false,
+          tools: mergeCodexThreadConfigs(
+            isJsonObject(approvalOverrides.tools) ? approvalOverrides.tools : {},
+            policy.readOnlyTools,
+          ),
+        }
+      : {}),
     // Native app/link/tool approval settings merge underneath this patch. Only
     // explicit ask replaces them, so native prompt and approve modes survive replay.
     ...(policy.destructiveApprovalMode === "ask"
@@ -497,7 +515,7 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
     };
   }
   const targetApps = Object.entries(params.policyContext.apps)
-    .filter(([, app]) => app.destructiveApprovalMode === "ask")
+    .filter(([, app]) => app.destructiveApprovalMode === "ask" || app.readOnlyTools !== undefined)
     .toSorted(([left], [right]) => left.localeCompare(right));
   const targetAppIds = targetApps.map(([id]) => id);
   const diagnostics: CodexPluginThreadConfigDiagnostic[] = [];
@@ -526,9 +544,24 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
         message: `Could not verify current Codex app approval policy for ${id}; the app was not exposed.`,
       });
     } else {
+      const currentPolicy = {
+        ...policy,
+        ...(policy.readOnlyTools !== undefined
+          ? {
+              readOnlyTools: buildCodexAppReadOnlyTools(
+                admissionConfig.config,
+                app,
+                policy.readOnlyTools,
+              ),
+            }
+          : {}),
+      };
+      apps[id] = currentPolicy;
       configPatch.apps[id] = buildEnabledAppConfig(
-        policy,
-        buildCodexAppApprovalOverrides(admissionConfig.config, app),
+        currentPolicy,
+        policy.destructiveApprovalMode === "ask"
+          ? buildCodexAppApprovalOverrides(admissionConfig.config, app)
+          : undefined,
       );
       continue;
     }

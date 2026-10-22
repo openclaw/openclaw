@@ -55,8 +55,7 @@ export function createAgentViewTestProps(
     identityDraft: { name: null, emoji: null, avatar: null },
     identitySaving: false,
     identityError: null,
-    agentSkillsLoading: false,
-    agentSkillsError: null,
+    agentSkillsRead: null,
     agentSkillsReport: null,
     agentSkillsAgentId: null,
     cron: createInitialCronState(),
@@ -65,7 +64,7 @@ export function createAgentViewTestProps(
     readData: () => data,
     readChannels: () => ({
       channelsSnapshot: null,
-      channelsLoading: false,
+      channelsRead: null,
       channelsError: null,
       channelsLastSuccess: null,
     }),
@@ -78,8 +77,7 @@ export function createAgentViewTestProps(
       canRunCron: true,
     },
     basePath: "",
-    loading: false,
-    error: null,
+    listRead: null,
     selectedAgentId: "beta",
     memoryTarget: {
       read: () => (overrides.selectedAgentId === undefined ? "beta" : overrides.selectedAgentId),
@@ -97,12 +95,14 @@ export function createAgentViewTestProps(
       onRefresh: () => undefined,
     },
     cron: {
+      read: () => ({ summary: null, jobs: null, refresh: null, command: null }),
       onRefresh: () => undefined,
       onLoadMore: () => undefined,
       onRunNow: () => undefined,
     },
     agentFiles: {
       agentFilesError: null,
+      listRead: null,
       ...inertAgentFileControls,
     },
     agentIdentityById: {},

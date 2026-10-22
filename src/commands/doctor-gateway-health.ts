@@ -50,7 +50,11 @@ import {
   gatewayProbeResultSawGateway,
   gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
-import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
+import {
+  formatGatewayClosedDiagnostic,
+  formatHealthCheckFailure,
+  formatHealthDiagnosticNote,
+} from "./health-format.js";
 import { formatSqliteWalHealthWarning } from "./sqlite-wal-health.js";
 import { formatTelemetryExporterSummary } from "./telemetry-exporter-summary.js";
 
@@ -258,39 +262,11 @@ function isGatewayCallTimeout(message: string): boolean {
   return /^gateway timeout after \d+ms(?:\n|$)/.test(message);
 }
 
-function resolveGatewayDiagnosticsTimeouts(timeoutMs: number, statusElapsedMs: number) {
-  // Preserve five seconds of channel work, plus the measured round-trip and result-delivery margin.
-  const transportMs = Math.ceil(statusElapsedMs) + 1_000;
-  const diagnosticsTimeoutMs = Math.min(
-    30_000,
-    Math.max(timeoutMs, 5_000 + transportMs, Math.ceil(statusElapsedMs * 3)),
-  );
-  return {
-    diagnosticsTimeoutMs,
-    channelProbeTimeoutMs: Math.max(1, diagnosticsTimeoutMs - transportMs),
-  };
-}
-
 function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
   return (
     isGatewayCredentialsRequiredError(error) ||
     isGatewaySecretRefUnavailableError(error) ||
     readMissingScopeError(error) !== null
-  );
-}
-
-function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
-  const gatewayVersion = status?.runtimeVersion?.trim();
-  if (!gatewayVersion || gatewayVersion === VERSION) {
-    return;
-  }
-  note(
-    [
-      `This command is OpenClaw ${VERSION}; the running Gateway is OpenClaw ${gatewayVersion}.`,
-      "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
-      "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
-    ].join("\n"),
-    "OpenClaw version mismatch",
   );
 }
 
@@ -347,7 +323,6 @@ async function noteInstalledGatewayStateDirectory(cfg: OpenClawConfig, timeoutMs
 export async function checkGatewayHealth(params: {
   runtime: RuntimeEnv;
   cfg: OpenClawConfig;
-  timeoutMs?: number;
 }): Promise<{ healthOk: boolean; authenticated: boolean; status?: StatusSummary }> {
   const replacement = await readLocalInstallationReplacement(params.cfg);
   if (replacement) {
@@ -355,10 +330,7 @@ export async function checkGatewayHealth(params: {
   }
   const { bindAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
-  const timeoutMs =
-    typeof params.timeoutMs === "number" && params.timeoutMs > 0
-      ? params.timeoutMs
-      : DEFAULT_RESTART_HEALTH_TIMEOUT_MS;
+  const timeoutMs = DEFAULT_RESTART_HEALTH_TIMEOUT_MS;
   let healthOk = false;
   let status: StatusSummary | undefined;
   let gatewaySnapshot: GatewayHello["snapshot"] | undefined;
@@ -387,14 +359,27 @@ export async function checkGatewayHealth(params: {
       },
     });
     const statusElapsedMs = performance.now() - statusStartedAt;
-    const { diagnosticsTimeoutMs, channelProbeTimeoutMs } = resolveGatewayDiagnosticsTimeouts(
-      timeoutMs,
-      statusElapsedMs,
+    // Preserve five seconds of channel work, plus the measured round-trip and result-delivery margin.
+    const transportMs = Math.ceil(statusElapsedMs) + 1_000;
+    const diagnosticsTimeoutMs = Math.min(
+      30_000,
+      Math.max(timeoutMs, 5_000 + transportMs, Math.ceil(statusElapsedMs * 3)),
     );
+    const channelProbeTimeoutMs = Math.max(1, diagnosticsTimeoutMs - transportMs);
     const slowDiagnosticNote = (diagnostic: string) =>
       `Gateway answered status in ${formatDurationSeconds(statusElapsedMs)}; ${diagnostic} diagnostics did not finish within ${formatDurationSeconds(diagnosticsTimeoutMs)}. The host may be slow; this does not mark the Gateway unhealthy.`;
     healthOk = true;
-    noteCliGatewayVersionSkew(status);
+    const gatewayVersion = status?.runtimeVersion?.trim();
+    if (gatewayVersion && gatewayVersion !== VERSION) {
+      note(
+        [
+          `This command is OpenClaw ${VERSION}; the running Gateway is OpenClaw ${gatewayVersion}.`,
+          "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
+          "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
+        ].join("\n"),
+        "OpenClaw version mismatch",
+      );
+    }
     const noteWarning = (warning: string | undefined, title: string) => {
       if (warning) {
         note(sanitizeTerminalText(warning), title);
@@ -527,7 +512,7 @@ export async function checkGatewayHealth(params: {
     if (closedDiagnostic) {
       const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
       note(closedDiagnostic, "Gateway");
-      note(gatewayDetails.message, "Gateway connection");
+      note(formatHealthDiagnosticNote(gatewayDetails.message), "Gateway connection");
     } else {
       params.runtime.error(formatHealthCheckFailure(err));
     }
@@ -548,17 +533,14 @@ type GatewayMemoryProbe = {
 /** Probes gateway memory readiness without forcing deep embedding checks. */
 export async function probeGatewayMemoryStatus(params: {
   cfg: OpenClawConfig;
-  timeoutMs?: number;
 }): Promise<GatewayMemoryProbe> {
   const { bindAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
-  const timeoutMs =
-    typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 8_000;
   try {
     const payload = await requestGateway<DoctorMemoryStatusPayload>({
       method: "doctor.memory.status",
       params: { probe: false },
-      timeoutMs,
+      timeoutMs: 8_000,
       sharedStateMode: "read-only",
       config: params.cfg,
     });

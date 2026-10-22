@@ -11,6 +11,7 @@ import { toErrorObject } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
+import { isRecoverableOAuthRefreshFailure } from "../../shared/oauth-refresh-outcome.js";
 import { formatProviderLoginCommand } from "../../shared/provider-login-command.js";
 import { findPersonalAuthProfileStoreFailure } from "./personal-store-error.js";
 import type { AuthProfileFailureReason, AuthProfileStore, OAuthCredential } from "./types.js";
@@ -178,6 +179,9 @@ function readProviderOAuthRefreshFailure(error: unknown): OAuthRefreshFailurePre
   };
 }
 
+/** Recovery needs positive protocol evidence, independent of presentation and cleanup receipts. */
+export const isTransientOAuthRefreshFailure = isRecoverableOAuthRefreshFailure;
+
 /** Error type that carries provider and classified OAuth refresh failure reason. */
 export class OAuthRefreshFailureError extends Error {
   readonly errorType?: string;
@@ -187,6 +191,7 @@ export class OAuthRefreshFailureError extends Error {
   readonly status?: number;
   readonly storageFailure: boolean;
   readonly summary?: string;
+  readonly retryable?: boolean;
 
   constructor(params: {
     provider: string;
@@ -198,6 +203,7 @@ export class OAuthRefreshFailureError extends Error {
     storageFailure?: boolean;
     status?: number;
     summary?: string;
+    retryable?: boolean;
   }) {
     super(params.message, { cause: params.cause });
     const inherited =
@@ -205,6 +211,9 @@ export class OAuthRefreshFailureError extends Error {
         ? params.cause
         : readProviderOAuthRefreshFailure(params.cause);
     this.name = "OAuthRefreshFailureError";
+    this.retryable =
+      params.retryable ??
+      (params.cause instanceof OAuthRefreshFailureError ? params.cause.retryable : undefined);
     this.errorType = normalizeBoundedOptionalString(
       params.errorType ?? inherited?.errorType,
       OAUTH_REFRESH_FAILURE_ERROR_TYPE_MAX_CHARS,
@@ -245,6 +254,7 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
     attemptedCredentials?: OAuthCredential[];
     profileId: string;
     refreshedStore: AuthProfileStore;
+    retryable?: boolean;
     cause: unknown;
   }) {
     const initiatingCause = readOAuthRefreshInitiatingError(params.cause);
@@ -269,6 +279,11 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
         ? formatRedactedOAuthRefreshError(personalStoreFailure, secrets)
         : `OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`,
       cause: createRedactedOAuthRefreshCause(params.cause, secrets),
+      retryable:
+        params.retryable ??
+        (initiatingCause instanceof OAuthRefreshFailureError
+          ? initiatingCause.retryable
+          : undefined),
       errorType: presentation?.errorType,
       reason: presentation?.reason,
       storageFailure: personalStoreFailure !== undefined,

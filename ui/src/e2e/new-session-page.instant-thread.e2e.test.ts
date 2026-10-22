@@ -70,7 +70,7 @@ suite.define(() => {
           await captureUiProof(suite, page, `instant-${incognito}-pending-chrome.png`);
           expect(await page.locator(".chat-pane__header").isVisible()).toBe(true);
           const followUpComposer = page.locator(
-            ".agent-chat__composer-combobox textarea:not(.new-session-page__message)",
+            ".agent-chat__composer-combobox:visible textarea:not(.new-session-page__message)",
           );
           await followUpComposer.waitFor({ state: "visible" });
           expect(await followUpComposer.isEnabled()).toBe(true);
@@ -314,7 +314,7 @@ suite.define(() => {
         expect(first.agentId).toBe(requestedAgent);
         await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
         const followUpComposer = page.locator(
-          ".agent-chat__composer-combobox textarea:not(.new-session-page__message)",
+          ".agent-chat__composer-combobox:visible textarea:not(.new-session-page__message)",
         );
         await followUpComposer.fill("Preserve this follow-up too");
         await followUpComposer.press("Enter");
@@ -332,6 +332,7 @@ suite.define(() => {
           .toContain("Synthetic admission refused");
         expect(page.url()).toBe(originalUrl);
         expect(await page.evaluate(() => history.length)).toBe(historyLength);
+        expect(await followUpComposer.count()).toBe(1);
         expect(await followUpComposer.inputValue()).toBe("Unfinished follow-up draft");
         expect(await page.locator(".chat-queue__text").allTextContents()).toEqual([
           "Preserve this follow-up too",
@@ -478,7 +479,7 @@ suite.define(() => {
       const first = createParams(await gateway.waitForRequest("sessions.create"));
       await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
       const followUpComposer = page.locator(
-        ".agent-chat__composer-combobox textarea:not(.new-session-page__message)",
+        ".agent-chat__composer-combobox:visible textarea:not(.new-session-page__message)",
       );
       await followUpComposer.fill("Queued before reconnect");
       await followUpComposer.press("Enter");
@@ -535,7 +536,7 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.create");
         await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
         const followUpComposer = page.locator(
-          ".agent-chat__composer-combobox textarea:not(.new-session-page__message)",
+          ".agent-chat__composer-combobox:visible textarea:not(.new-session-page__message)",
         );
         if (followUps) {
           await followUpComposer.fill("private staged follow-up");
@@ -579,6 +580,7 @@ suite.define(() => {
           expect(page.url()).toBe(originalUrl);
           await captureUiProof(suite, page, `interrupted-boot-follow-ups-${followUps}.png`);
           if (followUps) {
+            expect(await followUpComposer.count()).toBe(1);
             expect(await followUpComposer.inputValue()).toBe("private unfinished follow-up");
             expect(await page.locator(".chat-queue__text").allTextContents()).toEqual([
               "private staged follow-up",

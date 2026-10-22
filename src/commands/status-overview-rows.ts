@@ -23,7 +23,11 @@ import type { HealthSummary } from "./health.js";
 import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
 import { buildStatusDatabaseStoreRows } from "./status-database-engines.js";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
-import { countActiveStatusAgents, formatHostDesktopStatus } from "./status-overview-values.ts";
+import {
+  buildStatusSecretDiagnostics,
+  countActiveStatusAgents,
+  formatHostDesktopStatus,
+} from "./status-overview-values.ts";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 
@@ -157,11 +161,11 @@ function buildStatusDegradationRows(
           : decorate(status.message ?? "Certificate preparation unavailable"),
     });
   }
-  const secretOwners = summary.degradedSecretOwners ?? [];
+  const secretOwners = buildStatusSecretDiagnostics(summary.degradedSecretOwners ?? [], []);
   if (secretOwners.length > 0) {
     addWarning(
       "Degraded secrets",
-      `${secretOwners.length} degraded · ${secretOwners.map((owner) => `${owner.ownerKind}:${owner.ownerId}`).join(", ")}`,
+      `${secretOwners.length} degraded · ${secretOwners.slice(0, 10).join(", ")}${secretOwners.length > 10 ? `, … +${secretOwners.length - 10} more` : ""}`,
     );
   }
   const plugins = summary.degradedPlugins ?? [];

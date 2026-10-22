@@ -26,27 +26,12 @@ describe("Telegram polling lease", () => {
 
   it("refuses an old active duplicate poller for the same bot token", async () => {
     vi.useFakeTimers();
-    try {
-      const abort = new AbortController();
-      const first = await acquireTelegramPollingLease({
-        token: "123:abc",
-        accountId: "default",
-        abortSignal: abort.signal,
-      });
-
-      await vi.advanceTimersByTimeAsync(6 * 60 * 1_000);
-
-      await expect(
-        acquireTelegramPollingLease({
-          token: "123:abc",
-          accountId: "ops",
-        }),
-      ).rejects.toThrow('refusing duplicate poller for account "ops"');
-
-      first.release();
-    } finally {
-      vi.useRealTimers();
-    }
+    const { first } = await initialLease();
+    await vi.advanceTimersByTimeAsync(6 * 60 * 1_000);
+    await expect(acquire({ accountId: "ops" })).rejects.toThrow(
+      'refusing duplicate poller for account "ops"',
+    );
+    first.release();
   });
 
   it("waits for an aborting same-token poller before acquiring", async () => {
@@ -90,32 +75,12 @@ describe("Telegram polling lease", () => {
   });
 
   it("does not release a no-signal active lease", async () => {
-    const first = await acquireTelegramPollingLease({
-      token: "123:abc",
-      accountId: "default",
-    });
-
-    await expect(
-      acquireTelegramPollingLease({
-        token: "123:abc",
-        accountId: "ops",
-      }),
-    ).rejects.toThrow('refusing duplicate poller for account "ops"');
-
-    await expect(
-      releaseStoppedTelegramPollingLease({
-        token: "123:abc",
-        accountId: "default",
-      }),
-    ).resolves.toBe(false);
-
-    await expect(
-      acquireTelegramPollingLease({
-        token: "123:abc",
-        accountId: "ops",
-      }),
-    ).rejects.toThrow('account "default"');
-
+    const first = await acquire();
+    await expect(acquire({ accountId: "ops" })).rejects.toThrow(
+      'refusing duplicate poller for account "ops"',
+    );
+    await expect(releaseStopped()).resolves.toBe(false);
+    await expect(acquire({ accountId: "ops" })).rejects.toThrow('account "default"');
     first.release();
   });
 

@@ -27,6 +27,7 @@ type CommandPaletteInputProps = {
 export function CommandPaletteInput(props: CommandPaletteInputProps) {
   let textarea!: HTMLTextAreaElement;
   let entry!: HTMLDivElement;
+  let widthReference!: HTMLDivElement;
   let actions!: HTMLDivElement;
   let measuredValue: string | undefined;
   let measuredPlaceholder: string | undefined;
@@ -86,7 +87,8 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
       measuredValue = textarea.value;
       measuredPlaceholder = textarea.placeholder;
     },
-    { targets: () => [entry, actions] },
+    // The entry height follows the textarea; observe only its available width.
+    { targets: () => [widthReference, actions], fonts: true },
   );
   onSettled(() => {
     props.onInputRef(textarea);
@@ -97,6 +99,7 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
   });
   return (
     <div ref={(element) => (entry = element)} class="cmd-palette__entry">
+      <div ref={(element) => (widthReference = element)} aria-hidden="true" />
       <div class="cmd-palette__input-scroll">
         <textarea
           ref={[

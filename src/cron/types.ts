@@ -16,6 +16,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronCompletionStatus } from "./completion-status.js";
+import type { PluginCommandSchedule } from "./plugin-command-schedule.types.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
 import type {
   CronScheduledToolCallerOrigin,
@@ -292,35 +293,13 @@ export type CronFailureAlertPatch = {
 
 /** Payload variants cron can execute in main-session or detached modes. */
 export type CronPayload =
-  | Exclude<CronJobWire["payload"], { kind: "agentTurn" | "heartbeat" }>
-  | (Extract<CronJobWire["payload"], { kind: "agentTurn" }> & CronExternalContent)
-  // System-owned heartbeat monitor: execution requests an interval heartbeat
-  // wake. Gateway-converged only; not accepted from client create/patch APIs.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllow);
+  | Exclude<CronJobWire["payload"], { kind: "agentTurn" }>
+  | (Extract<CronJobWire["payload"], { kind: "agentTurn" }> & CronExternalContent);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
   | Exclude<CronPayloadPatchWire, { kind: "agentTurn" }>
-  | (Extract<CronPayloadPatchWire, { kind: "agentTurn" }> & CronExternalContent)
-  // Representable so the service can reject it with a typed boundary error;
-  // transports and tools never accept it.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch);
-
-export function isSystemOwnedCronPayloadKind(kind: unknown): kind is "heartbeat" {
-  return kind === "heartbeat";
-}
-
-type CronPayloadToolAllow = {
-  /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
-  toolsAllow?: string[];
-  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
-  toolsAllowIsDefault?: boolean;
-};
-
-type CronPayloadToolAllowPatch = {
-  toolsAllow?: string[] | null;
-  toolsAllowIsDefault?: boolean;
-};
+  | (Extract<CronPayloadPatchWire, { kind: "agentTurn" }> & CronExternalContent);
 
 type CronPayloadPatchWire = NonNullable<CronUpdateParamsWire["patch"]["payload"]>;
 
@@ -344,6 +323,8 @@ export type CronJobState = Omit<
   pacedNextRunAtMs?: number;
   /** Exact occurrence retained across a manual run; authored one-shots survive pause. */
   forcePreservedNextRunAtMs?: number;
+  /** Store-private, monotonic launch attempts for a requester-admitted plugin command. */
+  pluginCommandRuns?: number;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
   /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
@@ -447,6 +428,8 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = Omit<CronJob, "streamExecutionHost"> & {
+  /** Immutable host-captured scheduled command invocation; never public create/patch input. */
+  pluginCommand?: PluginCommandSchedule;
   /** Original authenticated source for a same-conversation continuation, never a public grant. */
   operatorSource?: {
     source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
@@ -491,6 +474,7 @@ type CronJobStateInput = Partial<
     | "sourceIdentity"
     | "runningReceiptId"
     | "runningScheduleChangeId"
+    | "pluginCommandRuns"
   >
 >;
 

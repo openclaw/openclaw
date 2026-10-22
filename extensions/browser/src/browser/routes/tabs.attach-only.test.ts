@@ -16,6 +16,15 @@ afterEach(() => {
 
 const cdpUrl = "http://127.0.0.1:9222";
 const wsUrl = "ws://127.0.0.1:9222/devtools/page/PAGE-1";
+const loginUrl = "https://example.com/wp-login.php";
+const proxyUrl = "http://93.184.216.34/proxy-routed";
+const tab = (title: string, url: string) => ({
+  targetId: "PAGE-1",
+  title,
+  url,
+  wsUrl,
+  type: "page",
+});
 
 function setup(
   attachOnly: boolean,
@@ -28,14 +37,10 @@ function setup(
     profile: makeBrowserProfile({
       name: "manual-cdp",
       cdpUrl,
-      cdpHost: "127.0.0.1",
-      cdpIsLoopback: true,
       cdpPort: 9222,
-      color: "#00AA00",
       attachOnly,
     }),
     resolvedOverrides: {
-      defaultProfile: "manual-cdp",
       ...(proxy ? { extraArgs: ["--proxy-server=http://proxy.example.test:8080"] } : {}),
       ssrfPolicy: proxy ? { dangerouslyAllowPrivateNetwork: allowPrivateNetwork } : {},
     },
@@ -43,12 +48,9 @@ function setup(
   const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady).mockResolvedValue(true);
   const fetchMock = vi.fn(async (url: unknown) => {
     expect(String(url)).toBe(cdpUrl + "/json/list");
-    return new Response(
-      JSON.stringify([
-        { id: "PAGE-1", title, url: tabUrl, webSocketDebuggerUrl: wsUrl, type: "page" },
-      ]),
-      { headers: { "content-type": "application/json" } },
-    );
+    return Response.json([
+      { id: "PAGE-1", title, url: tabUrl, webSocketDebuggerUrl: wsUrl, type: "page" },
+    ]);
   });
   vi.stubGlobal("fetch", fetchMock);
   const routes = createRouteFixture();
@@ -67,14 +69,10 @@ function setup(
 
 describe("browser tab routes attachOnly loopback profiles", () => {
   it("lists tabs for manual loopback CDP profiles under strict SSRF", async () => {
-    const { state, isChromeCdpReady, call } = setup(
-      true,
-      "WordPress",
-      "https://example.com/wp-login.php",
-    );
+    const { state, isChromeCdpReady, call } = setup(true, "WordPress", loginUrl);
     const response = await call();
     expect(isChromeCdpReady).toHaveBeenCalledWith(
-      "http://127.0.0.1:9222",
+      cdpUrl,
       state.resolved.remoteCdpTimeoutMs,
       state.resolved.remoteCdpHandshakeTimeoutMs,
       undefined,
@@ -84,31 +82,21 @@ describe("browser tab routes attachOnly loopback profiles", () => {
     expect(response.body).toEqual({
       running: true,
       canAutoResizeViewport: false,
-      tabs: [
-        {
-          targetId: "PAGE-1",
-          suggestedTargetId: "t1",
-          tabId: "t1",
-          title: "WordPress",
-          url: "https://example.com/wp-login.php",
-          wsUrl: "ws://127.0.0.1:9222/devtools/page/PAGE-1",
-          type: "page",
-        },
-      ],
+      tabs: [{ ...tab("WordPress", loginUrl), suggestedTargetId: "t1", tabId: "t1" }],
     });
   });
 
   it.each([
     [false, false, ""],
-    [false, true, "http://93.184.216.34/proxy-routed"],
-    [true, false, "http://93.184.216.34/proxy-routed"],
+    [false, true, proxyUrl],
+    [true, false, proxyUrl],
   ] as const)(
     "applies proxy policy (attachOnly=%s, allowPrivateNetwork=%s)",
     async (attachOnly, allowPrivateNetwork, expectedUrl) => {
       const { fetchMock, call } = setup(
         attachOnly,
         "Proxy routed",
-        "http://93.184.216.34/proxy-routed",
+        proxyUrl,
         true,
         allowPrivateNetwork,
       );
