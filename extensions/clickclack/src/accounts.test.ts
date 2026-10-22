@@ -10,11 +10,19 @@ import {
 import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const ACCOUNT_BASE = { baseUrl: "https://app.clickclack.chat", workspace: "wsp_1" };
+afterEach(() => vi.unstubAllEnvs());
 function accountConfig(
   settings: ClickClackAccountConfig & { accounts?: Record<string, ClickClackAccountConfig> },
   secrets?: CoreConfig["secrets"],
 ): CoreConfig {
   return { secrets, channels: { clickclack: { ...ACCOUNT_BASE, ...settings } } };
+}
+function resolve(
+  settings: Parameters<typeof accountConfig>[0],
+  accountId?: string,
+  env?: NodeJS.ProcessEnv,
+) {
+  return resolveClickClackAccount({ cfg: accountConfig(settings), accountId, env });
 }
 
 function expectUnavailable(
@@ -33,22 +41,21 @@ function expectUnavailable(
 }
 
 describe("ClickClack account resolution", () => {
-  afterEach(() => vi.unstubAllEnvs());
-
   it("merges partial named-account group overrides with the root group policy", () => {
-    const cfg = accountConfig({
-      token: "test-token-placeholder",
-      groups: {
-        " chn_1 ": {
-          requireMention: true,
-          requireMentionInBotThreads: false,
-          mentionPatterns: ["@root-bot"],
+    const account = resolve(
+      {
+        token: "test-token-placeholder",
+        groups: {
+          " chn_1 ": {
+            requireMention: true,
+            requireMentionInBotThreads: false,
+            mentionPatterns: ["@root-bot"],
+          },
         },
+        accounts: { work: { groups: { chn_1: { requireMention: false } } } },
       },
-      accounts: { work: { groups: { chn_1: { requireMention: false } } } },
-    });
-
-    const account = resolveClickClackAccount({ cfg, accountId: "work" });
+      "work",
+    );
     expect(account.groups).toEqual({
       chn_1: {
         requireMention: false,
@@ -73,15 +80,14 @@ describe("ClickClack account resolution", () => {
     await withTempDir("clickclack-token-", async (tempDir) => {
       const tokenFile = path.join(tempDir, "token");
       fs.writeFileSync(tokenFile, "  file-token  \n", "utf8");
-      const cfg = accountConfig({
+      const settings = {
         enabled: true,
         tokenFile,
         accounts: { work: { token: "work-token" } },
-      });
-
-      expect(listClickClackAccountIds(cfg)).toEqual(["default", "work"]);
-      expect(resolveClickClackAccount({ cfg }).token).toBe("file-token");
-      expect(resolveClickClackAccount({ cfg, accountId: "work" }).token).toBe("work-token");
+      };
+      expect(listClickClackAccountIds(accountConfig(settings))).toEqual(["default", "work"]);
+      expect(resolve(settings).token).toBe("file-token");
+      expect(resolve(settings, "work").token).toBe("work-token");
     });
   });
 
@@ -129,10 +135,7 @@ describe("ClickClack account resolution", () => {
       }
 
       for (const [selectedFile, reason] of invalidFiles) {
-        const account = resolveClickClackAccount({
-          cfg: accountConfig({ token: "lower-priority-token", tokenFile: selectedFile }),
-        });
-
+        const account = resolve({ token: "lower-priority-token", tokenFile: selectedFile });
         expectUnavailable(account, "channels.clickclack.tokenFile", reason, selectedFile);
       }
     });
@@ -146,26 +149,20 @@ describe("ClickClack account resolution", () => {
       model: "openai/gpt-5.4-mini",
       toolsAllow: ["web_search"],
     } satisfies ClickClackAccountConfig;
-    const cfg = accountConfig({ enabled: true, accounts: { peter: policy } });
-
-    expect(resolveClickClackAccount({ cfg, accountId: "peter" })).toEqual({
+    expect(resolve({ enabled: true, accounts: { peter: policy } }, "peter")).toEqual({
       ...policy,
+      ...ACCOUNT_BASE,
       allowBots: false,
       allowFrom: ["*"],
       accountId: "peter",
       apiEndpoint: "https://app.clickclack.chat",
-      baseUrl: "https://app.clickclack.chat",
-      botLoopProtection: undefined,
       config: {
         ...policy,
+        ...ACCOUNT_BASE,
         allowFrom: ["*"],
-        baseUrl: "https://app.clickclack.chat",
         enabled: true,
-        tokenFile: undefined,
-        workspace: "wsp_1",
       },
       configured: true,
-      botUserId: undefined,
       defaultTo: "channel:general",
       enabled: true,
       agentActivity: false,
@@ -173,14 +170,11 @@ describe("ClickClack account resolution", () => {
       discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
       groups: {},
       mentionPatterns: [],
-      name: undefined,
       nativeProgress: false,
       reconnectMs: 1_500,
       requireMention: false,
-      systemPrompt: undefined,
       tokenSource: "config",
       tokenStatus: "available",
-      workspace: "wsp_1",
     });
   });
 
@@ -221,20 +215,23 @@ const selectedRef = { source: "env", provider: "selected", id: selectedEnvId } a
 const otherRef = { ...selectedRef, provider: "other" };
 const fallbackEnv = { CLICKCLACK_BOT_TOKEN: "fallback-token" };
 type SecretProviders = NonNullable<CoreConfig["secrets"]>["providers"];
-function refConfig(
+function resolveRef(
   token: ClickClackAccountConfig["token"],
   providers?: SecretProviders,
+  value?: string,
   named = false,
 ) {
-  return accountConfig(
-    named ? { token: "lower-priority-root-token", accounts: { work: { token } } } : { token },
-    { defaults: { env: "selected" }, providers },
-  );
+  return resolveClickClackAccount({
+    cfg: accountConfig(
+      named ? { token: "lower-priority-root-token", accounts: { work: { token } } } : { token },
+      { defaults: { env: "selected" }, providers },
+    ),
+    accountId: named ? "work" : undefined,
+    env: { ...fallbackEnv, [selectedEnvId]: value },
+  });
 }
 
 describe("ClickClack SecretRef provider policy", () => {
-  afterEach(() => vi.unstubAllEnvs());
-
   it.each([
     ["exec", " injected-token ", "injected-token"],
     ["file", undefined, ""],
@@ -246,14 +243,7 @@ describe("ClickClack SecretRef provider policy", () => {
         source === "exec"
           ? { selected: { source, command: "/unused" } }
           : { selected: { source, path: "/unused" } };
-      const cfg = refConfig(selectedRef, providers, true);
-      expect(
-        resolveClickClackAccount({
-          cfg,
-          accountId: "work",
-          env: { ...fallbackEnv, [selectedEnvId]: value },
-        }),
-      ).toMatchObject({
+      expect(resolveRef(selectedRef, providers, value, true)).toMatchObject({
         accountId: "work",
         token,
         tokenSource: "config",
@@ -280,21 +270,16 @@ describe("ClickClack SecretRef provider policy", () => {
       `Secret provider "other" is not configured (ref: env:other:${selectedEnvId}).`,
     ],
   ])("rejects an unauthorized env provider (%#)", (token, providers, message) => {
-    const cfg = refConfig(token, providers);
-    expect(() =>
-      resolveClickClackAccount({ cfg, env: { ...fallbackEnv, [selectedEnvId]: "injected-token" } }),
-    ).toThrow(new Error(message));
+    expect(() => resolveRef(token, providers, "injected-token")).toThrow(new Error(message));
   });
 
   it("never borrows an env token for a file source ref", () => {
-    const cfg = accountConfig({
-      token: { source: "file", provider: "default", id: "/selected/token" },
-    });
     expect(
-      resolveClickClackAccount({
-        cfg,
-        env: { ...fallbackEnv, [selectedEnvId]: "wrong-source-token" },
-      }),
+      resolveRef(
+        { source: "file", provider: "default", id: "/selected/token" },
+        undefined,
+        "wrong-source-token",
+      ),
     ).toMatchObject({
       token: "",
       tokenSource: "config",
