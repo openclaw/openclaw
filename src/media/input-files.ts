@@ -302,7 +302,6 @@ export async function extractImageContentFromSource(
 export async function extractFileContentFromSource(params: {
   source: InputFileSource;
   limits: InputFileLimits;
-  config?: OpenClawConfig;
   signal?: AbortSignal;
 }): Promise<InputFileExtractResult> {
   const { source, limits, signal } = params;
@@ -315,7 +314,6 @@ export async function extractFileContentFromSource(params: {
     filename,
     mimeType: contentType,
     limits,
-    config: params.config,
     ...(signal ? { signal } : {}),
   });
   signal?.throwIfAborted();

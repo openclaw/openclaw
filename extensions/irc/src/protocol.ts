@@ -13,7 +13,6 @@ type ParsedIrcPrefix = {
   nick?: string;
   user?: string;
   host?: string;
-  server?: string;
 };
 
 export function parseIrcLine(line: string): ParsedIrcLine | null {
@@ -92,10 +91,7 @@ export function parseIrcPrefix(prefix?: string): ParsedIrcPrefix {
     const [nick, user] = prefix.split("!", 2);
     return { nick, user };
   }
-  if (prefix.includes(".")) {
-    return { server: prefix };
-  }
-  return { nick: prefix };
+  return prefix.includes(".") ? {} : { nick: prefix };
 }
 
 // Only real CR/LF and control characters can break out of an IRC line. Literal

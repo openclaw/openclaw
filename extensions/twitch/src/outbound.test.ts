@@ -59,7 +59,6 @@ describe("outbound", () => {
     vi.mocked(resolveTwitchAccountContext).mockImplementation((_cfg, accountId) => ({
       accountId: accountId?.trim() || "default",
       account,
-      tokenResolution: { token: account?.accessToken ?? "" },
       configured: account ? (params?.configured ?? true) : false,
       availableAccountIds: ["default"],
     }));

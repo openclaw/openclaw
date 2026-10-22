@@ -604,7 +604,6 @@ describe("createCodexDynamicToolBridge", () => {
       bridge.availableTools.map((tool) => tool.name),
     );
     expect(projected.availableTools.map((tool) => tool.name)).toEqual(["message"]);
-    expect(projected.quarantinedTools).toEqual(bridge.telemetry.quarantinedTools);
     expect(bridge.telemetry.quarantinedTools).toEqual([
       {
         tool: "fuzzplugin_move_angles",

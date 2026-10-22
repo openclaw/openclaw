@@ -111,7 +111,6 @@ export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
 
 export function enableOpenClawCompileCache(params: {
   currentFile: string;
-  env?: NodeJS.ProcessEnv;
   installRoot: string;
 }): void {
   if (!isSourceEntry(params.currentFile)) {
@@ -120,7 +119,6 @@ export function enableOpenClawCompileCache(params: {
         ...params,
         foregroundGateway: isForegroundGatewayRunArgv(process.argv),
       }),
-      env: params.env,
       foregroundGateway: isForegroundGatewayRunArgv(process.argv),
     });
   }

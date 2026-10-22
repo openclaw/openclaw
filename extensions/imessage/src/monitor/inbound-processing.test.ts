@@ -211,7 +211,6 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         chat_identifier: "+15555550123",
       },
       echoCache: { has: () => false },
-      isKnownFromMeMessageId: undefined,
     });
 
     expect(decision).toMatchObject({
