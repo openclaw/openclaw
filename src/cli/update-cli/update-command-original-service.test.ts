@@ -72,8 +72,8 @@ vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => 
   ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
 }));
-vi.mock("../../daemon/schtasks.js", async (original) => ({
-  ...(await original<typeof import("../../daemon/schtasks.js")>()),
+vi.mock("../../daemon/schtasks-control.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/schtasks-control.js")>()),
   suspendScheduledTaskAutoStartForUpdate: mocks.suspend,
   resumeScheduledTaskAutoStartAfterUpdate: mocks.resume,
 }));
