@@ -215,6 +215,8 @@ describe("CI changed Node test plan", () => {
         "src/agents/command/delivery.settle-reset.integration.test.ts",
         "src/auto-reply/reply/commands-acp.owner.test.ts",
         "src/auto-reply/reply/commands-allowlist.owner.test.ts",
+        "src/auto-reply/reply/commands-plugin.native-subagents.test.ts",
+        "src/auto-reply/reply/commands-plugin.scheduled-turns.test.ts",
         "src/gateway/operator-run-recovery.test.ts",
         "src/gateway/server.mcp-session-owner.test.ts",
       ],

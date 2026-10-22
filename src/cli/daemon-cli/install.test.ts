@@ -405,6 +405,16 @@ describe("runDaemonInstall", () => {
     );
   });
 
+  it("refreshes a loaded service when its definition is missing", async () => {
+    service.isLoaded.mockResolvedValue(true);
+
+    await expectReinstall();
+
+    expect(actionState.warnings).toContain(
+      "Gateway service definition is missing; refreshing the install.",
+    );
+  });
+
   it("returns already-installed when the embedded gateway token matches the install plan", async () => {
     const environment = { OPENCLAW_GATEWAY_TOKEN: "durable-token" };
     const command = loadedService({ environment });

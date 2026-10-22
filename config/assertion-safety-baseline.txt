@@ -542,7 +542,6 @@ extensions/nostr/src/nostr-cursor.ts	2
 extensions/nostr/src/nostr-ingress.ts	4
 extensions/nostr/src/nostr-profile-http.ts	1
 extensions/nostr/src/nostr-profile-import.ts	1
-extensions/nvidia/provider-catalog.ts	1
 extensions/oc-path/src/oc-path/find.ts	9
 extensions/oc-path/src/oc-path/universal.ts	2
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
@@ -834,7 +833,6 @@ extensions/twitch/src/setup-surface.ts	1
 extensions/twitch/src/token.ts	3
 extensions/twitch/src/twitch-ingress.ts	3
 extensions/venice/models.ts	1
-extensions/voice-call/index.ts	1
 extensions/voice-call/src/manager/outbound.ts	2
 extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
@@ -1527,7 +1525,7 @@ src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	7
 src/cli/program/register.onboard.ts	26
 src/cli/program/register.setup.ts	2
-src/cli/program/register.status-health-sessions.ts	9
+src/cli/program/register.status-health-sessions.ts	7
 src/cli/run-main.ts	1
 src/cli/secrets-cli.ts	2
 src/cli/secrets-store-cli.ts	1

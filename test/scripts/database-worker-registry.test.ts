@@ -13,7 +13,6 @@ describe("database-worker test routing registry", () => {
     "src/state/agent-database-admission.test.ts",
     "src/agents/prepared-model-runtime.hot-reload-dispatch.test.ts",
     "src/wizard/setup.inference-recovery.integration.test.ts",
-    "src/channels/message-access/discord-native-acp-owner.test.ts",
     "src/auto-reply/reply/commands-acp.owner.test.ts",
     "src/auto-reply/reply/commands-config.owner.test.ts",
     "src/auto-reply/reply/commands-plugins.owner.test.ts",

@@ -161,6 +161,10 @@ ${auditMarkdownTable}`,
     });
     try {
       await page.getByRole("button", { name: "Close Files" }).click();
+      await waitForLayoutSettled(
+        page,
+        '.chat-thread, [data-entry-id="wrapping-table"] .markdown-table',
+      );
       await expand.click();
       await dialog.waitFor({ state: "visible" });
     } catch (error) {

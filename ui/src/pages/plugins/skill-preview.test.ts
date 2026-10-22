@@ -53,6 +53,20 @@ const selectedResult = (path: string): PluginsSkillsReadResult => ({
   ),
 });
 
+it("releases initial preview readiness on close before the retired request settles", async () => {
+  const { preview, request } = setup();
+  const response = createDeferred<PluginsSkillsReadResult>();
+  request.mockReturnValueOnce(response.promise);
+  const opened = preview.open(params);
+  const ready = preview.state!.ready;
+  preview.close();
+  await ready;
+  expect(preview.state).toBeNull();
+  response.resolve(result);
+  await opened;
+  expect(preview.state).toBeNull();
+});
+
 it("fetches only selected bodies, deduplicates pending reads and retains late sibling bodies without changing selection", async () => {
   const { preview, request } = setup();
   const a = createDeferred<PluginsSkillsReadResult>();
