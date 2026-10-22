@@ -97,12 +97,18 @@ async function mount(
       }),
     ],
   });
-  const context = {
+  const contextFixture: Pick<ApplicationContext, "gateway" | "router"> & {
+    runtimeConfig: Pick<ApplicationContext["runtimeConfig"], "canPatch"> & {
+      state: Pick<ApplicationContext["runtimeConfig"]["state"], "connected">;
+    };
+    theme: typeof theme;
+  } = {
     gateway: gateway.gateway,
     runtimeConfig: { state: { connected: true }, canPatch: true },
     theme,
     router,
-  } as ApplicationContext;
+  };
+  const context = contextFixture as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
   host.innerHTML = '<div class="config-content"><div class="settings-page"></div></div>';
   const container = host.querySelector<HTMLElement>(".settings-page")!;
