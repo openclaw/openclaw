@@ -78,13 +78,9 @@ describe("Codex runtime plugin install repair", () => {
     mocks.ensureOnboardingPluginInstalled.mockResolvedValue(installerResult("failed"));
   });
 
-  it.each([
-    { accepted: false, promptError: undefined },
-    { accepted: true, promptError: undefined },
-    { accepted: false, promptError: new WizardCancelledError() },
-  ])(
-    "requires consent for runtime capabilities: accepted=$accepted promptError=$promptError",
-    async ({ accepted, promptError }) => {
+  it.each([false, true, new WizardCancelledError()])(
+    "requires consent for runtime capabilities: %s",
+    async (answer) => {
       await withTestDir({ prefix: "openclaw-runtime-consent-" }, async (artifactDir) => {
         createColdPluginFixture({
           rootDir: artifactDir,
@@ -105,20 +101,19 @@ describe("Codex runtime plugin install repair", () => {
           enabled: false,
           origin: "global",
           installRecord: record,
+          contracts: { tools: ["runtime.write"] },
         });
-        const manifest = metadata.byPluginId.get("codex")!;
-        manifest.rootDir = artifactDir;
-        manifest.contracts = { tools: ["runtime.write"] };
+        metadata.byPluginId.get("codex")!.rootDir = artifactDir;
         metadata.index.plugins[0]!.rootDir = artifactDir;
         mocks.metadata.mockReturnValue(metadata);
         const cfg: OpenClawConfig = { plugins: { entries: { codex: { enabled: false } } } };
         const beforePersistentEffect = vi.fn();
         const confirm = vi.fn(async () => {
           expect(beforePersistentEffect).not.toHaveBeenCalled();
-          if (promptError) {
-            throw promptError;
+          if (answer instanceof Error) {
+            throw answer;
           }
-          return accepted;
+          return answer;
         });
 
         const pending = selectRuntime({
@@ -127,15 +122,15 @@ describe("Codex runtime plugin install repair", () => {
           runtime: runtime(),
           beforePersistentEffect,
         });
-        if (promptError) {
-          await expect(pending).rejects.toBe(promptError);
+        if (answer instanceof Error) {
+          await expect(pending).rejects.toBe(answer);
           expect(mocks.writeInstallRecords).not.toHaveBeenCalled();
           return;
         }
         const result = await pending;
         expect(cfg.plugins?.entries?.codex?.enabled).toBe(false);
         expect(confirm).toHaveBeenCalledOnce();
-        if (accepted) {
+        if (answer) {
           expect(result).toMatchObject({
             ok: true,
             cfg: { plugins: { entries: { codex: { enabled: true } } } },

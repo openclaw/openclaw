@@ -23,10 +23,6 @@ vi.mock("../../packages/terminal-core/src/links.js", () => ({
   formatDocsLink: (path: string, label: string) => `${label}${path}`,
 }));
 
-vi.mock("../cli/command-format.js", () => ({
-  formatCliCommand: (s: string) => s,
-}));
-
 const { docsSearchCommand } = await import("./docs.js");
 let runtime: ReturnType<typeof createTestRuntime>;
 const search = (query: string[], options: Parameters<typeof docsSearchCommand>[2] = {}) =>
@@ -78,26 +74,27 @@ it("emits one JSON object for the docs homepage", async () => {
   });
 });
 
-it("rejects string results instead of reporting a successful empty search", async () => {
-  respond("unavailable");
-  await expect(search(["gateway"], { json: true })).rejects.toThrow(
-    "Docs search failed: Docs search response is malformed: expected results array",
-  );
-
-  expect(runtime.log).not.toHaveBeenCalled();
-});
-
-it("reports docs search responses with invalid UTF-8 bytes as malformed", async () => {
-  const body = new Uint8Array([
-    ...new TextEncoder().encode('{"results":[{"title":"Plugin allow'),
-    0xff,
-    ...new TextEncoder().encode('list","link":"https://docs.openclaw.ai/plugins/allowlist"}]}'),
-  ]);
-  fetchMock.mockResolvedValueOnce(new Response(body));
-  await expect(search(["plugin"])).rejects.toThrow(
-    "Docs search failed: Docs search response is malformed JSON",
-  );
-});
+it.each([
+  [
+    "non-array results",
+    JSON.stringify({ results: "unavailable" }),
+    "malformed: expected results array",
+  ],
+  [
+    "invalid UTF-8",
+    Buffer.from('{"results":[{"title":"\xff","link":"/"}]}', "latin1"),
+    "malformed JSON",
+  ],
+] as const)(
+  "rejects %s without reporting a successful empty search",
+  async (_name, body, error) => {
+    fetchMock.mockResolvedValueOnce(new Response(body));
+    await expect(search(["gateway"], { json: true })).rejects.toThrow(
+      `Docs search failed: Docs search response is ${error}`,
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
+  },
+);
 
 it.each([
   {
