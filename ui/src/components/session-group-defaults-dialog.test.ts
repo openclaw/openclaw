@@ -80,6 +80,22 @@ it("keeps folder input focus while filtering and saves the keyboard-completed fo
     expect(modal.querySelector('[role="option"]')?.textContent).toContain("tools");
     expect(document.activeElement).toBe(input);
   });
+  const composingEnter = new KeyboardEvent("keydown", {
+    key: "Enter",
+    isComposing: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  input.dispatchEvent(composingEnter);
+  expect(composingEnter.defaultPrevented).toBe(false);
+  input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+  const committingEnter = new KeyboardEvent("keydown", {
+    key: "Enter",
+    bubbles: true,
+    cancelable: true,
+  });
+  input.dispatchEvent(committingEnter);
+  expect(committingEnter.defaultPrevented).toBe(false);
   key(input, "Tab");
   await waitForSolid(() => expect(input.value).toBe("/workspace/tools"));
   modal.querySelector<HTMLButtonElement>(".new-session-page__browser-use")!.click();

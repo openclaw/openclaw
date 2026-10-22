@@ -3,6 +3,7 @@ import {
   createMemo,
   createOptimisticStore,
   createSignal,
+  Errored,
   For,
   onSettled,
   Show,
@@ -33,7 +34,14 @@ type McpAppContextStripProps = { sessionKey: string; agentId: string };
 export function McpAppContextStrip(props: McpAppContextStripProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
-  const [error, setError] = createSignal<string | null>(null);
+  const [removal, setRemoval] = createSignal<{
+    current: () => boolean;
+    result: Promise<null>;
+  }>();
+  const currentRemoval = () => {
+    const admitted = removal();
+    return admitted?.current() ? admitted : undefined;
+  };
   const [pending, setPending] = createOptimisticStore<Record<string, (() => boolean) | undefined>>(
     {},
   );
@@ -114,7 +122,6 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
     const scope = gatewayPresentationScope(context.gateway).key;
     const sessionKey = props.sessionKey;
     const agentId = props.agentId;
-    setError(null);
     const current = () => {
       gateway.read();
       return (
@@ -147,19 +154,20 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
         }
       } catch (failure) {
         if (current()) {
-          setError(formatUiError(failure));
+          throw failure;
         }
       }
     })();
+    const result = complete.then(() => null);
+    // Detached strips still consume their admitted operation's late failure.
+    void result.catch(() => {});
+    setRemoval({ current, result });
     await Promise.resolve();
     if (!current()) {
       return complete;
     }
-    return presentRemoval(entry.viewId, current, complete).catch((failure: unknown) => {
-      if (current()) {
-        setError(formatUiError(failure));
-      }
-    });
+    // The alert reads the operation outcome independently of the optimistic flag.
+    return presentRemoval(entry.viewId, current, complete).catch(() => {});
   }
   return (
     <openclaw-mcp-app-context-strip>
@@ -225,8 +233,15 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
               </div>
             )}
           </For>
-          <Show when={error()}>
-            <p role="alert">{error()}</p>
+          <Show when={currentRemoval()} keyed>
+            {(admitted) => {
+              const outcome = createMemo(() => admitted.result, { loadingValue: null });
+              return (
+                <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>
+                  {outcome()}
+                </Errored>
+              );
+            }}
           </Show>
         </section>
       </Show>

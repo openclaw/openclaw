@@ -644,7 +644,7 @@ function validateExplicitStartupJsBytes(
   }
 }
 
-export function runControlUiPerformanceCheck(
+function runControlUiPerformanceCheck(
   distDir: string,
   budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS> = CONTROL_UI_PERFORMANCE_BUDGETS,
   baselinePath = DEFAULT_STARTUP_BUDGET_BASELINE_PATH,
