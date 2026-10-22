@@ -72,6 +72,17 @@ const approvalRequest = {
   approvalId: "approval",
   title: "Run checks",
 } as const;
+const lineWithId = (id: string) => expect.objectContaining({ id });
+function expectText(text: string, included: string[], excluded: string[] = []) {
+  included.forEach((value) => expect(text).toContain(value));
+  excluded.forEach((value) => expect(text).not.toContain(value));
+}
+function createSnapshot(overrides: Partial<ChannelProgressDraftCompositorParams> = {}) {
+  return createProgress(
+    { ...commentary, maxLines: 8 },
+    { ...prepared, seed: "snapshot", ...overrides },
+  );
+}
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
@@ -671,4 +682,124 @@ it("rejects pending startup acceptance after final delivery cancels it", async (
   accepted.resolve(true);
   expect(await result).toBe(false);
   expect(progress).toMatchObject({ hasStarted: false, isVisible: false });
+});
+
+it("preserves public progress in rendering and snapshot capture", async () => {
+  const secret = `sk-test-${"a".repeat(48)}`;
+  const { progress, update } = createProgress(
+    { ...commentary, label: `Account ${secret}` },
+    { ...prepared, seed: "snapshot" },
+  );
+  await progress.start();
+  await progress.pushPlanProgress([{ step: `Check account ${secret}`, status: "in_progress" }], {
+    explanation: `Validate account ${secret}`,
+  });
+  await progress.pushNarrationProgress(`Inspect account ${secret}`);
+  await progress.pushToolProgress({
+    id: "public-tool",
+    kind: "tool",
+    text: secret,
+    label: secret,
+    detail: secret,
+  });
+  await progress.pushCommentaryProgress(`Checking account ${secret}`);
+  const snapshot = progress.getSnapshot();
+  expect(JSON.stringify(update.mock.calls)).toContain(secret);
+  expect(progress.getText()).toContain(secret);
+  expect(JSON.stringify(snapshot)).toContain(secret);
+  expect(snapshot.plan?.[0]?.step).toContain("Check account");
+  expect(update.mock.calls[0]?.[0]).toContain("Account");
+});
+
+it.each([true, false])("hydrates detached progress (live=%s)", async (live) => {
+  const initialSnapshot = {
+    label: "Parent label",
+    lines: [
+      { id: "commentary:parent", kind: "item" as const, text: "Parent note", label: "Note" },
+      { id: "child", kind: "tool" as const, text: "Read", label: "Read", status: "running" },
+    ],
+    plan: plan.slice(0, 2),
+    planExplanation: "Checking *literal* input",
+    planExplanationFormat: "plain" as const,
+    statusHeadline: "Transferred *headline*",
+    statusHeadlineFormat: "plain" as const,
+    preparedBlocks: [{ text: "Old transport markup", format: "markdown" as const }],
+  };
+  const update = vi.fn<NonNullable<ChannelProgressDraftCompositorParams["update"]>>(() => true);
+  const { progress, item, lines } = createSnapshot({
+    initialSnapshot,
+    update: live ? update : undefined,
+  });
+  expect(update).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+  expect(progress).toMatchObject({ hasStarted: false, isVisible: false });
+  await progress.noteActivity({ startImmediately: true });
+  await item("tool", "child", { name: "read", status: "completed" });
+  expect(progress).toMatchObject({ hasStarted: live, isVisible: live });
+  expect(vi.getTimerCount()).toBe(0);
+  expectText(
+    progress.getText(),
+    ["Parent label", "Parent note", "Inspect", "Repair", "Transferred \\*headline\\*"],
+    ["Old transport markup"],
+  );
+  const childLines = progress
+    .getSnapshot()
+    .lines.filter((line) => typeof line === "object" && line.id === "child");
+  expect(childLines).toEqual([expect.objectContaining({ status: "completed" })]);
+  if (live) {
+    expect(update.mock.lastCall?.[1].snapshot.preparedBlocks).toContainEqual({
+      text: "Transferred *headline*",
+      format: "plain",
+    });
+  }
+  await progress.pushItemEvent({ itemId: "child", hideFromChannelProgress: true });
+  lines().not.toContainEqual(lineWithId("child"));
+  await progress.pushNarrationProgress("Child status");
+  expectText(progress.getText(), ["Child status"], ["Transferred"]);
+  expect(progress.getSnapshot().statusHeadlineFormat).toBeUndefined();
+  await progress.pushNarrationProgress("");
+  expect(progress.getText()).toContain("Checking \\*literal\\* input");
+  expect(progress.getSnapshot().planExplanationFormat).toBe("plain");
+});
+
+it("applies privacy, quiet failures, approval priority and bounds to transferred lines", async () => {
+  const { progress: parent, item: parentItem } = createSnapshot();
+  await parent.pushPlanProgress([{ step: "Parent checklist", status: "in_progress" }]);
+  await parentItem("tool", "private", { name: "read", title: "Sensitive row" });
+  const approval = { approvalId: "approval", title: "Allow repair" };
+  await parent.pushApprovalEvent({ ...approval, phase: "requested" });
+  const initialSnapshot = parent.getSnapshot();
+  parent.cancel();
+  const { progress, update, item, lines } = createProgress(
+    { ...quiet, commentary: true, maxLines: 2 },
+    { ...prepared, seed: "snapshot", initialSnapshot },
+  );
+  await progress.noteActivity({ startImmediately: true });
+  await progress.pushItemEvent({ itemId: "private", hideFromChannelProgress: true });
+  lines().not.toContainEqual(lineWithId("private"));
+  await item("tool", "failed", { name: "exec", status: "failed" });
+  lines().not.toContainEqual(lineWithId("failed"));
+  await progress.pushCommentaryProgress("Child note", { itemId: "child" });
+  const text = update.mock.lastCall?.[0] ?? "";
+  expectText(text, ["Allow repair", "Parent checklist"], ["Sensitive row", "failed"]);
+  expect(text.split("\n").filter(Boolean)).toHaveLength(2);
+  await progress.pushApprovalEvent({ ...approval, phase: "resolved" });
+  expectText(update.mock.lastCall?.[0] ?? "", ["Child note"], ["Allow repair"]);
+});
+
+it("retains known mutation totals without inventing cross-owner file uniqueness", async () => {
+  const { progress } = createSnapshot({
+    initialSnapshot: { lines: [], diffStat: { files: 1, added: 2, removed: 1 } },
+  });
+  async function write(toolCallId: string, path: string) {
+    const args = { path, content: "one\ntwo\nthree" };
+    await progress.pushToolEvent({ toolCallId, name: "write", phase: "start", args });
+    await progress.pushItemEvent({ toolCallId, phase: "end", status: "completed" });
+  }
+  await write("child-write", "possibly-the-parent-file.ts");
+  expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 2, removed: 1 });
+  progress.resetActivity();
+  expect(progress.getSnapshot().diffStat).toBeUndefined();
+  await write("next-write", "new-file.ts");
+  expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 3, removed: 0 });
 });
