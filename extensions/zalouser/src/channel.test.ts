@@ -164,73 +164,45 @@ describe("zalouser channel policies", () => {
     expect(policy).toEqual({ deny: ["system.run"] });
   });
 
-  it("handles react action", async () => {
-    const actions = zalouserMessageActions;
-    expect(
-      actions?.describeMessageTool?.({ cfg: { channels: { zalouser: { enabled: true } } } })
-        ?.actions,
-    ).toEqual(["react"]);
-    const result = await react({ threadId: "123456" });
-    expect(mockSendReaction).toHaveBeenCalledWith({
-      profile: "default",
-      threadId: "123456",
-      isGroup: false,
-      msgId: "111",
-      cliMsgId: "222",
-      emoji: "👍",
-      remove: false,
-    });
-    expect(result).toEqual({
-      content: [{ type: "text", text: "Reacted 👍 on 111" }],
-      details: {
-        messageId: "111",
-        cliMsgId: "222",
-        threadId: "123456",
-      },
-    });
-  });
-
   it.each([
-    {
-      name: "prefixed direct target inside an ambient group",
-      params: { chatId: "zlu:user:user-456" },
-      threadId: "user-456",
-      isGroup: false,
-    },
-    {
-      name: "explicit direct override for a group target",
-      params: { to: "group:override-789", isGroup: false },
-      threadId: "override-789",
-      isGroup: false,
-    },
-    {
-      name: "ambient group without a target prefix",
-      params: {},
-      threadId: "ambient-group",
-      isGroup: true,
-    },
-  ])("routes $name reactions through the canonical target owner", async (testCase) => {
-    const result = await react(testCase.params, {
-      currentChannelProvider: "zalouser",
-      currentChannelId: "ambient-group",
-      currentChatType: "group",
-    });
+    ["explicit thread id", { threadId: "123456" }, "123456", false],
+    [
+      "prefixed direct target inside an ambient group",
+      { chatId: "zlu:user:user-456" },
+      "user-456",
+      false,
+    ],
+    [
+      "explicit direct override for a group target",
+      { to: "group:override-789", isGroup: false },
+      "override-789",
+      false,
+    ],
+    ["ambient group without a target prefix", {}, "ambient-group", true],
+  ] as const)(
+    "routes %s reactions through the canonical target owner",
+    async (_name, params, threadId, isGroup) => {
+      const result = await react(params, {
+        currentChannelProvider: "zalouser",
+        currentChannelId: "ambient-group",
+        currentChatType: "group",
+      });
 
-    expect(mockSendReaction).toHaveBeenCalledWith({
-      profile: "default",
-      threadId: testCase.threadId,
-      isGroup: testCase.isGroup,
-      msgId: "111",
-      cliMsgId: "222",
-      emoji: "👍",
-      remove: false,
-    });
-    expect(result?.details).toEqual({
-      messageId: "111",
-      cliMsgId: "222",
-      threadId: testCase.threadId,
-    });
-  });
+      expect(mockSendReaction).toHaveBeenCalledWith({
+        profile: "default",
+        threadId,
+        isGroup,
+        msgId: "111",
+        cliMsgId: "222",
+        emoji: "👍",
+        remove: false,
+      });
+      expect(result).toEqual({
+        content: [{ type: "text", text: "Reacted 👍 on 111" }],
+        details: { messageId: "111", cliMsgId: "222", threadId },
+      });
+    },
+  );
 
   it("does not borrow group routing from another channel with the same conversation id", async () => {
     await react(
@@ -249,6 +221,9 @@ describe("zalouser channel policies", () => {
 
   it("honors the selected Zalouser account during discovery", () => {
     const actions = zalouserMessageActions;
+    expect(actions.describeMessageTool?.({ cfg: config({ enabled: true }) })?.actions).toEqual([
+      "react",
+    ]);
     const cfg = config({
       enabled: true,
       profile: "default",
