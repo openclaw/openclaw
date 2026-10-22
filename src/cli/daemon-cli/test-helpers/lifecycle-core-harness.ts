@@ -27,6 +27,8 @@ export function createGatewayServiceRunArgs(checkTokenDrift?: boolean) {
     serviceNoun: "Gateway",
     service,
     renderStartHints: () => [],
+    renderStopHints: () => [],
+    renderUninstallHints: () => [],
     opts: { json: true as const },
     ...(checkTokenDrift ? { checkTokenDrift } : {}),
   };

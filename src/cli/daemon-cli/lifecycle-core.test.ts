@@ -85,7 +85,8 @@ vi.mock("./lifecycle-audit.js", () => ({
 
 // The runtime mock consumes the initialized lifecycle harness, not an early static import.
 const { ExitError } = await import("../../runtime.js");
-const { runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js");
+const { runServiceRestart, runServiceStart, runServiceStop, runServiceUninstall } =
+  await import("./lifecycle-core.js");
 type StartArgs = Parameters<typeof runServiceStart>[0];
 type RestartArgs = Parameters<typeof runServiceRestart>[0];
 
@@ -390,6 +391,7 @@ it("runs a requested managed stop even when the service is not loaded", async ()
   await runServiceStop({
     serviceNoun: "Gateway",
     service,
+    renderStopHints: () => [],
     opts: { json: true, disable: true },
     stopWhenNotLoaded: true,
     onNotLoaded,
@@ -401,6 +403,66 @@ it("runs a requested managed stop even when the service is not loaded", async ()
   expect(stopOptions).toMatchObject({ env: process.env, disable: true });
   expect(stopOptions?.env).toBe(process.env);
   expect(onNotLoaded).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["stop recovery", false, "stop-recovery"],
+  ["stop recovery", true, "stop-recovery"],
+  ["managed stop", false, "stop-native"],
+  ["managed stop", true, "stop-native"],
+  ["uninstall", false, "uninstall"],
+  ["uninstall", true, "uninstall"],
+  ["uninstall verification", false, "uninstall-loaded"],
+  ["uninstall verification", true, "uninstall-loaded"],
+] as const)("adds recovery hints when %s fails (json=%s)", async (_label, json, route) => {
+  const stopHints = ["openclaw gateway status --deep"];
+  const uninstallHints = [
+    "openclaw gateway status --deep",
+    "https://docs.openclaw.ai/install/uninstall#manual-service-removal-cli-not-installed",
+  ];
+  const hints = route.startsWith("uninstall") ? uninstallHints : stopHints;
+
+  if (route === "stop-recovery") {
+    missingService();
+  } else if (route === "stop-native") {
+    service.stop.mockRejectedValueOnce(new Error("native stop failed"));
+  } else if (route === "uninstall") {
+    service.uninstall.mockRejectedValueOnce(new Error("native uninstall failed"));
+  } else {
+    service.isLoaded.mockResolvedValue(true);
+  }
+
+  const run = () => {
+    if (route.startsWith("stop")) {
+      return runServiceStop({
+        ...createServiceRunArgs(),
+        opts: { json },
+        renderStopHints: () => stopHints,
+        onNotLoaded:
+          route === "stop-recovery"
+            ? async () => {
+                throw new Error("recovery stop failed");
+              }
+            : undefined,
+      });
+    }
+    return runServiceUninstall({
+      ...createServiceRunArgs(),
+      opts: { json },
+      stopBeforeUninstall: false,
+      assertNotLoadedAfterUninstall: route === "uninstall-loaded",
+      renderUninstallHints: () => uninstallHints,
+    });
+  };
+
+  await expect(run()).rejects.toThrow("__exit__:1");
+  if (json) {
+    expect(readJsonLog()).toMatchObject({ ok: false, hints });
+  } else {
+    for (const hint of hints) {
+      expect(lifecycleRuntimeLogs).toContain(`Tip: ${hint}`);
+    }
+  }
 });
 
 it("skips restart health checks when restart is only scheduled", async () => {

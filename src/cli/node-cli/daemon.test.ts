@@ -679,6 +679,17 @@ describe("node daemon lifecycle adapters", () => {
   });
 
   it.each([
+    ["stop", mocks.runServiceStop, "renderStopHints"],
+    ["uninstall", mocks.runServiceUninstall, "renderUninstallHints"],
+  ] as const)("provides node status recovery hints for %s", async (action, delegate, hintKey) => {
+    await runNodeDaemonLifecycle(action);
+
+    const params = delegate.mock.calls[0]?.[0] as Record<string, unknown>;
+    const renderHints = params[hintKey] as () => string[];
+    expect(renderHints()).toEqual(["openclaw node status"]);
+  });
+
+  it.each([
     {
       name: "start",
       delegate: mocks.runServiceStart,

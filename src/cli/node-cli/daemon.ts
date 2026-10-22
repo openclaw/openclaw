@@ -376,12 +376,16 @@ export async function runNodeDaemonLifecycle(
   if (action === "uninstall") {
     return await runServiceUninstall({
       ...params,
+      renderUninstallHints: () => [formatCliCommand("openclaw node status")],
       stopBeforeUninstall: false,
       assertNotLoadedAfterUninstall: false,
     });
   }
   if (action === "stop") {
-    return await runServiceStop(params);
+    return await runServiceStop({
+      ...params,
+      renderStopHints: () => [formatCliCommand("openclaw node status")],
+    });
   }
   const run = action === "start" ? runServiceStart : runServiceRestart;
   await run({ ...params, renderStartHints: renderNodeServiceStartHints });
