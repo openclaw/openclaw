@@ -156,6 +156,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/catalog-polling-measure.ts|typescript/unbound-method|1",
         // The diagnostics probe restores Session.post and invokes it with its live receiver.
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
+        // Node BroadcastChannel.postMessage has no target-origin parameter.
+        "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
