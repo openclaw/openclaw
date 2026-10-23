@@ -519,10 +519,16 @@ describe("candidate-owned full release dispatch entry point", () => {
         "-f",
         "validation_purpose=publish",
         "-f",
-        `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
+        `publication_selection_json=${JSON.stringify({
+          route: "normal",
+          npmDistTag: "beta",
+          publishOpenclawNpm: true,
+          pluginPublishScope: "all-publishable",
+          plugins: [],
+        })}`,
       ]);
-      expectDispatchFailure(
-        result,
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(
         "Forbidden changelog thanks attribution (pnpm check:changelog-attributions): CHANGELOG.md:3 uses Thanks @steipete. Use verified human GitHub credits",
       );
       expect(
