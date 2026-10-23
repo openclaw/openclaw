@@ -5,7 +5,7 @@ import type { Message } from "../../llm/types.js";
 
 const MAX_HISTORY_DIFF_FIELDS = 8;
 // Persistence-only metadata is absent from provider messages; content is hashed separately.
-const MESSAGE_ENVELOPE_OMITTED_FIELDS = new Set(["content", "__openclaw"]);
+const MESSAGE_ENVELOPE_OMITTED_FIELDS = new Set(["content", "__openclaw", "display"]);
 
 export type PromptHistoryFingerprint = {
   role: string;
