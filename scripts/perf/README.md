@@ -3638,3 +3638,35 @@ allocation and CPU totals include both. Observed throughput and bytes per minute
 are context; decisions use per-operation work. `bytesPer450Reads` provides a fixed
 synthetic rate comparison without claiming production Inbox traffic. These
 measurements do not cover browser rendering.
+
+## Database page-cache maintenance
+
+`database-page-cache-measure.ts` invokes the Gateway's Linux maintenance owner
+through its real spawn broker and read-only process pool on an existing synthetic
+team-shape fixture. It reports progress-request and main-thread stat counts,
+main/process/child CPU, GC duration and promotion, and event-loop p99/max with
+sample counts. `--profile` additionally writes collected-object allocation and
+CPU profiles; keep profiled runs separate from timing gates.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/database-page-cache-measure.ts \
+  --state-dir "$BENCH_ROOT/state" --cold --passes 3 \
+  --output "$BENCH_ROOT/measurement.json" \
+  --trace-log "$BENCH_ROOT/measurement.log" > "$BENCH_ROOT/measurement.log" 2>&1
+```
+
+`--cold` evicts only the named synthetic database files with Linux `posix_fadvise`;
+there is no host-wide cache drop. Without it, residency is observed as found.
+`--prepare-only` checks fixture admission and broker readiness without running
+maintenance. `--owner-dir` selects baseline copies of `sqlite-page-cache.worker.ts`
+and `sqlite-readonly-worker-session.ts` in the parent and its reader children, so
+paired runs can share one source installation. The benchmark does not boot a full
+Gateway or establish a deployed production effect.
+
+For synchronized pairs, pass `--barrier-dir` and `--side baseline|candidate`.
+Each side writes `<pass>.<side>.ready` after preparation; the controller releases
+both by atomically writing a future epoch in milliseconds to `<pass>.start`.
+Keep the exclusive measurement slot and production guard around the pair, and
+swap CPU placement in the second pair. Loop measurements cover the operation,
+without idle padding; tails below the campaign's sample minimum are context.
