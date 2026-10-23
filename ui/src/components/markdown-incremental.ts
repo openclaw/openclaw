@@ -61,9 +61,16 @@ function joinNodes(parts: MarkdownDomTree[]): MarkdownDomTree {
 /** Per-stream, sanitized subtree checkpoints. No parsed DOM survives a call. */
 export class IncrementalMarkdownSanitizer {
   private previous: RawNode[] = [];
+  private previousHtml?: string;
 
   render(html: string, sanitizeInertRoot: (root: Element) => void): MarkdownDomTree {
     const template = document.createElement("template");
+    const patched = this.patchText(html, template.content.ownerDocument, sanitizeInertRoot);
+    if (patched) {
+      this.previous = patched;
+      this.previousHtml = html;
+      return joinNodes(patched.map((node) => node.rendered));
+    }
     template.innerHTML = html;
     const read = (node: Node, previous?: RawNode): RawNode => {
       const element = node instanceof Element ? node : undefined;
@@ -139,7 +146,103 @@ export class IncrementalMarkdownSanitizer {
     this.previous = Array.from(template.content.childNodes, (node, index) =>
       read(node, this.previous[index]),
     );
+    this.previousHtml = template.innerHTML === html ? html : undefined;
     return joinNodes(this.previous.map((node) => node.rendered));
+  }
+
+  private patchText(
+    html: string,
+    inertDocument: Document,
+    sanitizeInertRoot: (root: Element) => void,
+  ): RawNode[] | undefined {
+    const previousHtml = this.previousHtml;
+    if (
+      previousHtml === undefined ||
+      previousHtml === html ||
+      this.previous.map((node) => node.raw).join("") !== previousHtml
+    ) {
+      return undefined;
+    }
+    let start = 0;
+    while (
+      start < previousHtml.length &&
+      start < html.length &&
+      previousHtml[start] === html[start]
+    ) {
+      start++;
+    }
+    let end = previousHtml.length;
+    let nextEnd = html.length;
+    while (end > start && nextEnd > start && previousHtml[end - 1] === html[nextEnd - 1]) {
+      end--;
+      nextEnd--;
+    }
+    const replacement = html.slice(start, nextEnd);
+    if (/[<>&\u00a0\r\0]/u.test(replacement)) {
+      return undefined;
+    }
+    const patch = (node: RawNode, offset: number): RawNode | undefined => {
+      if (start < offset || end > offset + node.raw.length) {
+        return undefined;
+      }
+      const oldRoot = node.rendered.nodes[0];
+      if (
+        node.kind === Node.TEXT_NODE &&
+        node.rendered.nodes.length === 1 &&
+        oldRoot?.text === node.raw &&
+        !/[<>&\u00a0\r\0]/u.test(node.raw)
+      ) {
+        const raw = node.raw.slice(0, start - offset) + replacement + node.raw.slice(end - offset);
+        const output = inertDocument.createElement("div");
+        output.textContent = raw;
+        sanitizeInertRoot(output);
+        const nodes = readMarkdownDomNodes(output, { incremental: true, sessionTitles: true });
+        if (nodes.length !== 1 || nodes[0]?.text !== raw || output.innerHTML !== raw) {
+          return undefined;
+        }
+        return { ...node, raw, rendered: { html: raw, nodes } };
+      }
+      if (!node.reusable || !oldRoot?.tag || oldRoot.opaque || node.rendered.nodes.length !== 1) {
+        return undefined;
+      }
+      const close = `</${oldRoot.tag}>`;
+      const open = node.shell.slice(0, -close.length);
+      if (open + node.children.map((child) => child.raw).join("") + close !== node.raw) {
+        return undefined;
+      }
+      let childOffset = offset + open.length;
+      for (const [index, child] of node.children.entries()) {
+        const updated = patch(child, childOffset);
+        if (updated) {
+          const children = node.children.slice();
+          children[index] = updated;
+          const content = joinNodes(children.map((entry) => entry.rendered));
+          const nextHtml = open + content.html + close;
+          return {
+            ...node,
+            raw: open + children.map((entry) => entry.raw).join("") + close,
+            children,
+            rendered: {
+              html: nextHtml,
+              nodes: [{ ...oldRoot, canonical: `1:${nextHtml}`, children: content.nodes }],
+            },
+          };
+        }
+        childOffset += child.raw.length;
+      }
+      return undefined;
+    };
+    let offset = 0;
+    for (const [index, node] of this.previous.entries()) {
+      const updated = patch(node, offset);
+      if (updated) {
+        const next = this.previous.slice();
+        next[index] = updated;
+        return next;
+      }
+      offset += node.raw.length;
+    }
+    return undefined;
   }
 }
 

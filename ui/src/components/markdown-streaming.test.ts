@@ -66,6 +66,8 @@ describe("toStreamingMarkdownParts", () => {
       (_, index) => prefix + "more text ".repeat(index + 1),
     );
     const expected = sources.map((source) => streamHtml(source));
+    const htmlAssignments = vi.spyOn(Element.prototype, "innerHTML", "set");
+    onTestFinished(() => htmlAssignments.mockRestore());
     withSanitizerBudget(() => {
       for (const [index, source] of sources.entries()) {
         expect(streamHtml(source, {}, "incremental-inline-sanitizer")).toBe(expected[index]);
@@ -74,6 +76,7 @@ describe("toStreamingMarkdownParts", () => {
       expect(sanitizedChars()).toBeLessThan(
         sources.reduce((sum, source) => sum + source.length, 0),
       );
+      expect(htmlAssignments.mock.calls.length).toBeLessThan(sources.length / 3);
     });
   });
 
