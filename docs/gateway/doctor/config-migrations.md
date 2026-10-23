@@ -119,8 +119,12 @@ one-time approval again; Doctor does not transfer an approval to different
 payload bytes or bypass its live parent approval.
 
 Conversion writes and verifies the canonical job and context data before removing
-legacy config or archiving files. Ambiguous input remains recoverable and the
-pending automation cannot execute. A completed provisioning receipt remains after
+legacy config or archiving files. Unsafe or unreadable input remains recoverable
+and the pending automation cannot execute. Existing scratch that was not imported
+from `HEARTBEAT.md` wins when it differs from that file: Doctor retains both, prints
+a notice, and completes conversion. Explicitly unset scratch stays unset. Review
+the retained file before copying wanted instructions into the automation. A
+completed provisioning receipt remains after
 job deletion, so repeated Doctor runs and restarts preserve operator edits and
 deletions. See [Heartbeat migration](/gateway/heartbeat) and the
 [shared-state policy fence](/reference/database-schemas/state-schema-history#state-schema-30).
@@ -129,10 +133,10 @@ Candidate update admission validates the projected configuration without changin
 the live config, databases, or backups. The installed updater can then run
 Doctor's backed-up data migration before the legacy settings are removed.
 Package updates using candidate admission also inspect the original heartbeat
-files and automation scratch. Known conflicts refuse the update before the running
-Gateway stops, including when an older updater omits workspace files from its
-private rehearsal. Reconcile the reported source and scratch while preserving
-both originals, then retry the update.
+files. Unsafe or unreadable sources refuse the update before the running Gateway
+stops, including when an older updater omits workspace files from its private
+rehearsal. Differing scratch or a file retained after completed conversion does
+not block admission: Doctor preserves the originals and reports them for review.
 Unrelated invalid fields, unsupported legacy shapes, and heartbeat repairs in
 read-only, future-written, or included configuration still require operator
 repair before admission.

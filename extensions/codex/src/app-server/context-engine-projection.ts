@@ -164,7 +164,6 @@ export async function projectContextEngineAssemblyForCodex(params: {
 
 export function resolveCodexContextEngineProjectionMaxChars(params: {
   contextTokenBudget?: number;
-  reserveTokens?: number;
 }): number {
   const contextTokenBudget = Math.floor(asFiniteNumber(params.contextTokenBudget) ?? 0);
   if (contextTokenBudget <= 0) {
@@ -173,7 +172,6 @@ export function resolveCodexContextEngineProjectionMaxChars(params: {
   const scaledChars =
     resolveProjectionPromptBudgetTokens({
       contextTokenBudget,
-      reserveTokens: params.reserveTokens,
     }) * APPROX_RENDERED_CHARS_PER_TOKEN;
   return normalizeRenderedContextMaxChars(scaledChars);
 }
