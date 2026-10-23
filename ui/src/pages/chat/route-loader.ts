@@ -19,6 +19,7 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,
+  isDashboardSessionKey,
   isUiGlobalSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -374,7 +375,7 @@ export async function loadChatRoute(
   if (target.kind === "literal") {
     const deferSnapshotRows =
       face === "chat" &&
-      parseAgentSessionKey(target.sessionKey)?.rest.startsWith("dashboard:") &&
+      isDashboardSessionKey(target.sessionKey) &&
       Boolean(sessionKeyUuid(target.sessionKey));
     let defaultsKnown =
       defaultsUsable ||
