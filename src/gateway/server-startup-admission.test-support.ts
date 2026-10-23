@@ -177,7 +177,7 @@ export function registerGatewayStartupAdmissionTests(params: {
           return work;
         });
       try {
-        expect(sidecarsReady).toHaveBeenCalledOnce();
+        expect(sidecarsReady).not.toHaveBeenCalled();
         if (stage === "gateway_start") {
           postReadyWork.resolve();
           await hookLoad.entered;
@@ -192,6 +192,7 @@ export function registerGatewayStartupAdmissionTests(params: {
         connectionWork.beginClose();
         // Close retains admitted imports, but must retire parked admission without reopening it.
         await connectionWork.drain();
+        expect(sidecarsReady).toHaveBeenCalledTimes(stage === "orphans" ? 0 : 1);
         expect(gatewayStart).not.toHaveBeenCalled();
         expect(refresh).toHaveBeenCalledTimes(stage === "orphans" ? 0 : 1);
       } finally {
