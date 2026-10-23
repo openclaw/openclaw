@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { pruneMapToMaxSize } from "./map-size.js";
+import { pruneMapToMaxSize, touchBoundedSet } from "./map-size.js";
+
+it("refreshes repeated set keys and prunes all excess oldest entries", () => {
+  const keys = new Set(["a", "b", "c", "d"]);
+  touchBoundedSet(keys, "b", 2);
+  expect([...keys]).toEqual(["d", "b"]);
+  touchBoundedSet(keys, "e", 2);
+  expect([...keys]).toEqual(["b", "e"]);
+});
 
 describe("pruneMapToMaxSize", () => {
   const entries = [

@@ -319,13 +319,6 @@ describe("private update capture exclusion", () => {
             repositoryPath,
             stateDir,
             databases: [database],
-            gitEnv: {
-              ...process.env,
-              GIT_AUTHOR_NAME: "OpenClaw Test",
-              GIT_AUTHOR_EMAIL: "test@example.invalid",
-              GIT_COMMITTER_NAME: "OpenClaw Test",
-              GIT_COMMITTER_EMAIL: "test@example.invalid",
-            },
           });
     await expect(create).rejects.toThrow("Private update captures are excluded");
     expect(await fs.readFile(databasePath)).toEqual(before);

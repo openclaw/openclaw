@@ -86,6 +86,23 @@ recorded predecessor, allowing retirement of a binding not yet transferred after
 compaction without adopting it during preparation. Ordinary compaction does not
 invoke this hook and continues to preserve native thread continuity.
 
+### Native child observations
+
+Implement optional `readNativeSubagents(params)` to expose native children in the
+Control UI Subagents panel. An authorized `sessions.describe` read opts in with
+`includeNativeSubagents: true`. Core captures registered observers and rechecks
+the parent session, sharing access, and plugin lifetime before returning results.
+A parent's runtime selection does not discard children retained by an earlier runtime.
+
+Return `coverage: "live"`, at most 128 children (`id`, `label`, and observed
+`status`), and `truncated`. Revalidate `params.assertCurrent()` after awaited
+work. Bind observations to the exact physical parent and native connection;
+never discover, adopt, start, resume, or retain execution just for inspection.
+Return `undefined` when the observation owner is unavailable. Native IDs are
+opaque display identities, not session keys or cancellation handles. Completed
+observations may disappear when their native owner retires; this is not saved
+history or proof that a parent consumed the child's result.
+
 ### Fresh native thread seeds
 
 The optional `hostCapabilities.prepareBoundedSeed({ assertCurrent, signal, tokenBudget })`

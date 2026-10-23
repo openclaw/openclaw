@@ -113,6 +113,9 @@ without inspecting the pathname again. Observer reads rely on that same admitted
 reader instead of capturing and rechecking every candidate file independently.
 Committed writes still invalidate retained entries; config routing, native-open
 replacement detection, and live disclosure authority remain with their owners.
+Session row projections borrow the replica's immutable nested entry facts while
+owning their mutable outer rows. Commit receipts carry pending final delivery in
+the canonical entry postimage, without a second copy.
 
 Session file reads retain workspace authority independently of evictable display
 rows. Committed writers carry their existing full postimages to predicates that
@@ -204,7 +207,10 @@ are the limited exceptions. Runtime access still using them is migration debt.
 For engine stores, the synchronous `withEngineStoreAdmission` scope is lexical:
 it cannot return a Promise, and a retained connection does not extend it.
 PostgreSQL rejects construction and SQL on the Gateway main thread outside that
-scope. The CLI entry records an immutable process role before state access;
+scope. Native lease verification, renewal, and release use this scope only for their
+storage primitive. Lifecycle callbacks remain outside it, and ownership checks
+still read the current owner and expiry before permitting an effect.
+The CLI entry records an immutable process role before state access;
 one-shot CLI and Doctor processes may use the synchronous PostgreSQL bridge.
 An unset role still refuses main-thread access. Interactive onboarding and
 `setup` (including `crestodian`) keep the CLI role through their prompts and
@@ -506,6 +512,12 @@ drain still owns the complete backfill, and a failed or cancelled refresh reject
 its pending exact reads instead of returning stale totals.
 
 ## Transactions and query shape
+
+Personal account mutations, approval operations, auth authorization enrollment,
+and auth usage writes obtain their initial host grant before `BEGIN IMMEDIATE`.
+They reread authoritative rows inside the transaction and retain final commit
+authorization. A busy host therefore cannot hold the writer during initial
+admission; commit admission still retains transaction custody.
 
 Use Kysely for ordinary queries. Raw SQL belongs to schema, migrations,
 bootstrap, or a justified engine-owned primitive. Prepare asynchronous inputs
@@ -3422,6 +3434,12 @@ missing store; idle agents still have no durable database until their first writ
 Session event capture retains the physical source reported by the worker after
 cold admission. A first writer that finishes before the read can supply that
 source; a file created after an absent read or replaced after capture is refused.
+Retained generation checks consume published session facts and the physical identity
+captured at admission. Existing files need one identity probe without rediscovering
+their canonical path; this still fences external tool effects after file replacement.
+Same-generation settings keep their published identity until permission mode or tool
+overrides change, so event guards compare policy once per settings revision. Every
+check still observes pending publications and current execution authority.
 No schema, durability, configuration, or update migration changes are required.
 
 Accepted chat input prepares fresh sharing and exact-row facts again before

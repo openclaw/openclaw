@@ -41,6 +41,7 @@ const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 type HeartbeatScratchMigrationResult = {
   changes: string[];
   warnings: string[];
+  notices?: string[];
 };
 
 type HeartbeatSource = {
@@ -51,7 +52,7 @@ type HeartbeatSource = {
   sha256: string;
 };
 
-export async function readHeartbeatSource(
+async function readHeartbeatSource(
   cfg: OpenClawConfig,
   agentId: string,
   options?: { recoverClaims?: boolean; env?: NodeJS.ProcessEnv },
@@ -120,27 +121,27 @@ export async function readHeartbeatSource(
   };
 }
 
-export function completedHeartbeatSourceWarning(agentId: string): string {
-  return `Agent "${agentId}" has completed cutover; its newly present HEARTBEAT.md was retained without changing the operator-owned automation.`;
+function completedHeartbeatSourceWarning(agentId: string): string {
+  return `Agent "${agentId}" has completed cutover; its HEARTBEAT.md was retained without changing the operator-owned automation.`;
 }
 
-export function shouldInspectHeartbeatScratchSource(
+function shouldInspectHeartbeatScratchSource(
   hasMonitor: boolean,
   receipt: DefaultProactiveJobReceipt | undefined,
 ): boolean {
   return hasMonitor || receipt?.phase === "complete";
 }
 
-export function heartbeatScratchMigrationConflict(
+function heartbeatScratchMigrationConflict(
   agentId: string,
   content: string,
   state: CronJobScratchState,
 ): string | undefined {
   if (state.currentRevision > 0 && !state.scratch) {
-    return `Agent "${agentId}" scratch was explicitly unset; it was left unchanged.`;
+    return `Agent "${agentId}" scratch was explicitly unset; it was left unchanged and HEARTBEAT.md was retained for review.`;
   }
   if (state.scratch && state.scratch.content !== content && !state.scratch.sourceSha256) {
-    return `Agent "${agentId}" already has different cron scratch; it was left unchanged.`;
+    return `Agent "${agentId}" already has different cron scratch; the automation keeps it and HEARTBEAT.md was retained for review.`;
   }
   return undefined;
 }
@@ -437,6 +438,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
   const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const changes: string[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
   const migrationAgents = resolveLegacyHeartbeatAgents(params.cfg);
   if (!params.shouldRepair) {
     for (const agent of migrationAgents) {
@@ -504,7 +506,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     }
     if (receipt?.phase === "complete") {
       retainedSources.add(source.entryKey);
-      warnings.push(completedHeartbeatSourceWarning(agentId));
+      notices.push(completedHeartbeatSourceWarning(agentId));
       continue;
     }
     // Group by the directory entry being removed (canonical parent directory +
@@ -536,7 +538,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       plannedRevisionByJobId.set(monitor.id, state.currentRevision);
       const conflict = heartbeatScratchMigrationConflict(agentId, source.content, state);
       if (conflict) {
-        warnings.push(conflict);
+        notices.push(conflict);
       } else {
         importAgents.push([agentId, monitor]);
         if (current?.sourceSha256 !== source.sha256) {
@@ -714,6 +716,6 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     }
   }
 
-  noteDoctorMigrationResult({ changes, warnings });
-  return { changes, warnings };
+  noteDoctorMigrationResult({ changes, warnings, notices });
+  return { changes, warnings, ...(notices.length ? { notices } : {}) };
 }

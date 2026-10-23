@@ -48,7 +48,7 @@ const ownerFor = (host: DesktopPanelElement) => {
   }
   return owner;
 };
-defineSolidBridge<DesktopPanelInputs, Methods>(
+export const DesktopPanel = defineSolidBridge<DesktopPanelInputs, Methods>(
   "openclaw-desktop-panel",
   (inputs, host) => {
     const retained = owners.has(host);

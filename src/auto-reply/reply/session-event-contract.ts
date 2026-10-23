@@ -128,6 +128,8 @@ export type ScheduledSessionAutomation = {
   modelFallbackPolicy?: {
     useSubagentFallbacks: boolean;
     inheritDefaultFallbacksForAgentStringModel: boolean;
+    /** Stored provenance when the turn uses the session's model selection. */
+    sessionModelOverrideSource?: "auto" | "user";
   };
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Original Control UI admin classification, revalidated by the restored operator source. */

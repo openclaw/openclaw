@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, untrack } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import {
   presenceViewerActivity,
@@ -24,15 +24,10 @@ import {
   renderPendingSessionCreateRow,
 } from "./app-sidebar-session-row-render.tsx";
 import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
-import { SIDEBAR_SESSION_PAGE_SIZE } from "./app-sidebar-session-types.ts";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
-/** Fetching a page is useless if the new rows land behind a section's local cap,
- *  so an explicit roster load reveals a page in every section too -- otherwise
- *  the click can look like undefined happened. */
 function renderRosterLoadMore(
   host: SidebarSessionListHost,
-  sections: RenderableSessionSection[],
   hasMore: boolean | undefined,
   loading: boolean,
 ) {
@@ -47,21 +42,7 @@ function renderRosterLoadMore(
         aria-label={loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
         disabled={loading}
         aria-busy={loading ? "true" : "false"}
-        onClick={() => {
-          // The request owner changes before the DOM commits the disabled attribute.
-          // A repeated activation must not reveal local rows during that read.
-          if (host.sessionData.sessionsLoading) {
-            return;
-          }
-          void host.sessionData.loadMoreSidebarSessions().then(() => {
-            for (const section of sections) {
-              host.setVisibleSessionLimit(
-                section.id,
-                section.visibleLimit + SIDEBAR_SESSION_PAGE_SIZE,
-              );
-            }
-          });
-        }}
+        onClick={() => void host.loadMoreSidebarSessions()}
       >
         {loading ? <span class="session-run-spinner" aria-hidden="true" /> : undefined}
         {loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
@@ -107,41 +88,39 @@ function renderSessionListBody(params: {
   );
   return (
     <For each={params.sections} keyed={(section) => section.id}>
-      {(section) => {
-        // For keys this branch by id; all changing section facts remain reactive below.
-        const initialSectionId = untrack(() => section().id);
-        if (initialSectionId.startsWith("catalog:")) {
-          return (
-            <Show when={catalogsBySectionId().get(section().id)}>
-              {(catalog) => (
-                <params.catalogRenderer
-                  host={host()}
-                  snapshot={params.catalogs}
-                  catalog={catalog()}
-                />
-              )}
+      {(section) => (
+        <Show
+          when={section().id.startsWith("catalog:")}
+          fallback={
+            // Empty personal sections are omitted by the projection. Other empty sections retain their drag destinations.
+            <Show
+              when={
+                !(section().id === "work" && section().totalRowCount === 0) &&
+                !(
+                  section().id === "ungrouped" &&
+                  section().totalRowCount === 0 &&
+                  !params.nativeSessionsHaveMore &&
+                  !host().sessionOwnershipVisibility.filters &&
+                  host().sessionsStatusFilter === "active" &&
+                  host().sessionOrganizer.draggingSessionKey === null
+                )
+              }
+            >
+              <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
             </Show>
-          );
-        }
-        // Empty personal sections are omitted by the projection. Other empty sections retain their drag destinations.
-        return (
-          <Show
-            when={
-              !(section().id === "work" && section().totalRowCount === 0) &&
-              !(
-                section().id === "ungrouped" &&
-                section().totalRowCount === 0 &&
-                !params.nativeSessionsHaveMore &&
-                !host().sessionOwnershipVisibility.filters &&
-                host().sessionsStatusFilter === "active" &&
-                host().sessionOrganizer.draggingSessionKey === null
-              )
-            }
-          >
-            <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
+          }
+        >
+          <Show when={catalogsBySectionId().get(section().id)}>
+            {(catalog) => (
+              <params.catalogRenderer
+                host={host()}
+                snapshot={params.catalogs}
+                catalog={catalog()}
+              />
+            )}
           </Show>
-        );
-      }}
+        </Show>
+      )}
     </For>
   );
 }
@@ -168,12 +147,7 @@ export function renderSessionList(params: {
     <div class="sidebar-recent-sessions">
       {renderPendingSessionCreateRow(unplacedCreate)}
       {renderSessionListBody(params)}
-      {renderRosterLoadMore(
-        host(),
-        params.sections,
-        params.nativeSessionsHaveMore,
-        params.nativeSessionsLoading,
-      )}
+      {renderRosterLoadMore(host(), params.nativeSessionsHaveMore, params.nativeSessionsLoading)}
       {renderPersonalSessionEmpty(
         host(),
         params.empty && params.sections.every((section) => section.totalRowCount === 0),

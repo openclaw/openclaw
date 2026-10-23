@@ -44,6 +44,7 @@ import {
 } from "../../infra/agent-lifecycle-error.js";
 import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { AgentTurnRestartClaimCleanup } from "./agent-runner-completion.types.js";
 import type {
   ReplyAdmissionPatch,
@@ -435,6 +436,8 @@ export function createReplyRestartRecoveryClaimController(
         throw new Error("channel restart recovery requires source-keyed user-turn admission");
       }
     }
+    const claimSourceRunId =
+      recoverableDeliveryContext && sourceTurnId ? sourceTurnId : recoveryRunId;
     const operatorSource =
       !recoverableDeliveryContext && !sourceTurnId
         ? createRestartRecoveryOperatorSource({
@@ -447,11 +450,21 @@ export function createReplyRestartRecoveryClaimController(
             requesterOrigin,
           })
         : undefined;
+    // Internal children retain requester custody even without an outward delivery route.
+    const requesterSource = createRestartRecoveryRequesterSource({
+      requesterOrigin,
+      entry,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sourceRunId: claimSourceRunId,
+    });
+    const requesterChannel = requesterSource?.requesterOrigin.messageProvider;
     if (
       !recoverableDeliveryContext &&
       !activeClaimRunId &&
       (!recorder || recorder.hasPersisted()) &&
-      !operatorSource
+      !operatorSource &&
+      !requesterSource
     ) {
       // These turns have no admission write to extend; lifecycle start owns their claim.
       return "admitted";
@@ -483,12 +496,8 @@ export function createReplyRestartRecoveryClaimController(
       canReplaceAbortedClaim &&
       entry.restartRecoverySourceIngress === "control-ui" &&
       !recoverableDeliveryContext;
-    const claimSourceRunId =
-      transfersControlUiClaim || operatorSource
-        ? recoveryRunId
-        : recoverableDeliveryContext
-          ? sourceTurnId
-          : undefined;
+    const hasClaim =
+      recoverableDeliveryContext || transfersControlUiClaim || operatorSource || requesterSource;
     const patch: SessionTranscriptTurnLifecyclePatch = {
       ...retiredClaim,
       abortedLastRun: false,
@@ -500,21 +509,10 @@ export function createReplyRestartRecoveryClaimController(
       restartRecoveryDeliveryToolCallId: undefined,
       restartRecoveryDeliveryContext: recoverableDeliveryContext,
       restartRecoveryDeliveryRequestFingerprint: undefined,
-      restartRecoveryDeliveryRunId:
-        recoverableDeliveryContext || transfersControlUiClaim || operatorSource
-          ? recoveryRunId
-          : undefined,
+      restartRecoveryDeliveryRunId: hasClaim ? recoveryRunId : undefined,
       restartRecoveryOperatorSource: operatorSource,
-      restartRecoveryRequesterSource: claimSourceRunId
-        ? createRestartRecoveryRequesterSource({
-            requesterOrigin,
-            entry,
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            sourceRunId: claimSourceRunId,
-          })
-        : undefined,
-      restartRecoveryDeliverySourceRunId: claimSourceRunId,
+      restartRecoveryRequesterSource: requesterSource,
+      restartRecoveryDeliverySourceRunId: hasClaim ? claimSourceRunId : undefined,
       restartRecoveryRequesterAccountId: transfersControlUiClaim
         ? undefined
         : normalizeOptionalString(params.requesterAccountId),
@@ -527,9 +525,14 @@ export function createReplyRestartRecoveryClaimController(
         ? "channel"
         : transfersControlUiClaim
           ? "control-ui"
-          : operatorSource && params.inputProvenance?.kind === "inter_session"
+          : (operatorSource || requesterSource) && params.inputProvenance?.kind === "inter_session"
             ? "internal"
-            : operatorSource?.snapshot.sourceIngress,
+            : (operatorSource?.snapshot.sourceIngress ??
+              (requesterSource
+                ? requesterChannel && !isInternalMessageChannel(requesterChannel)
+                  ? "channel"
+                  : "internal"
+                : undefined)),
       restartRecoverySourceReplyDeliveryMode: transfersControlUiClaim
         ? undefined
         : params.sourceReplyDeliveryMode,

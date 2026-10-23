@@ -4,6 +4,7 @@ import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
+import { cloneExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import {
   bindActiveCronAuthorityCurrentness,
   captureCronRequesterGrantIssuer,
@@ -114,17 +115,7 @@ function buildCliMcpBashElevated(
   if (!bashElevated) {
     return undefined;
   }
-  return {
-    enabled: bashElevated.enabled,
-    allowed: bashElevated.allowed,
-    defaultLevel: bashElevated.defaultLevel,
-    ...(bashElevated.fullAccessAvailable !== undefined
-      ? { fullAccessAvailable: bashElevated.fullAccessAvailable }
-      : {}),
-    ...(bashElevated.fullAccessBlockedReason !== undefined
-      ? { fullAccessBlockedReason: bashElevated.fullAccessBlockedReason }
-      : {}),
-  };
+  return cloneExecElevatedDefaults(bashElevated);
 }
 
 function buildCliMcpChannelContext(

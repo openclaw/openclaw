@@ -74,6 +74,8 @@ it("retains the rename control and focus while header facts and callbacks update
   expect(container.querySelector(".chat-pane__session-title-button")).toBe(button);
   expect(button.querySelector(".chat-pane__session-title-text")).toBe(title);
   expect(button.textContent).toBe("Current session");
+  expect(button.getAttribute("aria-label")).toBe("Rename session Current session");
+  expect(button.hasAttribute("title")).toBe(false);
   expect(document.activeElement).toBe(button);
   button.click();
   expect(currentRename).toHaveBeenCalledOnce();

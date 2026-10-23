@@ -1,5 +1,5 @@
 import { insert, render, spread } from "@solidjs/web";
-import { createRoot, createSignal, onCleanup, runWithOwner } from "solid-js";
+import { createRoot, createSignal, onCleanup } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { registerRouteElement } from "../app/route-elements.ts";
 import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
@@ -218,7 +218,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             this.#connectContext();
           }
           if (!this.#dispose) {
-            runWithOwner(null, () => this.#mount());
+            this.#mount();
           }
         }
         return true;

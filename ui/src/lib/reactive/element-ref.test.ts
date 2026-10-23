@@ -1,7 +1,26 @@
 /* @vitest-environment jsdom */
 
+import { createRoot } from "solid-js";
 import { expect, it } from "vitest";
-import { connectedElementRef } from "./element-ref.ts";
+import { connectedElementRef, elementRef } from "./element-ref.ts";
+
+it("retires replaced ref registrations and releases the last one before first settlement", () => {
+  const elements = new Set<HTMLElement>();
+  const first = document.createElement("button");
+  const replacement = document.createElement("button");
+  createRoot((dispose) => {
+    const ref = elementRef((element: HTMLElement) => {
+      elements.add(element);
+      return () => elements.delete(element);
+    });
+    ref(first);
+    expect([...elements]).toEqual([first]);
+    ref(replacement);
+    expect([...elements]).toEqual([replacement]);
+    dispose();
+    expect([...elements]).toEqual([]);
+  });
+});
 
 it("exposes only connected bindings and keeps a replacement when its predecessor retires", () => {
   const slot = connectedElementRef<HTMLButtonElement>();

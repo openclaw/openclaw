@@ -65,8 +65,10 @@ No lane accepts a protocol mismatch as a passing test. Preview failures retain
 their raw GitHub job conclusions; Release Checks can therefore appear red while
 Full Release Validation passes with explicit advisory evidence. The release
 policy admits only the named preview jobs and main-source resolver, and only
-when stable E2E and the release-check verifier succeeded. Unrelated failures and
-whole-workflow cancellation still block. Automatic child reuse remains limited
+when stable E2E succeeds and the release-check verifier passes the existing
+trusted-tooling policy. Independently approved provider waivers retain their
+aggregate-log checks. Unrelated unwaived failures and whole-workflow cancellation
+still block. Automatic child reuse remains limited
 to green runs; advisory-red children run again rather than reusing red evidence.
 
 The harness OIDC check binds the called workflow, not the caller's authority.

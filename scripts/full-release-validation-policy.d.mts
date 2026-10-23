@@ -23,13 +23,6 @@ export function validateReleaseCoveragePolicyBinding(
   plan: ReleaseRecord | undefined,
   validationInputs?: ReleaseRecord,
 ): void;
-export function normalizeReleaseTelegramWaiver(input: ReleaseRecord): string;
-export function releaseWaivedIntegrationChannels(input: ReleaseRecord): string[];
-export function validateReleaseTelegramWaiverBinding(
-  plan: ReleaseRecord | undefined,
-  validationInputs?: ReleaseRecord,
-): void;
-
 export interface ReleaseRecord {
   [key: string]: unknown;
 }
@@ -136,7 +129,7 @@ export function composeReleaseChildAttemptEvidence(input: {
 }): ReleaseRecord;
 
 export function releaseChildAdvisories(child: ReleaseRecord): ReleaseRecord[];
-export function terminalPolicyPass(child: ReleaseRecord): boolean;
+export function terminalPolicyPass(child: ReleaseRecord, targetVersion?: string): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;
 export function releasePlanGateFailures(gates: ReleaseRecord[]): ReleaseRecord[];

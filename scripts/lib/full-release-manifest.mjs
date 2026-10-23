@@ -50,6 +50,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
     publishInputs: context.publishInputs,
     advisoryJobs: drain?.advisoryJobs ?? [],
+    waivers: drain?.waivers ?? [],
     childEvidence,
     ...(plan.qualificationCoverage
       ? {
@@ -116,6 +117,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
         runReleaseSoak: context.runReleaseSoak,
         validationInputs: {
           ...context.validationInputs,
+          ...(plan.targetVersion ? { targetVersion: plan.targetVersion } : {}),
           ...(plan.sourceAdmissionContract
             ? {
                 ...publicationIntentInputs(plan.sourceAdmission),
@@ -159,8 +161,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
   return manifest;
 }
 
-export function manifestContextFromEnvironment(source) {
-  const env = process.env;
+export function manifestContextFromEnvironment(source, env = process.env) {
   const coverage = source?.coverage ?? {};
   const inputs = {};
   for (const [key, variable, sourceKey] of [
@@ -200,10 +201,6 @@ export function manifestContextFromEnvironment(source) {
   }
   inputs.targetContextRef = env.TARGET_CONTEXT_REF ?? source?.targetContextRef ?? "";
   inputs.targetVersion = env.TARGET_VERSION ?? source?.projection?.version ?? "";
-  const waiver = env.TELEGRAM_WAIVER ?? coverage.telegram_waiver ?? "";
-  if (waiver) {
-    inputs.telegramWaiver = waiver;
-  }
   return {
     runId: env.GITHUB_RUN_ID,
     runAttempt: env.GITHUB_RUN_ATTEMPT,
