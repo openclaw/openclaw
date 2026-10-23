@@ -1478,9 +1478,16 @@ const mode = ${JSON.stringify(mode)};
 const outputs = [0, 1].map(() => Object.assign(new EventEmitter(), {
   closed: true, destroy() { this.destroyed = true; },
 }));
-const externalClose = () => {};
+let child, closedOutputs = 0;
+const maybeCloseChild = () => {
+  if (closedOutputs === outputs.length &&
+      (child.exitCode !== null || child.signalCode !== null)) {
+    child.emit("close", child.exitCode, child.signalCode);
+  }
+};
+const externalClose = () => { closedOutputs++; maybeCloseChild(); };
 for (const output of outputs) output.on("close", externalClose);
-const child = Object.assign(new EventEmitter(), {
+child = Object.assign(new EventEmitter(), {
   pid: 12345, exitCode: null, signalCode: null,
   stdin: null, stdout: outputs[0], stderr: outputs[1],
   kill() { throw new Error("must signal the owned group"); },
@@ -1497,6 +1504,7 @@ process.kill = (pid, signal) => {
   if (signal !== 0) {
     child.signalCode = signal;
     child.emit("exit", null, signal);
+    maybeCloseChild();
   }
   return true;
 };
@@ -1525,6 +1533,7 @@ try {
       else {
         child.exitCode = 0;
         child.emit("exit", 0, null);
+        maybeCloseChild();
       }
     },
   }).then(value => ({ value }), error => ({ error })).finally(() => { settled = true; });
@@ -1595,22 +1604,31 @@ try {
     expect(() => owner.assertReleased()).not.toThrow();
   });
 
-  posixIt("does not wait indefinitely when a timed-out child omits close", async () => {
+  posixIt("fails bounded cleanup when a timed-out child omits close", async () => {
+    const root = createTempDir("openclaw-managed-child-missing-close-");
+    const owner = createVitestResourceOwner(root);
     const startedAt = Date.now();
     let childPid = 0;
     await expect(
       runNodeCommand({
         args: ["-e", "setInterval(() => {}, 1_000)"],
+        env: fixtureEnv(root),
         onReady: (child) => {
           childPid = expectProcessPid(child.pid);
           child.removeAllListeners("close");
         },
         timeoutMs: 200,
+        timeoutKillGraceMs: 0,
+        cleanupDrainTimeoutMs: 100,
       }),
-    ).rejects.toMatchObject({ code: "ETIMEDOUT" });
+    ).rejects.toMatchObject({
+      code: "EPROCESSGROUP_CLEANUP_FAILED",
+      processTreeState: "indeterminate",
+    });
 
     expect(Date.now() - startedAt).toBeLessThan(2_000);
     expect(isProcessAlive(childPid)).toBe(false);
+    expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
   });
 
   posixIt.for(["before", "after"])(

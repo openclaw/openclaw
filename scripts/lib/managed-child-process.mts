@@ -775,6 +775,11 @@ async function runManagedCommandInner(
     releaseOwnership();
     throw error;
   }
+  let childClosed = false;
+  child.once("close", () => {
+    childClosed = true;
+    clearTimeout(timeoutTimer);
+  });
   const cleanupHandoff = handoff.attach(child);
   if (cleanupHandoff) {
     cleanupHandoffs.set(child, cleanupHandoff);
@@ -821,6 +826,7 @@ async function runManagedCommandInner(
       forceKillOnLeaderExit,
       drainTimeoutMs: cleanupDrainTimeoutMs,
       areOutputPipesClosed: () => pendingOutputCloses.size === 0,
+      isChildClosed: () => childClosed,
       onTerminated: releaseOwnership,
       stopControl,
     }).then(
@@ -853,7 +859,6 @@ async function runManagedCommandInner(
       }
     });
     // The wall deadline includes output drainage, but not group verification after close.
-    child.once("close", () => clearTimeout(timeoutTimer));
     // Tree owners must start cleanup at exit: descendants can hold output
     // open indefinitely. Finalization still joins the group and output pipes.
     child.once(ownsProcessTree ? "exit" : "close", (status, received) => {
@@ -953,6 +958,7 @@ export async function finalizeManagedChild(
     drainTimeoutMs = PROCESS_GROUP_DRAIN_TIMEOUT_MS,
     retainOutputOnFailure = false,
     areOutputPipesClosed,
+    isChildClosed = () => true,
     onTerminated = () => {},
     stopControl,
   }: {
@@ -963,6 +969,7 @@ export async function finalizeManagedChild(
     drainTimeoutMs?: number;
     retainOutputOnFailure?: boolean;
     areOutputPipesClosed?: () => boolean;
+    isChildClosed?: () => boolean;
     onTerminated?: () => void;
     stopControl?: ManagedChildStopControl;
   },
@@ -1170,6 +1177,7 @@ export async function finalizeManagedChild(
       if (
         groupState === "dead" &&
         exited &&
+        isChildClosed() &&
         outputClosed() &&
         cleanupHandoff?.settled() !== false
       ) {
