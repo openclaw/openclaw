@@ -9,6 +9,7 @@ import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy
 import { settleCliSessionResult } from "../../agents/cli-session-store.js";
 import {
   applyCliSessionBindingResult,
+  hasCliSessionReuseMetadata,
   assertCliSessionBindingResultCommitAllowed,
 } from "../../agents/cli-session.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -31,7 +32,6 @@ import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-pl
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveAgentLifecycleTerminalMetadata } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
-import type { CliSessionBinding } from "../../config/sessions.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { registerCronRunExecSource } from "../../infra/cron-run-exec-source.js";
 import {
@@ -76,10 +76,6 @@ type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
   () => import("./run-embedded.runtime.js"),
 );
-
-function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
-  return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
-}
 
 /** Creates the model-fallback executor for one isolated cron prompt run. */
 export function createCronPromptExecutor(
@@ -508,6 +504,7 @@ export function createCronPromptExecutor(
                   allowCliAuthProfileForwarding
                     ? resolveCliExecutionAuthProfileId({
                         cliExecutionProvider: executionProvider,
+                        model: modelOverride,
                         authProfileProvider: providerOverride,
                         config: params.cfgWithAgentDefaults,
                         agentDir: params.agentDir,

@@ -162,6 +162,7 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
   const cliAuthProfileId = allowCliAuthProfileForwarding
     ? await resolveCliExecutionAuthProfileId({
         cliExecutionProvider: executionProvider,
+        model: selection.modelId,
         authProfileProvider: selection.provider,
         config: runConfig,
         agentDir: selection.agentDir,

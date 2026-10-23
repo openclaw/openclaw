@@ -18,3 +18,25 @@ export async function runWithCliPreparationSource<T>(
     () => runWithPreparedRunSourceScope(params, prepare),
   );
 }
+
+/** In-memory sessions own their source without borrowing durable transcript authority. */
+export function normalizeCliPreparationSource(params: RunCliAgentParams): RunCliAgentParams {
+  if (params.sessionManager) {
+    // Caller-owned memory is authoritative even when empty. Correlation and native
+    // bindings survive; borrowed durable paths, writers, and turn leases do not.
+    return {
+      ...params,
+      sessionFile: `in-memory:${params.sessionManager.getSessionId()}`,
+      sessionTarget: undefined,
+      storePath: undefined,
+      expectedLifecycleRevision: undefined,
+      expectedWriterRunId: undefined,
+      userTurnTranscriptRecorder: undefined,
+      persistAssistantTranscript: undefined,
+      prepareAssistantTranscriptMessage: undefined,
+      contextEngineLogicalTurnLease: undefined,
+      onContextEngineTurnCandidate: undefined,
+    };
+  }
+  return params;
+}

@@ -678,6 +678,7 @@ describe("runIsolatedCompletion", () => {
 
       expect(mocks.resolveCliExecutionAuthProfileId).toHaveBeenCalledWith({
         cliExecutionProvider: "claude-cli",
+        model: "claude-test",
         authProfileProvider: "anthropic",
         config: expect.any(Object),
         agentDir: "/tmp/agent",

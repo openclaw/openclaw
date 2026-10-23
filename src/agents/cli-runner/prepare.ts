@@ -140,7 +140,7 @@ import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
 import * as mcp from "./prepare-mcp.js";
-import { runWithCliPreparationSource } from "./prepare-source.js";
+import { normalizeCliPreparationSource, runWithCliPreparationSource } from "./prepare-source.js";
 import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import {
   buildCliVisibleReplyGuidance,
@@ -189,23 +189,7 @@ async function prepareCliRunContextWithinReadFence(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
   let params = inputParams.config ? inputParams : { ...inputParams, config: getRuntimeConfig() };
-  if (params.sessionManager) {
-    // Caller-owned memory is authoritative even when empty. Correlation and native
-    // bindings survive; borrowed durable paths, writers, and turn leases do not.
-    params = {
-      ...params,
-      sessionFile: `in-memory:${params.sessionManager.getSessionId()}`,
-      sessionTarget: undefined,
-      storePath: undefined,
-      expectedLifecycleRevision: undefined,
-      expectedWriterRunId: undefined,
-      userTurnTranscriptRecorder: undefined,
-      persistAssistantTranscript: undefined,
-      prepareAssistantTranscriptMessage: undefined,
-      contextEngineLogicalTurnLease: undefined,
-      onContextEngineTurnCandidate: undefined,
-    };
-  }
+  params = normalizeCliPreparationSource(params);
   const runConfig = params.config!;
   const sessionOwner = normalizeAgentId(
     parseAgentSessionKey(params.sessionKey)?.agentId ||
@@ -390,6 +374,7 @@ async function prepareCliRunContextWithinReadFence(
         store: authStore,
         provider: params.provider,
         includePendingOAuthRefresh: true,
+        forModel: params.model?.trim() || "default",
       })[0]?.trim() || undefined;
   }
   let authCredential = effectiveAuthProfileId

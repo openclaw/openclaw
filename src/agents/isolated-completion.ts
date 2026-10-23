@@ -316,6 +316,7 @@ async function runIsolatedCompletionOwned(
             })
               ? await resolveCliExecutionAuthProfileId({
                   cliExecutionProvider: cliOwner,
+                  model: request.model,
                   authProfileProvider: provider,
                   config: request.config,
                   agentDir: request.agentDir,
