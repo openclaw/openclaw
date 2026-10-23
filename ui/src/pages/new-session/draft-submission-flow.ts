@@ -75,6 +75,7 @@ export class DraftSubmissionFlow {
     phase: "creating" | "accepted";
     message: ReturnType<typeof buildLocalUserMessage>;
   } | null = null;
+  private blockedSubmitAttempt = false;
   private rejectedPromptError: string | null = null;
   submissionOutcomeUnknown: SubmissionOutcomeReason | null = null;
   private readonly startedSession = new StartedSessionNavigation();
@@ -179,7 +180,8 @@ export class DraftSubmissionFlow {
     });
   }
 
-  resumeInterruptedSubmission() {
+  synchronizeSubmission() {
+    this.blockedSubmitAttempt = this.blockedSubmitAttempt && this.submitBlock() !== undefined;
     const startup = this.sessionStartup.resume();
     if (startup.kind === "resume") {
       void this.submit(startup);
@@ -258,9 +260,14 @@ export class DraftSubmissionFlow {
     this.callbacks.changed();
   }
 
-  /** Explain unavailable submission before the user tries Enter or Start. */
+  noteBlockedSubmitAttempt() {
+    this.blockedSubmitAttempt = Boolean(this.submitBlock()?.reason);
+    this.callbacks.changed();
+  }
+
+  /** Follow the current gate after an attempt, including successive readiness gates. */
   blockedSubmitNotice(): string | undefined {
-    const block = this.submitBlock();
+    const block = this.blockedSubmitAttempt ? this.submitBlock() : undefined;
     return block && !PAGE_RENDERED_GATES.has(block.gate) ? block.reason : undefined;
   }
 
@@ -352,6 +359,7 @@ export class DraftSubmissionFlow {
     this.startedSession.clearSubmission();
     this.rejectedPromptError = null;
     this.sessionStartup.clear();
+    this.blockedSubmitAttempt = false;
     const preservePendingPlacement = Boolean(this.pendingPlacement.sessionKey);
     this.invalidate();
     this.submissionOutcomeUnknown = preservePendingPlacement
@@ -402,8 +410,10 @@ export class DraftSubmissionFlow {
       startup?.background ?? (backgroundRequested && this.visibilityValue !== "draft");
     const context = this.read().context;
     if (!context || (!startup && !this.canSubmit())) {
+      this.noteBlockedSubmitAttempt();
       return;
     }
+    this.blockedSubmitAttempt = false;
     if (
       !uploadsEnabled(context.config) &&
       (this.attachmentDraft.attachments.length ||
@@ -685,6 +695,7 @@ export class DraftSubmissionFlow {
       flow: this,
       closeTransientUi: this.callbacks.closeTransientUi,
       capture: (client) => {
+        this.blockedSubmitAttempt = false;
         this.error = null;
         const requestSignal = this.captureSubmitRequest();
         const submitted = this.draftPersistence.captureSubmission();

@@ -383,6 +383,28 @@ describe("DraftSubmissionFlow submit gates", () => {
     expectGate(flow);
   });
 
+  it("keeps an attempted-submit notice across gates and retires it when ready", async () => {
+    const { flow, context } = withMessage();
+    const snapshot = context.gateway.snapshot;
+    const scopes = snapshot.hello!.auth!.scopes;
+    snapshot.phase = "connecting";
+    expect(flow.blockedSubmitNotice()).toBeUndefined();
+    await flow.submit();
+    const firstReason = flow.submitDisabledReason();
+    expect(flow.blockedSubmitNotice()).toBe(firstReason);
+
+    snapshot.phase = "connected";
+    snapshot.hello!.auth!.scopes = [];
+    expect(flow.blockedSubmitNotice()).toBe(flow.submitDisabledReason());
+    expect(flow.blockedSubmitNotice()).not.toBe(firstReason);
+
+    snapshot.hello!.auth!.scopes = scopes;
+    flow.synchronizeSubmission();
+    expect(flow.blockedSubmitNotice()).toBeUndefined();
+    snapshot.phase = "connecting";
+    expect(flow.blockedSubmitNotice()).toBeUndefined();
+  });
+
   it.each(["unavailable", "rejected", "write-denied", "admin-denied", "forbidden"] as const)(
     "keeps saved worktree submission gated until discovery succeeds (%s)",
     async (result) => {
@@ -403,7 +425,7 @@ describe("DraftSubmissionFlow submit gates", () => {
 
       expect(flow.canSubmit()).toBe(false);
       expect(flow.submitDisabledReason()).toBeTruthy();
-      expect(flow.blockedSubmitNotice()).toBe(flow.submitDisabledReason());
+      expect(flow.blockedSubmitNotice()).toBeUndefined();
 
       await flow.submit();
       expect(context.sessions.createResult).not.toHaveBeenCalled();
@@ -446,6 +468,7 @@ describe("DraftSubmissionFlow submit gates", () => {
             ? "You don't have permission to check Git for this folder. Ask the person who manages OpenClaw for access."
             : "Couldn't verify Git for this folder. Choose it again to retry.",
       });
+      expect(flow.blockedSubmitNotice()).toBe(flow.submitDisabledReason());
       await flow.submit();
       await flow.submit(undefined, true);
       expect(flow.message).toBe("hello");

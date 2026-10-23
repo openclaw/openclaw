@@ -11,9 +11,13 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
-  it.each(["agents.list", "models.list"])(
-    "explains unavailable submission while %s is pending",
-    async (method) => {
+  it.each([
+    { method: "agents.list", attempt: "Enter" },
+    { method: "models.list", attempt: "paste+Enter" },
+    { method: "agents.list", attempt: "Start" },
+  ])(
+    "explains $attempt only after attempting submission while $method is pending",
+    async ({ method, attempt }) => {
       await suite.withPage(
         {
           viewport: { width: 1280, height: 800 },
@@ -49,14 +53,25 @@ suite.define(() => {
           expect(await composer.inputValue()).toBe(message);
           const start = page.getByRole("button", { name: "Start session", exact: true });
           const notice = page.locator(".new-session-page__blocked-submit");
-          await captureUiProof(suite, page, `${method}-rendered.png`);
-          const unavailable = {
-            disabled: await start.isDisabled(),
-            notice: (await notice.allTextContents()).join(""),
-          };
-          await composer.press("Enter");
-          await captureUiProof(suite, page, `${method}-blocked.png`);
-          await start.click({ force: true });
+          const frame = page.locator(".new-session-page__composer");
+          const bounds = await frame.boundingBox();
+          expect(await start.isDisabled()).toBe(true);
+          expect(await notice.count()).toBe(0);
+          await captureUiProof(suite, page, `${method}-${attempt}-rendered.png`);
+          if (attempt === "Start") {
+            await start.click({ force: true });
+          } else {
+            await composer.press("Enter");
+          }
+          await notice.waitFor({ state: "visible" });
+          expect(await notice.textContent()).toContain(
+            method === "agents.list"
+              ? "Refreshing agent defaults"
+              : "Restoring your last session setup",
+          );
+          expect(await frame.locator(".new-session-page__blocked-submit").count()).toBe(0);
+          expect(await frame.boundingBox()).toEqual(bounds);
+          await captureUiProof(suite, page, `${method}-${attempt}-blocked.png`);
           expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
           expect(await composer.inputValue()).toBe(message);
 
@@ -65,20 +80,38 @@ suite.define(() => {
           expect(await notice.count()).toBe(0);
           expect(await composer.inputValue()).toBe(message);
           expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-          expect(unavailable.disabled).toBe(true);
-          expect(unavailable.notice).toContain(
-            method === "agents.list"
-              ? "Refreshing agent defaults"
-              : "Restoring your last session setup",
-          );
+          expect(await frame.boundingBox()).toEqual(bounds);
           await composer.press("Enter");
           await waitForCommittedChatRoute(page);
           const creates = await gateway.getRequests("sessions.create");
           expect(creates).toHaveLength(1);
           expect(creates[0]?.params).toMatchObject({ agentId: "main", message });
-          await captureUiProof(suite, page, `${method}-sent.png`);
+          await captureUiProof(suite, page, `${method}-${attempt}-sent.png`);
         },
       );
     },
   );
+
+  it("keeps blocked palette readiness out of creation errors", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, { heldMethods: ["agents.list"] });
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      await page.locator(".new-session-page__message").waitFor({ state: "visible" });
+      await page.keyboard.press("ControlOrMeta+K");
+      const palette = page.locator("openclaw-command-palette");
+      const input = palette.locator(".cmd-palette__input");
+      await input.fill("Keep preparation out of errors");
+      const start = palette.locator(".cmd-palette__create");
+      expect(await start.isDisabled()).toBe(true);
+      expect(await palette.locator(".cmd-palette__creation-error").count()).toBe(0);
+      await input.press("ControlOrMeta+Enter");
+      expect(await palette.locator(".cmd-palette__creation-error").count()).toBe(0);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await gateway.resolveDeferred("agents.list");
+      await palette.locator(".cmd-palette__create:not(:disabled)").waitFor();
+      await start.click();
+      await gateway.waitForRequest("sessions.create");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+    });
+  });
 });

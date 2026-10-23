@@ -1320,6 +1320,10 @@ span.new-session-page__select {
     order: 1;
   }
 
+  .new-session-page__blocked-submit {
+    order: 2;
+  }
+
   .new-session-page__composer .new-session-page__message {
     min-height: clamp(48px, 9svh, 80px);
     max-height: min(10lh, 34svh);

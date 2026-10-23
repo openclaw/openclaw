@@ -139,9 +139,9 @@ or connections without a durable profile stay browser-local rather than writing
 another person’s layout or shared Gateway configuration.
 
 While New session loads agent defaults, restores saved choices, or checks the
-workspace, **Start session** stays disabled and the composer explains why. Your
-draft stays editable. When preparation finishes, press Enter or **Start session**
-to send it.
+workspace, **Start session** stays disabled. Trying Enter or pressing the disabled
+button shows the current reason below the composer until preparation finishes.
+Your draft stays editable; press Enter or **Start session** again when it is ready.
 
 New session previews the first prompt immediately while the Gateway accepts it.
 A temporary selected row appears at the top of the sidebar session list
