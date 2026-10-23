@@ -74,6 +74,9 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   // scripts/README.md invokes this warm-interaction benchmark CLI by path.
   "scripts/bench-control-ui-interactions.ts!",
+  // scripts/README.md invokes these exact memory-search benchmarks by path.
+  "scripts/bench-memory-search.mjs!",
+  "scripts/bench-memory-search-sqlite.mjs!",
   // #180983 invokes this isolated plugin-registration benchmark CLI by path.
   "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
@@ -93,6 +96,10 @@ const repositoryScriptEntries = [
   "scripts/perf/fsync-gateway-entry.ts!",
   // scripts/perf/README.md invokes this fsync scratch measurement through Node.
   "scripts/perf/fsync-scratch-measure.ts!",
+  // scripts/perf/README.md invokes this database page-cache benchmark by path.
+  "scripts/perf/database-page-cache-measure.ts!",
+  // The source header documents this GitHub reader benchmark's Node command.
+  "scripts/perf/github-reader-measure.ts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
   "scripts/bench-decision-transport.mts!",
   // docs/reference/test/performance.md invokes the frozen-revision benchmark builder.
