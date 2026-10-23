@@ -4,7 +4,14 @@ import type {
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 
-export const KIMI_K3_MODEL_IDS = ["k3", "k3-256k", "kimi-k3"] as const;
+// K3.1 Pro shares K3's thinking efforts and adaptive-thinking request shape.
+export const KIMI_K3_MODEL_IDS = [
+  "k3",
+  "k3-256k",
+  "k3.1-pro",
+  "k3.1-pro-highspeed",
+  "kimi-k3",
+] as const;
 const KIMI_K3_LEGACY_MODEL_IDS = ["k3[1m]"] as const;
 // Kimi Code's K2.8 backend leaks reasoning into visible text when thinking is disabled.
 const KIMI_CODE_ENABLED_ONLY_MODEL_IDS = [

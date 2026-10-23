@@ -141,26 +141,50 @@ describe("moonshot provider plugin", () => {
     );
   });
 
-  it("exposes Kimi K3 as an always-max-thinking modern model", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const model = { api: "openai-completions", provider: "moonshot", id: "kimi-k3" } as const;
-    const ref = { provider: model.provider, modelId: model.id };
-    const captured = createCapturedThinkingConfigStream();
-    const wrapped = provider.wrapSimpleCompletionStreamFn?.({
-      ...ref,
-      thinkingLevel: "off",
-      streamFn: captured.streamFn,
-    } as never);
-    await wrapped?.(model as Model<"openai-completions">, { messages: [] } as Context, {});
-    expect(captured.getCapturedPayload()).toEqual({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      reasoning_effort: "max",
-    });
-    expect(provider.resolveThinkingProfile?.({ ...ref, reasoning: true })).toEqual({
-      levels: [{ id: "max", label: "max" }],
-      defaultLevel: "max",
-      preserveWhenCatalogReasoningFalse: true,
-    });
-    expect(provider.isModernModelRef?.(ref)).toBe(true);
-  });
+  it.each(["kimi-k3", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"])(
+    "enables native video for %s on the native route",
+    async (id) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const model = {
+        id,
+        provider: "moonshot",
+        api: "openai-completions",
+        baseUrl: "https://api.moonshot.ai/v1",
+        input: ["text", "image"],
+      } as unknown as Model;
+      const normalized = provider.normalizeResolvedModel?.({
+        provider: model.provider,
+        modelId: model.id,
+        model,
+      } as never);
+
+      expect((normalized ?? model).input).toEqual(["text", "image", "video"]);
+    },
+  );
+
+  it.each(["kimi-k3", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"])(
+    "exposes %s as an always-max-thinking modern model",
+    async (id) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const model = { api: "openai-completions", provider: "moonshot", id } as const;
+      const ref = { provider: model.provider, modelId: model.id };
+      const captured = createCapturedThinkingConfigStream();
+      const wrapped = provider.wrapSimpleCompletionStreamFn?.({
+        ...ref,
+        thinkingLevel: "off",
+        streamFn: captured.streamFn,
+      } as never);
+      await wrapped?.(model as Model<"openai-completions">, { messages: [] } as Context, {});
+      expect(captured.getCapturedPayload()).toEqual({
+        config: { thinkingConfig: { thinkingBudget: -1 } },
+        reasoning_effort: "max",
+      });
+      expect(provider.resolveThinkingProfile?.({ ...ref, reasoning: true })).toEqual({
+        levels: [{ id: "max", label: "max" }],
+        defaultLevel: "max",
+        preserveWhenCatalogReasoningFalse: true,
+      });
+      expect(provider.isModernModelRef?.(ref)).toBe(true);
+    },
+  );
 });

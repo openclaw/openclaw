@@ -164,6 +164,8 @@ describe("kimi provider plugin", () => {
   it.each([
     { modelId: "k3", defaultLevel: "high" },
     { modelId: "K3-256K", defaultLevel: "high" },
+    { modelId: "k3.1-pro", defaultLevel: "high" },
+    { modelId: "k3.1-pro-highspeed", defaultLevel: "high" },
     { modelId: "kimi-k3", defaultLevel: "off" },
     { modelId: " Kimi-K3 ", defaultLevel: "off" },
   ])(

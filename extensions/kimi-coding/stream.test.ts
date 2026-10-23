@@ -254,12 +254,14 @@ describe("kimi tool-call markup wrapper", () => {
   });
 
   it.each([
-    ["minimal", "low"],
-    ["medium", "high"],
-    ["adaptive", "high"],
-    ["xhigh", "max"],
-  ] as const)("maps K3 %s thinking to %s effort", (thinkingLevel, effort) => {
-    const { getCapturedPayload } = captureKimiPayload({ modelId: "k3", thinkingLevel });
+    ["k3", "minimal", "low"],
+    ["k3", "medium", "high"],
+    ["k3", "adaptive", "high"],
+    ["k3", "xhigh", "max"],
+    ["k3.1-pro", "medium", "high"],
+    ["k3.1-pro-highspeed", "xhigh", "max"],
+  ] as const)("maps %s %s thinking to %s effort", (modelId, thinkingLevel, effort) => {
+    const { getCapturedPayload } = captureKimiPayload({ modelId, thinkingLevel });
 
     expect(getCapturedPayload()).toEqual({
       thinking: { type: "adaptive", display: "summarized" },
