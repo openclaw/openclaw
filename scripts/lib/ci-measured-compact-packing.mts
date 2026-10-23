@@ -4,7 +4,11 @@ import { mergeVitestPretestBuildModes } from "./vitest-build-prerequisites.mts";
 import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 
 const FIXED_JOB_SECONDS = 60;
-const MAX_PACKED_JOB_SECONDS = { native: 360, "hosted-hourly": 720 } as const;
+const MAX_PACKED_JOB_SECONDS = {
+  native: 360,
+  "main-validation": 480,
+  "hosted-hourly": 720,
+} as const;
 
 // Complete serial BS8/two-worker child observations from 35702479645,
 // 35702772380, 35707408465 and native Testbox run 35722202780.
@@ -177,13 +181,20 @@ export function rebalanceMeasuredSerialJobs(
   jobs: CompactNodeTestShard[],
   options: {
     runner: string;
-    profile?: "native" | "hosted-hourly";
+    profile?: "native" | "main-validation" | "hosted-hourly";
     estimateGroup: (group: NodeTestShardGroup) => { seconds: number; complete: boolean };
     canShare: (groups: NodeTestShardGroup[]) => boolean;
+    testSecondsLimit?: (groups: NodeTestShardGroup[]) => number;
   },
 ): CompactNodeTestShard[] {
   const profile = options.profile ?? "native";
   const maxPackedJobSeconds = MAX_PACKED_JOB_SECONDS[profile];
+  const packedJobLimit = (groups: NodeTestShardGroup[]) =>
+    Math.min(
+      maxPackedJobSeconds,
+      (options.testSecondsLimit?.(groups) ?? maxPackedJobSeconds - FIXED_JOB_SECONDS) +
+        FIXED_JOB_SECONDS,
+    );
   const split = jobs.flatMap((job) => {
     if (
       profile === "hosted-hourly" ||
@@ -238,7 +249,7 @@ export function rebalanceMeasuredSerialJobs(
       ) + FIXED_JOB_SECONDS;
     // Complete child walls identify existing tails more directly than summed
     // file estimates. Packing still retains the higher canonical price below.
-    const limit = maxPackedJobSeconds;
+    const limit = packedJobLimit(job.groups);
     if (!pair && (!tooling || completeWall <= limit)) {
       return [job];
     }
@@ -293,7 +304,8 @@ export function rebalanceMeasuredSerialJobs(
   );
   const candidates = measured
     .filter(
-      ({ seconds, complete }) => complete && seconds + FIXED_JOB_SECONDS <= maxPackedJobSeconds,
+      ({ job, seconds, complete }) =>
+        complete && seconds + FIXED_JOB_SECONDS <= packedJobLimit(job.groups),
     )
     .toSorted((a, b) => b.seconds - a.seconds || a.job.checkName.localeCompare(b.job.checkName));
   if (candidates.length < 2) {
@@ -317,7 +329,8 @@ export function rebalanceMeasuredSerialJobs(
       const bin = bins
         .filter(
           (candidate) =>
-            candidate.seconds + seconds <= workBudget &&
+            candidate.seconds + seconds + FIXED_JOB_SECONDS <=
+              packedJobLimit([...candidate.jobs.flatMap((entry) => entry.groups), ...job.groups]) &&
             (candidate.jobs.length === 0 ||
               candidate.jobs[0]!.timeoutMinutes === job.timeoutMinutes) &&
             options.canShare([...candidate.jobs.flatMap((entry) => entry.groups), ...job.groups]),

@@ -198,23 +198,25 @@ impl GatewayDeviceIdentity {
         nonce: &str,
         signed_at_ms: u64,
     ) -> Result<Value, String> {
+        self.signed_device_with_scopes(auth, nonce, signed_at_ms, &CLIENT_SCOPES)
+    }
+
+    pub(crate) fn signed_device_with_scopes(
+        &self,
+        auth: &GatewayAuth,
+        nonce: &str,
+        signed_at_ms: u64,
+        scopes: &[&str],
+    ) -> Result<Value, String> {
         let signing_key_bytes = Zeroizing::new(decode_key(&self.private_key, "private")?);
         let signing_key = SigningKey::from_bytes(&signing_key_bytes);
         let public_key = signing_key.verifying_key().to_bytes();
-        if STANDARD.encode(public_key) != self.public_key {
-            return Err("Gateway device identity keypair is invalid.".to_string());
-        }
         let payload = build_device_auth_payload(DeviceAuthPayloadFields {
             device_id: &self.device_id,
-            client_id: CLIENT_ID,
-            client_mode: CLIENT_MODE,
-            role: CLIENT_ROLE,
-            scopes: &CLIENT_SCOPES,
+            scopes,
             signed_at_ms,
             token: auth.signature_token(),
             nonce,
-            platform: CLIENT_PLATFORM,
-            device_family: CLIENT_DEVICE_FAMILY,
         });
         let signature = signing_key.sign(payload.as_bytes()).to_bytes();
         Ok(json!({
@@ -229,15 +231,10 @@ impl GatewayDeviceIdentity {
 
 struct DeviceAuthPayloadFields<'a> {
     device_id: &'a str,
-    client_id: &'a str,
-    client_mode: &'a str,
-    role: &'a str,
     scopes: &'a [&'a str],
     signed_at_ms: u64,
     token: Option<&'a str>,
     nonce: &'a str,
-    platform: &'a str,
-    device_family: &'a str,
 }
 
 fn build_device_auth_payload(fields: DeviceAuthPayloadFields<'_>) -> String {
@@ -245,21 +242,17 @@ fn build_device_auth_payload(fields: DeviceAuthPayloadFields<'_>) -> String {
     [
         "v3".to_string(),
         fields.device_id.to_string(),
-        fields.client_id.to_string(),
-        fields.client_mode.to_string(),
-        fields.role.to_string(),
+        CLIENT_ID.to_string(),
+        CLIENT_MODE.to_string(),
+        CLIENT_ROLE.to_string(),
         fields.scopes.join(","),
         fields.signed_at_ms.to_string(),
         fields.token.unwrap_or_default().to_string(),
         fields.nonce.to_string(),
-        normalize_metadata(fields.platform),
-        normalize_metadata(fields.device_family),
+        CLIENT_PLATFORM.trim().to_ascii_lowercase(),
+        CLIENT_DEVICE_FAMILY.trim().to_ascii_lowercase(),
     ]
     .join("|")
-}
-
-fn normalize_metadata(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
 }
 
 fn non_empty_trimmed(value: Option<&str>) -> Option<&str> {
@@ -563,15 +556,10 @@ mod tests {
     fn v3_signature_payload_matches_gateway_fixture_bytes() {
         let payload = build_device_auth_payload(DeviceAuthPayloadFields {
             device_id: "dev-1",
-            client_id: CLIENT_ID,
-            client_mode: CLIENT_MODE,
-            role: CLIENT_ROLE,
             scopes: &["operator.admin", "operator.read"],
             signed_at_ms: 1_800_000_000_000,
             token: Some("test-token"),
             nonce: "nonce-abc",
-            platform: " LiNuX ",
-            device_family: "DESKTOP",
         });
 
         assert_eq!(

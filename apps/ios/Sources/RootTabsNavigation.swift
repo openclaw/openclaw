@@ -114,15 +114,7 @@ extension RootTabs {
         }
 
         var settingsRoute: SettingsRoute? {
-            switch self {
-            case .gateway:
-                .gateway
-            case .chat, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
-                 .files,
-                 .dreaming,
-                 .usage, .cron, .desktop, .terminal, .settings, .docs:
-                nil
-            }
+            self == .gateway ? .gateway : nil
         }
     }
 
@@ -147,17 +139,8 @@ extension RootTabs {
         case dashboard
     }
 
-    struct SidebarDashboardTarget: Equatable {
-        let sessionKey: String
-        let agentId: String?
-    }
-
     static func sidebarPresentation(for session: OpenClawChatSessionEntry) -> SidebarSessionPresentation {
         session.boardFace == "dashboard" ? .dashboard : .chat
-    }
-
-    static func sidebarDashboardTarget(for session: OpenClawChatSessionEntry) -> SidebarDashboardTarget {
-        SidebarDashboardTarget(sessionKey: session.key, agentId: session.agentId)
     }
 
     static func sidebarLayoutContainerSize(contentSize: CGSize, windowSize: CGSize?) -> CGSize {
@@ -178,10 +161,6 @@ extension RootTabs {
 
     static func sidebarVisibility(layoutMode: SidebarLayoutMode, splitPreference: Bool?) -> Bool {
         layoutMode == .split ? (splitPreference ?? true) : false
-    }
-
-    static func shouldCollapseSidebarAfterSelection(layoutMode: SidebarLayoutMode) -> Bool {
-        layoutMode == .drawer
     }
 
     static func sidebarWidth(containerWidth: CGFloat, isDrawerLayout: Bool) -> CGFloat {
@@ -228,13 +207,9 @@ extension RootTabs {
     }
 
     static func requestedInitialSidebarVisibility(arguments: [String]) -> Bool? {
-        guard let flagIndex = arguments.firstIndex(of: "--openclaw-sidebar-visibility") else {
-            return nil
-        }
-        let valueIndex = arguments.index(after: flagIndex)
-        guard arguments.indices.contains(valueIndex) else { return nil }
-
-        switch arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        guard let value = arguments.drop(while: { $0 != "--openclaw-sidebar-visibility" }).dropFirst().first
+        else { return nil }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "visible", "show", "shown", "open", "true", "1":
             return true
         case "hidden", "hide", "closed", "false", "0":

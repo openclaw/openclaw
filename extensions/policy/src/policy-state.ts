@@ -1,4 +1,4 @@
-import type { PolicyRoutingRules } from "./policy-routing.js";
+import { scanPolicyRouting, type PolicyRoutingRules } from "./policy-routing.js";
 import {
   scanPolicyChannels,
   scanPolicyMcpServers,
@@ -14,11 +14,9 @@ import {
 import { scanPolicyExecApprovals } from "./policy-state-exec-approvals.js";
 import { scanPolicyGatewayExposure } from "./policy-state-gateway.js";
 import { scanPolicyIngress } from "./policy-state-ingress.js";
-import { scanPolicyRouting } from "./policy-state-routing.js";
 import { scanPolicySandboxPosture } from "./policy-state-sandbox.js";
 import { scanPolicyToolPosture } from "./policy-state-tool-posture.js";
 import { scanPolicyTools } from "./policy-state-tools.js";
-// Policy plugin evidence collection facade.
 import type { PolicyEvidence } from "./policy-state-types.js";
 import { scanPolicyAgentWorkspace } from "./policy-state-workspace.js";
 
@@ -39,19 +37,9 @@ type PolicyEvidenceOptions = {
 
 export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
-  options?: PolicyEvidenceOptions & { readonly toolsRaw?: undefined },
-): PolicyEvidence;
-
-export function collectPolicyEvidence(
-  cfg: Record<string, unknown>,
-  options: PolicyEvidenceOptions & { readonly toolsRaw: string },
-): Promise<PolicyEvidence>;
-
-export function collectPolicyEvidence(
-  cfg: Record<string, unknown>,
   options: PolicyEvidenceOptions = {},
-): PolicyEvidence | Promise<PolicyEvidence> {
-  const evidence = {
+): PolicyEvidence {
+  return {
     channels: scanPolicyChannels(cfg),
     mcpServers: scanPolicyMcpServers(cfg),
     modelProviders: scanPolicyModelProviders(cfg),
@@ -80,11 +68,8 @@ export function collectPolicyEvidence(
               : scanPolicyExecApprovals(options.execApprovalsRaw),
         }),
     ...(options.routing === undefined ? {} : { routing: scanPolicyRouting(cfg, options.routing) }),
+    ...(options.toolsRaw === undefined ? {} : { tools: scanPolicyTools(options.toolsRaw) }),
   };
-  if (options.toolsRaw === undefined) {
-    return evidence;
-  }
-  return scanPolicyTools(options.toolsRaw).then((tools) => ({ ...evidence, tools }));
 }
 
 export { createPolicyAttestation, policyDocumentHash } from "./policy-state-attestation.js";

@@ -126,19 +126,16 @@ function resetWebAutoReplySessionSockets() {
   getSessionSockets().length = 0;
 }
 
+// mock-isolation: The WhatsApp socket fixture supplies model replies and run activity without the process-wide agent runtime.
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   appendCronStyleCurrentTimeLine: (text: string) => text,
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   resolveAgentIdentity: (
-    cfg: { agents?: { list?: Array<{ id: string; identity?: unknown }> } },
+    cfg: { agents?: { entries?: Record<string, { identity?: unknown }> } },
     agentId: string,
-  ) =>
-    cfg.agents?.list?.find(
-      (entry) => entry.id.trim().toLowerCase() === agentId.trim().toLowerCase(),
-    )?.identity,
+  ) => cfg.agents?.entries?.[agentId.trim().toLowerCase()]?.identity,
   resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
     cfg.messages?.responsePrefix,
   runEmbeddedAgent: vi.fn(),

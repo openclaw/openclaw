@@ -37,10 +37,11 @@ bundled, official external, and source-only plugins, see
     openclaw plugins search "calendar"
     ```
 
-    ClawHub is the primary discovery surface for community plugins. Ordinary
-    bare package specs install from npm unless they match a bundled or official
-    plugin id. Raw `@openclaw/*` specs that match a
-    bundled plugin resolve to that bundled copy. Use an explicit source prefix
+    ClawHub is the default install source and primary discovery surface for
+    community plugins. Ordinary package specs install from ClawHub unless they
+    are bare bundled or official plugin ids without a version or tag. Scoped
+    package names, including `@openclaw/*`, always select ClawHub by default.
+    Use an explicit source prefix
     when you need one source specifically.
 
   </Step>
@@ -48,7 +49,7 @@ bundled, official external, and source-only plugins, see
   <Step title="Install the plugin">
     ```bash
     # From ClawHub.
-    openclaw plugins install clawhub:<package>
+    openclaw plugins install <package>
 
     # From npm.
     openclaw plugins install npm:<package>
@@ -119,20 +120,18 @@ bundled, official external, and source-only plugins, see
 
 | Source      | Use when                                                                       | Example                                                        |
 | ----------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| ClawHub     | You want OpenClaw-native discovery, scans, version metadata, and install hints | `openclaw plugins install clawhub:<package>`                   |
+| ClawHub     | You want OpenClaw-native discovery, scans, version metadata, and install hints | `openclaw plugins install <package>`                           |
 | npm         | You need direct npm registry or dist-tag workflows                             | `openclaw plugins install npm:<package>`                       |
 | git         | You need a branch, tag, or commit from a repository                            | `openclaw plugins install git:github.com/<owner>/<repo>@<ref>` |
 | local path  | You are developing or testing a plugin on the same machine                     | `openclaw plugins install --link ./my-plugin`                  |
 | marketplace | You are installing a Claude-compatible marketplace plugin                      | `openclaw plugins install <plugin> --marketplace <source>`     |
 
-Bare package specs have special compatibility behavior: a bare name that
-matches a bundled plugin id uses that bundled source; a bare name that matches
-an official external plugin id uses the official package catalog; any other
-bare spec installs through npm. Raw `@openclaw/*`
-specs that match bundled plugins also resolve to the bundled copy before npm
-fallback. Use `npm:@openclaw/<plugin>@<version>` to deliberately install the
-external npm package instead of the bundled copy. Use `clawhub:`, `npm:`,
-`git:`, or `npm-pack:` for deterministic source selection. See
+Bare plugin ids without a version or tag are shortcuts: an id that matches a
+bundled plugin uses that bundled source, and an official external plugin id uses
+the official package catalog. All package names, including `@openclaw/*`, and
+versioned or tagged specs install through ClawHub, with no automatic npm fallback.
+Use `npm:@openclaw/<plugin>@<version>` to install directly from npm. Use `clawhub:`, `npm:`,
+`git:`, or `npm-pack:` to select the source explicitly. See
 [`openclaw plugins`](/cli/plugins#install) for the full command contract.
 
 For npm installs, unpinned specs and `@latest` choose the newest stable
@@ -221,7 +220,7 @@ Key policy rules:
 - OpenAI-family Codex routing keeps provider and runtime plugin boundaries
   separate: legacy Codex model refs are legacy config that doctor repairs,
   while the bundled `codex` plugin owns Codex app-server runtime for
-  canonical `openai/*` agent refs, explicit `agentRuntime.id: "codex"`, and
+  current `openai/*` agent refs, explicit `agentRuntime.id: "codex"`, and
   legacy `codex/*` refs.
 
 When `plugins.allow` is unset and non-bundled plugins are auto-discovered from
@@ -351,9 +350,17 @@ TypeScript entry ...`, the package was published without the JavaScript files
 OpenClaw needs at runtime. Update or reinstall after the publisher ships
 compiled JavaScript, or disable/uninstall the plugin until then.
 
-### Trusted plugin state refused
+<a id="trusted-plugin-state-refused" />
 
-If a plugin fails with `openKeyedStore is only available for trusted plugins`,
+### Plugin runtime trust refused
+
+Every loaded plugin can use its own keyed and blob state and channel ingress
+queues, including local paths and linked installs. Trust remains required for
+hook agent turns and Gateway scope elevation.
+Provenance warnings and `plugins inspect` still report unverified sources;
+they do not block plugin-scoped storage or queues.
+
+If a plugin fails with `dispatchHookAgentTurn is only available for trusted plugins`,
 compare the error's `registryPath` with `plugin.trust.registryPath` from:
 
 ```bash
@@ -368,6 +375,9 @@ registry databases. Inspection loads into the CLI process, so compare both paths
 Doctor also checks the installed service environment when a local Gateway is
 unreachable; if that environment cannot be verified, it says so.
 
+If the plugin needs a trust-gated capability, use the applicable remedy below.
+`--link` and `--force` do not grant trust for those capabilities.
+
 | Reason                  | Remedy                                                                                                                                                                                                               |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `record-missing`        | Align CLI and Gateway state paths if they differ; otherwise reinstall through `openclaw plugins install` so the install is recorded.                                                                                 |
@@ -376,6 +386,7 @@ unreachable; if that environment cannot be verified, it says so.
 | `install-path-mismatch` | Reinstall the intended package and remove load paths that select another copy.                                                                                                                                       |
 | `owner-ambiguous`       | Refresh the registry and resolve conflicting package ownership before reinstalling.                                                                                                                                  |
 | `provenance-invalid`    | Reinstall from the official source; conflicting or partial provenance is not automatically trusted.                                                                                                                  |
+| `third-party-npm`       | The npm install record is consistent, but the plugin is not official. Reinstalling the same package cannot grant trust-gated capabilities; use an official package if you need them.                                 |
 
 `bundled` and `trusted-official` identify accepted sources. Legacy npm records
 with a consistent official package spec remain valid without extra resolution

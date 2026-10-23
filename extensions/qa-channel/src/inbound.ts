@@ -1,9 +1,9 @@
+import { isDeepStrictEqual } from "node:util";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   buildChannelInboundEventContext,
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   formatInboundMediaUnavailableText,
-  resolveChannelInboundRouteEnvelope,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
@@ -14,7 +14,7 @@ import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import {
   buildQaTarget,
@@ -23,7 +23,7 @@ import {
   sendQaBusMessage,
   type QaBusMessage,
 } from "./bus-client.js";
-import { sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
+import { collectQaMediaUrls, sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
@@ -129,46 +129,39 @@ function formatQaErrorForLog(error: unknown): string {
   return escaped;
 }
 
-function normalizeQaToolCallSnapshotValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(normalizeQaToolCallSnapshotValue);
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-        .map(([key, entry]) => [key, normalizeQaToolCallSnapshotValue(entry)]),
-    );
-  }
-  return value;
-}
-
-function serializeQaToolCallSnapshot(toolCalls: QaBusToolCall[]): string {
-  // Call order is chronological trace data; nested argument keys are the
-  // unordered surface that must be canonicalized before comparison.
-  return JSON.stringify(
-    toolCalls.map((toolCall) => ({
-      name: toolCall.name,
-      ...(toolCall.arguments
-        ? { arguments: normalizeQaToolCallSnapshotValue(toolCall.arguments) }
-        : {}),
-    })),
-  );
-}
-
-function createQaReplyPreview(params: {
-  config: CoreConfig;
+export async function handleQaInbound(params: {
+  channelId: string;
+  channelLabel: string;
   account: ResolvedQaChannelAccount;
-  inbound: QaBusMessage;
-  target: string;
-  toolCalls: QaBusToolCall[];
-  mediaLocalRoots: readonly string[];
+  config: CoreConfig;
+  message: QaBusMessage;
+  buildContext?: typeof buildChannelInboundEventContext;
+  channelRuntime?: PluginRuntime["channel"];
 }) {
+  const channelRuntime = params.channelRuntime ?? getQaChannelRuntime().channel;
+  const inbound = params.message;
+  const target = buildQaTarget({
+    chatType: inbound.conversation.kind,
+    conversationId: inbound.conversation.id,
+  });
+  const toolCalls: QaBusToolCall[] = [];
+  const route = resolveAgentRoute({
+    cfg: params.config,
+    channel: params.channelId,
+    accountId: params.account.accountId,
+    peer: {
+      kind: inbound.conversation.kind,
+      id: target,
+    },
+  });
+  const config = params.config;
+  const account = params.account;
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(config, route.agentId);
   let messageId: string | null = null;
   let currentText = "";
   let previewStopped = false;
   let lastDurableText = "";
-  let lastDurableToolCallSnapshot = "[]";
+  let lastDurableToolCalls: QaBusToolCall[] = [];
   // Partials run concurrently with delivery callbacks. Keep edits, deletion,
   // and durable delivery in one queue without poisoning it after an error.
   const withPreviewLock = createAsyncLock();
@@ -179,22 +172,22 @@ function createQaReplyPreview(params: {
     }
     if (messageId) {
       await editQaBusMessage({
-        baseUrl: params.account.baseUrl,
-        accountId: params.account.accountId,
+        baseUrl: account.baseUrl,
+        accountId: account.accountId,
         messageId,
         text,
       });
     } else {
       const response = await sendQaBusMessage({
-        baseUrl: params.account.baseUrl,
-        accountId: params.account.accountId,
-        to: params.target,
+        baseUrl: account.baseUrl,
+        accountId: account.accountId,
+        to: target,
         text,
-        senderId: params.account.botUserId,
-        senderName: params.account.botDisplayName,
-        threadId: params.inbound.threadId,
-        replyToId: params.inbound.id,
-        toolCalls: params.toolCalls,
+        senderId: account.botUserId,
+        senderName: account.botDisplayName,
+        threadId: inbound.threadId,
+        replyToId: inbound.id,
+        toolCalls,
       });
       messageId = response.message.id;
     }
@@ -206,8 +199,8 @@ function createQaReplyPreview(params: {
       return;
     }
     await deleteQaBusMessage({
-      baseUrl: params.account.baseUrl,
-      accountId: params.account.accountId,
+      baseUrl: account.baseUrl,
+      accountId: account.accountId,
       messageId,
     });
     messageId = null;
@@ -220,32 +213,31 @@ function createQaReplyPreview(params: {
     }
     // Media loading can yield while new tools start. Record only the trace that
     // accompanies this successful durable send, never later or failed work.
-    const toolCalls = [...params.toolCalls];
-    const toolCallSnapshot = serializeQaToolCallSnapshot(toolCalls);
+    const durableToolCalls = [...toolCalls];
     const message = {
-      cfg: params.config,
-      accountId: params.account.accountId,
-      to: params.target,
+      cfg: config,
+      accountId: account.accountId,
+      to: target,
       text,
       isError,
-      threadId: params.inbound.threadId,
-      replyToId: params.inbound.id,
-      toolCalls,
+      threadId: inbound.threadId,
+      replyToId: inbound.id,
+      toolCalls: durableToolCalls,
     };
     if (mediaUrls.length > 0) {
       await sendQaChannelMediaBatch({
         ...message,
         mediaUrls,
-        mediaLocalRoots: params.mediaLocalRoots,
+        mediaLocalRoots,
       });
     } else {
       await sendQaChannelText(message);
     }
     lastDurableText = text;
-    lastDurableToolCallSnapshot = toolCallSnapshot;
+    lastDurableToolCalls = durableToolCalls;
   };
 
-  return {
+  const preview = {
     clear: () => {
       previewStopped = true;
       return withPreviewLock(clear);
@@ -269,20 +261,18 @@ function createQaReplyPreview(params: {
         if (
           kind === "final" &&
           text === lastDurableText &&
-          serializeQaToolCallSnapshot(params.toolCalls) === lastDurableToolCallSnapshot
+          isDeepStrictEqual(toolCalls, lastDurableToolCalls)
         ) {
-          // Count equality is not record equality: a same-count final with changed
-          // tool records must still be delivered.
           await clear();
           return;
         }
-        if (kind === "final" && messageId && params.toolCalls.length === 0) {
+        if (kind === "final" && messageId && toolCalls.length === 0) {
           await write(text);
           // The edited message is now durable; preview cleanup no longer owns it.
           messageId = null;
           currentText = "";
           lastDurableText = text;
-          lastDurableToolCallSnapshot = "[]";
+          lastDurableToolCalls = [];
           return;
         }
         await clear();
@@ -296,48 +286,13 @@ function createQaReplyPreview(params: {
         }
       }),
   };
-}
-
-export async function handleQaInbound(params: {
-  channelId: string;
-  channelLabel: string;
-  account: ResolvedQaChannelAccount;
-  config: CoreConfig;
-  message: QaBusMessage;
-  buildContext?: typeof buildChannelInboundEventContext;
-  channelRuntime?: PluginRuntime["channel"];
-}) {
-  const channelRuntime = params.channelRuntime ?? getQaChannelRuntime().channel;
-  const inbound = params.message;
-  const target = buildQaTarget({
-    chatType: inbound.conversation.kind,
-    conversationId: inbound.conversation.id,
-  });
-  const toolCalls: QaBusToolCall[] = [];
-  const { route } = resolveChannelInboundRouteEnvelope({
-    cfg: params.config,
-    channel: params.channelId,
-    accountId: params.account.accountId,
-    peer: {
-      kind: inbound.conversation.kind,
-      id: target,
-    },
-  });
-  const preview = createQaReplyPreview({
-    config: params.config,
-    account: params.account,
-    inbound,
-    target,
-    toolCalls,
-    mediaLocalRoots: getAgentScopedMediaLocalRoots(params.config, route.agentId),
-  });
   const isGroup = inbound.conversation.kind !== "direct";
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: route.sessionKey,
     threadId: inbound.threadId,
     parentSessionKey: isGroup ? route.sessionKey : undefined,
   });
-  const buildEnvelope = createChannelInboundEnvelopeBuilder({
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({
     cfg: params.config,
     route: { agentId: route.agentId, sessionKey: threadKeys.sessionKey },
   });
@@ -490,14 +445,7 @@ export async function handleQaInbound(params: {
     delivery: {
       deliver: async (payload, info) => {
         const text = payload.text ?? "";
-        const mediaUrls = Array.from(
-          new Set(
-            [payload.mediaUrl, ...(payload.mediaUrls ?? [])].filter(
-              (mediaUrl): mediaUrl is string =>
-                typeof mediaUrl === "string" && mediaUrl.trim().length > 0,
-            ),
-          ),
-        );
+        const mediaUrls = collectQaMediaUrls(payload.mediaUrl, ...(payload.mediaUrls ?? []));
         if (!text.trim() && mediaUrls.length === 0) {
           return;
         }

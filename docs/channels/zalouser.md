@@ -218,6 +218,10 @@ For multi-account setups, prefer setting `profile` on each account in config so 
 
 - Remove any external `zca` process assumptions; the channel now runs fully in-process via `zca-js`, with no external CLI binary.
 
+**DM history is missing after an upgrade:**
+
+- Run `openclaw doctor --fix` to repair supported legacy DM session keys. Doctor checks every configured agent, including named agents, and preserves genuine group sessions.
+
 ## Related
 
 - [Channels Overview](/channels) - all supported channels

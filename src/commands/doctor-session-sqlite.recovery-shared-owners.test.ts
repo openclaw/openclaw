@@ -4,21 +4,126 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { updateSessionEntry } from "../config/sessions/session-accessor.entry-mutation.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
 import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync as drainDatabases,
+  closeOpenClawAgentDatabasesForTest as closeDatabases,
 } from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
-  readMigrationManifest,
+  containsObjects,
+  expectFiles,
+  snapshotFiles,
+} from "./doctor-session-sqlite.publication-spies.test-support.js";
+import {
+  readMigrationManifest as readManifest,
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
 
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
+type SharedFixture = ReturnType<typeof createSharedRecoveryFixture>;
+type Manifest = ReturnType<typeof readManifest>;
+type Report = Awaited<ReturnType<typeof run>>;
+type Cleanup = Awaited<ReturnType<typeof retireRecovery>>;
+type FixtureScope = Pick<SharedFixture, "cfg" | "env">;
+
+function run(fixture: FixtureScope, mode: "import" | "restore", agent?: string) {
+  return runDoctorSessionSqlite({ ...fixture, mode, ...(agent ? { agent } : { allAgents: true }) });
+}
+
+async function cleanRun(fixture: FixtureScope, mode: "import" | "restore") {
+  const report = await run(fixture, mode);
+  expect(report.targets.flatMap((target) => target.issues)).toEqual([]);
+  return report;
+}
+
+async function importAtCommittedOwner(
+  fixture: FixtureScope,
+  owner: string,
+  inject: () => Error | void,
+) {
+  const snapshot = sqliteReaders.readOnlySqliteValidationSnapshot;
+  const spy = vi
+    .spyOn(sqliteReaders, "readOnlySqliteValidationSnapshot")
+    .mockImplementation((target) => {
+      const result = snapshot(target);
+      if (
+        target.agentId === owner &&
+        result.ok &&
+        result.snapshot.sessionIdsBySessionKey.has(`agent:${owner}:main`)
+      ) {
+        const error = inject();
+        if (error) {
+          return { ok: false, error };
+        }
+      }
+      return result;
+    });
+  try {
+    return await run(fixture, "import");
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+function addPrivateHistory(indexPath: string) {
+  const siblingPath = path.join(path.dirname(indexPath), "main-private.jsonl");
+  const index = JSON.parse(fs.readFileSync(indexPath, "utf8"));
+  index["agent:main:private"] = {
+    sessionId: "main-private",
+    sessionFile: "main-private.jsonl",
+    updatedAt: 30,
+  };
+  fs.writeFileSync(indexPath, JSON.stringify(index));
+  fs.writeFileSync(siblingPath, '{"type":"session","id":"main-private","version":3}\n');
+  return siblingPath;
+}
+
+function expectRetained(manifest: Manifest, file: string, bytes: Buffer) {
+  const locations = [
+    file,
+    ...manifest.targets.flatMap((target) =>
+      target.plannedMoves
+        .filter((move) => move.sourcePath === file)
+        .map((move) => move.archivePath),
+    ),
+  ];
+  expect(
+    locations
+      .filter((location) => fs.existsSync(location))
+      .map((location) => fs.readFileSync(location)),
+  ).toContainEqual(bytes);
+}
+
+function expectOwners(report: Report, indexes: string[], reverse: boolean) {
+  expect(
+    report.targets
+      .filter((target) => indexes.includes(target.storePath))
+      .map((target) => target.agentId),
+  ).toEqual(reverse ? ["work", "main"] : ["main", "work"]);
+}
+
+function expectOutcome(report: Cleanup, archivePath: string, outcome: string) {
+  expect(report.artifacts.find((item) => item.path === archivePath)?.outcome).toBe(outcome);
+}
+
+function importedMoves(manifest: Manifest, storePath?: string) {
+  const targets = storePath
+    ? [
+        expectDefined(
+          manifest.targets.find((target) => target.storePath === storePath),
+          "independent target",
+        ),
+      ]
+    : manifest.targets;
+  return targets
+    .flatMap((target) => target.completedMoves)
+    .filter((move) => move.kind === "transcript" || move.kind === "legacy-store");
+}
 
 describe("runDoctorSessionSqlite", () => {
   it.each([
@@ -33,64 +138,28 @@ describe("runDoctorSessionSqlite", () => {
         separateIndexes: true,
         reverse,
       });
-      const mainIndexPath = path.join(path.dirname(transcriptPath), "main.json");
-      const siblingPath = path.join(path.dirname(transcriptPath), "main-private.jsonl");
-      const mainIndex = JSON.parse(fs.readFileSync(mainIndexPath, "utf8"));
-      mainIndex["agent:main:private"] = {
-        sessionId: "main-private",
-        sessionFile: "main-private.jsonl",
-        updatedAt: 30,
-      };
-      fs.writeFileSync(mainIndexPath, JSON.stringify(mainIndex));
-      fs.writeFileSync(siblingPath, '{"type":"session","id":"main-private","version":3}\n');
+      const siblingPath = addPrivateHistory(path.join(path.dirname(transcriptPath), "main.json"));
       const lastOwner = reverse ? "main" : "work";
       const lostPath =
         kind === "transcript"
           ? transcriptPath
           : path.join(path.dirname(transcriptPath), `${lastOwner}.json`);
-      const originals = [...indexes, siblingPath, transcriptPath]
-        .filter((file) => file !== lostPath)
-        .map((file) => ({ file, bytes: fs.readFileSync(file) }));
-      const snapshot = sqliteReaders.readOnlySqliteValidationSnapshot;
+      const originals = snapshotFiles(
+        [...indexes, siblingPath, transcriptPath].filter((file) => file !== lostPath),
+      );
       let disappeared = false;
-      const spy = vi
-        .spyOn(sqliteReaders, "readOnlySqliteValidationSnapshot")
-        .mockImplementation((target) => {
-          const result = snapshot(target);
-          if (
-            !disappeared &&
-            target.agentId === lastOwner &&
-            result.ok &&
-            result.snapshot.sessionIdsBySessionKey.has(`agent:${lastOwner}:main`)
-          ) {
-            // Both owners committed the source; lose recovery input before archival.
-            fs.unlinkSync(lostPath);
-            disappeared = true;
-          }
-          return result;
-        });
-      let imported;
-      try {
-        imported = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
-      } finally {
-        spy.mockRestore();
-      }
+      const imported = await importAtCommittedOwner({ cfg, env }, lastOwner, () => {
+        if (!disappeared) {
+          // Both owners committed the source; lose recovery input before archival.
+          fs.unlinkSync(lostPath);
+          disappeared = true;
+        }
+      });
       expect(disappeared).toBe(true);
-      closeOpenClawAgentDatabasesForTest();
       const retired = await retireRecovery(cfg, env);
-      const manifest = readMigrationManifest(imported.migrationRun?.manifestPath);
+      const manifest = readManifest(imported.migrationRun?.manifestPath);
       for (const original of originals) {
-        const locations = [
-          original.file,
-          ...manifest.targets.flatMap((target) =>
-            target.plannedMoves
-              .filter((move) => move.sourcePath === original.file)
-              .map((move) => move.archivePath),
-          ),
-        ];
-        expect(
-          locations.filter((file) => fs.existsSync(file)).map((file) => fs.readFileSync(file)),
-        ).toContainEqual(original.bytes);
+        expectRetained(manifest, original.file, original.bytes);
       }
       expect(retired.totals.removedFiles).toBe(2);
       const affectedOwners = imported.targets.filter((target) =>
@@ -99,26 +168,43 @@ describe("runDoctorSessionSqlite", () => {
       const code =
         kind === "transcript" ? "transcript_archive_failed" : "legacy_store_archive_failed";
       for (const owner of affectedOwners) {
-        expect(owner.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code })]));
+        containsObjects(owner.issues, { code });
       }
     },
   );
 
-  it.each([false, true])(
-    "restores every shared-owner publication before reimport and retirement (separate=%s)",
-    async (separateIndexes) => {
+  it.each([
+    { separateIndexes: false, reverse: false, sharedTranscript: true, missingOwner: false },
+    { separateIndexes: true, reverse: false, sharedTranscript: true, missingOwner: false },
+    { separateIndexes: false, reverse: false, sharedTranscript: true, missingOwner: true },
+    { separateIndexes: true, reverse: false, sharedTranscript: false, missingOwner: false },
+    { separateIndexes: true, reverse: true, sharedTranscript: false, missingOwner: false },
+  ])(
+    "preserves each owner's index and history (separate=$separateIndexes, shared=$sharedTranscript, reverse=$reverse, missingOwner=$missingOwner)",
+    async ({ separateIndexes, reverse, sharedTranscript, missingOwner }) => {
       const { cfg, env, indexes, transcriptPath } = createSharedRecoveryFixture({
         separateIndexes,
-        reverse: false,
+        reverse,
+        sharedTranscript,
       });
-      const originals = [transcriptPath, ...indexes].map((file) => ({
-        file,
-        bytes: fs.readFileSync(file),
-      }));
-      const imported = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
-      expect(imported.targets.flatMap((target) => target.issues)).toEqual([]);
+      const originals = snapshotFiles([transcriptPath, ...indexes]);
+      const imported = await cleanRun({ cfg, env }, "import");
+      if (!sharedTranscript) {
+        expectOwners(imported, indexes, reverse);
+        const manifest = readManifest(imported.migrationRun?.manifestPath);
+        for (const target of manifest.targets.filter((candidate) =>
+          indexes.includes(candidate.storePath),
+        )) {
+          containsObjects(target.completedMoves, {
+            kind: "transcript",
+            sourcePath: path.join(path.dirname(transcriptPath), `${target.agentId}-session.jsonl`),
+          });
+        }
+        expect((await retireRecovery(cfg, env)).totals.removedFiles).toBe(6);
+        return;
+      }
       const current = [];
-      for (const owner of ["main", "work"]) {
+      for (const owner of missingOwner ? ["main"] : ["main", "work"]) {
         const scope = {
           agentId: owner,
           env,
@@ -133,64 +219,36 @@ describe("runDoctorSessionSqlite", () => {
         expect(entry.label).toBe(`Current ${owner} metadata`);
         current.push({ scope, entry: structuredClone(entry) });
       }
-      await closeOpenClawAgentDatabasesAsync();
-      const restored = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "restore" });
-      expect(restored.targets.flatMap((target) => target.issues)).toEqual([]);
-      for (const original of originals) {
-        expect(fs.existsSync(original.file)).toBe(true);
-        expect(fs.readFileSync(original.file)).toEqual(original.bytes);
+      await drainDatabases();
+      await cleanRun({ cfg, env }, "restore");
+      expect(snapshotFiles(originals.map(({ file }) => file))).toEqual(originals);
+      if (missingOwner) {
+        const manifestPath = expectDefined(imported.migrationRun, "import run").manifestPath;
+        const manifest = readManifest(manifestPath);
+        manifest.targets = manifest.targets.filter((target) => target.agentId !== "main");
+        writeSessionSqliteMigrationManifest({ manifestPath, manifest });
       }
-      const reimported = await runDoctorSessionSqlite({
-        cfg,
-        env,
-        allAgents: true,
-        mode: "import",
-      });
-      expect(reimported.targets.flatMap((target) => target.issues)).toEqual([]);
+      const reimported = await run({ cfg, env }, "import", missingOwner ? "main" : undefined);
+      if (missingOwner) {
+        containsObjects(
+          reimported.targets.flatMap((target) => target.issues),
+          {
+            code: "legacy_import_deferred",
+            message: expect.stringContaining("Restored session index evidence cannot be verified"),
+          },
+        );
+        expectFiles(originals[1]!.bytes, indexes[0]!);
+      } else {
+        expect(reimported.targets.flatMap((target) => target.issues)).toEqual([]);
+      }
       for (const { scope, entry } of current) {
         expect(loadSessionEntry(scope)).toEqual(entry);
       }
-      closeOpenClawAgentDatabasesForTest();
-      const retired = await retireRecovery(cfg, env);
-      expect(retired.totals.removedFiles).toBe(separateIndexes ? 5 : 4);
+      if (!missingOwner) {
+        expect((await retireRecovery(cfg, env)).totals.removedFiles).toBe(separateIndexes ? 5 : 4);
+      }
     },
   );
-
-  it("refuses shared-index replay when only another owner's receipt remains", async () => {
-    const { cfg, env, indexes } = createSharedRecoveryFixture({
-      separateIndexes: false,
-      reverse: false,
-    });
-    const imported = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
-    expect(imported.targets.flatMap((target) => target.issues)).toEqual([]);
-    const scope = {
-      agentId: "main",
-      env,
-      storePath: expectDefined(
-        imported.targets.find((target) => target.agentId === "main"),
-        "main target",
-      ).sqlitePath,
-      sessionKey: "agent:main:main",
-    };
-    await updateSessionEntry(scope, () => ({ label: "Current main metadata" }));
-    const before = structuredClone(expectDefined(loadSessionEntry(scope), "current main entry"));
-    expect(before.label).toBe("Current main metadata");
-    closeOpenClawAgentDatabasesForTest();
-    const restored = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "restore" });
-    expect(restored.targets.flatMap((target) => target.issues)).toEqual([]);
-    const indexPath = expectDefined(indexes[0], "shared index");
-    const original = fs.readFileSync(indexPath);
-    const manifestPath = expectDefined(imported.migrationRun, "import run").manifestPath;
-    const manifest = readMigrationManifest(manifestPath);
-    manifest.targets = manifest.targets.filter((target) => target.agentId !== "main");
-    writeSessionSqliteMigrationManifest({ manifestPath, manifest });
-
-    await expect(
-      runDoctorSessionSqlite({ cfg, env, agent: "main", mode: "import" }),
-    ).rejects.toThrow("Restored session index evidence cannot be verified");
-    expect(loadSessionEntry(scope)).toEqual(before);
-    expect(fs.readFileSync(indexPath)).toEqual(original);
-  });
 
   it.each(["shared", "distinct", "unreadable", "invalid-entry"] as const)(
     "retains known unselected index recovery (%s)",
@@ -201,15 +259,7 @@ describe("runDoctorSessionSqlite", () => {
         sharedTranscript: coverage !== "distinct",
       });
       const workIndex = indexes[1]!;
-      const siblingSource = path.join(path.dirname(transcriptPath), "main-private.jsonl");
-      const mainIndex = JSON.parse(fs.readFileSync(indexes[0]!, "utf8"));
-      mainIndex["agent:main:private"] = {
-        sessionId: "main-private",
-        sessionFile: "main-private.jsonl",
-        updatedAt: 30,
-      };
-      fs.writeFileSync(indexes[0]!, JSON.stringify(mainIndex));
-      fs.writeFileSync(siblingSource, '{"type":"session","id":"main-private","version":3}\n');
+      const siblingSource = addPrivateHistory(indexes[0]!);
       const workSource =
         coverage === "distinct"
           ? path.join(path.dirname(transcriptPath), "work-session.jsonl")
@@ -225,19 +275,15 @@ describe("runDoctorSessionSqlite", () => {
       }
       const original = fs.readFileSync(workSource);
       const indexBytes = fs.readFileSync(workIndex);
-      const report = await runDoctorSessionSqlite({ cfg, env, agent: "main", mode: "import" });
-      closeOpenClawAgentDatabasesForTest();
+      const report = await run({ cfg, env }, "import", "main");
       const cleanup = await retireRecovery(cfg, env);
-      expect(fs.existsSync(workSource)).toBe(true);
-      expect(fs.readFileSync(workSource)).toEqual(original);
-      expect(fs.readFileSync(workIndex)).toEqual(indexBytes);
+      expect([fs.readFileSync(workSource), fs.readFileSync(workIndex)]).toEqual([
+        original,
+        indexBytes,
+      ]);
       expect(cleanup.totals.removedFiles).toBe(coverage === "distinct" ? 3 : 0);
       if (coverage !== "distinct") {
-        expect(report.targets[0]?.issues).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ code: "transcript_archive_deferred" }),
-          ]),
-        );
+        containsObjects(report.targets[0]?.issues, { code: "transcript_archive_deferred" });
       }
       expect(report.targets[0]?.archivedUnreferencedJsonlFiles).toEqual([]);
       // Keep the whole retained index usable; a direct retry must not orphan an earlier archive.
@@ -245,20 +291,11 @@ describe("runDoctorSessionSqlite", () => {
         expect(fs.existsSync(siblingSource)).toBe(true);
       }
       if (coverage === "shared") {
-        const retry = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
-        expect(retry.targets.flatMap((target) => target.issues)).toEqual([]);
-        closeOpenClawAgentDatabasesForTest();
+        const retry = await cleanRun({ cfg, env }, "import");
         const retired = await retireRecovery(cfg, env);
-        const current = readMigrationManifest(retry.migrationRun?.manifestPath);
-        for (const move of current.targets
-          .flatMap((target) => target.completedMoves)
-          .filter(
-            (plannedMove) =>
-              plannedMove.kind === "transcript" || plannedMove.kind === "legacy-store",
-          )) {
-          expect(retired.artifacts.find((item) => item.path === move.archivePath)?.outcome).toBe(
-            "removed",
-          );
+        const current = readManifest(retry.migrationRun?.manifestPath);
+        for (const move of importedMoves(current)) {
+          expectOutcome(retired, move.archivePath, "removed");
         }
       }
     },
@@ -276,79 +313,33 @@ describe("runDoctorSessionSqlite", () => {
       const { cfg, env, transcriptPath, indexes, independent } = fixture;
       const original = fs.readFileSync(transcriptPath);
       const supportOriginals = new Map(
-        [independent.trajectoryPath, independent.unreferencedJsonlPath].map((source) => [
-          source,
-          fs.readFileSync(source),
-        ]),
+        snapshotFiles([independent.trajectoryPath, independent.unreferencedJsonlPath]).map(
+          ({ file, bytes }) => [file, bytes],
+        ),
       );
-      const snapshot = sqliteReaders.readOnlySqliteValidationSnapshot;
       let injected = false;
-      const spy = vi
-        .spyOn(sqliteReaders, "readOnlySqliteValidationSnapshot")
-        .mockImplementation((target) => {
-          const result = snapshot(target);
-          if (
-            target.agentId === "work" &&
-            result.ok &&
-            result.snapshot.sessionIdsBySessionKey.has("agent:work:main")
-          ) {
-            injected = true;
-            return { ok: false, error: new Error("injected validation read failure") };
-          }
-          return result;
-        });
-      let report;
-      try {
-        report = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
-      } finally {
-        spy.mockRestore();
-      }
+      const report = await importAtCommittedOwner({ cfg, env }, "work", () => {
+        injected = true;
+        return new Error("injected validation read failure");
+      });
       expect(injected).toBe(true);
-      expect(
-        report.targets
-          .filter((target) => indexes.includes(target.storePath))
-          .map((target) => target.agentId),
-      ).toEqual(reverse ? ["work", "main"] : ["main", "work"]);
-      const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+      expectOwners(report, indexes, reverse);
+      const manifest = readManifest(report.migrationRun?.manifestPath);
       expect(
         manifest.targets.find((target) => target.agentId === "work")?.validationBeforeArchive,
       ).toBe("failed");
-      closeOpenClawAgentDatabasesForTest();
       const cleanup = await retireRecovery(cfg, env);
-      const originalLocations = [
-        transcriptPath,
-        ...manifest.targets.flatMap((target) =>
-          target.plannedMoves
-            .filter((move) => move.sourcePath === transcriptPath)
-            .map((move) => move.archivePath),
-        ),
-      ];
-      expect(
-        originalLocations
-          .filter((file) => fs.existsSync(file))
-          .map((file) => fs.readFileSync(file)),
-      ).toContainEqual(original);
-      const independentMoves = manifest.targets.find(
-        (target) => target.storePath === independent.storePath,
-      )!.completedMoves;
-      expect(
-        independentMoves
-          .filter((move) => move.kind === "transcript" || move.kind === "legacy-store")
-          .every((move) =>
-            cleanup.artifacts.some(
-              (item) => item.path === move.archivePath && item.outcome === "removed",
-            ),
-          ),
-      ).toBe(true);
+      expectRetained(manifest, transcriptPath, original);
+      for (const move of importedMoves(manifest, independent.storePath)) {
+        expectOutcome(cleanup, move.archivePath, "removed");
+      }
       // Recovery and retry must remain usable with the failed owner's original index and bytes.
-      await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "restore" });
-      expect(fs.readFileSync(transcriptPath)).toEqual(original);
+      await run({ cfg, env }, "restore");
+      expectFiles(original, transcriptPath);
       expect(indexes.every((index) => fs.existsSync(index))).toBe(true);
-      const retried = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
-      expect(retried.targets.flatMap((target) => target.issues)).toEqual([]);
-      closeOpenClawAgentDatabasesForTest();
+      const retried = await cleanRun({ cfg, env }, "import");
       const retired = await retireRecovery(cfg, env);
-      const latest = readMigrationManifest(retried.migrationRun?.manifestPath);
+      const latest = readManifest(retried.migrationRun?.manifestPath);
       const protectedSources = new Set<string>();
       for (const move of latest.targets.flatMap((target) => target.completedMoves)) {
         const supportBytes = supportOriginals.get(move.sourcePath);
@@ -361,53 +352,14 @@ describe("runDoctorSessionSqlite", () => {
               disposal: { state: "retained" },
             },
           });
-          expect(retired.artifacts.find((item) => item.path === move.archivePath)?.outcome).toBe(
-            "protected",
-          );
-          expect(fs.readFileSync(move.archivePath)).toEqual(supportBytes);
+          expectOutcome(retired, move.archivePath, "protected");
+          expectFiles(supportBytes, move.archivePath);
           protectedSources.add(move.sourcePath);
           continue;
         }
-        expect(retired.artifacts.find((item) => item.path === move.archivePath)?.outcome).toBe(
-          "removed",
-        );
+        expectOutcome(retired, move.archivePath, "removed");
       }
       expect([...protectedSources].toSorted()).toEqual([...supportOriginals.keys()].toSorted());
-    },
-  );
-
-  it.each([false, true])(
-    "plans separate indexes before sweeping sibling transcripts (reverse=%s)",
-    async (reverse) => {
-      const { cfg, env, indexes, transcriptPath } = createSharedRecoveryFixture({
-        separateIndexes: true,
-        reverse,
-        sharedTranscript: false,
-      });
-      const report = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
-      expect(report.targets.flatMap((target) => target.issues)).toEqual([]);
-      expect(
-        report.targets
-          .filter((target) => indexes.includes(target.storePath))
-          .map((target) => target.agentId),
-      ).toEqual(reverse ? ["work", "main"] : ["main", "work"]);
-      const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
-      for (const target of manifest.targets.filter((candidate) =>
-        indexes.includes(candidate.storePath),
-      )) {
-        const expectedSource = path.join(
-          path.dirname(transcriptPath),
-          `${target.agentId}-session.jsonl`,
-        );
-        expect(target.completedMoves).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ kind: "transcript", sourcePath: expectedSource }),
-          ]),
-        );
-      }
-      closeOpenClawAgentDatabasesForTest();
-      const retired = await retireRecovery(cfg, env);
-      expect(retired.totals.removedFiles).toBe(6);
     },
   );
 });
@@ -416,6 +368,7 @@ function retireRecovery(
   cfg: ReturnType<typeof createSharedRecoveryFixture>["cfg"],
   env: NodeJS.ProcessEnv,
 ) {
+  closeDatabases();
   return retireSessionSqliteRecovery({
     env,
     preview: inspectSessionSqliteRecovery({ cfg, env }),
@@ -470,9 +423,11 @@ function createSharedRecoveryFixture(params: {
   if (!params.separateIndexes) {
     fs.writeFileSync(storePath, JSON.stringify(records));
   }
-  const cfg = {
+  const cfg: OpenClawConfig = {
     agents: {
-      entries: Object.fromEntries(owners.map((owner) => [owner, { default: owner === "main" }])),
+      ownership: "explicit",
+      defaults: { sessionStore: { agentId: "main" } },
+      entries: Object.fromEntries(owners.map((owner) => [owner, {}])),
     },
     session: { store: storePath },
   };

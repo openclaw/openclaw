@@ -15,7 +15,10 @@ const log = createSubsystemLogger("gateway");
 
 export async function prewarmGatewaySessionHistory(
   config: OpenClawConfig,
-  options: { onlyIfCold?: boolean; isCancelled?: () => boolean } = {},
+  options: {
+    onlyIfCold?: boolean;
+    isCancelled?: () => boolean;
+  } = {},
 ): Promise<void> {
   try {
     if (options.onlyIfCold && !isSessionHistoryWorkerCold()) {

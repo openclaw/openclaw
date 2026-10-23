@@ -2,7 +2,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
@@ -12,32 +13,55 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import * as sessionCostUsage from "../../infra/session-cost-usage.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  createSessionRowProjection,
+  type SessionRowProjection,
+} from "../session-row-projection.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import * as usageSessionSelection from "./usage-session-selection.js";
 
-it.for(["session reset", "incognito transition"] as const)(
-  "does not attach saved context after %s while usage summaries settle",
+it.for([
+  "session reset",
+  "incognito transition",
+  "revocation after context read",
+  "page backfill after revocation",
+] as const)(
+  "does not expose revoked usage context after %s",
   async (change, { signal, onTestFinished }) => {
-    const state = await createOpenClawTestState({ label: "usage-context-lifecycle" });
+    const state = await createOpenClawTestState({
+      label: "usage-context-lifecycle",
+      prepareProfileCatalog: true,
+    });
     const release = createDeferred();
+    const targetReadStarted = createDeferred();
     const summaryLoaded =
       createDeferred<
         Awaited<ReturnType<typeof sessionCostUsage.loadSessionCostSummariesFromCache>>
       >();
     let request: Promise<unknown> | undefined;
+    let projection: SessionRowProjection | undefined;
     let restoreSummaryLoader: (() => void) | undefined;
+    let restoreTargetReader: (() => void) | undefined;
     let cleanupPromise: Promise<void> | undefined;
+    let releaseProfileCatalog: (() => void) | undefined;
     const releaseSummary = () => release.resolve();
     const cleanup = () =>
       (cleanupPromise ??= (async () => {
         releaseSummary();
         await Promise.allSettled(request ? [request] : []);
         try {
+          projection?.dispose();
+          releaseProfileCatalog?.();
           await state.cleanup();
         } finally {
           restoreSummaryLoader?.();
+          restoreTargetReader?.();
           signal.removeEventListener("abort", releaseSummary);
         }
       })());
@@ -57,7 +81,7 @@ it.for(["session reset", "incognito transition"] as const)(
             default: "guest",
             definitions: {
               guest: {
-                sessions: { others: "none" },
+                sessions: { others: change === "revocation after context read" ? "view" : "none" },
                 agents: "*",
                 scopes: ["operator.read", "operator.write"],
               },
@@ -65,8 +89,9 @@ it.for(["session reset", "incognito transition"] as const)(
           },
         },
       });
-      const config = getRuntimeConfig();
+      const config = await captureRuntimeConfigAsyncReader()();
       const viewer = ensureProfileForEmail("usage-viewer@example.com");
+      releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
       const client: GatewayClient = {
         connect: {
           minProtocol: 1,
@@ -103,6 +128,7 @@ it.for(["session reset", "incognito transition"] as const)(
         tools: { listChars: 0, schemaChars: 0, entries: [] },
       };
       const changedReport = { ...originalReport, generatedAt: timestamp + 1 };
+      const siblingReport = { ...originalReport, generatedAt: timestamp + 2 };
       replaceSessionEntrySync(scope, {
         sessionId,
         updatedAt: timestamp,
@@ -110,19 +136,42 @@ it.for(["session reset", "incognito transition"] as const)(
         visibility: "shared",
         systemPromptReport: originalReport,
       });
-      await persistSessionTranscriptTurn(
-        { ...scope, sessionId },
-        {
+      const sibling = {
+        ...scope,
+        sessionKey: "agent:main:usage-unaffected",
+        sessionId: "usage-unaffected",
+      };
+      replaceSessionEntrySync(sibling, {
+        sessionId: sibling.sessionId,
+        updatedAt: timestamp - 1,
+        createdActor: { type: "human", source: "profile", id: viewer.id },
+        visibility: "shared",
+        ...(change === "page backfill after revocation"
+          ? { systemPromptReport: siblingReport }
+          : {}),
+      });
+      for (const [target, tokens] of [
+        [{ ...scope, sessionId }, 17],
+        [sibling, 23],
+      ] as const) {
+        await persistSessionTranscriptTurn(target, {
           cwd: state.workspaceDir,
           updateMode: "none",
           messages: [
             {
-              message: { role: "user", content: "Synthetic usage", timestamp },
+              message: {
+                role: "assistant",
+                content: "Synthetic usage",
+                timestamp,
+                provider: "synthetic",
+                model: "synthetic",
+                usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: 0 } },
+              },
               now: timestamp,
             },
           ],
-        },
-      );
+        });
+      }
       await sessionCostUsage.loadCostUsageSummary({
         config,
         agentId: scope.agentId,
@@ -130,16 +179,36 @@ it.for(["session reset", "incognito transition"] as const)(
         endMs: timestamp + 1,
       });
 
+      projection = await createSessionRowProjection({ cfg: config, getConfig: () => config });
       const actualLoad = sessionCostUsage.loadSessionCostSummariesFromCache;
       const summaryLoader = vi
         .spyOn(sessionCostUsage, "loadSessionCostSummariesFromCache")
         .mockImplementation(async (params) => {
           const result = await actualLoad(params);
           summaryLoaded.resolve(result);
-          await release.promise;
+          if (
+            change !== "revocation after context read" &&
+            change !== "page backfill after revocation"
+          ) {
+            await release.promise;
+          }
           return result;
         });
       restoreSummaryLoader = () => summaryLoader.mockRestore();
+      if (
+        change === "revocation after context read" ||
+        change === "page backfill after revocation"
+      ) {
+        const actualRead = usageSessionSelection.loadUsageSessionContext;
+        const reader = vi
+          .spyOn(usageSessionSelection, "loadUsageSessionContext")
+          .mockImplementation(async (...args) => {
+            await actualRead(...args);
+            targetReadStarted.resolve();
+            await release.promise;
+          });
+        restoreTargetReader = () => reader.mockRestore();
+      }
       const respond = vi.fn();
       request = Promise.resolve(
         expectDefined(
@@ -147,21 +216,33 @@ it.for(["session reset", "incognito transition"] as const)(
           "registered usage handler",
         )({
           req: { type: "req", id: "context-lifecycle", method: "sessions.usage" },
-          params: { agentId: "main", range: "all", limit: 1, includeContextWeight: true },
+          params: {
+            agentId: "main",
+            range: "all",
+            limit: change === "page backfill after revocation" ? 1 : 2,
+            includeContextWeight: true,
+          },
           respond,
           client,
           isWebchatConnect: () => false,
-          context: { getRuntimeConfig: () => config } as GatewayRequestContext,
+          context: bindSessionRowProjection(
+            { getRuntimeConfig: () => config } as GatewayRequestContext,
+            () => projection,
+          ),
         }),
       );
       const loaded = await Promise.race([
-        summaryLoaded.promise,
+        change === "revocation after context read" || change === "page backfill after revocation"
+          ? targetReadStarted.promise
+          : summaryLoaded.promise,
         request.then(() => {
-          throw new Error("Usage request returned before the summary hold");
+          throw new Error("Usage request returned before the read hold");
         }),
       ]);
-      expect(loaded.cacheStatus.status).toBe("fresh");
-      expect(loaded.summaries).toHaveLength(1);
+      if (loaded) {
+        expect(loaded.cacheStatus.status).toBe("fresh");
+        expect(loaded.summaries).toHaveLength(2);
+      }
       expect(respond).not.toHaveBeenCalled();
       signal.throwIfAborted();
 
@@ -186,22 +267,46 @@ it.for(["session reset", "incognito transition"] as const)(
       expect(loadSessionEntryReadOnly(scope)).toMatchObject({
         sessionId: change === "session reset" ? "usage-after-reset" : sessionId,
         systemPromptReport: changedReport,
-        ...(change === "incognito transition" ? { incognito: true } : {}),
+        ...(change === "session reset" ? {} : { incognito: true }),
       });
 
-      releaseSummary();
-      await request;
+      if (change === "revocation after context read") {
+        invalidateOperatorRolePolicy(viewer.id);
+      }
+      const sql = change === "revocation after context read" ? observeHostDataSql() : undefined;
+      try {
+        releaseSummary();
+        await request;
+        if (sql) {
+          expect(sql.queries).toEqual([]);
+        }
+      } finally {
+        sql?.restore();
+      }
       expect(respond).toHaveBeenCalledOnce();
       const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
       expect(ok).toBe(true);
       const result = payload as SessionsUsageResult;
-      expect(result.sessions).toHaveLength(1);
-      expect(result.sessions[0]).toMatchObject({
-        key: scope.sessionKey,
-        sessionId,
-        hasContextWeight: false,
-        contextWeight: null,
-      });
+      expect(result.sessions.map((row) => row.key)).toEqual(
+        change === "session reset" ? [scope.sessionKey, sibling.sessionKey] : [sibling.sessionKey],
+      );
+      expect(result.totals.totalTokens).toBe(change === "session reset" ? 40 : 23);
+      expect(
+        result.sessions.find((row) => row.key === sibling.sessionKey)?.usage?.totalTokens,
+      ).toBe(23);
+      if (change === "session reset") {
+        expect(result.sessions[0]).toMatchObject({
+          key: scope.sessionKey,
+          sessionId,
+          hasContextWeight: false,
+          contextWeight: null,
+        });
+      }
+      if (change === "page backfill after revocation") {
+        expect(result.sessions).toMatchObject([
+          { key: sibling.sessionKey, hasContextWeight: true, contextWeight: siblingReport },
+        ]);
+      }
     } finally {
       await cleanup();
     }

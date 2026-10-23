@@ -191,18 +191,7 @@ internal fun PreparedChatHistory.buildTimeline(
     }
   val items = projectToolActivity(sourceItems, rows, pendingToolCalls, toolScope, toolScopesByRun)
   val latestUserIndex = items.indexOfFirst { it is ChatTimelineItem.Message && it.message.id == latestUserMessageId }.takeIf { it >= 0 }
-  if (items.isEmpty()) {
-    return ChatTimeline(
-      items = items,
-      readAnchorIndex = null,
-      latestContentIndex = null,
-      latestUserMessageId = null,
-      latestUserMessageVersion = null,
-      latestContentVersion = "",
-    )
-  }
-
-  val latestContentIndex = 0
+  val latestContentIndex = 0.takeIf { items.isNotEmpty() }
   // In reverseLayout, index 0 is bottom-most. Keep the latest prompt as a stable
   // reader anchor even after streaming rows collapse into a finished reply.
   val readAnchorIndex = latestUserIndex ?: latestContentIndex
@@ -211,17 +200,21 @@ internal fun PreparedChatHistory.buildTimeline(
     items = items,
     readAnchorIndex = readAnchorIndex,
     latestContentIndex = latestContentIndex,
-    latestUserMessageId = latestUserMessageId,
-    latestUserMessageVersion = latestUserMessageVersion,
+    latestUserMessageId = latestUserMessageId.takeIf { latestContentIndex != null },
+    latestUserMessageVersion = latestUserMessageVersion.takeIf { latestContentIndex != null },
     latestContentVersion =
-      latestContentVersion(
-        rawHistoryVersionPrefix,
-        pendingRunCount,
-        pendingToolCalls,
-        stream,
-        outboxItems + recoveryOutboxItems,
-        questions,
-      ),
+      if (latestContentIndex == null) {
+        ""
+      } else {
+        latestContentVersion(
+          rawHistoryVersionPrefix,
+          pendingRunCount,
+          pendingToolCalls,
+          stream,
+          outboxItems + recoveryOutboxItems,
+          questions,
+        )
+      },
   )
 }
 
@@ -525,24 +518,21 @@ private fun classifyTranscriptMessage(
   val provenance = message.provenance
   if (message.role == "user" && provenance?.kind == "internal_system") {
     val rawBody = chatMessagePlainText(message.content).removePrefix("[System] ")
-    val label: String
-    val body: String
-    when (provenance.sourceTool) {
-      "main_session_restart_recovery" -> {
-        label = nativeString("System · restart recovery")
-        body = nativeString("Turn interrupted by a gateway restart — asked the agent to resume and finish the response.")
-      }
+    val (label, body) =
+      when (provenance.sourceTool) {
+        "main_session_restart_recovery" -> {
+          nativeString("System · restart recovery") to
+            nativeString("Turn interrupted by a gateway restart — asked the agent to resume and finish the response.")
+        }
 
-      "restart-sentinel" -> {
-        label = nativeString("System · gateway restarted")
-        body = rawBody
-      }
+        "restart-sentinel" -> {
+          nativeString("System · gateway restarted") to rawBody
+        }
 
-      else -> {
-        label = nativeString("System")
-        body = rawBody
+        else -> {
+          nativeString("System") to rawBody
+        }
       }
-    }
     if (body.isBlank()) return null
     val keySuffix = message.entryId ?: message.idempotencyKey ?: "${message.timestampMs ?: "missing"}:$index"
     return ChatTimelineItem.SystemNotice(
@@ -579,15 +569,12 @@ private fun projectTranscriptToolActivity(messages: List<ChatMessage>): List<Tra
   val calls = mutableMapOf<String, MutableMap<String?, TranscriptTool>>()
   var turnRunId: String? = null
   messages.forEachIndexed { messageIndex, message ->
-    if (message.turnBoundary || message.isForwardedBoundary()) {
+    // A later turn may reuse a harness-local call ID.
+    if (message.turnBoundary || message.isForwardedBoundary() || message.transcriptMarker != null) {
       calls.clear()
       turnRunId = null
     }
-    // A later turn may reuse a harness-local call ID.
-    if (message.transcriptMarker != null) {
-      calls.clear()
-      turnRunId = null
-    } else if (message.role.equals("user", ignoreCase = true)) {
+    if (message.transcriptMarker == null && message.role.equals("user", ignoreCase = true)) {
       val continuesRun = turnRunId != null && message.steerTargetRunId == turnRunId
       if (!continuesRun) {
         // Known runs can finish after a newer prompt. Only unattributed calls are

@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   appendLocalMediaParentRoots,
@@ -18,7 +18,7 @@ import {
 const testTempRoot = realpathSync(os.tmpdir());
 
 function loadedConfig(config: OpenClawConfig): OpenClawConfig {
-  return migratePersistedImplicitMainRoster(config).config as OpenClawConfig;
+  return createCanonicalAgentConfigFixture(config).config;
 }
 
 function getAgentScopedMediaLocalRoots(

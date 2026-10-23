@@ -1,152 +1,151 @@
 // @vitest-environment node
-import {
-  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-  GatewayProtocolRequestTimeoutError,
-} from "@openclaw/gateway-client/browser";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createTestSessionCapability } from "./session-capability.test-support.ts";
-import { createSessionScopedOperations } from "./session-scoped-operations.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "./session-capability.test-support.ts";
+import type { SessionCapability } from "./session-capability.ts";
+import {
+  createSessionScopedOperations,
+  preloadSessionMessageSubscriptions,
+} from "./session-scoped-operations.ts";
 
 const subscriptionRequestOptions = { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS };
+type Params = Record<string, unknown>;
+type SubscribeOptions = NonNullable<Parameters<SessionCapability["subscribeMessages"]>[1]>;
 
-function createGateway(client: GatewayBrowserClient) {
-  return {
-    snapshot: {
-      client,
-      phase: "connected" as const,
-      sessionKey: "agent:main:main",
-      assistantAgentId: "main",
-      hello: null,
-    },
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  };
+function wireCall(action: "subscribe" | "unsubscribe", params: Record<string, unknown>) {
+  return [
+    `sessions.messages.${action}`,
+    { ...params, subscriptionId: expect.any(String) },
+    subscriptionRequestOptions,
+  ];
+}
+
+function createGateway(request: (method: string, params?: Params) => Promise<unknown>) {
+  return createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway;
+}
+
+function observerRequest(reply: (params?: Params) => unknown) {
+  return vi.fn(async (method: string, params?: Params) => {
+    if (method === "sessions.messages.subscribe") {
+      return reply(params);
+    }
+    if (method === "sessions.messages.unsubscribe") {
+      return {};
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
 }
 
 describe("createSessionCapability message subscriptions", () => {
-  it("retries a rejected unsubscribe against its original live Gateway observer", async () => {
-    let unsubscribeCalls = 0;
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "sessions.messages.subscribe") {
-        return { key: params?.key };
-      }
-      if (method === "sessions.messages.unsubscribe") {
-        unsubscribeCalls += 1;
-        if (unsubscribeCalls === 1) {
-          throw new Error("temporary observer release failure");
-        }
-        return {};
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createTestSessionCapability(createGateway(client));
-    const subscription = await sessions.subscribeMessages("agent:main:main");
+  it("retains the requested subscription intent while admission is pending", async () => {
+    await preloadSessionMessageSubscriptions();
+    const request = vi.fn(async (_method: string, params?: Params) => ({
+      key: params?.key,
+      agentId: params?.agentId,
+    }));
+    const sessions = createTestSessionCapability(createGateway(request));
+    const intent = { agentId: "main", mode: "narration", includeApprovals: true } as const;
+    const options: SubscribeOptions = { ...intent, agentId: " Main " };
+    const pending = sessions.subscribeMessages("global", options);
+    expect(request).toHaveBeenCalledOnce();
+    Object.assign(options, { agentId: "work", mode: undefined, includeApprovals: false });
+    const subscription = await pending;
 
-    await expect(sessions.unsubscribeMessages(subscription)).rejects.toThrow(
-      "temporary observer release failure",
-    );
-    await expect(sessions.unsubscribeMessages(subscription)).resolves.toBeUndefined();
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "sessions.messages.unsubscribe",
-      { key: "agent:main:main" },
-      subscriptionRequestOptions,
-    );
-    expect(request).toHaveBeenNthCalledWith(
-      3,
-      "sessions.messages.unsubscribe",
-      { key: "agent:main:main" },
-      subscriptionRequestOptions,
-    );
-    sessions.dispose();
+    expect(request.mock.calls).toEqual([wireCall("subscribe", { key: "global", ...intent })]);
+    await sessions.unsubscribeMessages(subscription);
   });
 
-  it("shares canonical observers across capabilities without releasing the live owner", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.messages.subscribe") {
-        return { key: "agent:main:main" };
+  it.each(["reconnect", "dispose"])(
+    "retires a pending wire observer when %s interrupts admission",
+    async (retirement) => {
+      await preloadSessionMessageSubscriptions();
+      const request = vi.fn(async (_method: string, params?: Params) => ({
+        key: params?.key,
+      }));
+      const client = { request } as unknown as GatewayBrowserClient;
+      let scope = { client, epoch: 0 };
+      const operations = createSessionScopedOperations({
+        notifyCreated: vi.fn(),
+        reportError: vi.fn(),
+        connection: { capture: () => scope, isCurrent: (captured) => captured === scope },
+        reconcileMutation: async () => ({ status: "stale" }),
+      });
+      const acquisition = operations.subscribeMessages("agent:main:old");
+      expect(request.mock.calls).toEqual([wireCall("subscribe", { key: "agent:main:old" })]);
+      if (retirement === "dispose") {
+        operations.dispose();
+      } else {
+        scope = { client, epoch: 1 };
+        operations.retireConnection(client);
       }
-      if (method === "sessions.messages.unsubscribe") {
-        return {};
+      await expect(acquisition).rejects.toThrow("replaced Gateway connection");
+      if (retirement === "dispose") {
+        expect(request.mock.calls.at(-1)).toEqual(
+          wireCall("unsubscribe", { key: "agent:main:old" }),
+        );
       }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = createGateway(client);
+      request.mockClear();
+      if (retirement === "reconnect") {
+        const current = await operations.subscribeMessages("agent:main:current");
+        expect(request.mock.calls).toEqual([wireCall("subscribe", { key: "agent:main:current" })]);
+        await operations.unsubscribeMessages(current);
+      }
+      operations.dispose();
+    },
+  );
+
+  it("shares narration and foreground observers across capabilities without retiring the full stream", async () => {
+    const request = observerRequest(() => ({ key: "agent:main:main" }));
+    const gateway = createGateway(request);
     const first = createTestSessionCapability(gateway);
     const second = createTestSessionCapability(gateway);
 
     const [firstLease, secondLease] = await Promise.all([
-      first.subscribeMessages("main"),
+      first.subscribeMessages("main", { mode: "narration" }),
       second.subscribeMessages("agent:main:main"),
     ]);
 
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      "sessions.messages.subscribe",
-      { key: "main" },
-      subscriptionRequestOptions,
-    );
+    expect(request.mock.calls).toEqual([
+      wireCall("subscribe", { key: "main", mode: "narration" }),
+      wireCall("subscribe", { key: "agent:main:main" }),
+    ]);
     await first.unsubscribeMessages(firstLease);
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
     await second.unsubscribeMessages(secondLease);
-    expect(request).toHaveBeenLastCalledWith(
-      "sessions.messages.unsubscribe",
-      { key: "agent:main:main" },
-      subscriptionRequestOptions,
-    );
-    first.dispose();
-    second.dispose();
+    expect(request.mock.calls.at(-1)).toEqual(wireCall("unsubscribe", { key: "agent:main:main" }));
   });
 
   it("upgrades a plain observer for approvals without downgrading existing owners", async () => {
     const replay = { approvals: [{ id: "approval-1" }] };
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "sessions.messages.subscribe") {
-        return {
-          key: params?.key,
-          ...(params?.includeApprovals ? { approvalReplay: replay } : {}),
-        };
-      }
-      if (method === "sessions.messages.unsubscribe") {
-        return {};
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createTestSessionCapability(createGateway(client));
+    const opts = { includeApprovals: true } as const;
+    const request = observerRequest((params) => ({
+      key: params?.key,
+      ...(params?.includeApprovals ? { approvalReplay: replay } : {}),
+    }));
+    const sessions = createTestSessionCapability(createGateway(request));
 
     const plain = await sessions.subscribeMessages("main");
-    const approval = await sessions.subscribeMessages("main", { includeApprovals: true });
+    const approval = await sessions.subscribeMessages("main", opts);
     const anotherPlain = await sessions.subscribeMessages("main");
 
-    expect(approval).toEqual({
-      key: "main",
-      agentId: null,
-      includeApprovals: true,
-      approvalReplay: replay,
-    });
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "sessions.messages.subscribe",
-      { key: "main", includeApprovals: true },
-      subscriptionRequestOptions,
-    );
+    expect(approval).toEqual({ key: "main", agentId: null, ...opts, approvalReplay: replay });
+    expect(request.mock.calls[1]).toEqual(wireCall("subscribe", { key: "main", ...opts }));
     await sessions.unsubscribeMessages(approval);
     await sessions.unsubscribeMessages(plain);
     expect(request).toHaveBeenCalledTimes(2);
     await sessions.unsubscribeMessages(anotherPlain);
     expect(request).toHaveBeenCalledTimes(3);
-    sessions.dispose();
   });
 
   it.each(["global", "qualified main alias"])(
     "retains each global observer owner through %s acknowledgment and release",
     async (keyForm) => {
       const observers = new Map<string, boolean>();
-      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      const request = vi.fn(async (method: string, params?: Params) => {
         const key = params?.key;
         const agentId =
           params?.agentId ??
@@ -164,8 +163,7 @@ describe("createSessionCapability message subscriptions", () => {
         }
         throw new Error(`Unexpected request: ${method}`);
       });
-      const client = { request } as unknown as GatewayBrowserClient;
-      const sessions = createTestSessionCapability(createGateway(client));
+      const sessions = createTestSessionCapability(createGateway(request));
 
       const keyFor = (agentId: string) =>
         keyForm === "global" ? "global" : `agent:${agentId}:main`;
@@ -184,126 +182,14 @@ describe("createSessionCapability message subscriptions", () => {
       expect([...observers]).toEqual([["work", true]]);
       await sessions.unsubscribeMessages(approval);
       expect(observers.size).toBe(0);
-      expect(main).toEqual({ key: "global", agentId: "main" });
-      expect(work).toEqual({ key: "global", agentId: "work" });
-      expect(request).toHaveBeenNthCalledWith(
-        1,
-        "sessions.messages.subscribe",
-        { key: keyFor("main"), agentId: "main" },
-        subscriptionRequestOptions,
+      expect([main, work]).toEqual(["main", "work"].map((agentId) => ({ key: "global", agentId })));
+      expect(request.mock.calls.slice(0, 2)).toEqual([
+        wireCall("subscribe", { key: keyFor("main"), agentId: "main" }),
+        wireCall("subscribe", { key: keyFor("work"), agentId: "work" }),
+      ]);
+      expect(request.mock.calls.at(-1)).toEqual(
+        wireCall("unsubscribe", { key: "global", agentId: "work" }),
       );
-      expect(request).toHaveBeenNthCalledWith(
-        2,
-        "sessions.messages.subscribe",
-        { key: keyFor("work"), agentId: "work" },
-        subscriptionRequestOptions,
-      );
-      expect(request).toHaveBeenLastCalledWith(
-        "sessions.messages.unsubscribe",
-        { key: "global", agentId: "work" },
-        subscriptionRequestOptions,
-      );
-      sessions.dispose();
     },
   );
-
-  it("retires the current Gateway generation when a sent subscription cannot be recovered", async () => {
-    const timeout = new GatewayProtocolRequestTimeoutError({
-      method: "sessions.messages.subscribe",
-      timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-      requestSent: true,
-    });
-    const recoveryError = new Error("subscription recovery unavailable");
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.messages.subscribe") {
-        throw timeout;
-      }
-      throw recoveryError;
-    });
-    const forceReconnect = vi.fn();
-    const client = { request, forceReconnect } as unknown as GatewayBrowserClient;
-    const gateway = createGateway(client);
-    const sessions = createTestSessionCapability(gateway);
-    const anotherOwner = createTestSessionCapability(gateway);
-
-    const failures = await Promise.allSettled([
-      sessions.subscribeMessages("main", { includeApprovals: true }),
-      anotherOwner.subscribeMessages("main", { includeApprovals: true }),
-    ]);
-
-    expect(failures).toEqual([
-      { status: "rejected", reason: expect.objectContaining({ cause: recoveryError }) },
-      { status: "rejected", reason: expect.objectContaining({ cause: recoveryError }) },
-    ]);
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "sessions.messages.unsubscribe",
-      { key: "main" },
-      subscriptionRequestOptions,
-    );
-    expect(forceReconnect).toHaveBeenCalledExactlyOnceWith("session subscription recovery failed");
-    sessions.dispose();
-    anotherOwner.dispose();
-  });
-
-  it("keeps the current Gateway connection when its sent subscription is recovered", async () => {
-    const timeout = new GatewayProtocolRequestTimeoutError({
-      method: "sessions.messages.subscribe",
-      timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-      requestSent: true,
-    });
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.messages.subscribe") {
-        throw timeout;
-      }
-      return {};
-    });
-    const forceReconnect = vi.fn();
-    const client = { request, forceReconnect } as unknown as GatewayBrowserClient;
-    const sessions = createTestSessionCapability(createGateway(client));
-
-    await expect(sessions.subscribeMessages("main")).rejects.toBe(timeout);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(forceReconnect).not.toHaveBeenCalled();
-    sessions.dispose();
-  });
-
-  it("never reconnects a Gateway generation retired during subscription recovery", async () => {
-    const timeout = new GatewayProtocolRequestTimeoutError({
-      method: "sessions.messages.subscribe",
-      timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-      requestSent: true,
-    });
-    const recovering = createDeferred();
-    const recovery = createDeferred<never>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.messages.subscribe") {
-        throw timeout;
-      }
-      recovering.resolve();
-      return await recovery.promise;
-    });
-    const forceReconnect = vi.fn();
-    const client = { request, forceReconnect } as unknown as GatewayBrowserClient;
-    let current = true;
-    const operations = createSessionScopedOperations({
-      notifyCreated: vi.fn(),
-      reportError: vi.fn(),
-      connection: {
-        capture: () => ({ client, epoch: 0 }),
-        isCurrent: () => current,
-      },
-      reconcileMutation: async () => ({ status: "stale" }),
-    });
-    const failure = operations.subscribeMessages("main").catch((error: unknown) => error);
-
-    await recovering.promise;
-    current = false;
-    operations.retireConnection(client);
-    recovery.reject(new Error("retired Gateway connection"));
-
-    await expect(failure).resolves.toBe(timeout);
-    expect(forceReconnect).not.toHaveBeenCalled();
-    operations.dispose();
-  });
 });

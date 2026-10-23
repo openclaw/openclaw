@@ -1,35 +1,19 @@
-import {
-  GatewayDispatchEvents,
-  type APIMessage,
-  type APIUser,
-  type GatewayDispatchPayload,
-} from "discord-api-types/v10";
+import { GatewayDispatchEvents, type APIMessage, type APIUser } from "discord-api-types/v10";
 import type { Client } from "./client.js";
 import { Guild, Message, User } from "./structures.js";
 
-export function dispatchVoiceGatewayEvent(client: Client, payload: GatewayDispatchPayload): void {
-  const guildId = readGuildId(payload.d);
-  if (!guildId) {
-    return;
-  }
-  const adapters = client.getPlugin("voice")?.adapters;
-  const adapter = adapters?.get(guildId);
-  if (payload.t === GatewayDispatchEvents.VoiceServerUpdate) {
-    adapter?.onVoiceServerUpdate?.(payload.d);
-  }
-  if (payload.t === GatewayDispatchEvents.VoiceStateUpdate) {
-    adapter?.onVoiceStateUpdate?.(payload.d);
-  }
-}
-
-export function mapGatewayDispatchData(client: Client, type: string, data: unknown): unknown {
-  const messageCreate: string = GatewayDispatchEvents.MessageCreate;
-  const reactionAdd: string = GatewayDispatchEvents.MessageReactionAdd;
-  const reactionRemove: string = GatewayDispatchEvents.MessageReactionRemove;
-  if (type === messageCreate) {
+export function mapGatewayDispatchData(
+  client: Client,
+  type: GatewayDispatchEvents,
+  data: unknown,
+): unknown {
+  if (type === GatewayDispatchEvents.MessageCreate) {
     return createMessageDispatchData(client, data as MessageCreatePayload);
   }
-  if (type === reactionAdd || type === reactionRemove) {
+  if (
+    type === GatewayDispatchEvents.MessageReactionAdd ||
+    type === GatewayDispatchEvents.MessageReactionRemove
+  ) {
     return createReactionDispatchData(client, data as ReactionPayload);
   }
   return data;
@@ -81,12 +65,4 @@ function createReactionDispatchData(client: Client, data: ReactionPayload) {
       channelId: data.channel_id,
     }),
   };
-}
-
-function readGuildId(data: unknown): string | undefined {
-  return data &&
-    typeof data === "object" &&
-    typeof (data as { guild_id?: unknown }).guild_id === "string"
-    ? (data as { guild_id: string }).guild_id
-    : undefined;
 }

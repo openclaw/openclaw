@@ -7,7 +7,7 @@ import {
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "./registry.js";
-import { startPluginServices } from "./services.js";
+import { startPluginServices } from "./services.test-support.js";
 import type { OpenClawPluginService } from "./types.js";
 
 beforeEach(resetDiagnosticEventsForTest);

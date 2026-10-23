@@ -6,10 +6,12 @@ import {
 } from "./metadata-normalization.ts";
 import {
   isValidWorkboardBoardId,
+  normalizeWorkboardSessionsBoardSpec,
   WORKBOARD_PRIORITIES,
   WORKBOARD_STATUSES,
   type WorkboardBoardSummary,
   type WorkboardCard,
+  type WorkboardCardCursor,
   type WorkboardPriority,
   type WorkboardStatus,
 } from "./types.ts";
@@ -38,6 +40,9 @@ function normalizeBoardSummary(value: unknown): WorkboardBoardSummary | null {
     typeof value.automationJobId === "string" ? value.automationJobId.trim() : "";
   return {
     id,
+    ...(value.kind === "sessions"
+      ? { kind: "sessions" as const, sessions: normalizeWorkboardSessionsBoardSpec(value.sessions) }
+      : {}),
     total: normalizeCount(value.total),
     active: normalizeCount(value.active),
     archived: normalizeCount(value.archived),
@@ -100,9 +105,10 @@ export function normalizeCardsPayload(payload: unknown): {
   cards: WorkboardCard[];
   boards: WorkboardBoardSummary[];
   statuses: readonly WorkboardStatus[];
+  nextCursor: WorkboardCardCursor | null;
 } {
   if (!isRecord(payload)) {
-    return { cards: [], boards: [], statuses: WORKBOARD_STATUSES };
+    return { cards: [], boards: [], statuses: WORKBOARD_STATUSES, nextCursor: null };
   }
   const cards = Array.isArray(payload.cards)
     ? payload.cards.map(normalizeCard).filter((card): card is WorkboardCard => card !== null)
@@ -117,7 +123,15 @@ export function normalizeCardsPayload(payload: unknown): {
         .map(normalizeBoardSummary)
         .filter((board): board is WorkboardBoardSummary => board !== null)
     : [];
-  return { cards, boards, statuses: statuses.length ? statuses : WORKBOARD_STATUSES };
+  const cursor = payload.nextCursor;
+  const nextCursor =
+    isRecord(cursor) &&
+    typeof cursor.position === "number" &&
+    typeof cursor.createdAt === "number" &&
+    typeof cursor.id === "string"
+      ? { position: cursor.position, createdAt: cursor.createdAt, id: cursor.id }
+      : null;
+  return { cards, boards, statuses: statuses.length ? statuses : WORKBOARD_STATUSES, nextCursor };
 }
 
 export function normalizeCardPayload(payload: unknown): WorkboardCard {

@@ -1,9 +1,8 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Moonshot provider module implements model/runtime integration.
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createWebSearchProviderContractFields,
+  WEB_SEARCH_QUERY_COUNT_PROPERTIES,
   type WebSearchProviderPlugin,
-  type WebSearchProviderSetupContext,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 
 const KIMI_CREDENTIAL_PATH = "plugins.entries.moonshot.config.webSearch.apiKey";
@@ -15,13 +14,7 @@ const loadKimiWebSearchProviderRuntime = createLazyRuntimeModule(
 const KimiSearchSchema = {
   type: "object",
   properties: {
-    query: { type: "string", description: "Search query string." },
-    count: {
-      type: "integer",
-      description: "Number of results to return (1-10).",
-      minimum: 1,
-      maximum: 10,
-    },
+    ...WEB_SEARCH_QUERY_COUNT_PROPERTIES,
     country: { type: "string", description: "Not supported by Kimi." },
     language: { type: "string", description: "Not supported by Kimi." },
     freshness: { type: "string", description: "Not supported by Kimi." },
@@ -29,13 +22,6 @@ const KimiSearchSchema = {
     date_before: { type: "string", description: "Not supported by Kimi." },
   },
 } satisfies Record<string, unknown>;
-
-async function runKimiSearchProviderSetup(
-  ctx: WebSearchProviderSetupContext,
-): Promise<WebSearchProviderSetupContext["config"]> {
-  const runtime = await loadKimiWebSearchProviderRuntime();
-  return await runtime.runKimiSearchProviderSetup(ctx);
-}
 
 export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
   return {
@@ -55,10 +41,13 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
       searchCredential: { type: "scoped", scopeId: "kimi" },
       configuredCredential: { pluginId: "moonshot" },
     }),
-    runSetup: runKimiSearchProviderSetup,
+    runSetup: createLazyRuntimeMethod(
+      loadKimiWebSearchProviderRuntime,
+      (runtime) => runtime.runKimiSearchProviderSetup,
+    ),
     createTool: (ctx) => ({
       description:
-        "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search.",
+        "Search the web using Kimi by Moonshot. Returns structured results with titles, URLs, and descriptions.",
       parameters: KimiSearchSchema,
       execute: async (args, context) => {
         const { executeKimiWebSearchProviderTool } = await loadKimiWebSearchProviderRuntime();

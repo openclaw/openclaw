@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   updateAuthProfileStoreWithLock: vi.fn(),
@@ -11,11 +11,17 @@ vi.mock("./store-runtime.js", () => ({
   updateAuthProfileStoreWithLock: hoisted.updateAuthProfileStoreWithLock,
 }));
 
+import * as persisted from "./persisted.js";
 import { upsertAuthProfileWithLockOrThrow } from "./upsert-with-lock.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("upsertAuthProfileWithLockOrThrow", () => {
   it("fails with the canonical retry guidance when the locked update fails", async () => {
     hoisted.updateAuthProfileStoreWithLock.mockResolvedValue(null);
+    vi.spyOn(persisted, "loadPersistedAuthProfileStore").mockImplementation(() => {
+      throw new Error("Static tokens must reach the write owner without a preparatory read");
+    });
 
     await expect(
       upsertAuthProfileWithLockOrThrow({

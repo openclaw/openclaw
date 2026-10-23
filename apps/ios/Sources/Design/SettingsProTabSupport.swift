@@ -12,6 +12,33 @@ enum SettingsRoute: Hashable {
     case about
 }
 
+struct ManualGatewaySecurityRows: View {
+    let presentation: GatewayManualTransportPresentation
+    @Binding var useTLS: Bool
+
+    var body: some View {
+        Picker(selection: self.$useTLS) {
+            Text("Unencrypted")
+                .font(OpenClawType.captionSemiBold)
+                .tag(false)
+            Text("Secure (TLS)")
+                .font(OpenClawType.captionSemiBold)
+                .tag(true)
+        } label: {
+            Text("Connection security")
+                .font(OpenClawType.captionSemiBold)
+        }
+        .pickerStyle(.segmented)
+        .disabled(self.presentation.requiresTLS)
+
+        if let helperText = self.presentation.helperText {
+            Text(helperText)
+                .font(OpenClawType.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 /// Canonical label/value list row for Settings and Talk surfaces. Keep every
 /// detail row on this view so row typography cannot drift between sections;
 /// plain `LabeledContent(String, value:)` renders unbranded system fonts.
@@ -128,7 +155,7 @@ struct SettingsBuildMetadataStrip: View {
                     Divider()
                         .frame(height: 30)
                 }
-                self.metadataField(field, alignment: .center)
+                self.metadataField(field)
                     .frame(minWidth: 72, maxWidth: .infinity)
                     .padding(.horizontal, 4)
             }
@@ -139,13 +166,13 @@ struct SettingsBuildMetadataStrip: View {
     private var metadataColumn: some View {
         VStack(alignment: .center, spacing: 8) {
             ForEach(self.fields) { field in
-                self.metadataField(field, alignment: .center)
+                self.metadataField(field)
             }
         }
     }
 
-    private func metadataField(_ field: Field, alignment: HorizontalAlignment) -> some View {
-        VStack(alignment: alignment, spacing: 1) {
+    private func metadataField(_ field: Field) -> some View {
+        VStack(alignment: .center, spacing: 1) {
             Text(field.title)
                 .font(OpenClawType.caption2SemiBold)
                 .textCase(.uppercase)
@@ -342,22 +369,5 @@ enum SettingsDiagnostics {
         if gatewayConnected, !talkConfigLoaded { issues.append(.talkConfigMissing) }
         if !notificationsAllowed { issues.append(.notificationsUnavailable) }
         return issues
-    }
-
-    static func issueCount(
-        gatewayConnected: Bool,
-        discoveredGatewayCount: Int,
-        talkConfigLoaded: Bool,
-        notificationsAllowed: Bool) -> Int
-    {
-        self.issues(
-            gatewayConnected: gatewayConnected,
-            discoveredGatewayCount: discoveredGatewayCount,
-            talkConfigLoaded: talkConfigLoaded,
-            notificationsAllowed: notificationsAllowed).count
-    }
-
-    static func timestamp(_ date: Date) -> String {
-        date.formatted(date: .omitted, time: .shortened)
     }
 }

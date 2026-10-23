@@ -1,4 +1,3 @@
-/** Shared helpers for onboarding, reset, gateway checks, and wizard output. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
@@ -8,10 +7,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { WorkspaceStateGuard } from "../agents/workspace-state-store.worker-contract.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { printClawBanner } from "../cli/claw-banner.js";
 import { readSourceConfigBestEffort } from "../config/config.js";
-import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
@@ -31,15 +30,10 @@ export {
   resolveControlUiLinks,
   resolveLocalControlUiProbeLinks,
 } from "../gateway/control-ui-links.js";
-export {
-  detectBrowserOpenSupport,
-  openUrl,
-  resolveBrowserOpenCommand,
-} from "../infra/browser-open.js";
+export { detectBrowserOpenSupport } from "../infra/browser-open.js";
 export { detectBinary } from "../infra/detect-binary.js";
 export { randomToken } from "./random-token.js";
 
-/** Handles Clack cancellation by exiting through the runtime. */
 export function guardCancel<T>(
   value: T | typeof CANCEL_SYMBOL,
   runtime: RuntimeEnv,
@@ -131,7 +125,6 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   return trimmed;
 }
 
-/** Validates gateway password prompt input. */
 export function validateGatewayPasswordInput(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return "Required";
@@ -146,7 +139,6 @@ export function validateGatewayPasswordInput(value: unknown): string | undefined
   return undefined;
 }
 
-/** Prints the onboarding banner: pixel mascot beside the OPENCLAW wordmark. */
 export async function printWizardHeader(runtime: RuntimeEnv): Promise<void> {
   await printClawBanner(runtime);
 }
@@ -158,7 +150,7 @@ export function applyWizardMetadata(
 ): OpenClawConfig {
   const commit =
     normalizeOptionalString(process.env.GIT_COMMIT) ?? normalizeOptionalString(process.env.GIT_SHA);
-  return inheritLegacyDefaultAgentId(cfg, {
+  return {
     ...cfg,
     wizard: {
       ...cfg.wizard,
@@ -168,10 +160,9 @@ export function applyWizardMetadata(
       lastRunCommand: params.command,
       lastRunMode: params.mode,
     },
-  });
+  };
 }
 
-/** Formats the no-GUI SSH tunnel hint for opening the Control UI remotely. */
 export function formatControlUiSshHint(params: {
   port: number;
   basePath?: string;
@@ -202,18 +193,18 @@ export async function ensureWorkspaceAndSessions(
     skipBootstrap?: boolean;
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
     agentId: string;
-    beforePersistentApply?: () => void;
+    guard?: WorkspaceStateGuard;
   },
 ): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
     ensureBootstrapFiles: !options.skipBootstrap,
     skipOptionalBootstrapFiles: options.skipOptionalBootstrapFiles,
-    beforePersistentApply: options.beforePersistentApply,
+    guard: options.guard,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options.agentId);
-  options.beforePersistentApply?.();
+  options.guard?.assertHost?.();
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   return { bootstrapPending: ws.bootstrapPending === true };
@@ -294,6 +285,7 @@ type OnboardingGatewayProbeParams = {
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 function runOnboardingGatewayProbe(
@@ -317,6 +309,7 @@ function runOnboardingGatewayProbe(
       ? { preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs }
       : {}),
     detailLevel,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 
@@ -336,10 +329,10 @@ export async function probeGatewayReachable(
 }
 
 export type GatewayConfiguredModelProbeResult =
-  | { kind: "configured" }
-  | { kind: "missing-configured-model"; detail: string }
-  | { kind: "reachable-unverified"; detail?: string }
-  | { kind: "unreachable"; detail?: string };
+  | "configured"
+  | "missing-configured-model"
+  | "reachable-unverified"
+  | "unreachable";
 
 /** Reads only Gateway config and classifies whether its default agent has inference. */
 export async function probeGatewayConfiguredModel(
@@ -348,15 +341,14 @@ export async function probeGatewayConfiguredModel(
   let probe: GatewayProbeResult;
   try {
     probe = await runOnboardingGatewayProbe(params, "config");
-  } catch (err) {
-    return { kind: "unreachable", detail: summarizeError(err) };
+  } catch {
+    return "unreachable";
   }
-  const detail = probe.error ?? undefined;
   if (!probe.gatewayReached) {
-    return { kind: "unreachable", ...(detail ? { detail } : {}) };
+    return "unreachable";
   }
   if (!probe.ok) {
-    return { kind: "reachable-unverified", detail };
+    return "reachable-unverified";
   }
   const snapshot = probe.configSnapshot as {
     valid?: unknown;
@@ -366,29 +358,17 @@ export async function probeGatewayConfiguredModel(
   const configCandidate =
     snapshot?.valid === true ? (snapshot.runtimeConfig ?? snapshot.config) : null;
   if (!configCandidate || typeof configCandidate !== "object" || Array.isArray(configCandidate)) {
-    return {
-      kind: "reachable-unverified",
-      detail: "Gateway returned an invalid config snapshot",
-    };
+    return "reachable-unverified";
   }
   try {
     const config = configCandidate as OpenClawConfig;
     const model = resolveAgentEffectiveModelPrimary(config, resolveDefaultAgentId(config));
-    return model
-      ? { kind: "configured" }
-      : {
-          kind: "missing-configured-model",
-          detail: "Gateway default agent has no configured model",
-        };
+    return model ? "configured" : "missing-configured-model";
   } catch {
-    return {
-      kind: "reachable-unverified",
-      detail: "Gateway returned an invalid config snapshot",
-    };
+    return "reachable-unverified";
   }
 }
 
-/** Polls gateway reachability until success or deadline. */
 export async function waitForGatewayReachable(
   params: Omit<OnboardingGatewayProbeParams, "timeoutMs"> & {
     /** Total time to wait before giving up. */
@@ -405,10 +385,12 @@ export async function waitForGatewayReachable(
   let lastDetail: string | undefined;
 
   while (Date.now() - startedAt < deadlineMs) {
+    params.signal?.throwIfAborted();
     const probe = await probeGatewayReachable({
       ...probeParams,
       timeoutMs: probeTimeoutMs,
     });
+    params.signal?.throwIfAborted();
     if (probe.ok) {
       return probe;
     }
@@ -417,7 +399,7 @@ export async function waitForGatewayReachable(
     if (remainingMs <= 0) {
       break;
     }
-    await sleep(Math.min(pollDelayMs, remainingMs));
+    await sleep(Math.min(pollDelayMs, remainingMs), params.signal);
   }
 
   return { ok: false, detail: lastDetail };

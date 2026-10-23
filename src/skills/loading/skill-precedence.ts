@@ -130,9 +130,9 @@ export function appendLowerPrecedenceSkillRecords<T extends { skill: Skill }>(
   entries: T[],
   lower: readonly T[],
   onCollision: (winner: T, loser: T) => void,
-): T[] {
+): void {
   if (lower.length === 0) {
-    return entries;
+    return;
   }
   const winners = new Map(entries.map((entry) => [entry.skill.name, entry]));
   for (const entry of lower) {
@@ -144,5 +144,4 @@ export function appendLowerPrecedenceSkillRecords<T extends { skill: Skill }>(
       entries.push(entry);
     }
   }
-  return entries;
 }

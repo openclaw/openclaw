@@ -1,7 +1,6 @@
 import { vi } from "vitest";
-import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
-import type { UpdateCommandOptions } from "./shared.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
+import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 
 const command = vi.hoisted(() => ({
   prepare: vi.fn<typeof import("./update-command-run.js").prepareUpdateCommand>(),
@@ -49,8 +48,11 @@ vi.mock("./update-command-schema.js", () => ({
   preflightUpdateCommandSchemas: async () => ({ preflightNotes: [], preflightFailures: [] }),
   captureUpdateActivationSchemas: async () => ({}),
 }));
-vi.mock("./update-command-database-context.js", () => ({
-  inspectUpdateDatabaseContexts: async () => ({ services: new Map() }),
+vi.mock("./update-command-database-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-database-context.js")>()),
+  inspectUpdateDatabaseContexts: async (): ReturnType<
+    typeof import("./update-command-database-context.js").inspectUpdateDatabaseContexts
+  > => ({ services: new Map(), contexts: [], service: undefined, managedEnv: undefined }),
   revalidateUpdateDatabaseContexts: async (_params: unknown, context: unknown) => context,
 }));
 vi.mock("./update-command-managed-context.js", async (original) => ({
@@ -74,7 +76,6 @@ vi.mock("./update-command-package.js", () => ({
     await params.beforeActivate?.();
     return { status: "ok", mode: "npm", root: params.root, steps: [], durationMs: 0 };
   },
-  preparePackageDoctorContext: () => undefined,
 }));
 vi.mock("../../infra/update-global.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-global.js")>()),
@@ -82,6 +83,8 @@ vi.mock("../../infra/update-global.js", async (original) => ({
 }));
 vi.mock("./update-execution.runtime.js", async () => ({
   executeMutableUpdate: (await import("./update-command-execution.js")).executeMutableUpdate,
+  createUpdateCommandExecutionGuards: (await import("./update-command-execution-guards.js"))
+    .createUpdateCommandExecutionGuards,
   restoreFailedUpdateDatabases: (await import("./update-command-database-backup.js"))
     .restoreFailedUpdateDatabases,
   createUpdateCommandFinalizationFence: (await import("./update-command-recovery.js"))
@@ -102,21 +105,6 @@ export async function runNativeMaintenanceUpdate(
   handoffId: string,
   serviceRoot?: string,
 ) {
-  const snapshot: ConfigFileSnapshot = {
-    path: `${process.env.HOME}/.openclaw/openclaw.json`,
-    exists: true,
-    raw: "{}",
-    parsed: {},
-    resolved: {},
-    sourceConfig: {},
-    config: {},
-    runtimeConfig: {},
-    valid: true,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  };
-  const run: NonNullable<UpdateCommandOptions["run"]> = { runId, env: process.env };
   command.prepare.mockResolvedValue({
     startedAt: Date.now(),
     postCoreUpdateResume: false,
@@ -129,15 +117,15 @@ export async function runNativeMaintenanceUpdate(
     discoveredRoot: root,
     installKind: "package",
     servicePlan: serviceRoot ? { rootRedirect: null, serviceRoot } : undefined,
-    pkgOwnership: createFreeBsdPkgOwnershipInspection(),
+    pkgOwnership: createSystemPackageOwnershipInspection(),
   });
-  command.admit.mockResolvedValue(run);
+  command.admit.mockResolvedValue({ runId, env: process.env });
   command.target.mockResolvedValue({
     root,
     mode: "npm",
     updateInstallKind: "package",
     refuseUpdate: async () => {},
-    configSnapshot: snapshot,
+    configSnapshot: createTestConfigSnapshot({}, {}, `${process.env.HOME}/.openclaw/openclaw.json`),
     configReadFailure: undefined,
     legacyConfigPlan: undefined,
     storedChannel: null,
@@ -163,7 +151,8 @@ export async function runNativeMaintenanceUpdate(
     packageUpdateNodeRunner: undefined,
     devTarget: undefined,
   });
-  command.finish.mockReset().mockImplementation(async ({ result }) => {
+  command.finish.mockReset().mockImplementation(async ({ result }, options) => {
+    await options?.beforeFinalization?.();
     if (result.status === "error") {
       throw new Error(`${result.reason}: ${result.steps.at(-1)?.stderrTail}`);
     }

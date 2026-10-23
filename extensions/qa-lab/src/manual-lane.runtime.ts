@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { toQaError } from "./errors.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
@@ -21,7 +22,6 @@ type QaManualLaneParams = {
   thinkingDefault?: QaThinkingLevel;
   message: string;
   timeoutMs?: number;
-  replySettleMs?: number;
 };
 
 type ManualLaneResult = {
@@ -30,29 +30,6 @@ type ManualLaneResult = {
   reply: string | null;
   watchUrl: string;
 };
-
-async function stopManualLaneAuxiliaryResources(resources: {
-  lab?: { stop: () => Promise<void> | void };
-  mock?: { stop: () => Promise<void> | void } | null;
-}): Promise<Error | undefined> {
-  const stopTasks = [resources.mock, resources.lab]
-    .filter((resource): resource is { stop: () => Promise<void> | void } => Boolean(resource))
-    .map((resource) => Promise.resolve().then(() => resource.stop()));
-  const results = await Promise.allSettled(stopTasks);
-  const failed = results.find((result) => result.status === "rejected");
-  return failed ? toQaError(failed.reason) : undefined;
-}
-
-function resolveManualLaneTimeoutMs(params: QaManualLaneParams) {
-  if (
-    typeof params.timeoutMs === "number" &&
-    Number.isFinite(params.timeoutMs) &&
-    params.timeoutMs > 0
-  ) {
-    return params.timeoutMs;
-  }
-  return resolveQaLiveTurnTimeoutMs(params, 120_000, params.primaryModel);
-}
 
 export async function runQaManualLane(params: QaManualLaneParams) {
   const sessionSuffix = params.primaryModel.replace(/[^a-z0-9._-]+/gi, "-");
@@ -95,7 +72,9 @@ export async function runQaManualLane(params: QaManualLaneParams) {
       controlUiEnabled: false,
     });
 
-    const timeoutMs = resolveManualLaneTimeoutMs(params);
+    const timeoutMs =
+      asPositiveFiniteNumber(params.timeoutMs) ??
+      resolveQaLiveTurnTimeoutMs(params, 120_000, params.primaryModel);
     const delivery = transport.buildAgentDelivery({
       target: "dm:qa-operator",
     });
@@ -128,10 +107,7 @@ export async function runQaManualLane(params: QaManualLaneParams) {
       { timeoutMs: resolveQaGatewayTimeoutWithGraceMs(timeoutMs) },
     )) as { status?: string; error?: string };
 
-    const replySettleMs = params.replySettleMs ?? 500;
-    if (replySettleMs > 0) {
-      await sleep(replySettleMs);
-    }
+    await sleep(500);
 
     const reply =
       lab.state
@@ -162,7 +138,12 @@ export async function runQaManualLane(params: QaManualLaneParams) {
         transportCleanupAfterError = toQaError(error);
       });
     }
-    const auxiliaryCleanupError = await stopManualLaneAuxiliaryResources({ lab, mock });
+    const stopTasks = [mock, lab]
+      .filter((resource) => resource !== undefined && resource !== null)
+      .map((resource) => Promise.resolve().then(() => resource.stop()));
+    const results = await Promise.allSettled(stopTasks);
+    const failed = results.find((entry) => entry.status === "rejected");
+    const auxiliaryCleanupError = failed ? toQaError(failed.reason) : undefined;
     cleanupError =
       transportCleanupBeforeError ??
       gatewayCleanupError ??

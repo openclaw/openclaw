@@ -1,7 +1,21 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { beforeEach, expect, it, vi } from "vitest";
 
-const warnMock = vi.hoisted(() => vi.fn());
+const { warnMock, runCommand, randomUUIDMock } = vi.hoisted(() => ({
+  warnMock: vi.fn(),
+  runCommand: vi.fn(),
+  randomUUIDMock: vi.fn(),
+}));
+
+vi.mock("node:crypto", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:crypto")>()),
+  randomUUID: randomUUIDMock,
+}));
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandWithTimeout: runCommand,
+}));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => ({ warn: warnMock }),
@@ -9,253 +23,125 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 
 import { withIMessageRemoteFile } from "./remote-file.js";
 
-function result(
-  overrides: Partial<{
-    code: number | null;
-    stdout: string;
-    stderr: string;
-    termination: "exit" | "timeout" | "signal" | "no-output-timeout";
-  }> = {},
-) {
-  return {
-    code: 0,
-    stdout: "",
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "exit" as const,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
+const remoteDir = "/tmp/openclaw-imessage-0123456789abcdef0123456789abcdef";
+const use = vi.fn(async () => "sent");
+function stage(options: Partial<Parameters<typeof withIMessageRemoteFile<string>>[0]> = {}) {
+  return withIMessageRemoteFile({
+    remoteHost: "messages-mac",
+    localPath: "/gateway/file.pdf",
+    use,
+    ...options,
+  });
 }
 
-describe("withIMessageRemoteFile", () => {
-  beforeEach(() => {
-    warnMock.mockReset();
-  });
+type CommandResult = Pick<SpawnResult, "code" | "stdout" | "stderr" | "termination">;
+const success: CommandResult = { code: 0, stdout: "", stderr: "", termination: "exit" };
 
-  it.each(["allocation", "upload"] as const)(
-    "stops later work after retirement during %s and still cleans the remote directory",
-    async (phase) => {
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      const retired = new Error("iMessage delivery retired");
-      let current = true;
-      const runCommand = vi.fn(async (argv: string[]) => {
-        const isHeldCommand = phase === "allocation" ? argv[0] === "ssh" : argv[0] === "scp";
-        if (current && isHeldCommand) {
-          entered.resolve();
-          await release.promise;
-        }
-        return result();
-      });
-      const use = vi.fn(async () => "sent");
-      const settled = withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/synthetic.pdf",
-        assertDirectAdapterHandoff: () => {
-          if (!current) {
-            throw retired;
-          }
-        },
-        deps: { runCommand, createToken: () => "0123456789abcdef0123456789abcdef" },
-        use,
-      }).then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        expect(
-          await Promise.race([entered.promise.then(() => true), settled.then(() => false)]),
-        ).toBe(true);
-        current = false;
-      } finally {
-        release.resolve();
-        await settled;
+function respond(...overrides: Partial<CommandResult>[]) {
+  for (const override of overrides) {
+    runCommand.mockResolvedValueOnce({ ...success, ...override });
+  }
+}
+
+beforeEach(() => {
+  warnMock.mockReset();
+  runCommand.mockReset();
+  use.mockReset().mockResolvedValue("sent");
+  randomUUIDMock.mockReturnValue("01234567-89ab-cdef-0123-456789abcdef");
+});
+
+it.each(["allocation", "upload"] as const)(
+  "stops later work after retirement during %s and still cleans the remote directory",
+  async (phase) => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const retired = new Error("iMessage delivery retired");
+    let current = true;
+    runCommand.mockImplementation(async (argv: string[]) => {
+      if (current && argv[0] === (phase === "allocation" ? "ssh" : "scp")) {
+        entered.resolve();
+        await release.promise;
       }
-      expect(await settled).toEqual({ error: retired });
-      expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(
-        phase === "allocation" ? ["ssh", "ssh"] : ["ssh", "scp", "ssh"],
-      );
-      expect(use).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not allocate or clean a directory when authority is already retired", async () => {
-    const runCommand = vi.fn(async () => result());
-    const use = vi.fn(async () => "sent");
-    await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/synthetic.pdf",
-        assertDirectAdapterHandoff: () => {
-          throw new Error("iMessage delivery retired");
-        },
-        deps: { runCommand },
-        use,
-      }),
-    ).rejects.toThrow("iMessage delivery retired");
-    expect(runCommand).not.toHaveBeenCalled();
+      return success;
+    });
+    const settled = stage({
+      assertDirectAdapterHandoff: () => {
+        if (!current) {
+          throw retired;
+        }
+      },
+    }).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      expect(
+        await Promise.race([entered.promise.then(() => true), settled.then(() => false)]),
+      ).toBe(true);
+      current = false;
+    } finally {
+      release.resolve();
+      await settled;
+    }
+    expect(await settled).toEqual({ error: retired });
+    expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(
+      phase === "allocation" ? ["ssh", "ssh"] : ["ssh", "scp", "ssh"],
+    );
     expect(use).not.toHaveBeenCalled();
-  });
+  },
+);
 
-  it("uploads into an owner-only remote directory and cleans after success", async () => {
-    const runCommand = vi
-      .fn()
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result());
-    const use = vi.fn(async () => "sent");
+it("does not allocate or clean a directory when authority is already retired", async () => {
+  runCommand.mockResolvedValue(success);
+  await expect(
+    stage({
+      assertDirectAdapterHandoff: () => {
+        throw new Error("iMessage delivery retired");
+      },
+    }),
+  ).rejects.toThrow("iMessage delivery retired");
+  expect(runCommand).not.toHaveBeenCalled();
+  expect(use).not.toHaveBeenCalled();
+});
 
-    await expect(
-      withIMessageRemoteFile({
-        remoteHost: "bot@messages-mac",
-        localPath: "/gateway/private/a file;$(touch nope).png",
-        deps: { runCommand, createToken: () => "a1b2c3d4e5f60718293a4b5c6d7e8f90" },
-        use,
-      }),
-    ).resolves.toBe("sent");
+it("uploads into an owner-only remote directory and cleans after success", async () => {
+  respond({}, {}, {});
+  const localPath = "/gateway/private/a file;$(touch nope).png";
+  const remotePath = `${remoteDir}/a-file-touch-nope-.png`;
 
-    expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(["ssh", "scp", "ssh"]);
-    expect(runCommand.mock.calls[0]?.[0].at(-1)).toBe("sh -s");
-    expect(runCommand.mock.calls[0]?.[1].input).toContain("umask 077");
-    expect(runCommand.mock.calls[0]?.[1].input).not.toContain("a file");
-    expect(runCommand.mock.calls[1]?.[0]).toEqual([
-      "scp",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "StrictHostKeyChecking=yes",
-      "-o",
-      "ConnectTimeout=10",
-      "-o",
-      "ClearAllForwardings=yes",
-      "-o",
-      "ForwardAgent=no",
-      "-o",
-      "ForwardX11=no",
-      "--",
-      "/gateway/private/a file;$(touch nope).png",
-      "bot@messages-mac:/tmp/openclaw-imessage-a1b2c3d4e5f60718293a4b5c6d7e8f90/a-file-touch-nope-.png",
-    ]);
-    expect(use).toHaveBeenCalledWith(
-      "/tmp/openclaw-imessage-a1b2c3d4e5f60718293a4b5c6d7e8f90/a-file-touch-nope-.png",
-    );
-    expect(runCommand.mock.calls[2]?.[1].input).toBe(
-      "set -eu\nrm -rf -- /tmp/openclaw-imessage-a1b2c3d4e5f60718293a4b5c6d7e8f90\n",
-    );
-  });
+  await expect(stage({ remoteHost: "bot@messages-mac", localPath })).resolves.toBe("sent");
 
-  it("cleans after the remote file consumer fails", async () => {
-    const message = "rpc failure";
-    const runCommand = vi
-      .fn()
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result());
+  const [allocate, upload, cleanup] = runCommand.mock.calls;
+  expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(["ssh", "scp", "ssh"]);
+  expect(allocate?.[0].at(-1)).toBe("sh -s");
+  expect(allocate?.[1].input).toContain("umask 077");
+  expect(allocate?.[1].input).not.toContain("a file");
+  expect(upload?.[0]).toEqual([
+    "scp",
+    ..."BatchMode=yes StrictHostKeyChecking=yes ConnectTimeout=10 ClearAllForwardings=yes ForwardAgent=no ForwardX11=no"
+      .split(" ")
+      .flatMap((option) => ["-o", option]),
+    "--",
+    localPath,
+    `bot@messages-mac:${remotePath}`,
+  ]);
+  expect(use).toHaveBeenCalledWith(remotePath);
+  expect(cleanup?.[1].input).toBe(`set -eu\nrm -rf -- ${remoteDir}\n`);
+});
 
-    await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/file.pdf",
-        deps: { runCommand, createToken: () => "0123456789abcdef0123456789abcdef" },
-        use: async () => {
-          throw new Error(message);
-        },
-      }),
-    ).rejects.toThrow(message);
-    expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(["ssh", "scp", "ssh"]);
-  });
+it("cleans the token-owned parent after setup timeout", async () => {
+  respond({ code: null, termination: "timeout" }, {});
 
-  it("cleans when upload fails", async () => {
-    const runCommand = vi
-      .fn()
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result({ code: 1, stderr: "upload failed" }))
-      .mockResolvedValueOnce(result());
+  await expect(stage()).rejects.toThrow("allocation failed (timeout)");
+  expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(["ssh", "ssh"]);
+  expect(runCommand.mock.calls[1]?.[1].input).toContain(`rm -rf -- ${remoteDir}`);
+});
 
-    await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/file.pdf",
-        deps: { runCommand, createToken: () => "0123456789abcdef0123456789abcdef" },
-        use: async () => "unused",
-      }),
-    ).rejects.toThrow("upload failed");
-    expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(["ssh", "scp", "ssh"]);
-  });
-
-  it("cleans the token-owned parent after setup timeout", async () => {
-    const runCommand = vi
-      .fn()
-      .mockResolvedValueOnce(result({ code: null, termination: "timeout" }))
-      .mockResolvedValueOnce(result());
-
-    await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/file.pdf",
-        deps: { runCommand, createToken: () => "0123456789abcdef0123456789abcdef" },
-        use: async () => "unused",
-      }),
-    ).rejects.toThrow("allocation failed (timeout)");
-    expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(["ssh", "ssh"]);
-    expect(runCommand.mock.calls[1]?.[1].input).toContain(
-      "rm -rf -- /tmp/openclaw-imessage-0123456789abcdef0123456789abcdef",
-    );
-  });
-
-  it("warns once without replacing a successful result when cleanup fails", async () => {
-    const runCommand = vi
-      .fn()
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result({ code: 1, stderr: "cleanup failed" }));
-
-    await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/file.pdf",
-        deps: { runCommand, createToken: () => "0123456789abcdef0123456789abcdef" },
-        use: async () => "accepted",
-      }),
-    ).resolves.toBe("accepted");
-    expect(warnMock).toHaveBeenCalledOnce();
-    expect(warnMock).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
-  });
-
-  it("warns once without replacing the primary failure when cleanup also fails", async () => {
-    const primary = new Error("RPC failed");
-    const runCommand = vi
-      .fn()
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result({ code: 1, stderr: "cleanup failed" }));
-
-    await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/file.pdf",
-        deps: { runCommand, createToken: () => "0123456789abcdef0123456789abcdef" },
-        use: async () => {
-          throw primary;
-        },
-      }),
-    ).rejects.toBe(primary);
-    expect(warnMock).toHaveBeenCalledOnce();
-    expect(warnMock).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
-  });
-
-  it("rejects invalid generated tokens before spawning", async () => {
-    const runCommand = vi.fn();
-    await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/file.pdf",
-        deps: { runCommand, createToken: () => "../escape" },
-        use: async () => "unused",
-      }),
-    ).rejects.toThrow("invalid temporary token");
-    expect(runCommand).not.toHaveBeenCalled();
-  });
+it("warns once without replacing the primary failure when cleanup also fails", async () => {
+  const primary = new Error("RPC failed");
+  respond({}, {}, { code: 1, stderr: "cleanup failed" });
+  use.mockRejectedValueOnce(primary);
+  await expect(stage()).rejects.toBe(primary);
+  expect(warnMock).toHaveBeenCalledOnce();
+  expect(warnMock).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
 });

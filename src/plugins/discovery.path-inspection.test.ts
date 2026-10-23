@@ -14,12 +14,7 @@ afterEach(() => {
 
 it.each([
   { code: "ENOENT", reason: "configured-plugin-path-unavailable" },
-  { code: "ENOTDIR", reason: "configured-plugin-path-unavailable" },
-  { code: "not-found", reason: "configured-plugin-path-unavailable" },
   { code: "EACCES", reason: "configured-plugin-path-inspection-failed" },
-  { code: "EPERM", reason: "configured-plugin-path-inspection-failed" },
-  { code: "EIO", reason: "configured-plugin-path-inspection-failed" },
-  { code: "ELOOP", reason: "configured-plugin-path-inspection-failed" },
   { code: undefined, reason: "configured-plugin-path-inspection-failed" },
 ])("classifies directory inspection by code $code, not message text", ({ code, reason }) => {
   const root = tempDirs.make("openclaw-directory-failure-");

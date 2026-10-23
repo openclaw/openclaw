@@ -1,10 +1,12 @@
-/** Higher-level agent scope helpers for model selection, fallbacks, skills, and workspaces. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveSelectedModelFallbacksOverride,
+} from "../config/model-input.js";
 import {
   resolveCollapsedSessionAuthPinSource,
   resolveSessionAuthProfileOverrideSource,
@@ -82,23 +84,16 @@ function autoFallbackPrimaryProbeStateKey(params: {
   ].join("\0");
 }
 
-function pruneAutoFallbackPrimaryProbeState(params: {
-  state: Map<string, number>;
-  now: number;
-  minIntervalMs: number;
-  maxKeys?: number;
-}): void {
-  const maxKeys = Math.max(1, Math.trunc(params.maxKeys ?? AUTO_FALLBACK_PRIMARY_PROBE_MAX_KEYS));
-  const staleBefore = params.now - params.minIntervalMs;
-  for (const [key, lastProbeAt] of params.state) {
-    if (!Number.isFinite(lastProbeAt) || lastProbeAt < staleBefore) {
-      params.state.delete(key);
+function pruneAutoFallbackPrimaryProbeState(state: Map<string, number>, now: number): void {
+  const staleBefore = now - AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS;
+  for (const [key, lastProbeAt] of state) {
+    if (lastProbeAt < staleBefore) {
+      state.delete(key);
     }
   }
-  pruneMapToMaxSize(params.state, maxKeys || 0);
+  pruneMapToMaxSize(state, AUTO_FALLBACK_PRIMARY_PROBE_MAX_KEYS);
 }
 
-/** Primary model probe metadata used to validate auto-fallback recovery. */
 export type AutoFallbackPrimaryProbe = {
   provider: string;
   model: string;
@@ -148,9 +143,6 @@ export function resolveAutoFallbackPrimaryProbe(params: {
   sessionKey?: string | null;
   primaryProvider: string;
   primaryModel: string;
-  now?: number;
-  minIntervalMs?: number;
-  maxTrackedProbeKeys?: number;
   probeState?: Map<string, number>;
 }): AutoFallbackPrimaryProbe | undefined {
   const entry = params.entry;
@@ -182,26 +174,16 @@ export function resolveAutoFallbackPrimaryProbe(params: {
     return undefined;
   }
 
-  const now = params.now ?? Date.now();
-  const minIntervalMs = params.minIntervalMs ?? AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS;
+  const now = Date.now();
   const state = params.probeState ?? autoFallbackPrimaryProbeState;
-  pruneAutoFallbackPrimaryProbeState({
-    state,
-    now,
-    minIntervalMs,
-    maxKeys: params.maxTrackedProbeKeys,
-  });
+  pruneAutoFallbackPrimaryProbeState(state, now);
   const key = autoFallbackPrimaryProbeStateKey({
     sessionKey: params.sessionKey,
     primaryProvider: originProvider,
     primaryModel: originModel,
   });
   const lastProbeAt = state.get(key);
-  if (
-    typeof lastProbeAt === "number" &&
-    Number.isFinite(lastProbeAt) &&
-    now - lastProbeAt < minIntervalMs
-  ) {
+  if (lastProbeAt !== undefined && now - lastProbeAt < AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS) {
     return undefined;
   }
   const fallbackAuthProfileId = normalizeOptionalString(entry.authProfileOverride);
@@ -223,32 +205,15 @@ export function resolveAutoFallbackPrimaryProbe(params: {
 export function markAutoFallbackPrimaryProbe(params: {
   probe: AutoFallbackPrimaryProbe;
   sessionKey?: string | null;
-  now?: number;
-  minIntervalMs?: number;
-  maxTrackedProbeKeys?: number;
-  probeState?: Map<string, number>;
 }): void {
-  const now = params.now ?? Date.now();
-  const minIntervalMs = params.minIntervalMs ?? AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS;
-  const state = params.probeState ?? autoFallbackPrimaryProbeState;
-  pruneAutoFallbackPrimaryProbeState({
-    state,
-    now,
-    minIntervalMs,
-    maxKeys: params.maxTrackedProbeKeys,
-  });
+  const now = Date.now();
   const key = autoFallbackPrimaryProbeStateKey({
     sessionKey: params.sessionKey,
     primaryProvider: params.probe.provider,
     primaryModel: params.probe.model,
   });
-  state.set(key, now);
-  pruneAutoFallbackPrimaryProbeState({
-    state,
-    now,
-    minIntervalMs,
-    maxKeys: params.maxTrackedProbeKeys,
-  });
+  autoFallbackPrimaryProbeState.set(key, now);
+  pruneAutoFallbackPrimaryProbeState(autoFallbackPrimaryProbeState, now);
 }
 
 export function entryMatchesAutoFallbackPrimaryProbe(
@@ -271,10 +236,7 @@ export function entryMatchesAutoFallbackPrimaryProbe(
   );
 }
 
-export function clearAutoFallbackPrimaryProbeSelection(
-  entry: SessionEntry,
-  now = Date.now(),
-): void {
+export function clearAutoFallbackPrimaryProbeSelection(entry: SessionEntry): void {
   delete entry.providerOverride;
   delete entry.modelOverride;
   delete entry.modelOverrideSource;
@@ -287,7 +249,7 @@ export function clearAutoFallbackPrimaryProbeSelection(
     delete entry.authProfileOverrideCompactionCount;
   }
   delete entry.fallbackNotice;
-  entry.updatedAt = now;
+  entry.updatedAt = Date.now();
 }
 
 type SessionAgentResolutionParams = {
@@ -423,18 +385,6 @@ function updateAgentModelPrimary(
 
 export type AgentModelPrimaryWriteTarget = "agent" | "defaults";
 
-export function resolveAgentModelPrimaryWriteTarget(
-  cfg: OpenClawConfig,
-  agentId: string,
-  options: { target?: AgentModelPrimaryWriteTarget; forceAgent?: boolean } = {},
-): AgentModelPrimaryWriteTarget {
-  const id = normalizeAgentId(agentId);
-  const target = options.target ?? (options.forceAgent ? "agent" : undefined);
-  return target !== "defaults" && (target === "agent" || resolveAgentExplicitModelPrimary(cfg, id))
-    ? "agent"
-    : "defaults";
-}
-
 export function setAgentEffectiveModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
@@ -443,10 +393,9 @@ export function setAgentEffectiveModelPrimary(
 ): AgentModelPrimaryWriteTarget {
   const id = normalizeAgentId(agentId);
   const target = options.target ?? (options.forceAgent ? "agent" : undefined);
-  const resolvedTarget = resolveAgentModelPrimaryWriteTarget(cfg, id, options);
   // An explicit agent target pins the write even without an existing model,
   // so a per-agent override never rewrites the shared default route.
-  if (resolvedTarget === "agent") {
+  if (target !== "defaults" && (target === "agent" || resolveAgentExplicitModelPrimary(cfg, id))) {
     const entry = resolveMutableAgentEntry(cfg, id);
     if (entry) {
       entry.model = updateAgentModelPrimary(entry.model, primary);
@@ -474,22 +423,6 @@ export function resolveAgentModelFallbacksOverride(
   return resolveSelectedModelFallbacksOverride(
     resolveAgentModelConfigForRuntime(resolveAgentConfig(cfg, agentId)),
   );
-}
-
-function resolveSelectedModelFallbacksOverride(
-  raw: AgentModelConfig | undefined,
-): string[] | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  if (typeof raw === "string") {
-    return resolvePrimaryStringValue(raw) ? [] : undefined;
-  }
-  // Important: treat an explicitly provided empty array as an override to disable global fallbacks.
-  if (!Object.hasOwn(raw, "fallbacks")) {
-    return Object.hasOwn(raw, "primary") && resolvePrimaryStringValue(raw) ? [] : undefined;
-  }
-  return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
 }
 
 function resolveFirstModelFallbacksOverride(
@@ -545,11 +478,8 @@ export function resolveSubagentModelFallbacksOverride(
     return subagentFallbacks;
   }
   const selection = resolveSubagentModelConfigSelectionResult({ cfg, agentId });
-  if (selection?.source === "agent") {
+  if (selection?.source === "agent" || selection?.source === "default-subagent") {
     return resolveSelectedModelFallbacksOverride(selection.raw);
-  }
-  if (selection?.source === "default-subagent") {
-    return resolveSelectedModelFallbacksOverride(cfg.agents?.defaults?.subagents?.model);
   }
   return undefined;
 }

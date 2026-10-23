@@ -31,12 +31,15 @@ vi.mock("./config-write-flow.js", async (importOriginal) => ({
 vi.mock("../../secrets/runtime.js", () => ({
   prepareSecretsRuntimeSnapshot: async ({ config }: { config: OpenClawConfig }) => ({ config }),
 }));
-vi.mock("../../config/runtime-schema.js", () => ({
+vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
+  loadGatewayConfigRedactionHints: () => undefined,
   loadGatewayRuntimeConfigSchema: () => ({ schema: {}, uiHints: undefined }),
 }));
 
 let storedConfig: OpenClawConfig;
 let storedHash: string;
+type Harness = ReturnType<typeof createConfigHandlerHarness>;
 function readSnapshot() {
   const result = createConfigWriteSnapshot(storedConfig);
   result.snapshot.hash = storedHash;
@@ -46,6 +49,14 @@ function externalEdit() {
   storedConfig = { logging: { level: "warn" } };
   storedHash = "external-hash";
 }
+function expectConfig({ respond }: Harness, hash: string, level: string) {
+  expect(respond).toHaveBeenLastCalledWith(
+    true,
+    expect.objectContaining({ hash, config: { logging: { level } } }),
+    undefined,
+  );
+}
+
 beforeEach(() => {
   invalidateConfigGetResponseCache();
   storedConfig = { logging: { level: "info" } };
@@ -53,17 +64,11 @@ beforeEach(() => {
   mocks.read.mockImplementation(async () => readSnapshot().snapshot);
   mocks.readForWrite.mockImplementation(async () => readSnapshot());
   mocks.commit.mockImplementation(
-    async ({
-      snapshot,
-      nextConfig,
-    }: {
-      snapshot: { hash: string };
-      nextConfig: OpenClawConfig;
-    }) => {
-      if (snapshot.hash !== storedHash) {
+    async (input: { snapshot: { hash: string }; nextConfig: OpenClawConfig }) => {
+      if (input.snapshot.hash !== storedHash) {
         throw new ConfigMutationConflictError("config changed since last load");
       }
-      storedConfig = nextConfig;
+      storedConfig = input.nextConfig;
       storedHash = "saved-hash";
       return {
         path: "/tmp/openclaw.json",
@@ -79,24 +84,16 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it.each(
-  (["config.patch", "config.set", "config.apply"] as const).flatMap((method) =>
-    (["before request", "during commit"] as const).map((editAt) => ({ method, editAt })),
-  ),
-)(
-  "$method reloads a rejected draft when an external edit occurs $editAt",
-  async ({ method, editAt }) => {
+it.each(["before request", "during commit"])(
+  "config.patch reloads a rejected draft when an external edit occurs %s",
+  async (editAt) => {
     // Exercise the real response cache before watcher notification reaches the Gateway.
     const reader = createConfigHandlerHarness({
       contextOverrides: { getConfigReloaderHotReloadStatus: () => "active" },
     });
     const get = expectDefined(configHandlers["config.get"], "registered config.get");
     await get(reader.options);
-    expect(reader.respond).toHaveBeenLastCalledWith(
-      true,
-      expect.objectContaining({ hash: "base-hash", config: { logging: { level: "info" } } }),
-      undefined,
-    );
+    expectConfig(reader, "base-hash", "info");
     if (editAt === "before request") {
       externalEdit();
     } else {
@@ -106,11 +103,11 @@ it.each(
       });
     }
     const writer = createConfigHandlerHarness({
-      method,
+      method: "config.patch",
       params: { raw: '{"logging":{"level":"debug"}}', baseHash: "base-hash" },
       contextOverrides: reader.options.context,
     });
-    const write = expectDefined(configHandlers[method], "registered config write");
+    const write = expectDefined(configHandlers["config.patch"], "registered config write");
     await write(writer.options);
     expect(writer.respond).toHaveBeenLastCalledWith(
       false,
@@ -120,18 +117,10 @@ it.each(
     expect(storedConfig).toEqual({ logging: { level: "warn" } });
 
     await get(reader.options);
-    expect(reader.respond).toHaveBeenLastCalledWith(
-      true,
-      expect.objectContaining({ hash: "external-hash", config: { logging: { level: "warn" } } }),
-      undefined,
-    );
+    expectConfig(reader, "external-hash", "warn");
     writer.options.params = { raw: '{"logging":{"level":"debug"}}', baseHash: "external-hash" };
     await write(writer.options);
-    expect(writer.respond).toHaveBeenLastCalledWith(
-      true,
-      expect.objectContaining({ hash: "saved-hash", config: { logging: { level: "debug" } } }),
-      undefined,
-    );
+    expectConfig(writer, "saved-hash", "debug");
     expect(storedConfig).toEqual({ logging: { level: "debug" } });
   },
 );

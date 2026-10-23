@@ -23,7 +23,7 @@ import type {
 export function extractMSTeamsHtmlAttachmentIds(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): string[] {
-  const list = Array.isArray(attachments) ? attachments : [];
+  const list = attachments ?? [];
   if (list.length === 0) {
     return [];
   }
@@ -47,7 +47,7 @@ export function extractMSTeamsHtmlAttachmentIds(
 export function summarizeMSTeamsHtmlAttachments(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): MSTeamsHtmlAttachmentSummary | undefined {
-  const list = Array.isArray(attachments) ? attachments : [];
+  const list = attachments ?? [];
   if (list.length === 0) {
     return undefined;
   }
@@ -56,7 +56,6 @@ export function summarizeMSTeamsHtmlAttachments(
   let dataImages = 0;
   let cidImages = 0;
   const srcHosts = new Set<string>();
-  let attachmentTags = 0;
   const attachmentIds = new Set<string>();
 
   for (const att of list) {
@@ -82,7 +81,6 @@ export function summarizeMSTeamsHtmlAttachments(
 
     ATTACHMENT_TAG_RE.lastIndex = 0;
     for (const attachmentMatch of html.matchAll(ATTACHMENT_TAG_RE)) {
-      attachmentTags += 1;
       const id = attachmentMatch[1]?.trim();
       if (id) {
         attachmentIds.add(id);
@@ -99,7 +97,6 @@ export function summarizeMSTeamsHtmlAttachments(
     dataImages,
     cidImages,
     srcHosts: Array.from(srcHosts).slice(0, 5),
-    attachmentTags,
     attachmentIds: Array.from(attachmentIds).slice(0, 5),
   };
 }
@@ -131,7 +128,7 @@ function createAdvertisedMediaFact(
 export function resolveMSTeamsAdvertisedMedia(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): MSTeamsInboundMedia[] {
-  const list = Array.isArray(attachments) ? attachments : [];
+  const list = attachments ?? [];
   if (list.length === 0) {
     return [];
   }

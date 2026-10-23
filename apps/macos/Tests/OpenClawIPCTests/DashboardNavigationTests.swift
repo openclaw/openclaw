@@ -10,7 +10,7 @@ struct DashboardNavigationTests {
         let fallbackURL = try #require(URL(string: "http://127.0.0.1:18789/control/skills"))
         let controller = DashboardWindowController(
             url: baseURL,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -27,7 +27,7 @@ struct DashboardNavigationTests {
         let fallbackURL = try #require(URL(string: "http://127.0.0.1:18789/control/skills"))
         let controller = DashboardWindowController(
             url: baseURL,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -44,7 +44,7 @@ struct DashboardNavigationTests {
         #expect(!controller._testNavigationFallbackIsCurrent(
             generation: staleGeneration,
             sourceURL: baseURL))
-        #expect(controller.dashboardBaseURL == baseURL)
+        #expect(controller.currentURL == baseURL)
     }
 
     @Test func `newer Dashboard dispatch invalidates stale in-flight fallback`() throws {
@@ -57,7 +57,7 @@ struct DashboardNavigationTests {
             fallbackURL: #require(URL(string: "http://127.0.0.1:18789/control/cron")))
         let controller = DashboardWindowController(
             url: baseURL,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })

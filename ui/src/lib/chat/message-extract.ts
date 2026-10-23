@@ -1,8 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Control UI chat module implements message extract behavior.
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
-import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import { stripUserEnvelopeForDisplay } from "../../../../src/auto-reply/reply/user-envelope-display.js";
 import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
 import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
@@ -28,7 +27,7 @@ function processMessageText(text: string, role: string): string {
     return stripThinkingTags(withoutInternalContext);
   }
   return shouldStripInboundMetadata
-    ? stripInboundMetadata(stripEnvelope(withoutInternalContext))
+    ? stripUserEnvelopeForDisplay(withoutInternalContext)
     : stripEnvelope(withoutInternalContext);
 }
 
@@ -69,25 +68,26 @@ export function extractTextCached(message: unknown): string | null {
   return readCachedMessageExtraction(message, textCache, extractText);
 }
 
-function extractThinking(message: unknown): string | null {
-  if (message == null) {
-    return null;
-  }
-  const m = message as Record<string, unknown>;
-  const content = m.content;
-  const parts: string[] = [];
-  if (Array.isArray(content)) {
-    for (const p of content) {
-      const item = asOptionalRecord(p);
-      if (item?.type === "thinking" && typeof item.thinking === "string") {
-        const cleaned = item.thinking.trim();
-        if (cleaned) {
-          parts.push(cleaned);
-        }
-      }
-    }
-  }
+function contentText(
+  content: unknown,
+  read: (item: Record<string, unknown>) => string | undefined,
+): string | null {
+  const parts = Array.isArray(content)
+    ? content.flatMap((value) => {
+        const item = asOptionalRecord(value);
+        const text = item ? read(item) : undefined;
+        return text === undefined ? [] : [text];
+      })
+    : [];
   return parts.length > 0 ? parts.join("\n") : null;
+}
+
+function extractThinking(message: unknown): string | null {
+  return contentText((message as Record<string, unknown> | null | undefined)?.content, (item) =>
+    item.type === "thinking" && typeof item.thinking === "string"
+      ? item.thinking.trim() || undefined
+      : undefined,
+  );
 }
 
 export function extractThinkingCached(message: unknown): string | null {
@@ -104,24 +104,13 @@ function extractRawText(message: unknown): string | null {
   if (typeof content === "string") {
     return content;
   }
-  if (Array.isArray(content)) {
-    const parts = content
-      .map((p) => {
-        const item = asOptionalRecord(p);
-        if (item && isTextContentBlockType(item.type, role) && typeof item.text === "string") {
-          return item.text;
-        }
-        return null;
-      })
-      .filter((v): v is string => typeof v === "string");
-    if (parts.length > 0) {
-      return parts.join("\n");
-    }
-  }
-  if (typeof m.text === "string") {
-    return m.text;
-  }
-  return null;
+  return (
+    contentText(content, (item) =>
+      isTextContentBlockType(item.type, role) && typeof item.text === "string"
+        ? item.text
+        : undefined,
+    ) ?? (typeof m.text === "string" ? m.text : null)
+  );
 }
 
 export function readTranscriptMediaEntries(message: unknown): Array<{

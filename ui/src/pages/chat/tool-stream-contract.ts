@@ -1,3 +1,4 @@
+import type { AgentEvent } from "../../../../packages/gateway-protocol/src/schema/agent.js";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 // Leaf contract for the tool-stream lane: the host-state shape and event
 // payload types shared by tool-stream, its status/preamble modules, and the
@@ -12,14 +13,22 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 
-export type AgentEventPayload = {
+export type ChatReasoning = {
   runId: string;
-  seq: number;
-  stream: string;
-  ts: number;
+  items: ChatReasoningItem[];
+};
+
+type ChatReasoningItem = {
+  itemId: string;
+  text: string;
+  startedAt: number;
+  /** Durable IDs survive display reindexing; source ownership can differ from the client run. */
+  receipt?: { runId: string; messageId: string; persisted?: true };
+};
+
+export type AgentEventPayload = AgentEvent & {
   sessionKey?: string;
   agentId?: string;
-  data: Record<string, unknown>;
 };
 
 export type ToolStreamEntry = {
@@ -27,7 +36,6 @@ export type ToolStreamEntry = {
   toolCallId: string;
   parentToolCallId?: string;
   runId: string;
-  sessionKey?: string;
   name: string;
   args?: unknown;
   output?: string;
@@ -41,10 +49,12 @@ export type ToolStreamEntry = {
   resultReceived?: boolean;
   startedAt: number;
   receivedAt: number;
+  /** Live-only placement; durable invocation positions supersede this boundary. */
+  afterUserSendId?: string;
   message: Record<string, unknown>;
 };
 
-export type RunOutputUsage = { outputTokens: number; seq: number };
+export type RunOutputUsage = { outputTokens: number | null; seq: number };
 
 export type ProviderPolicyNotice = {
   runId: string;
@@ -73,8 +83,6 @@ export type FallbackStatus = {
 };
 
 export type WaitingApprovalStatus = {
-  approvalId: string;
-  toolCallId: string | null;
   runId: string;
 };
 
@@ -82,13 +90,14 @@ export type ToolStreamHost = {
   sessionKey: string;
   assistantAgentId?: string | null;
   agentsList?: UiSessionDefaultsHost["agentsList"];
-  hello?: { snapshot?: unknown } | null;
+  hello?: UiSessionDefaultsHost["hello"];
   chatRunId: string | null;
   chatQueue?: readonly ChatQueueItem[];
   chatMessages?: unknown[];
   chatRunUsageById?: Map<string, RunOutputUsage>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatReasoning?: ChatReasoning | null;
   chatRunStartup?: ChatRunStartupState | null;
   chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;
@@ -105,6 +114,18 @@ export type ToolStreamHost = {
   knownAgentRunIds?: Set<string>;
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   waitingApprovalResolvedIds?: Set<string>;
-  requestUpdate?: () => void;
   sessions: Pick<SessionCapability, "reconcileMutation">;
 };
+
+export type LiveToolStreamState = Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder">;
+
+export type ToolStreamState = Pick<
+  ToolStreamHost,
+  | "toolStreamById"
+  | "toolStreamOrder"
+  | "chatToolMessages"
+  | "chatStreamSegments"
+  | "activityEventSeqById"
+  | "knownAgentRunIds"
+  | "waitingApprovalStatuses"
+> & { toolStreamSyncTimer?: number | null };

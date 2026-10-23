@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -150,7 +151,7 @@ vi.mock("../infra/exec-approvals.js", async () => {
   const approvals = mockExecApprovals;
   return {
     ...mod,
-    loadExecApprovals: () => approvals.file,
+    loadExecApprovalsReadOnlyAsync: async () => approvals.file,
     resolveExecApprovals: () => approvals,
     resolveExecApprovalsLocked: async () => approvals,
   };

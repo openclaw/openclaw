@@ -69,10 +69,10 @@ suite.define(() => {
             channelDefaultAccountId: { discord: "default" },
           },
           "config.get": {
-            config: { agents: { entries: { main: { default: true } } } },
+            config: { agents: { entries: { main: {} } } },
             hash: "hash-1",
             issues: [],
-            raw: '{"agents":{"list":[{"id":"main"}]}}',
+            raw: '{"agents":{"entries":{"main":{}}}}',
             valid: true,
           },
         },

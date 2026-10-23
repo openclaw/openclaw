@@ -1,4 +1,4 @@
-// Mcp Code Mode Gateway E2E script supports OpenClaw repository automation.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -16,14 +16,16 @@ import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shar
 import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
 import { resetConfigRuntimeState } from "../src/config/config.js";
 import { startGatewayServer } from "../src/gateway/server.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../src/test-utils/env.js";
 import { writeProbeMcpServer } from "./e2e/lib/mcp-code-mode-probe-server.ts";
 import {
-  type McpCodeModeMentions,
+  extractMcpCodeModeRequestEvidence,
   validateMcpCodeModeResult,
 } from "./e2e/lib/mcp-code-mode-validation.ts";
-import { countSessionLogMentions } from "./e2e/lib/session-log-mentions.ts";
-import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseText,
+} from "./lib/bounded-response.mjs";
 
 async function freePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -56,9 +58,7 @@ async function fetchJson(url: string, init: RequestInit = {}): Promise<unknown> 
       timeoutPromise,
     ]);
     const text = await readBoundedResponseText(response, url, 1024 * 1024, {
-      createTooLargeError(message: string) {
-        return Object.assign(new Error(message), { code: "ETOOBIG" });
-      },
+      createTooLargeError: createBoundedResponseTooLargeError,
       formatTooLargeMessage(targetUrl: string, byteLimit: number) {
         return `HTTP response from ${targetUrl} exceeded ${byteLimit} bytes`;
       },
@@ -73,29 +73,6 @@ async function fetchJson(url: string, init: RequestInit = {}): Promise<unknown> 
     if (timeout) {
       clearNodeTimeout(timeout);
     }
-  }
-}
-
-async function readSessionLogMentions(stateDir: string): Promise<Record<string, number>> {
-  const sessionsDir = path.join(stateDir, "agents", "qa", "sessions");
-  return await countSessionLogMentions({
-    sessionsDir,
-    needles: {
-      apiCall: "MCP.$api",
-      apiFileList: "API.list",
-      apiFileRead: "API.read",
-      mcpNamespace: "MCP.fixture",
-      mcpTool: "MCP.fixture.lookupNote",
-      toolSearchPollution: 'catalog.search("lookup note"',
-    },
-  });
-}
-
-function restoreEnvValue(key: string, value: string | undefined): void {
-  if (value === undefined) {
-    deleteTestEnvValue(key);
-  } else {
-    setTestEnvValue(key, value);
   }
 }
 
@@ -175,11 +152,11 @@ async function writeConfig(params: {
 async function main() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-code-mode-"));
   const keep = process.env.OPENCLAW_MCP_CODE_MODE_GATEWAY_E2E_KEEP === "1";
-  const previousEnv = {
-    configPath: process.env.OPENCLAW_CONFIG_PATH,
-    stateDir: process.env.OPENCLAW_STATE_DIR,
-    testFast: process.env.OPENCLAW_TEST_FAST,
-  };
+  const previousEnv = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_TEST_FAST",
+  ]);
   let provider: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   try {
@@ -215,6 +192,7 @@ async function main() {
     const requestCursorBefore = readQaMockRequestCursor(
       await fetchJson(qaMockRequestCursorUrl(provider.baseUrl)),
     );
+    const attemptMarker = `mcp code mode api file qa check: ${randomUUID()}`;
     const response = await fetchJson(`http://127.0.0.1:${gatewayPort}/v1/responses`, {
       method: "POST",
       headers: {
@@ -231,7 +209,7 @@ async function main() {
             content: [
               {
                 type: "input_text",
-                text: "mcp code mode api file qa check: inspect the MCP TypeScript declaration files through API.read, call the fixture lookup_note tool for alpha, and return the note text plus what was unclear.",
+                text: `${attemptMarker} inspect the MCP TypeScript declaration files through API.read, call the fixture lookup_note tool for alpha, and return the note text plus what was unclear.`,
               },
             ],
           },
@@ -245,40 +223,29 @@ async function main() {
     )) as Array<{
       raw?: string;
       body?: { tools?: unknown[] };
-      plannedToolName?: string;
     }>;
     const firstRequest = laneRequests[0] ?? {};
-    const mentions = await readSessionLogMentions(stateDir);
-    const plannedTools = laneRequests
-      .map((request) => request.plannedToolName)
-      .filter((name): name is string => typeof name === "string");
-    const finalText = validateMcpCodeModeResult(response, mentions as McpCodeModeMentions, {
-      plannedTools,
-      requireExec: true,
-    });
+    const evidence = extractMcpCodeModeRequestEvidence(laneRequests, attemptMarker);
+    const proof = validateMcpCodeModeResult(response, evidence);
 
     const summary = {
       ok: true,
       rootDir,
       stateDir,
       gatewayUrl: `http://127.0.0.1:${gatewayPort}`,
-      finalText,
+      ...proof,
       providerRequestCount: laneRequests.length,
       providerDeclaredToolCount: Array.isArray(firstRequest.body?.tools)
         ? firstRequest.body.tools.length
         : 0,
       providerRawBytes: typeof firstRequest.raw === "string" ? firstRequest.raw.length : 0,
-      plannedTools,
-      sessionLogMentions: mentions,
     };
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   } finally {
     await server?.close({ reason: "mcp code-mode gateway e2e complete" });
     await provider?.stop();
     resetConfigRuntimeState();
-    restoreEnvValue("OPENCLAW_STATE_DIR", previousEnv.stateDir);
-    restoreEnvValue("OPENCLAW_CONFIG_PATH", previousEnv.configPath);
-    restoreEnvValue("OPENCLAW_TEST_FAST", previousEnv.testFast);
+    previousEnv.restore();
     if (!keep) {
       await fs.rm(rootDir, { recursive: true, force: true });
     }

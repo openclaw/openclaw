@@ -65,8 +65,9 @@ export async function rawPathExists(target: string | Buffer): Promise<boolean> {
   return (await rawPathStat(target)) !== undefined;
 }
 
-export type GitTreePath = { path: Buffer; mode: string };
-export type GitIndexPath = GitTreePath & { skipWorktree: boolean; assumeUnchanged: boolean };
+type GitPath = { path: Buffer; mode: string };
+export type GitTreePath = GitPath & { oid: string };
+export type GitIndexPath = GitPath & { skipWorktree: boolean; assumeUnchanged: boolean };
 
 export function parseGitTreePaths(output: Uint8Array): GitTreePath[] {
   return splitNullBuffer(output).map((entry) => {
@@ -74,7 +75,11 @@ export function parseGitTreePaths(output: Uint8Array): GitTreePath[] {
     if (separator < 0) {
       throw new Error("Git tree inventory contains an invalid entry");
     }
-    return { path: entry.subarray(separator + 1), mode: entry.subarray(0, 6).toString("ascii") };
+    return {
+      path: entry.subarray(separator + 1),
+      mode: entry.subarray(0, 6).toString("ascii"),
+      oid: entry.subarray(entry.indexOf(32, 7) + 1, separator).toString("ascii"),
+    };
   });
 }
 

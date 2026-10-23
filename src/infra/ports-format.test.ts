@@ -39,10 +39,11 @@ describe("ports-format", () => {
     // "close the tunnel / change -L port" remediation does not apply to them.
     [{ command: "sshd" }, "non_gateway"],
     [{ command: "sshd-session.exe" }, "non_gateway"],
-    [{ commandLine: "/opt/fast-ssh/server --listen 18789" }, "non_gateway"],
-    // ssh-named non-tunnel that merely mentions the queried port with a colon: there
-    // is no -L/-R forward, so it must not classify as a tunnel or emit the hint.
-    [{ commandLine: "/opt/fast-ssh/server --listen 127.0.0.1:18789" }, "non_gateway"],
+    [{ commandLine: "/usr/sbin/sshd -D" }, "non_gateway"],
+    [{ commandLine: "/opt/fast-ssh-server --listen 18789" }, "non_gateway"],
+    // A directory name is not executable identity, even when a later argument
+    // mentions the queried port.
+    [{ commandLine: "/opt/fast-ssh/server --listen 127.0.0.1:18789" }, "unknown"],
     [{ commandLine: "ssh -N -L 9999:remote:22 host" }, "ssh"],
     [{ command: "socat" }, "non_gateway"],
     [{ command: "socat1" }, "non_gateway"],
@@ -57,8 +58,10 @@ describe("ports-format", () => {
     [{ command: "openclaw-search" }, "unknown"],
     [{ commandLine: "python worker.py openclaw gateway" }, "unknown"],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
+    [{ commandLine: 'node "/tmp/ssh workspace/dist/index.js" logs --follow' }, "unknown"],
+    [{ commandLine: "node /tmp/app.js --cache /tmp/ssh" }, "unknown"],
   ] as const)("classifies port listener %j", (listener, expected) => {
-    expect(classifyPortListener(listener, 18789)).toBe(expected);
+    expect(classifyPortListener(listener)).toBe(expected);
   });
 
   it.each([
@@ -70,7 +73,7 @@ describe("ports-format", () => {
     ({ entry, directory, args }) => {
       const script = writeScript(entry, directory);
       expect(
-        classifyPortListener({ command: "node", commandLine: `node "${script}" ${args}` }, 18789),
+        classifyPortListener({ command: "node", commandLine: `node "${script}" ${args}` }),
       ).toBe("gateway");
     },
   );
@@ -81,7 +84,7 @@ describe("ports-format", () => {
   ])("does not classify $packageName $args as a Gateway", ({ packageName, command, args }) => {
     const script = writeScript("dist/index.js", "openclaw data", packageName);
     const listener = { command, commandLine: `node "${script}" ${args}` };
-    expect(classifyPortListener(listener, 18789)).toBe("unknown");
+    expect(classifyPortListener(listener)).toBe("unknown");
     expect(buildPortHints([listener], 18789)).toEqual([
       "Another process is listening on this port.",
     ]);

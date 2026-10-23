@@ -1,30 +1,12 @@
-// Implements debug command toggles used by maintainers during reply runs.
-import { parseSlashCommandWithSetUnset } from "./commands-setunset.js";
+import { parseSlashCommandWithSetUnset, type SetUnsetCommand } from "./commands-setunset.js";
 
-type DebugCommand =
-  | { action: "show" }
-  | { action: "reset" }
-  | { action: "set"; path: string; value: unknown }
-  | { action: "unset"; path: string }
-  | { action: "error"; message: string };
+type DebugCommand = { action: "show" } | { action: "reset" } | SetUnsetCommand;
 
 export function parseDebugCommand(raw: string): DebugCommand | null {
   return parseSlashCommandWithSetUnset<DebugCommand>({
     raw,
     slash: "/debug",
-    invalidMessage: "Invalid /debug syntax.",
     usageMessage: "Usage: /debug show|set|unset|reset",
-    onSet: (path, value) => ({ action: "set", path, value }),
-    onUnset: (path) => ({ action: "unset", path }),
-    onError: (message) => ({ action: "error", message }),
-    onKnownAction: (action) => {
-      if (action === "show") {
-        return { action: "show" };
-      }
-      if (action === "reset") {
-        return { action: "reset" };
-      }
-      return undefined;
-    },
+    onKnownAction: (action) => (action === "show" || action === "reset" ? { action } : undefined),
   });
 }

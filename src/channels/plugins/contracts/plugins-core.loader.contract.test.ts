@@ -1,63 +1,39 @@
-// Plugins core loader contract tests cover channel plugin loader setup and teardown behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   createChannelTestPluginBase,
-  createOutboundTestPlugin,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { loadChannelOutboundAdapter } from "../outbound/load.js";
 import { createChannelRegistryLoader } from "../registry-loader.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../types.public.js";
 
-const loadChannelPlugin = createChannelRegistryLoader<ChannelPlugin>((entry) => entry.plugin);
+const loadChannelPlugin = createChannelRegistryLoader((entry) => entry.plugin);
 
 const emptyRegistry = createTestRegistry([]);
 
-const demoOutbound: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  sendText: async () => ({ channel: "demo-loader", messageId: "m1" }),
-  sendMedia: async () => ({ channel: "demo-loader", messageId: "m2" }),
-};
-
-const demoLoaderPlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "demo-loader",
-    label: "Demo Loader",
-    config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-  }),
-  outbound: demoOutbound,
-};
-
-const registryWithDemoLoader = createTestRegistry([
-  { pluginId: "demo-loader", plugin: demoLoaderPlugin, source: "test" },
-]);
-
-const demoOutboundV2: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  sendText: async () => ({ channel: "demo-loader", messageId: "m3" }),
-  sendMedia: async () => ({ channel: "demo-loader", messageId: "m4" }),
-};
-
-const demoLoaderPluginV2 = createOutboundTestPlugin({
-  id: "demo-loader",
-  label: "Demo Loader",
-  outbound: demoOutboundV2,
-});
-
-const registryWithDemoLoaderV2 = createTestRegistry([
-  { pluginId: "demo-loader", plugin: demoLoaderPluginV2, source: "test-v2" },
-]);
-
+function makeOutbound(textId: string, mediaId: string): ChannelOutboundAdapter {
+  return {
+    deliveryMode: "direct",
+    sendText: async () => ({ channel: "demo-loader", messageId: textId }),
+    sendMedia: async () => ({ channel: "demo-loader", messageId: mediaId }),
+  };
+}
 const demoNoOutboundPlugin = createChannelTestPluginBase({
   id: "demo-loader",
   label: "Demo Loader",
+  config: { listAccountIds: () => [], resolveAccount: () => ({}) },
 });
-
-const registryWithDemoLoaderNoOutbound = createTestRegistry([
-  { pluginId: "demo-loader", plugin: demoNoOutboundPlugin, source: "test-no-outbound" },
-]);
+const demoOutbound = makeOutbound("m1", "m2");
+const demoOutboundV2 = makeOutbound("m3", "m4");
+const demoLoaderPlugin: ChannelPlugin = { ...demoNoOutboundPlugin, outbound: demoOutbound };
+const demoLoaderPluginV2: ChannelPlugin = { ...demoNoOutboundPlugin, outbound: demoOutboundV2 };
+const registryFor = (plugin: ChannelPlugin) =>
+  createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]);
+const registryWithDemoLoader = registryFor(demoLoaderPlugin);
+const registryWithDemoLoaderV2 = registryFor(demoLoaderPluginV2);
+const registryWithDemoLoaderNoOutbound = registryFor(demoNoOutboundPlugin);
 
 describe("channel plugin loader", () => {
   beforeEach(() => {
@@ -69,8 +45,6 @@ describe("channel plugin loader", () => {
   });
 
   it("prefers the registry scoped to a bootstrapped channel handler", async () => {
-    setActivePluginRegistry(emptyRegistry);
-
     const loaded = await withPluginRuntimeRegistryScope(registryWithDemoLoader, () =>
       loadChannelOutboundAdapter("demo-loader"),
     );
@@ -99,24 +73,17 @@ describe("channel plugin loader", () => {
   });
 
   it.each([
-    {
-      name: "plugin",
-      load: loadChannelPlugin,
-      first: demoLoaderPlugin,
-      second: demoLoaderPluginV2,
+    ["plugin", loadChannelPlugin, demoLoaderPlugin, demoLoaderPluginV2],
+    ["outbound", loadChannelOutboundAdapter, demoOutbound, demoOutboundV2],
+  ] as const)(
+    "reads updated %s values when the registry changes",
+    async (_name, load, first, second) => {
+      setActivePluginRegistry(registryWithDemoLoader);
+      expect(await load("demo-loader")).toBe(first);
+      setActivePluginRegistry(registryWithDemoLoaderV2);
+      expect(await load("demo-loader")).toBe(second);
     },
-    {
-      name: "outbound",
-      load: loadChannelOutboundAdapter,
-      first: demoOutbound,
-      second: demoOutboundV2,
-    },
-  ])("reads updated $name values when the registry changes", async ({ load, first, second }) => {
-    setActivePluginRegistry(registryWithDemoLoader);
-    expect(await load("demo-loader")).toBe(first);
-    setActivePluginRegistry(registryWithDemoLoaderV2);
-    expect(await load("demo-loader")).toBe(second);
-  });
+  );
 
   it("returns undefined when the plugin has no outbound adapter", async () => {
     setActivePluginRegistry(registryWithDemoLoaderNoOutbound);

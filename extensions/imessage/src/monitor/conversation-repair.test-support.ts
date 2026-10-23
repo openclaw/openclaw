@@ -1,6 +1,6 @@
-// Imessage test support covers conversation repair plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
+import { createInboundDecisionParams } from "./inbound-decision.test-support.js";
 import type { IMessagePayload } from "./types.js";
 
 function anchorlessMessage(overrides: Partial<IMessagePayload> = {}): IMessagePayload {
@@ -36,6 +36,27 @@ function mockClient(chats: Array<{ id: number; messages: Record<string, unknown>
   return { request };
 }
 
+function historyRow(chatId = 42, overrides: Record<string, unknown> = {}) {
+  return {
+    guid: "ANCHORLESS-GUID-1",
+    chat_id: chatId,
+    chat_guid: "iMessage;-;+15550000002",
+    chat_identifier: "+15550000002",
+    sender: "+15550000002",
+    destination_caller_id: "+15550000001",
+    is_from_me: false,
+    is_group: false,
+    ...overrides,
+  };
+}
+
+const chat = (id: number, ...messages: Record<string, unknown>[]) => ({ id, messages });
+const repair = (
+  client: ReturnType<typeof mockClient>,
+  message = anchorlessMessage(),
+  runtime: Parameters<typeof repairIMessageConversationAnchor>[0]["runtime"] = {},
+) => repairIMessageConversationAnchor({ client: client as never, message, runtime });
+
 describe("repairIMessageConversationAnchor", () => {
   it.each([
     anchorlessMessage({ chat_id: 349, is_group: true }),
@@ -50,41 +71,13 @@ describe("repairIMessageConversationAnchor", () => {
   ])("passes through anchored and sender-only messages without recovery RPCs", async (message) => {
     const client = mockClient([]);
 
-    await expect(
-      repairIMessageConversationAnchor({ client: client as never, message }),
-    ).resolves.toBe(message);
+    await expect(repair(client, message)).resolves.toBe(message);
     expect(client.request).not.toHaveBeenCalled();
   });
 
   it("recovers the full authoritative projection from recent history by GUID", async () => {
     const message = anchorlessMessage();
-    const client = mockClient([
-      { id: 100, messages: [{ guid: "OTHER-GUID", chat_id: 100, is_group: true }] },
-      {
-        id: 349,
-        messages: [
-          {
-            guid: "ANCHORLESS-GUID-1",
-            chat_id: 349,
-            chat_guid: "iMessage;+;chat349",
-            chat_identifier: "chat349",
-            chat_name: "Project group",
-            participants: ["+15550001111", "+15550002222"],
-            sender: "+15550002222",
-            destination_caller_id: "+15550001111",
-            is_from_me: false,
-            is_group: true,
-          },
-        ],
-      },
-    ]);
-
-    const repaired = await repairIMessageConversationAnchor({
-      client: client as never,
-      message,
-    });
-
-    expect(repaired).toMatchObject({
+    const authoritative = {
       chat_id: 349,
       chat_guid: "iMessage;+;chat349",
       chat_identifier: "chat349",
@@ -94,7 +87,12 @@ describe("repairIMessageConversationAnchor", () => {
       destination_caller_id: "+15550001111",
       is_from_me: false,
       is_group: true,
-    });
+    };
+    const client = mockClient([
+      chat(100, { guid: "OTHER-GUID", chat_id: 100, is_group: true }),
+      chat(349, { guid: "ANCHORLESS-GUID-1", ...authoritative }),
+    ]);
+    expect(await repair(client, message)).toMatchObject(authoritative);
   });
 
   it("clears stale destination_caller_id on the monitor path when history omits it", async () => {
@@ -106,43 +104,21 @@ describe("repairIMessageConversationAnchor", () => {
       destination_caller_id: "+15550000001",
     });
     const client = mockClient([
-      {
-        id: 42,
-        messages: [
-          {
-            guid: "33333333-3333-4333-8333-333333333333",
-            chat_id: 42,
-            chat_guid: "iMessage;-;+15550000002",
-            chat_identifier: "+15550000002",
-            sender: "+15550000002",
-            is_from_me: false,
-            is_group: false,
-          },
-        ],
-      },
+      chat(
+        42,
+        historyRow(42, {
+          guid: message.guid,
+          destination_caller_id: undefined,
+        }),
+      ),
     ]);
-
-    const repaired = await repairIMessageConversationAnchor({
-      client: client as never,
-      message,
-    });
+    const repaired = await repair(client, message);
     expect(repaired?.sender).toBe("+15550000002");
     expect(repaired?.destination_caller_id ?? null).toBeNull();
 
-    const decision = await resolveIMessageInboundDecision({
-      cfg: {} as never,
-      accountId: "default",
-      message: repaired!,
-      messageText: repaired!.text ?? "",
-      bodyText: repaired!.text ?? "",
-      allowFrom: ["*"],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories: new Map(),
-    });
+    const decision = await resolveIMessageInboundDecision(
+      createInboundDecisionParams({ message: repaired! }),
+    );
     expect(decision.kind).toBe("dispatch");
     if (decision.kind !== "dispatch") {
       return;
@@ -161,126 +137,32 @@ describe("repairIMessageConversationAnchor", () => {
     expect(ctxPayload.To).toBe("chat_id:42");
   });
 
-  it("drops fail-closed when authoritative history says is_from_me=true", async () => {
-    const runtime = { error: vi.fn() };
-    const client = mockClient([
-      {
-        id: 42,
-        messages: [
-          {
-            guid: "ANCHORLESS-GUID-1",
-            chat_id: 42,
-            chat_guid: "iMessage;-;+15550000002",
-            chat_identifier: "+15550000002",
-            sender: "+15550000002",
-            destination_caller_id: "+15550000001",
-            is_from_me: true,
-            is_group: false,
-          },
-        ],
-      },
-    ]);
-
-    await expect(
-      repairIMessageConversationAnchor({
-        client: client as never,
-        message: anchorlessMessage({ is_from_me: false }),
-        runtime,
-      }),
-    ).resolves.toBeNull();
-    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(
-      "recovered authoritative row is from-me",
-    );
-  });
-
-  it("drops fail-closed when exact-GUID history projections conflict", async () => {
-    const runtime = { error: vi.fn() };
-    const client = mockClient([
-      {
-        id: 100,
-        messages: [
-          {
-            guid: "ANCHORLESS-GUID-1",
-            chat_id: 100,
-            chat_guid: "iMessage;-;+15550000002",
-            chat_identifier: "+15550000002",
-            sender: "+15550000002",
-            destination_caller_id: "+15550000001",
-            is_from_me: false,
-            is_group: false,
-          },
-        ],
-      },
-      {
-        id: 200,
-        messages: [
-          {
-            guid: "ANCHORLESS-GUID-1",
-            chat_id: 200,
+  it.each([
+    [
+      "conflicting exact-GUID history projections",
+      [
+        chat(100, historyRow(100)),
+        chat(
+          200,
+          historyRow(200, {
             chat_guid: "iMessage;-;+15550000003",
             chat_identifier: "+15550000003",
             sender: "+15550000003",
-            destination_caller_id: "+15550000001",
-            is_from_me: false,
-            is_group: false,
-          },
-        ],
-      },
-    ]);
-
-    await expect(
-      repairIMessageConversationAnchor({
-        client: client as never,
-        message: anchorlessMessage(),
-        runtime,
-      }),
-    ).resolves.toBeNull();
-    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(
-      "conflicting exact-GUID history projections",
-    );
-  });
-
-  it("drops fail-closed when the GUID cannot be matched", async () => {
-    const runtime = { error: vi.fn() };
-    const client = mockClient([{ id: 349, messages: [{ guid: "OTHER-GUID", chat_id: 349 }] }]);
-
-    await expect(
-      repairIMessageConversationAnchor({
-        client: client as never,
-        message: anchorlessMessage(),
-        runtime,
-      }),
-    ).resolves.toBeNull();
-    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain("no recent chat matched");
-  });
-
-  it("drops fail-closed when history finds the GUID but no usable anchor", async () => {
-    const runtime = { error: vi.fn() };
-    const client = mockClient([
-      {
-        id: 349,
-        messages: [
-          {
-            guid: "ANCHORLESS-GUID-1",
-            chat_id: 0,
-            chat_guid: "",
-            chat_identifier: "",
-            sender: "+15550000002",
-            destination_caller_id: "+15550000001",
-            is_from_me: false,
-            is_group: false,
-          },
-        ],
-      },
-    ]);
-
-    await expect(
-      repairIMessageConversationAnchor({
-        client: client as never,
-        message: anchorlessMessage(),
-        runtime,
-      }),
-    ).resolves.toBeNull();
-    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain("exact-GUID history row is incomplete");
-  });
+          }),
+        ),
+      ],
+    ],
+    ["no recent chat matched", [chat(349, { guid: "OTHER-GUID", chat_id: 349 })]],
+    [
+      "exact-GUID history row is incomplete",
+      [chat(349, historyRow(0, { chat_guid: "", chat_identifier: "" }))],
+    ],
+  ] satisfies Array<[string, Parameters<typeof mockClient>[0]]>)(
+    "drops fail-closed: %s",
+    async (reason, chats) => {
+      const runtime = { error: vi.fn() };
+      await expect(repair(mockClient(chats), anchorlessMessage(), runtime)).resolves.toBeNull();
+      expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(reason);
+    },
+  );
 });

@@ -1,3 +1,7 @@
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withWorktreeGitConfig, type WorktreeGitPolicy } from "./checkout-git-config.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -14,40 +18,47 @@ export async function usesSourceOnlyWorktreeGit(
   if (!record.ownerId) {
     return true;
   }
+  const source = captureSessionActorStorageOwner(
+    { sessionKey: record.ownerId, env },
+    { assertCurrent() {}, authorize() {} },
+  );
   const [
-    { loadSessionEntryReadOnly },
+    { readSessionEntryReadOnlyInWorker },
     { resolveSessionStorePathCore },
     { resolveSessionAgentId },
-    { resolveSandboxRuntimeStatusesForPersistedSessions },
-    { localWorkspaceStore },
+    { resolveSandboxRuntimeStatus },
+    { hasLocalWorkspaceProjection },
   ] = await Promise.all([
-    import("../../config/sessions/session-accessor.js"),
+    import("../../config/sessions/session-entry-read-runtime.js"),
     import("../../config/sessions/paths.js"),
     import("../agent-scope.js"),
     import("../sandbox/runtime-status.js"),
     import("../../gateway/worker-environments/local-workspace-store.js"),
   ]);
-  if (localWorkspaceStore(env).get(record.id)) {
+  if (await hasLocalWorkspaceProjection(record.id, env)) {
     return true;
   }
   const cfg = getConfig();
   const agentId = resolveSessionAgentId({ config: cfg, sessionKey: record.ownerId });
-  const entry = loadSessionEntryReadOnly({
-    agentId,
-    sessionKey: record.ownerId,
-    env,
-    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId, env }),
-    clone: false,
-  });
+  const entry = source
+    ? readCapturedSessionActorEntry(source, record.ownerId)
+    : await readSessionEntryReadOnlyInWorker({
+        agentId,
+        sessionKey: record.ownerId,
+        env,
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId, env }),
+        clone: false,
+      });
   // Missing or replaced session custody cannot authorize host-side repository programs.
   if (!entry || entry.worktree?.id !== record.id || entry.sandbox === "required") {
     return true;
   }
-  return (
-    resolveSandboxRuntimeStatusesForPersistedSessions([
-      { cfg, agentId, sessionKeys: [record.ownerId], env },
-    ])[0]?.[0]?.sandboxed === true
-  );
+  return resolveSandboxRuntimeStatus({
+    cfg,
+    agentId,
+    sessionKey: record.ownerId,
+    preparedSessionEntry: entry,
+  }).sandboxed;
 }
 
 export async function withManagedWorktreeGit<T>(

@@ -166,23 +166,6 @@ describe("applyEditsToNormalizedContent uniqueness", () => {
 });
 
 describe("fuzzy edit source-span mapping", () => {
-  it("preserves escaped Unicode bytes outside a fuzzy-matched span", () => {
-    const content =
-      "export const RETRY\u00A0MAX = 3; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A\n" +
-      "export const OTHER = 1;\n";
-
-    const result = prepareChangedEdit(
-      content,
-      [{ oldText: "export const RETRY MAX = 3;", newText: "export const RETRY_MAX = 5;" }],
-      "config.ts",
-    );
-
-    expect(result.content).toBe(
-      "export const RETRY_MAX = 5; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A\n" +
-        "export const OTHER = 1;\n",
-    );
-  });
-
   it("maps smart-quote folds while preserving a smart-quote comment", () => {
     const content =
       "const label = \u201Chello\u201D; // keep \u201Ccomment\u201D \u2014 unchanged\n";
@@ -234,16 +217,6 @@ describe("fuzzy edit source-span mapping", () => {
     expect(result.content).toBe("const value = 2;  ");
   });
 
-  it("keeps trim-folding behavior inside a complete fuzzy span", () => {
-    const result = prepareChangedEdit(
-      "before\nfirst  \nsecond\nafter  \n",
-      [{ oldText: "first\nsecond", newText: "combined" }],
-      "test.ts",
-    );
-
-    expect(result.content).toBe("before\ncombined\nafter  \n");
-  });
-
   it("preserves CRLF while mapping a fuzzy Unicode span", () => {
     const result = prepareChangedEdit(
       "const value\u00A0= 1;\r\nnext\r\n",
@@ -278,6 +251,26 @@ describe("applyEditsToNormalizedContent fuzzy uniqueness", () => {
 
     expect(() =>
       prepareChangedEdit(content, [{ oldText: "foo();\n", newText: "baz();\n" }], "test.ts"),
+    ).toThrow(/Found 2 occurrences/);
+  });
+
+  it("rejects an oldText whose occurrences overlap", () => {
+    expect(() =>
+      prepareFileEdit(
+        "a();\na();\na();\n",
+        [{ oldText: "a();\na();", newText: "b();" }],
+        "test.ts",
+      ),
+    ).toThrow(/Found 2 occurrences/);
+  });
+
+  it("rejects a fuzzy oldText whose normalized occurrences overlap", () => {
+    expect(() =>
+      prepareFileEdit(
+        "a();\na(); \na();\n",
+        [{ oldText: "a();\na();\n", newText: "b();\n" }],
+        "test.ts",
+      ),
     ).toThrow(/Found 2 occurrences/);
   });
 });

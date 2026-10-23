@@ -16,7 +16,7 @@ import { getLeasedSharedCodexAppServerClient } from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
 
 export function startFixtureAttempt(
-  fixture: { root: string; pluginConfig: CodexPluginConfig },
+  fixture: { root: string; pluginConfig: CodexPluginConfig; disableTools?: boolean },
   attemptClientFactory = getLeasedSharedCodexAppServerClient,
   signal = new AbortController().signal,
 ) {
@@ -36,8 +36,11 @@ export function startFixtureAttempt(
     appServer: resolveCodexAppServerRuntimeOptions({ pluginConfig: fixture.pluginConfig }),
     pluginConfig: fixture.pluginConfig,
     computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig: fixture.pluginConfig }),
-    startupAuthProfileId: undefined,
-    startupAuthBindingFingerprint: undefined,
+    clientOptions: {
+      authProfileId: undefined,
+      authBindingFingerprint: undefined,
+      authRequirement: undefined,
+    },
     startupAuthAccountCacheKey: undefined,
     startupEnvApiKeyCacheKey: undefined,
     agentDir,
@@ -57,7 +60,7 @@ export function startFixtureAttempt(
         modelId: "gpt-5.4-codex",
         model: createCodexTestModel("codex"),
         thinkLevel: "medium",
-        disableTools: true,
+        disableTools: fixture.disableTools ?? true,
         timeoutMs: 5_000,
         authStorage: {} as never,
         authProfileStore: { version: 1, profiles: {} },
@@ -69,7 +72,6 @@ export function startFixtureAttempt(
     dynamicTools: [],
     webSearchAllowed: false,
     developerInstructions: undefined,
-    finalConfigPatch: undefined,
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled: true,
     nativeProviderWebSearchSupport: "supported",

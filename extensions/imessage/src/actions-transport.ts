@@ -1,3 +1,7 @@
+import {
+  captureChannelReadAuthority,
+  captureEffectAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
 
@@ -8,17 +12,11 @@ export type IMessageActionTransportOptions = {
   timeoutMs?: number;
 };
 
-class IMessageRemoteUnsupportedError extends Error {
-  readonly code = "IMESSAGE_REMOTE_UNSUPPORTED";
-
-  constructor(message: string) {
-    super(message);
-    this.name = "IMessageRemoteUnsupportedError";
-  }
-}
-
 export function throwIMessageRemoteUnsupported(message: string): never {
-  throw new IMessageRemoteUnsupportedError(`iMessage Remote Mac limitation: ${message}`);
+  throw Object.assign(new Error(`iMessage Remote Mac limitation: ${message}`), {
+    code: "IMESSAGE_REMOTE_UNSUPPORTED",
+    name: "IMessageRemoteUnsupportedError",
+  });
 }
 
 export async function runIMessageAction(
@@ -28,11 +26,15 @@ export async function runIMessageAction(
   args: readonly string[],
 ): Promise<Record<string, unknown>> {
   if (!options.remoteHost) {
-    return await runIMessageCliJsonCommand({
-      args,
-      cliPath: options.cliPath,
-      dbPath: options.dbPath,
-      timeoutMs: options.timeoutMs,
+    const assertReadAuthority = captureChannelReadAuthority();
+    return await captureEffectAuthority().initiate(() => {
+      assertReadAuthority?.();
+      return runIMessageCliJsonCommand({
+        args,
+        cliPath: options.cliPath,
+        dbPath: options.dbPath,
+        timeoutMs: options.timeoutMs,
+      });
     });
   }
   const client = await createIMessageRpcClient({

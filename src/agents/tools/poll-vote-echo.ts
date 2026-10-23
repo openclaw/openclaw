@@ -5,6 +5,56 @@ import type { ChannelMessageActionName } from "../../channels/plugins/types.publ
 import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { readToolStringParam } from "./common.js";
+
+const POLL_VOTE_ECHO_TTL_MS = 30_000;
+
+// Share route-checked poll votes across runs in the same conversation: the poll
+// and its following comment can arrive at different tool instances.
+const recentPollVoteBySession = new Map<
+  string,
+  { option: string; route: string; recordedAt: number }
+>();
+
+export function suppressPollVoteEcho(
+  sessionKey: string | undefined,
+  route: string | undefined,
+  action: ChannelMessageActionName,
+  args: Record<string, unknown>,
+): boolean {
+  const vote = sessionKey ? recentPollVoteBySession.get(sessionKey) : undefined;
+  if (!vote || !sessionKey || (action !== "send" && action !== "reply")) {
+    return false;
+  }
+  const expired = Date.now() - vote.recordedAt >= POLL_VOTE_ECHO_TTL_MS;
+  if (!expired && route !== vote.route) {
+    return false;
+  }
+  recentPollVoteBySession.delete(sessionKey);
+  if (expired) {
+    return false;
+  }
+  const outboundText =
+    readToolStringParam(args, "text") ??
+    readToolStringParam(args, "message") ??
+    readToolStringParam(args, "content");
+  return Boolean(outboundText && isPollVoteEchoText(vote.option, outboundText));
+}
+
+export function recordPollVote(sessionKey: string, route: string, votedOption: unknown): void {
+  const option = typeof votedOption === "string" ? votedOption.trim() : "";
+  if (!option) {
+    return;
+  }
+  const recordedAt = Date.now();
+  // Prune on writes, including sessions that never send a follow-up text.
+  for (const [key, entry] of recentPollVoteBySession) {
+    if (recordedAt - entry.recordedAt >= POLL_VOTE_ECHO_TTL_MS) {
+      recentPollVoteBySession.delete(key);
+    }
+  }
+  recentPollVoteBySession.set(sessionKey, { option, route, recordedAt });
+}
 
 type NormalizedPollEchoText = {
   emojiSignature: string;
@@ -32,7 +82,7 @@ function normalizePollEchoText(text: string): NormalizedPollEchoText {
   return { emojiSignature, words };
 }
 
-export function isPollVoteEchoText(option: string, outboundText: string): boolean {
+function isPollVoteEchoText(option: string, outboundText: string): boolean {
   const normalizedOption = normalizePollEchoText(option);
   const normalizedOutbound = normalizePollEchoText(outboundText);
   const optionHasContent = Boolean(normalizedOption.words || normalizedOption.emojiSignature);

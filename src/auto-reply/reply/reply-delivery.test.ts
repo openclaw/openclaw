@@ -1,4 +1,3 @@
-// Tests reply delivery routing, payload persistence, and send suppression.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
@@ -33,6 +32,61 @@ const quietTypingSignals: TypingSignaler = {
   signalToolStart: async () => {},
 };
 
+type HandlerOptions = Parameters<typeof createBlockReplyDeliveryHandler>[0];
+const defaultCoalescing = { minChars: 100, maxChars: 200, idleMs: 0, joiner: " " };
+const normalizedPayload = (payload: ReplyPayload): ReplyPayload => ({
+  text: undefined,
+  mediaUrl: undefined,
+  mediaUrls: undefined,
+  replyToId: undefined,
+  replyToCurrent: undefined,
+  replyToTag: undefined,
+  audioAsVoice: false,
+  ...payload,
+});
+
+function createHandler(overrides: Partial<HandlerOptions>) {
+  return createBlockReplyDeliveryHandler({
+    onBlockReply: async () => {},
+    normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+    applyReplyToMode: (payload) => payload,
+    typingSignals: quietTypingSignals,
+    blockStreamingEnabled: true,
+    blockReplyPipeline: null,
+    directBlockDeliveries: [],
+    ...overrides,
+  });
+}
+
+function buildFinalPayloads(
+  overrides: Pick<Parameters<typeof buildReplyPayloads>[0], "payloads"> &
+    Partial<Parameters<typeof buildReplyPayloads>[0]>,
+) {
+  return buildReplyPayloads({
+    blockStreamingEnabled: true,
+    blockReplyPipeline: null,
+    replyToMode: "off",
+    ...overrides,
+  });
+}
+
+function deliveryFixture(overrides: Partial<HandlerOptions> = {}) {
+  const sent: ReplyPayload[] = [];
+  const directBlockDeliveries: DirectBlockDelivery[] = [];
+  const handler = createHandler({
+    onBlockReply: async (payload) => {
+      sent.push(payload);
+    },
+    directBlockDeliveries,
+    ...overrides,
+  });
+  const final = (
+    payloads: ReplyPayload[],
+    options: Partial<Parameters<typeof buildFinalPayloads>[0]> = {},
+  ) => buildFinalPayloads({ payloads, directBlockDeliveries, ...options });
+  return { sent, directBlockDeliveries, handler, final };
+}
+
 describe("createBlockReplyDeliveryHandler", () => {
   it.each([false, true])(
     "delivers independent replies without buffering or completing the turn (streaming=%s)",
@@ -48,14 +102,11 @@ describe("createBlockReplyDeliveryHandler", () => {
       const pipeline = createBlockReplyPipeline({
         onBlockReply,
         timeoutMs: 0,
-        coalescing: { minChars: 100, maxChars: 200, idleMs: 0, joiner: " " },
+        coalescing: defaultCoalescing,
       });
       const directBlockDeliveries: DirectBlockDelivery[] = [];
-      const handler = createBlockReplyDeliveryHandler({
+      const handler = createHandler({
         onBlockReply,
-        normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-        applyReplyToMode: (payload) => payload,
-        typingSignals: quietTypingSignals,
         blockStreamingEnabled,
         blockReplyPipeline: pipeline,
         directBlockDeliveries,
@@ -77,14 +128,11 @@ describe("createBlockReplyDeliveryHandler", () => {
         expect(pipeline.hasBuffered()).toBe(blockStreamingEnabled);
         expect(ledger.resolveTerminalDelivery()).toBe("missing");
 
-        const { replyPayloads } = await buildReplyPayloads({
+        const { replyPayloads } = await buildFinalPayloads({
           payloads: [{ text: "The list contains Casey." }, { text: "The audit is complete." }],
-          isHeartbeat: false,
-          didLogHeartbeatStrip: false,
           blockStreamingEnabled,
           blockReplyPipeline: pipeline,
           directBlockDeliveries,
-          replyToMode: "off",
         });
         expect(replyPayloads.map((payload) => payload.text)).toEqual([
           "The list contains Casey.",
@@ -112,7 +160,7 @@ describe("createBlockReplyDeliveryHandler", () => {
         cause: undefined,
       });
       const delivered: string[] = [];
-      const handler = createBlockReplyDeliveryHandler({
+      const handler = createHandler({
         onBlockReply: async (payload, context) => {
           context?.abortSignal?.throwIfAborted();
           if (outcome === "failed") {
@@ -123,12 +171,7 @@ describe("createBlockReplyDeliveryHandler", () => {
             Promise.resolve({ outcome: outcome === "cancelled" ? outcome : "recovery-owned" }),
           );
         },
-        normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-        applyReplyToMode: (payload) => payload,
-        typingSignals: quietTypingSignals,
         blockStreamingEnabled: false,
-        blockReplyPipeline: null,
-        directBlockDeliveries: [],
       });
       if (outcome === "aborted") {
         controller.abort(failure);
@@ -162,20 +205,14 @@ describe("createBlockReplyDeliveryHandler", () => {
     const enqueue = vi.fn();
     const baseParams = {
       onBlockReply,
-      normalizeStreamingText: (reply: ReplyPayload) => ({ text: reply.text, skip: false }),
-      applyReplyToMode: (reply: ReplyPayload) => reply,
-      typingSignals: {
-        signalTextDelta: vi.fn(async () => {}),
-      } as unknown as TypingSignaler,
       blockStreamingEnabled: true,
       blockReplyPipeline: { enqueue } as unknown as BlockReplyPipelineLike,
-      directBlockDeliveries: [],
     };
 
-    await createBlockReplyDeliveryHandler(baseParams)(payload);
+    await createHandler(baseParams)(payload);
     expect(enqueue).not.toHaveBeenCalled();
 
-    await createBlockReplyDeliveryHandler({ ...baseParams, [enabledFlag]: true })(payload);
+    await createHandler({ ...baseParams, [enabledFlag]: true })(payload);
     expect(enqueue).toHaveBeenCalledTimes(1);
   });
 
@@ -185,393 +222,107 @@ describe("createBlockReplyDeliveryHandler", () => {
     { lane: "reasoning", flag: "isReasoning", blockStreamingEnabled: true },
     { lane: "commentary", flag: "isCommentary", blockStreamingEnabled: true },
     { lane: "status notice", flag: "isStatusNotice", blockStreamingEnabled: true },
+    { lane: "different assistant message", flag: undefined, blockStreamingEnabled: true },
   ] as const)(
-    "preserves the final answer after directly sending $lane (streaming=$blockStreamingEnabled)",
+    "retains final after $lane (streaming=$blockStreamingEnabled)",
     async ({ flag, blockStreamingEnabled }) => {
-      const delivered: ReplyPayload[] = [];
-      const directBlockDeliveries: DirectBlockDelivery[] = [];
-      const handler = createBlockReplyDeliveryHandler({
-        onBlockReply: async (payload) => {
-          delivered.push(payload);
-        },
-        normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-        applyReplyToMode: (payload) => payload,
-        typingSignals: {
-          signalTextDelta: vi.fn(async () => {}),
-        } as unknown as TypingSignaler,
+      const { sent, handler, final } = deliveryFixture({
         reasoningPayloadsEnabled: true,
         commentaryPayloadsEnabled: true,
         blockStreamingEnabled,
-        blockReplyPipeline: null,
-        directBlockDeliveries,
       });
 
-      await handler({ text: "Same answer", [flag]: true });
-      const { replyPayloads } = await buildReplyPayloads({
-        payloads: [{ text: "Same answer" }],
-        isHeartbeat: false,
-        didLogHeartbeatStrip: false,
-        blockStreamingEnabled,
-        blockReplyPipeline: null,
-        directBlockDeliveries,
-        replyToMode: "off",
-      });
-
-      expect(delivered).toHaveLength(1);
+      const sentPayload = flag
+        ? { text: "Same answer", [flag]: true }
+        : setReplyPayloadMetadata({ text: "Same answer" }, { assistantMessageIndex: 0 });
+      const finalPayload = flag
+        ? { text: "Same answer" }
+        : setReplyPayloadMetadata({ text: "Same answer" }, { assistantMessageIndex: 1 });
+      await handler(sentPayload);
+      const { replyPayloads } = await final([finalPayload], { blockStreamingEnabled });
+      expect(sent).toHaveLength(1);
       expect(replyPayloads).toEqual([expect.objectContaining({ text: "Same answer" })]);
     },
   );
 
-  it("keeps a matching final answer from a different directly sent assistant message", async () => {
-    const directBlockDeliveries: DirectBlockDelivery[] = [];
-    const handler = createBlockReplyDeliveryHandler({
-      onBlockReply: async () => {},
-      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-      applyReplyToMode: (payload) => payload,
-      typingSignals: {
-        signalTextDelta: vi.fn(async () => {}),
-      } as unknown as TypingSignaler,
-      blockStreamingEnabled: true,
-      blockReplyPipeline: null,
-      directBlockDeliveries,
-    });
-
-    await handler(setReplyPayloadMetadata({ text: "Same answer" }, { assistantMessageIndex: 0 }));
-    const finalPayload = setReplyPayloadMetadata(
-      { text: "Same answer" },
-      { assistantMessageIndex: 1 },
-    );
-    const { replyPayloads } = await buildReplyPayloads({
-      payloads: [finalPayload],
-      isHeartbeat: false,
-      didLogHeartbeatStrip: false,
-      blockStreamingEnabled: true,
-      blockReplyPipeline: null,
-      directBlockDeliveries,
-      replyToMode: "off",
-    });
-
-    expect(replyPayloads).toEqual([expect.objectContaining({ text: "Same answer" })]);
-  });
-
-  it("sends captioned media-bearing block replies when block streaming is disabled", async () => {
+  it.each<[string, ReplyPayload, string?]>([
+    [
+      "captioned voice",
+      { text: "spoken confirmation", mediaUrls: ["/tmp/voice.opus"], audioAsVoice: true },
+      "/tmp/voice.opus",
+    ],
+    [
+      "media only",
+      { mediaUrls: ["/tmp/generated.png"], replyToCurrent: true },
+      "/tmp/generated.png",
+    ],
+    [
+      "presentation only",
+      {
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+        },
+      },
+    ],
+  ])("sends %s without block streaming", async (_name, payload, mediaUrl) => {
     const onBlockReply = vi.fn(async () => {});
-    const normalizeStreamingText = vi.fn((payload: { text?: string }) => ({
-      text: payload.text,
-      skip: false,
-    }));
-    const typingSignals = {
-      signalTextDelta: vi.fn(async () => {}),
-    } as unknown as TypingSignaler;
-
-    const handler = createBlockReplyDeliveryHandler({
+    const signalTextDelta = vi.fn(async () => {});
+    const handler = createHandler({
       onBlockReply,
-      normalizeStreamingText,
-      applyReplyToMode: (payload) => payload,
-      typingSignals,
+      typingSignals: { ...quietTypingSignals, signalTextDelta },
       blockStreamingEnabled: false,
-      blockReplyPipeline: null,
-      directBlockDeliveries: [],
     });
-
-    await handler({
-      text: "here's the vibe",
-      mediaUrls: ["/tmp/generated.png"],
-      replyToCurrent: true,
-    });
-
-    const expectedPayload = {
-      text: "here's the vibe",
-      mediaUrl: "/tmp/generated.png",
-      mediaUrls: ["/tmp/generated.png"],
-      replyToCurrent: true,
-      replyToId: undefined,
-      replyToTag: undefined,
-      audioAsVoice: false,
-    };
-
-    expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
-    expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("here's the vibe");
+    await handler(payload);
+    expect(onBlockReply).toHaveBeenCalledWith(normalizedPayload({ ...payload, mediaUrl }));
+    if (payload.text) {
+      expect(signalTextDelta).toHaveBeenCalledWith(payload.text);
+    }
   });
 
-  it("sends captioned audio-as-voice block replies when block streaming is disabled", async () => {
-    const onBlockReply = vi.fn(async () => {});
-
-    const handler = createBlockReplyDeliveryHandler({
-      onBlockReply,
-      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-      applyReplyToMode: (payload) => payload,
-      typingSignals: {
-        signalTextDelta: vi.fn(async () => {}),
-      } as unknown as TypingSignaler,
-      blockStreamingEnabled: false,
-      blockReplyPipeline: null,
-      directBlockDeliveries: [],
-    });
-
-    await handler({
-      text: "spoken confirmation",
-      mediaUrls: ["/tmp/voice.opus"],
-      audioAsVoice: true,
-    });
-
-    const expectedPayload = {
-      text: "spoken confirmation",
-      mediaUrl: "/tmp/voice.opus",
-      mediaUrls: ["/tmp/voice.opus"],
-      replyToId: undefined,
-      replyToCurrent: undefined,
-      replyToTag: undefined,
-      audioAsVoice: true,
-    };
-
-    expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
-  });
-
-  it("sends media-only block replies when block streaming is disabled", async () => {
-    const onBlockReply = vi.fn(async () => {});
-
-    const handler = createBlockReplyDeliveryHandler({
-      onBlockReply,
-      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-      applyReplyToMode: (payload) => payload,
-      typingSignals: {
-        signalTextDelta: vi.fn(async () => {}),
-      } as unknown as TypingSignaler,
-      blockStreamingEnabled: false,
-      blockReplyPipeline: null,
-      directBlockDeliveries: [],
-    });
-
-    await handler({
-      mediaUrls: ["/tmp/generated.png"],
-      replyToCurrent: true,
-    });
-
-    expect(onBlockReply).toHaveBeenCalledWith({
-      mediaUrl: "/tmp/generated.png",
-      mediaUrls: ["/tmp/generated.png"],
-      replyToCurrent: true,
-      replyToId: undefined,
-      replyToTag: undefined,
-      audioAsVoice: false,
-      text: undefined,
-    });
-  });
-
-  it("sends presentation-only block replies when block streaming is disabled", async () => {
-    const onBlockReply = vi.fn(async () => {});
-    const presentation = {
-      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
-    };
-
-    const handler = createBlockReplyDeliveryHandler({
-      onBlockReply,
-      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-      applyReplyToMode: (payload) => payload,
-      typingSignals: {
-        signalTextDelta: vi.fn(async () => {}),
-      } as unknown as TypingSignaler,
-      blockStreamingEnabled: false,
-      blockReplyPipeline: null,
-      directBlockDeliveries: [],
-    });
-
-    await handler({ presentation });
-
-    const expectedPayload = {
-      presentation,
-      text: undefined,
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-      replyToId: undefined,
-      replyToCurrent: undefined,
-      replyToTag: undefined,
-      audioAsVoice: false,
-    };
-    expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
-  });
-
-  it("keeps text-only block replies buffered when block streaming is disabled", async () => {
-    const onBlockReply = vi.fn(async () => {});
-
-    const handler = createBlockReplyDeliveryHandler({
-      onBlockReply,
-      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-      applyReplyToMode: (payload) => payload,
-      typingSignals: {
-        signalTextDelta: vi.fn(async () => {}),
-      } as unknown as TypingSignaler,
-      blockStreamingEnabled: false,
-      blockReplyPipeline: null,
-      directBlockDeliveries: [],
-    });
-
-    await handler({ text: "text only" });
-
-    expect(onBlockReply).not.toHaveBeenCalled();
-  });
-
-  it("trims leading whitespace in block-streamed replies", async () => {
-    const blockReplyPipeline = {
-      enqueue: vi.fn(),
-    } as unknown as BlockReplyPipelineLike;
-
-    const handler = createBlockReplyDeliveryHandler({
-      onBlockReply: vi.fn(async () => {}),
-      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-      applyReplyToMode: (payload) => payload,
-      typingSignals: {
-        signalTextDelta: vi.fn(async () => {}),
-      } as unknown as TypingSignaler,
-      blockStreamingEnabled: true,
-      blockReplyPipeline,
-      directBlockDeliveries: [],
-    });
-
-    await handler({ text: "\n\n  Hello from stream" });
-
-    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
-      text: "Hello from stream",
-      mediaUrl: undefined,
-      replyToId: undefined,
-      replyToCurrent: undefined,
-      replyToTag: undefined,
-      audioAsVoice: false,
-      mediaUrls: undefined,
-    });
-  });
-
-  it("suppresses implicit current-message threading for block replies when reply threading denies it", async () => {
-    const blockReplyPipeline = {
-      enqueue: vi.fn(),
-    } as unknown as BlockReplyPipelineLike;
-
-    const handler = createBlockReplyDeliveryHandler({
-      onBlockReply: vi.fn(async () => {}),
+  it("normalizes text and threading without losing payload metadata before enqueueing", async () => {
+    const enqueue = vi.fn();
+    const metadata = { assistantMessageIndex: 7 };
+    const handler = createHandler({
+      blockReplyPipeline: { enqueue } as unknown as BlockReplyPipelineLike,
       currentMessageId: "msg-123",
       replyThreading: { implicitCurrentMessage: "deny" },
-      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-      applyReplyToMode: (payload) => payload,
-      typingSignals: {
-        signalTextDelta: vi.fn(async () => {}),
-      } as unknown as TypingSignaler,
-      blockStreamingEnabled: true,
-      blockReplyPipeline,
-      directBlockDeliveries: [],
+      applyReplyToMode: (payload) => ({ ...payload, replyToTag: true }),
     });
-
-    await handler({ text: "reset intro" });
-
-    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
-      text: "reset intro",
-      mediaUrl: undefined,
-      replyToId: undefined,
-      replyToCurrent: undefined,
-      replyToTag: undefined,
-      audioAsVoice: false,
-      mediaUrls: undefined,
-    });
+    await handler(setReplyPayloadMetadata({ text: "\n\n  Alpha" }, metadata));
+    expect(enqueue).toHaveBeenCalledExactlyOnceWith(
+      normalizedPayload({ text: "Alpha", replyToTag: true }),
+    );
+    expect(getReplyPayloadMetadata(enqueue.mock.calls[0]?.[0])).toEqual(metadata);
   });
 
-  it("parses media directives in block replies before path normalization", () => {
+  it.each<[string, ReplyPayload, ReplyPayload]>([
+    [
+      "captioned directive",
+      { text: "Result\nMEDIA: ./image.png" },
+      { text: "Result", mediaUrl: "./image.png", mediaUrls: ["./image.png"] },
+    ],
+    [
+      "empty explicit list",
+      { text: "MEDIA: ./report.pdf", mediaUrls: [] },
+      { text: undefined, mediaUrl: "./report.pdf", mediaUrls: [] },
+    ],
+    [
+      "plain reply",
+      { text: "plain reply" },
+      { text: "plain reply", mediaUrl: undefined, mediaUrls: undefined },
+    ],
+  ])("normalizes %s without an explicit threading opt-out", (_name, payload, expected) => {
     const normalized = normalizeReplyPayloadDirectives({
-      payload: { text: "Result\nMEDIA: ./image.png" },
+      payload,
       trimLeadingWhitespace: true,
       parseMode: "auto",
     });
-
-    expect(normalized.payload.text).toBe("Result");
-    expect(normalized.payload.mediaUrl).toBe("./image.png");
-    expect(normalized.payload.mediaUrls).toEqual(["./image.png"]);
-  });
-
-  it("parses lowercase media directives in block replies before path normalization", () => {
-    const normalized = normalizeReplyPayloadDirectives({
-      payload: { text: "media: ./report.pdf" },
-      trimLeadingWhitespace: true,
-      parseMode: "auto",
-    });
-
-    expect(normalized.payload.text).toBeUndefined();
-    expect(normalized.payload.mediaUrl).toBe("./report.pdf");
-    expect(normalized.payload.mediaUrls).toEqual(["./report.pdf"]);
-  });
-
-  it("keeps parsed media when an explicit media list is empty", () => {
-    const normalized = normalizeReplyPayloadDirectives({
-      payload: { text: "MEDIA: ./report.pdf", mediaUrls: [] },
-      trimLeadingWhitespace: true,
-      parseMode: "auto",
-    });
-
-    expect(normalized.payload.text).toBeUndefined();
-    expect(normalized.payload.mediaUrl).toBe("./report.pdf");
-    expect(normalized.payload.mediaUrls).toEqual([]);
-  });
-
-  it("leaves media-looking text alone when media directive parsing is disabled", () => {
-    const normalized = normalizeReplyPayloadDirectives({
-      payload: { text: "Result\nMEDIA: ./image.png" },
-      trimLeadingWhitespace: true,
-      parseMode: "auto",
-      extractMediaDirectives: false,
-    });
-
-    expect(normalized.payload.text).toBe("Result\nMEDIA: ./image.png");
-    expect(normalized.payload.mediaUrl).toBeUndefined();
-    expect(normalized.payload.mediaUrls).toBeUndefined();
-  });
-
-  it("does not mark plain replies as explicit reply_to_current opt-outs", () => {
-    const normalized = normalizeReplyPayloadDirectives({
-      payload: { text: "plain reply" },
-      trimLeadingWhitespace: true,
-      parseMode: "auto",
-    });
-
-    expect(normalized.payload.replyToCurrent).toBeUndefined();
-  });
-
-  it("passes structured media block replies through media path normalization", async () => {
-    const blockReplyPipeline = {
-      enqueue: vi.fn(),
-    } as unknown as BlockReplyPipelineLike;
-    const absPath = path.join("/tmp/home", "openclaw", "image.png");
-
-    const handler = createBlockReplyDeliveryHandler({
-      onBlockReply: vi.fn(async () => {}),
-      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-      applyReplyToMode: (payload) => payload,
-      normalizeMediaPaths: async (payload) => ({
-        ...payload,
-        mediaUrl: absPath,
-        mediaUrls: [absPath],
-      }),
-      typingSignals: {
-        signalTextDelta: vi.fn(async () => {}),
-      } as unknown as TypingSignaler,
-      blockStreamingEnabled: true,
-      blockReplyPipeline,
-      directBlockDeliveries: [],
-    });
-
-    await handler({ text: "Result", mediaUrl: "./image.png" });
-
-    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
-      text: "Result",
-      mediaUrl: absPath,
-      mediaUrls: [absPath],
-      replyToId: undefined,
-      replyToCurrent: undefined,
-      replyToTag: undefined,
-      audioAsVoice: false,
-    });
+    expect(normalized.payload).toMatchObject({ ...expected, replyToCurrent: undefined });
   });
 
   it.each([
-    { name: "raw silence", text: "NO_REPLY", parsedSilent: false, expectWarning: false },
-    { name: "parsed silence", text: "", parsedSilent: true, expectWarning: false },
+    { name: "prepared literal marker", text: "NO_REPLY", parsedSilent: false, expectWarning: true },
+    { name: "recorded silence", text: "", parsedSilent: true, expectWarning: false },
     { name: "ordinary reply", text: "Caption", parsedSilent: false, expectWarning: true },
   ])(
     "preserves $name text policy during structured block normalization",
@@ -580,23 +331,19 @@ describe("createBlockReplyDeliveryHandler", () => {
         enqueue: vi.fn(),
       } as unknown as BlockReplyPipelineLike;
       const absPath = path.join("/tmp/home", "openclaw", "survived.png");
+      const warning =
+        "⚠️ Media failed. Try sending a smaller supported file or a different format.";
 
-      const handler = createBlockReplyDeliveryHandler({
+      const handler = createHandler({
         onBlockReply: vi.fn(async () => {}),
-        normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-        applyReplyToMode: (payload) => payload,
         normalizeMediaPaths: async (payload) => ({
           ...payload,
-          text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+          text: warning,
           mediaUrl: absPath,
           mediaUrls: [absPath],
         }),
-        typingSignals: {
-          signalTextDelta: vi.fn(async () => {}),
-        } as unknown as TypingSignaler,
         blockStreamingEnabled: true,
         blockReplyPipeline,
-        directBlockDeliveries: [],
       });
 
       const payload: ReplyPayload = { text, mediaUrls: ["./missing.png", "./survived.png"] };
@@ -605,67 +352,18 @@ describe("createBlockReplyDeliveryHandler", () => {
       }
       await handler(payload);
 
-      expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
-        text: expectWarning
-          ? "⚠️ Media failed. Try sending a smaller supported file or a different format."
-          : undefined,
-        mediaUrl: absPath,
-        mediaUrls: [absPath],
-        replyToId: undefined,
-        replyToCurrent: undefined,
-        replyToTag: undefined,
-        audioAsVoice: false,
-      });
+      expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith(
+        normalizedPayload({
+          text: expectWarning ? warning : undefined,
+          mediaUrl: absPath,
+          mediaUrls: [absPath],
+        }),
+      );
     },
   );
 
-  it("preserves reply payload metadata across block-reply normalization", async () => {
-    const enqueue = vi.fn();
-    const blockReplyPipeline = {
-      enqueue,
-    } as unknown as BlockReplyPipelineLike;
-
-    const handler = createBlockReplyDeliveryHandler({
-      onBlockReply: vi.fn(async () => {}),
-      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-      applyReplyToMode: (payload) => ({ ...payload, replyToTag: true }),
-      typingSignals: {
-        signalTextDelta: vi.fn(async () => {}),
-      } as unknown as TypingSignaler,
-      blockStreamingEnabled: true,
-      blockReplyPipeline,
-      directBlockDeliveries: [],
-    });
-
-    const payload = setReplyPayloadMetadata({ text: "Alpha" }, { assistantMessageIndex: 7 });
-
-    await handler(payload);
-
-    expect(enqueue).toHaveBeenCalledTimes(1);
-    const [firstCall] = enqueue.mock.calls;
-    if (!firstCall) {
-      throw new Error("Expected block reply pipeline enqueue call");
-    }
-    const [enqueuedPayload] = firstCall;
-    if (enqueuedPayload === undefined) {
-      throw new Error("Expected block reply pipeline payload");
-    }
-    expect(enqueuedPayload).toEqual({
-      text: "Alpha",
-      mediaUrl: undefined,
-      replyToId: undefined,
-      replyToCurrent: undefined,
-      replyToTag: true,
-      audioAsVoice: false,
-      mediaUrls: undefined,
-    });
-    expect(getReplyPayloadMetadata(enqueuedPayload)).toEqual({
-      assistantMessageIndex: 7,
-    });
-  });
-
   it.each([false, true])(
-    "falls back to payload identity when normalization invalidates source text (coalescing=%s)",
+    "uses payload identity after source text changes (coalescing=%s)",
     async (coalescing) => {
       const sent: ReplyPayload[] = [];
       const pipeline = createBlockReplyPipeline({
@@ -677,19 +375,14 @@ describe("createBlockReplyDeliveryHandler", () => {
           ? { coalescing: { minChars: 100, maxChars: 200, idleMs: 0, joiner: "" } }
           : {}),
       });
-      const handler = createBlockReplyDeliveryHandler({
+      const handler = createHandler({
         onBlockReply: vi.fn(async () => {}),
         normalizeStreamingText: (payload) => ({
           text: payload.text?.replace(/^HEARTBEAT_OK /, ""),
           skip: false,
         }),
-        applyReplyToMode: (payload) => payload,
-        typingSignals: {
-          signalTextDelta: vi.fn(async () => {}),
-        } as unknown as TypingSignaler,
         blockStreamingEnabled: true,
         blockReplyPipeline: pipeline,
-        directBlockDeliveries: [],
       });
       const sourcePayload = (text: string) =>
         setReplyPayloadMetadata(
@@ -728,18 +421,12 @@ describe("createBlockReplyDeliveryHandler", () => {
   it("records concurrent direct block deliveries in emission order", async () => {
     const resolvers: Array<() => void> = [];
     const directBlockDeliveries: DirectBlockDelivery[] = [];
-    const handler = createBlockReplyDeliveryHandler({
+    const handler = createHandler({
       onBlockReply: () =>
         new Promise<void>((resolve) => {
           resolvers.push(resolve);
         }),
-      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-      applyReplyToMode: (payload) => payload,
-      typingSignals: {
-        signalTextDelta: vi.fn(async () => {}),
-      } as unknown as TypingSignaler,
       blockStreamingEnabled: true,
-      blockReplyPipeline: null,
       directBlockDeliveries,
     });
 
@@ -769,8 +456,7 @@ describe("createBlockReplyDeliveryHandler", () => {
 it.each([true, false])(
   "deduplicates only delivered completed reply segments (delivered=%s)",
   async (delivered) => {
-    const directBlockDeliveries: DirectBlockDelivery[] = [];
-    const handler = createBlockReplyDeliveryHandler({
+    const { handler, final } = deliveryFixture({
       onBlockReply: async () => {
         if (!delivered) {
           throw new PlatformMessageNotDispatchedError("Synthetic delivery failure", {
@@ -778,12 +464,7 @@ it.each([true, false])(
           });
         }
       },
-      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-      applyReplyToMode: (payload) => payload,
-      typingSignals: { signalTextDelta: vi.fn(async () => {}) } as unknown as TypingSignaler,
       blockStreamingEnabled: false,
-      blockReplyPipeline: null,
-      directBlockDeliveries,
     });
     const sending = handler({ text: "First answer." }, { completed: true });
     if (delivered) {
@@ -791,14 +472,8 @@ it.each([true, false])(
     } else {
       await expect(sending).rejects.toThrow("Synthetic delivery failure");
     }
-    const { replyPayloads } = await buildReplyPayloads({
-      payloads: [{ text: "First answer." }, { text: "Final answer." }],
-      isHeartbeat: false,
-      didLogHeartbeatStrip: false,
+    const { replyPayloads } = await final([{ text: "First answer." }, { text: "Final answer." }], {
       blockStreamingEnabled: false,
-      blockReplyPipeline: null,
-      directBlockDeliveries,
-      replyToMode: "off",
     });
     expect(replyPayloads.map((payload) => payload.text)).toEqual(
       delivered ? ["Final answer."] : ["First answer.", "Final answer."],
@@ -814,16 +489,12 @@ it("keeps completed CLI segments distinct through coalescing and final dedupe", 
       sent.push(payload);
     },
     timeoutMs: 0,
-    coalescing: { minChars: 100, maxChars: 200, idleMs: 0, joiner: " " },
+    coalescing: defaultCoalescing,
   });
-  const handler = createBlockReplyDeliveryHandler({
+  const handler = createHandler({
     onBlockReply: async () => {},
-    normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-    applyReplyToMode: (payload) => payload,
-    typingSignals: { signalTextDelta: vi.fn(async () => {}) } as unknown as TypingSignaler,
     blockStreamingEnabled: true,
     blockReplyPipeline: pipeline,
-    directBlockDeliveries: [],
   });
   try {
     await handler({ text: "Checking." });
@@ -832,16 +503,13 @@ it("keeps completed CLI segments distinct through coalescing and final dedupe", 
     expect(sent.map((payload) => payload.text)).toEqual(["Checking.", "Alpha"]);
     await handler(prepareCliReplyPayload("Beta", undefined, 1), { completed: true });
     await pipeline.flush({ force: true });
-    const { replyPayloads } = await buildReplyPayloads({
+    const { replyPayloads } = await buildFinalPayloads({
       payloads: [
         prepareCliReplyPayload("Alpha", undefined, 0),
         prepareCliReplyPayload("Beta", undefined, 1),
       ],
-      isHeartbeat: false,
-      didLogHeartbeatStrip: false,
       blockStreamingEnabled: true,
       blockReplyPipeline: pipeline,
-      replyToMode: "off",
     });
     expect(sent.map((payload) => payload.text)).toEqual(["Checking.", "Alpha", "Beta"]);
     expect(replyPayloads).toEqual([]);
@@ -859,8 +527,7 @@ it("retains deferred-tail recovery after multiple completed CLI replies", async 
     await import("./block-reply-delivery.js");
   const { prepareCliReplyPayload } = await import("./cli-reply-payload.js");
   const source = createBlockReplySource();
-  const directBlockDeliveries: DirectBlockDelivery[] = [];
-  const handler = createBlockReplyDeliveryHandler({
+  const { handler, final } = deliveryFixture({
     onBlockReply: async (payload) => {
       if (payload.text !== "See [") {
         return;
@@ -870,27 +537,14 @@ it("retains deferred-tail recovery after multiple completed CLI replies", async 
         setBlockReplyDelivery(Promise.resolve({ outcome: "delivered" }), { text: "See " });
       });
     },
-    normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-    applyReplyToMode: (payload) => payload,
-    typingSignals: { signalTextDelta: vi.fn(async () => {}) } as unknown as TypingSignaler,
     blockStreamingEnabled: false,
-    blockReplyPipeline: null,
-    directBlockDeliveries,
   });
   await handler(prepareCliReplyPayload("First", undefined, 0), { completed: true });
   await handler(prepareCliReplyPayload("See [", undefined, 1), { completed: true });
-  const { replyPayloads } = await buildReplyPayloads({
-    payloads: [
-      prepareCliReplyPayload("First", undefined, 0),
-      prepareCliReplyPayload("See [", undefined, 1),
-    ],
-    isHeartbeat: false,
-    didLogHeartbeatStrip: false,
-    blockStreamingEnabled: false,
-    blockReplyPipeline: null,
-    directBlockDeliveries,
-    replyToMode: "off",
-  });
+  const { replyPayloads } = await final(
+    [prepareCliReplyPayload("First", undefined, 0), prepareCliReplyPayload("See [", undefined, 1)],
+    { blockStreamingEnabled: false },
+  );
   expect(replyPayloads).toHaveLength(1);
   const pending = replyPayloads[0]!;
   expect(getReplyPayloadMetadata(pending)?.blockReplySources).toEqual([source]);

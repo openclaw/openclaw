@@ -1,4 +1,5 @@
 import OpenClawChatUI
+import OpenClawKit
 import SwiftUI
 
 struct CommandSessionRow: View {
@@ -33,7 +34,7 @@ struct CommandSessionRow: View {
                             .foregroundStyle(OpenClawBrand.accent)
                             .accessibilityHidden(true)
                     }
-                    Text(verbatim: self.item.trailing)
+                    Text(verbatim: "chat")
                         .font(OpenClawType.caption2Medium)
                         .foregroundStyle(.secondary)
                 }
@@ -61,9 +62,6 @@ struct CommandSessionRow: View {
 
     private var stateLabel: String {
         switch self.item.state {
-        case "offline": String(localized: "offline")
-        case "off": String(localized: "off")
-        case "idle": String(localized: "idle")
         case "open": String(localized: "open")
         case "default": String(localized: "default")
         case "recent": String(localized: "recent")
@@ -72,74 +70,24 @@ struct CommandSessionRow: View {
     }
 }
 
-struct CommandSessionActions {
+struct CommandSessionActionsModifier: ViewModifier {
     typealias Mutation = (any OpenClawChatTransport) async throws -> Void
 
-    let rename: (String?) -> Void
-    let moveToGroup: (String?) -> Void
-    let setColor: (String?) -> Void
-    let togglePinned: () -> Void
-    let toggleUnread: () -> Void
-    let fork: () -> Void
-    let toggleArchived: () -> Void
-    let delete: () -> Void
-
-    static func gateway(
-        session: OpenClawChatSessionEntry,
-        archivesSession: @escaping () -> Bool = { true },
-        performMutation: @escaping (String?, @escaping Mutation) -> Void,
-        fork: @escaping () -> Void) -> Self
-    {
-        func patch(
-            label: String?? = nil,
-            category: String?? = nil,
-            color: String?? = nil,
-            pinned: Bool? = nil,
-            archived: Bool? = nil,
-            unread: Bool? = nil)
-        {
-            performMutation(archived == true ? session.key : nil) { transport in
-                try await transport.patchSession(
-                    key: session.key,
-                    expectedSessionID: archived == nil ? nil : session.sessionId,
-                    label: label,
-                    category: category,
-                    color: color,
-                    pinned: pinned,
-                    archived: archived,
-                    unread: unread)
-            }
-        }
-
-        return Self(
-            rename: { patch(label: .some($0)) },
-            moveToGroup: { patch(category: .some($0)) },
-            setColor: { patch(color: .some($0)) },
-            togglePinned: { patch(pinned: session.pinned != true) },
-            toggleUnread: { patch(unread: session.unread != true) },
-            fork: fork,
-            toggleArchived: { patch(archived: archivesSession()) },
-            delete: {
-                performMutation(session.key) { transport in
-                    try await transport.deleteSession(key: session.key)
-                }
-            })
-    }
-}
-
-struct CommandSessionActionsModifier: ViewModifier {
     private enum Editor {
         case rename
         case newGroup
     }
 
     let session: OpenClawChatSessionEntry
+    let mainSessionKey: String
     let categories: [String]
     let isArchived: Bool
     let isEnabled: Bool
     let canArchive: Bool
     let canDelete: Bool
-    let actions: CommandSessionActions
+    let archivesSession: () -> Bool
+    let performMutation: (String?, @escaping Mutation) -> Void
+    let fork: () -> Void
 
     @State private var editor: Editor?
     @State private var draftText = ""
@@ -156,24 +104,20 @@ struct CommandSessionActionsModifier: ViewModifier {
     private func managedContent(_ content: Content) -> some View {
         content
             .contextMenu {
-                OpenClawSessionColorMenu(color: self.session.color, onSelect: self.actions.setColor)
-                if self.isArchived {
-                    if self.canArchive {
-                        self.actionButton("Unarchive", systemImage: "archivebox") {
-                            self.actions.toggleArchived()
-                        }
-                    }
-                    if self.canDelete {
-                        self.deleteButton
-                    }
-                } else {
+                OpenClawSessionColorMenu(color: self.session.color) {
+                    self.patch(color: .some($0))
+                }
+                if !self.isArchived {
                     self.actionButton(
                         self.session.pinned == true
                             ? OpenClawTextValue.localized("Unpin")
                             : OpenClawTextValue.localized("Pin"),
                         systemImage: self.session.pinned == true ? "pin.slash" : "pin")
                     {
-                        self.actions.togglePinned()
+                        self.patch(pinned: self.session.pinned != true)
+                    }
+                    if self.canSnooze {
+                        self.snoozeMenu
                     }
                     self.actionButton(
                         self.session.unread == true
@@ -181,7 +125,7 @@ struct CommandSessionActionsModifier: ViewModifier {
                             : OpenClawTextValue.localized("Mark as Unread"),
                         systemImage: self.session.unread == true ? "envelope.open" : "envelope.badge")
                     {
-                        self.actions.toggleUnread()
+                        self.patch(unread: self.session.unread != true)
                     }
                     self.actionButton("Rename…", systemImage: "pencil") {
                         self.beginRename()
@@ -192,17 +136,20 @@ struct CommandSessionActionsModifier: ViewModifier {
                             : OpenClawTextValue.localized("Fork"),
                         systemImage: "arrow.triangle.branch")
                     {
-                        self.actions.fork()
+                        self.fork()
                     }
                     self.groupMenu
-                    if self.canArchive {
-                        self.actionButton("Archive", systemImage: "archivebox") {
-                            self.actions.toggleArchived()
-                        }
+                }
+                if self.canArchive {
+                    self.actionButton(
+                        self.isArchived ? .localized("Unarchive") : .localized("Archive"),
+                        systemImage: "archivebox")
+                    {
+                        self.patch(archived: self.archivesSession())
                     }
-                    if self.canDelete {
-                        self.deleteButton
-                    }
+                }
+                if self.canDelete {
+                    self.deleteButton
                 }
             }
             .alert(self.editorTitle, isPresented: self.editorBinding) {
@@ -229,7 +176,9 @@ struct CommandSessionActionsModifier: ViewModifier {
                 titleVisibility: .visible)
             {
                 Button(role: .destructive) {
-                    self.actions.delete()
+                    self.performMutation(self.session.key) { transport in
+                        try await transport.deleteSession(key: self.session.key)
+                    }
                 } label: {
                     Text("Delete Session")
                         .font(OpenClawType.subheadSemiBold)
@@ -244,20 +193,102 @@ struct CommandSessionActionsModifier: ViewModifier {
             }
     }
 
+    private func patch(
+        label: String?? = nil,
+        category: String?? = nil,
+        color: String?? = nil,
+        pinned: Bool? = nil,
+        archived: Bool? = nil,
+        unread: Bool? = nil)
+    {
+        self.performMutation(archived == true ? self.session.key : nil) { transport in
+            try await transport.patchSession(
+                key: self.session.key,
+                expectedSessionID: archived == nil ? nil : self.session.sessionId,
+                label: label,
+                category: category,
+                color: color,
+                pinned: pinned,
+                archived: archived,
+                unread: unread)
+        }
+    }
+
+    private func patchSnooze(_ snoozedUntil: OpenClawChatSnoozePatch) {
+        self.performMutation(nil) { transport in
+            try await transport.patchSession(
+                key: self.session.key,
+                expectedSessionID: self.session.sessionId,
+                snoozedUntil: snoozedUntil)
+        }
+    }
+
+    private var canSnooze: Bool {
+        let key = self.session.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let agentID = OpenClawChatSessionKey.agentID(from: key)
+        let sessionName = agentID == nil
+            ? key
+            : String(key.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)[2])
+        let mainKey = self.mainSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let configuredMain = OpenClawChatSessionKey.agentID(from: mainKey) == nil
+            ? mainKey
+            : String(mainKey.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)[2])
+        guard !self.isArchived, !self.session.isArchived, self.session.isMain != true,
+              self.session.sessionId?.trimmedNonEmpty != nil,
+              self.session.kind != "global", self.session.kind != "unknown",
+              key != "main", key != "global", key != "unknown", sessionName != configuredMain,
+              !sessionName.hasPrefix("subagent:"), self.session.spawnedBy?.trimmedNonEmpty == nil
+        else { return false }
+        guard let parent = self.session.parentSessionKey?.trimmedNonEmpty else { return true }
+        // Ordinary dashboard conversations link to Home without becoming nested children.
+        return agentID.map { parent == "agent:\($0):main" } ?? false
+    }
+
+    @ViewBuilder
+    private var snoozeMenu: some View {
+        let now = Date.now
+        if self.session.isSnoozed(at: now), let snoozedUntil = self.session.snoozedUntil {
+            let wakeDescription = OpenClawChatSessionSnooze.wakeDescription(
+                Date(timeIntervalSince1970: snoozedUntil / 1000),
+                now: now)
+            self.actionButton(
+                .verbatim(String(format: String(localized: "Wake session · %@"), wakeDescription)),
+                systemImage: "clock")
+            {
+                self.patchSnooze(.wake)
+            }
+        } else {
+            Menu {
+                ForEach(OpenClawChatSessionSnooze.presets(now: now), id: \.id) { preset in
+                    // "Next week" needs its weekday; the other titles already name the day.
+                    let when = preset.id == "next-week"
+                        ? OpenClawChatSessionSnooze.wakeDescription(preset.wakeAt, now: now)
+                        : preset.wakeAt.formatted(date: .omitted, time: .shortened)
+                    self.actionButton(.verbatim("\(preset.title) · \(when)"), systemImage: "clock") {
+                        self.patchSnooze(.until(preset.wakeAt))
+                    }
+                }
+            } label: {
+                Label("Snooze", systemImage: "clock")
+                    .font(OpenClawType.subhead)
+            }
+        }
+    }
+
     private var groupMenu: some View {
         Menu {
             ForEach(self.categories, id: \.self) { category in
                 self.actionButton(.verbatim(category), systemImage: "folder") {
-                    self.actions.moveToGroup(category)
+                    self.patch(category: .some(category))
                 }
             }
             self.actionButton("New Group…", systemImage: "folder.badge.plus") {
                 self.draftText = ""
                 self.editor = .newGroup
             }
-            if self.normalized(self.session.category) != nil {
+            if self.session.category?.trimmedNonEmpty != nil {
                 self.actionButton("Remove from Group", systemImage: "folder.badge.minus") {
-                    self.actions.moveToGroup(nil)
+                    self.patch(category: .some(nil))
                 }
             }
         } label: {
@@ -309,66 +340,55 @@ struct CommandSessionActionsModifier: ViewModifier {
     }
 
     private func beginRename() {
-        self.draftText = self.normalized(self.session.label)
-            ?? self.normalized(self.session.displayName)
+        self.draftText = self.session.label?.trimmedNonEmpty
+            ?? self.session.displayName?.trimmedNonEmpty
             ?? ""
         self.editor = .rename
     }
 
     private func commitEditor() {
-        let value = self.normalized(self.draftText)
+        let value = self.draftText.trimmedNonEmpty
         switch self.editor {
         case .rename:
-            self.actions.rename(value)
+            self.patch(label: .some(value))
         case .newGroup:
             if let value {
                 // Web parity: only prompt-created groups join the stored list,
                 // so they survive as empty sections after members leave.
                 SessionGroupStore.remember(value)
-                self.actions.moveToGroup(value)
+                self.patch(category: .some(value))
             }
         case nil:
             break
         }
         self.editor = nil
     }
-
-    private func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
 }
 
 extension View {
     func commandSessionActions(
         session: OpenClawChatSessionEntry,
+        mainSessionKey: String = "main",
         categories: [String],
         isArchived: Bool = false,
         isEnabled: Bool = true,
         canArchive: Bool = true,
         canDelete: Bool = true,
-        actions: CommandSessionActions) -> some View
+        archivesSession: @escaping () -> Bool = { true },
+        performMutation: @escaping (String?, @escaping CommandSessionActionsModifier.Mutation) -> Void,
+        fork: @escaping () -> Void) -> some View
     {
         self.modifier(CommandSessionActionsModifier(
             session: session,
+            mainSessionKey: mainSessionKey,
             categories: categories,
             isArchived: isArchived,
             isEnabled: isEnabled,
             canArchive: canArchive,
             canDelete: canDelete,
-            actions: actions))
-    }
-}
-
-struct CommandViewMoreRow: View {
-    var body: some View {
-        Label("View More", systemImage: "chevron.right")
-            .font(OpenClawType.subheadBold)
-            .foregroundStyle(OpenClawBrand.accent)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
+            archivesSession: archivesSession,
+            performMutation: performMutation,
+            fork: fork))
     }
 }
 

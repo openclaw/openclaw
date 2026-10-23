@@ -1,8 +1,9 @@
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
-import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
+import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 
 type ChatPositionMarker = {
   id: string;
@@ -11,18 +12,20 @@ type ChatPositionMarker = {
   message: unknown;
 };
 
-export type ChatPositionIndex = {
-  markers: ChatPositionMarker[];
-  /** Transcript order, including continuations after an intervening user steer. */
-  markerIdsByMessageId: Map<string, string>;
-};
+export type ChatPositionIndex = Readonly<{
+  markers: readonly Readonly<ChatPositionMarker>[];
+  markerIdsByMessageId: ReadonlyMap<string, string>;
+  /** Current tail previews over the immutable marker membership. */
+  liveMarkers?: readonly Readonly<ChatPositionMarker>[];
+}>;
 
-type RenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+type RenderItem = SystemEventRenderItem;
 
 export function projectChatPositions(
-  items: readonly RenderItem[],
+  items: Iterable<RenderItem>,
   expandedWork: ReadonlyMap<string, boolean>,
   messageRowKeysById: Map<string, string>,
+  searchActive = false,
 ): ChatPositionIndex {
   const markers = new Map<string, ChatPositionMarker>();
   const markerIdsByMessageId = new Map<string, string>();
@@ -43,6 +46,13 @@ export function projectChatPositions(
     messageRowKeysById.set(messageId, rowKey);
   };
   const group = (item: MessageGroup, rowKey: string) => {
+    if (
+      isSessionActivityGroup(item) &&
+      !searchActive &&
+      !expandedWork.get("session-activity:" + item.key)
+    ) {
+      return;
+    }
     if ((item.role !== "user" && item.role !== "assistant") || item.visibleContent === "none") {
       return;
     }
@@ -102,5 +112,6 @@ export function projectChatPositions(
   for (const item of items) {
     visit(item, item.key);
   }
+  // Transcript order includes continuations after an intervening user steer.
   return { markers: [...markers.values()], markerIdsByMessageId };
 }

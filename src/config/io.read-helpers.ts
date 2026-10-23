@@ -119,11 +119,11 @@ export function normalizeConfigIoDeps(overrides: ConfigIoDeps = {}): NormalizedC
   const env = overrides.env ?? process.env;
   return {
     fs: overrides.fs ?? fs,
-    json5: overrides.json5 ?? JSON5,
     env,
     lowerPrecedenceEnv: overrides.lowerPrecedenceEnv ?? {},
     homedir: overrides.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir)),
     configPath: overrides.configPath ?? "",
+    mapIncludePath: overrides.mapIncludePath ?? ((absolutePath) => absolutePath),
     logger: overrides.logger ?? console,
     measure: overrides.measure ?? (async (_name, run) => await run()),
     suppressFutureVersionWarning:
@@ -134,12 +134,9 @@ export function normalizeConfigIoDeps(overrides: ConfigIoDeps = {}): NormalizedC
   };
 }
 
-export function parseConfigJson5(
-  raw: string,
-  json5: { parse: (value: string) => unknown } = JSON5,
-): ParseConfigJson5Result {
+export function parseConfigJson5(raw: string): ParseConfigJson5Result {
   try {
-    return { ok: true, parsed: parseJsonWithJson5Fallback(raw, json5) };
+    return { ok: true, parsed: parseJsonWithJson5Fallback(raw, JSON5) };
   } catch (err) {
     return { ok: false, error: String(err) };
   }
@@ -153,17 +150,6 @@ function isPathLikeConfigKey(key: string | undefined): boolean {
   return Boolean(key && (PATH_LIKE_CONFIG_KEY_RE.test(key) || PATH_LIKE_CONFIG_LIST_KEYS.has(key)));
 }
 
-function expandAuthoredTildePath(value: string, home: string): string {
-  const suffix = value.slice(1);
-  if (!suffix) {
-    return home;
-  }
-  if (suffix.startsWith("/") || suffix.startsWith("\\")) {
-    return path.join(home, suffix.slice(1));
-  }
-  return value;
-}
-
 export function restoreAuthoredTildePathsForWrite(
   next: unknown,
   authored: unknown,
@@ -175,7 +161,7 @@ export function restoreAuthoredTildePathsForWrite(
     typeof authored === "string" &&
     isPathLikeConfigKey(key) &&
     TILDE_PATH_VALUE_RE.test(authored.trim()) &&
-    path.normalize(next) === path.normalize(expandAuthoredTildePath(authored.trim(), home))
+    path.normalize(next) === path.join(home, authored.trim().slice(2))
   ) {
     return authored;
   }
@@ -239,6 +225,7 @@ export function resolveConfigIncludesForRead(
     configPath,
     {
       readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+      mapPath: deps.mapIncludePath,
       onLexicalPath: recordIncludeWatchPath,
       onIncludeResolved,
       readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) => {
@@ -270,7 +257,7 @@ export function resolveConfigIncludesForRead(
           throw error;
         }
       },
-      parseJson: (raw) => deps.json5.parse(raw),
+      parseJson: (raw) => JSON5.parse(raw),
     },
     { allowedRoots },
   );

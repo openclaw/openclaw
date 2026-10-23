@@ -1,6 +1,7 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { listen } from "../lib/reactive/listener.ts";
 import { playLobsterPetChirp, type LobsterPetChirpKind } from "./lobster-pet-audio.ts";
 import { prefersReducedMotion } from "./lobster-pet-plans.ts";
+import { LobsterPetTimers } from "./lobster-pet-timers.ts";
 
 type LobsterInteractionHooks = {
   soundsEnabled: () => boolean;
@@ -12,28 +13,30 @@ type LobsterInteractionHooks = {
   onHuff: () => void;
 };
 
-export class LobsterPetInteractions implements ReactiveController {
-  private grumpyTimer: number | null = null;
-  private holdTimer: number | null = null;
+export class LobsterPetInteractions {
+  private readonly timers = new LobsterPetTimers<"grumpyTimer" | "holdTimer">();
   private audioCtx: AudioContext | null = null;
   private pokeTimes: number[] = [];
   private lastGazeAt = 0;
+  private sprite: HTMLElement | undefined;
+  private stopGaze?: () => void;
 
-  constructor(
-    private readonly host: ReactiveControllerHost & HTMLElement,
-    private readonly hooks: LobsterInteractionHooks,
-  ) {
-    host.addController(this);
+  constructor(private readonly hooks: LobsterInteractionHooks) {}
+
+  readonly bindSprite = (element: HTMLElement) => {
+    this.sprite = element;
+  };
+
+  connect() {
+    this.stopGaze = listen(document, "pointermove", this.handleGaze, { passive: true });
   }
 
-  hostConnected() {
-    document.addEventListener("pointermove", this.handleGaze, { passive: true });
-  }
-
-  hostDisconnected() {
-    document.removeEventListener("pointermove", this.handleGaze);
+  dispose() {
+    this.stopGaze?.();
+    this.stopGaze = undefined;
+    this.sprite = undefined;
     this.handleHoldCancel();
-    this.clearGrumpyTimer();
+    this.timers.clear("grumpyTimer");
     if (this.audioCtx) {
       this.audioCtx.close().catch(() => {});
       this.audioCtx = null;
@@ -42,7 +45,7 @@ export class LobsterPetInteractions implements ReactiveController {
 
   suspend() {
     this.handleHoldCancel();
-    this.clearGrumpyTimer();
+    this.timers.clear("grumpyTimer");
     this.hooks.onGrumpyChange(false);
   }
 
@@ -52,34 +55,25 @@ export class LobsterPetInteractions implements ReactiveController {
     if (event.button !== 0 || prefersReducedMotion()) {
       return;
     }
-    if (this.holdTimer !== null) {
-      window.clearTimeout(this.holdTimer);
-    }
-    this.holdTimer = window.setTimeout(() => {
-      this.holdTimer = null;
+    this.handleHoldCancel();
+    this.timers.schedule("holdTimer", 600, () => {
       this.hooks.onGrumpyChange(false);
       this.playChirp("pet");
       this.hooks.onAct("pet");
-    }, 600);
+    });
   };
 
   readonly handleHoldEnd = (event: PointerEvent) => {
     if (event.button !== 0) {
       return;
     }
-    if (this.holdTimer !== null) {
-      window.clearTimeout(this.holdTimer);
-      this.holdTimer = null;
+    if (this.timers.has("holdTimer")) {
+      this.handleHoldCancel();
       this.pokeNow();
     }
   };
 
-  readonly handleHoldCancel = () => {
-    if (this.holdTimer !== null) {
-      window.clearTimeout(this.holdTimer);
-      this.holdTimer = null;
-    }
-  };
+  readonly handleHoldCancel = () => this.timers.clear("holdTimer");
 
   private playChirp(kind: LobsterPetChirpKind) {
     this.audioCtx = playLobsterPetChirp(this.audioCtx, this.hooks.soundsEnabled(), kind);
@@ -99,20 +93,12 @@ export class LobsterPetInteractions implements ReactiveController {
     this.hooks.onAct("startle");
   }
 
-  private clearGrumpyTimer() {
-    if (this.grumpyTimer !== null) {
-      window.clearTimeout(this.grumpyTimer);
-      this.grumpyTimer = null;
-    }
-  }
-
   private enterGrumpy() {
     this.hooks.onGrumpyChange(true);
-    this.clearGrumpyTimer();
-    this.grumpyTimer = window.setTimeout(() => {
-      this.grumpyTimer = null;
+    this.timers.clear("grumpyTimer");
+    this.timers.schedule("grumpyTimer", 60_000, () => {
       this.hooks.onGrumpyChange(false);
-    }, 60_000);
+    });
   }
 
   private huffOff() {
@@ -132,8 +118,8 @@ export class LobsterPetInteractions implements ReactiveController {
       return;
     }
     this.lastGazeAt = now;
-    const sprite = this.host.querySelector(".lobster-pet:not(.lobster-pet--shell)");
-    if (!sprite) {
+    const sprite = this.sprite;
+    if (!sprite?.isConnected) {
       return;
     }
     const rect = sprite.getBoundingClientRect();

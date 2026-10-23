@@ -1,6 +1,6 @@
 import type { IdentifierAuthentication } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { asNonArrayRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const SENDER_STRENGTHS = [
   "mutable",
@@ -40,13 +40,13 @@ export function resolveImapConfig(
   value: unknown,
   onUnavailableAccount?: (accountId: string) => void,
 ): ImapPluginConfig {
-  const configured = asNonArrayRecord(asNonArrayRecord(value)?.accounts);
+  const configured = asOptionalRecord(asOptionalRecord(value)?.accounts);
   const accounts: Record<string, ImapAccountConfig> = {};
   for (const [accountId, input] of Object.entries(configured ?? {})) {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(accountId)) {
       throw new Error(`IMAP account id ${JSON.stringify(accountId)} is not session-safe`);
     }
-    const account = asNonArrayRecord(input);
+    const account = asOptionalRecord(input);
     if (!account) {
       throw new Error(`IMAP account ${accountId} must be an object`);
     }
@@ -57,14 +57,14 @@ export function resolveImapConfig(
       );
     }
     if (typeof password !== "string") {
-      if (asNonArrayRecord(password)) {
+      if (asOptionalRecord(password)) {
         onUnavailableAccount?.(accountId);
         continue;
       }
       throw new Error(`IMAP account ${accountId} requires a resolved password`);
     }
-    const watch = asNonArrayRecord(account.watch);
-    const senderAuth = asNonArrayRecord(account.senderAuth);
+    const watch = asOptionalRecord(account.watch);
+    const senderAuth = asOptionalRecord(account.senderAuth);
     const mode = watch?.mode;
     const min = senderAuth?.min;
     const thinking = [
@@ -104,7 +104,7 @@ export function resolveImapConfig(
       },
       addressTokens: Array.isArray(account.addressTokens)
         ? account.addressTokens.flatMap((entry) => {
-            const tokenEntry = asNonArrayRecord(entry);
+            const tokenEntry = asOptionalRecord(entry);
             return typeof tokenEntry?.token === "string"
               ? [{ token: tokenEntry.token, senders: filterStringEntries(tokenEntry.senders) }]
               : [];

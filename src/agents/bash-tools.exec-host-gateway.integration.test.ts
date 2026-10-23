@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { pathLooksMutableForShellPayloadSync } from "../infra/system-run-mutable-file-policy.js";
@@ -202,44 +202,35 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
     expect(fs.existsSync(path.join(root, "spawn-marker"))).toBe(false);
   });
 
-  it.each(["busybox"])(
-    "retains opaque interpreter rejection for %s shell applets with a resolved binary",
-    async (wrapper) => {
-      const wrapperPath = path.join(binDir, wrapper);
+  it.each([
+    {
+      name: "opaque interpreter",
+      command: "busybox sh -c 'ls *.txt'",
+      resolved: true,
+      error: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+    },
+    {
+      name: "missing dispatch file",
+      command: "ls *.txt",
+      resolved: false,
+      error: "SYSTEM_RUN_DENIED",
+    },
+  ])("rejects $name before review or dispatch", async ({ command, resolved, error }) => {
+    const wrapperPath = path.join(resolved ? binDir : path.join(root, "missing"), "busybox");
+    if (resolved) {
       fs.copyFileSync("/usr/bin/true", wrapperPath);
-      expect(resolveExecutablePath(wrapper, { env: process.env, useCache: false })).toBe(
+      expect(resolveExecutablePath("busybox", { env: process.env, useCache: false })).toBe(
         wrapperPath,
       );
-      const autoReviewer = vi.fn<ExecAutoReviewer>();
-      const result = await makeTool("auto", autoReviewer).execute("dispatch-opaque-call", {
-        command: `${wrapper} sh -c 'ls *.txt'`,
-      });
-      expect(result.details.status).toBe("failed");
-      expect(result.content[0]).toMatchObject({
-        text: expect.stringContaining(
-          "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-        ),
-      });
-      expect(autoReviewer).not.toHaveBeenCalled();
-      expect(callGatewayTool).not.toHaveBeenCalled();
-      expect(spawn.mock.calls.length).toBe(0);
-    },
-  );
-
-  it.each(["busybox"])(
-    "retains binding rejection for missing %s dispatch files",
-    async (wrapper) => {
-      const autoReviewer = vi.fn<ExecAutoReviewer>();
-      const result = await makeTool("auto", autoReviewer).execute("dispatch-unresolved-call", {
-        command: `${path.join(root, "missing", wrapper)} ls *.txt`,
-      });
-      expect(result.details.status).toBe("failed");
-      expect(result.content[0]).toMatchObject({
-        text: expect.stringContaining("SYSTEM_RUN_DENIED"),
-      });
-      expect(autoReviewer).not.toHaveBeenCalled();
-      expect(callGatewayTool).not.toHaveBeenCalled();
-      expect(spawn.mock.calls.length).toBe(0);
-    },
-  );
+    }
+    const autoReviewer = vi.fn<ExecAutoReviewer>();
+    const result = await makeTool("auto", autoReviewer).execute("dispatch-unresolved-call", {
+      command: resolved ? command : `${wrapperPath} ${command}`,
+    });
+    expect(result.details.status).toBe("failed");
+    expect(result.content[0]).toMatchObject({ text: expect.stringContaining(error) });
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(callGatewayTool).not.toHaveBeenCalled();
+    expect(spawn.mock.calls.length).toBe(0);
+  });
 });

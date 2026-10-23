@@ -1,5 +1,5 @@
 // Verifies group-policy normalization and runtime resolution.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { parseConcreteConfigPath } from "../shared/dot-path.js";
 import { resolveMergedAccountConfig } from "./channel-account-config.js";
 import { setConfigValueAtPath } from "./config-paths.js";
@@ -11,14 +11,6 @@ import {
   resolveChannelGroupsConfigPath,
   resolveToolsBySender,
 } from "./group-policy.js";
-
-function firstWarningCall(warningSpy: ReturnType<typeof vi.spyOn>): [unknown, { code?: unknown }?] {
-  const [call] = warningSpy.mock.calls;
-  if (!call) {
-    throw new Error("expected process.emitWarning call");
-  }
-  return call as [unknown, { code?: unknown }?];
-}
 
 describe("resolveChannelGroupPolicy", () => {
   it("allows configured groups when groupPolicy=allowlist", () => {
@@ -346,10 +338,6 @@ describe("resolveChannelGroupsConfigPath", () => {
 });
 
 describe("resolveToolsBySender", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("matches typed sender IDs", () => {
     expect(
       resolveToolsBySender({
@@ -376,23 +364,6 @@ describe("resolveToolsBySender", () => {
     ).toEqual({ allow: ["exec"] });
   });
 
-  it("keeps legacy colon sender IDs as sender IDs, not channel keys", () => {
-    const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-
-    expect(
-      resolveToolsBySender({
-        toolsBySender: {
-          "discord:user:alice": { allow: ["exec"] },
-          "channel:discord:user:alice": { deny: ["exec"] },
-        },
-        messageProvider: "slack",
-        senderId: "discord:user:alice",
-      }),
-    ).toEqual({ allow: ["exec"] });
-
-    expect(warningSpy).toHaveBeenCalledTimes(1);
-  });
-
   it("does not allow senderName collisions to match id keys", () => {
     const victimId = "f4ce8a7d-1111-2222-3333-444455556666";
     expect(
@@ -408,32 +379,27 @@ describe("resolveToolsBySender", () => {
     ).toEqual({ deny: ["exec"] });
   });
 
-  it("treats untyped legacy keys as senderId only", () => {
-    const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-    const victimId = "legacy-owner-id";
-    expect(
+  it("rejects untyped policies instead of silently dropping a restriction", () => {
+    expect(() =>
       resolveToolsBySender({
-        toolsBySender: {
-          [victimId]: { allow: ["exec"] },
-          "*": { deny: ["exec"] },
-        },
-        senderId: "attacker-real-id",
-        senderName: victimId,
+        toolsBySender: { alice: { deny: ["exec"] }, "*": { allow: ["exec"] } },
+        senderId: "alice",
       }),
-    ).toEqual({ deny: ["exec"] });
-
-    expect(
-      resolveToolsBySender({
-        toolsBySender: {
-          [victimId]: { allow: ["exec"] },
-          "*": { deny: ["exec"] },
-        },
-        senderId: victimId,
-        senderName: "attacker",
-      }),
-    ).toEqual({ allow: ["exec"] });
-    expect(warningSpy).toHaveBeenCalledTimes(1);
+    ).toThrow('Untyped toolsBySender keys are retired. Run "openclaw doctor --fix".');
   });
+
+  it.each(["id:alice:example.invalid", "channel:matrix:alice:example.invalid"])(
+    "preserves incoming sender-ID alternatives for %s",
+    (key) => {
+      expect(
+        resolveToolsBySender({
+          toolsBySender: { [key]: { deny: ["exec"] }, "*": { allow: ["exec"] } },
+          senderId: "@Alice:example.invalid",
+          messageProvider: "matrix",
+        }),
+      ).toEqual({ deny: ["exec"] });
+    },
+  );
 
   it("matches username keys only against senderUsername", () => {
     expect(
@@ -485,66 +451,5 @@ describe("resolveToolsBySender", () => {
         senderName: "alice",
       }),
     ).toEqual({ deny: ["exec"] });
-  });
-
-  it("emits one deprecation warning per legacy key", () => {
-    const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-    const legacyKey = "legacy-warning-key";
-    const policy = {
-      [legacyKey]: { allow: ["exec"] },
-      "*": { deny: ["exec"] },
-    };
-
-    resolveToolsBySender({
-      toolsBySender: policy,
-      senderId: "other-id",
-    });
-    resolveToolsBySender({
-      toolsBySender: policy,
-      senderId: "other-id",
-    });
-
-    expect(warningSpy).toHaveBeenCalledTimes(1);
-    const [warningMessage, warningMeta] = firstWarningCall(warningSpy);
-    expect(String(warningMessage)).toContain(`toolsBySender key "${legacyKey}"`);
-    expect(warningMeta?.code).toBe("OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY");
-  });
-
-  describe("legacy key warning dedupe cache", () => {
-    let resolveToolsBySenderFn: typeof resolveToolsBySender;
-
-    const resolveFreshConfig = (legacyKey: string) => {
-      resolveToolsBySenderFn({
-        toolsBySender: { [legacyKey]: { allow: ["read"] }, "*": { deny: ["exec"] } },
-        senderId: "some-id",
-      });
-    };
-
-    beforeEach(async () => {
-      vi.resetModules();
-      const mod = await import("./group-policy.js");
-      resolveToolsBySenderFn = mod.resolveToolsBySender;
-    });
-
-    it("refreshes recent keys across config snapshots and re-warns evicted keys", () => {
-      const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-
-      for (let i = 0; i < 4096; i++) {
-        resolveFreshConfig(`legacy-key-${i}`);
-      }
-      expect(warningSpy).toHaveBeenCalledTimes(4096);
-
-      resolveFreshConfig("legacy-key-0");
-      expect(warningSpy).toHaveBeenCalledTimes(4096);
-
-      resolveFreshConfig("overflow-key");
-      expect(warningSpy).toHaveBeenCalledTimes(4097);
-
-      resolveFreshConfig("legacy-key-0");
-      expect(warningSpy).toHaveBeenCalledTimes(4097);
-
-      resolveFreshConfig("legacy-key-1");
-      expect(warningSpy).toHaveBeenCalledTimes(4098);
-    });
   });
 });

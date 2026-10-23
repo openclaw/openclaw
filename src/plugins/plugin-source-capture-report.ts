@@ -3,9 +3,10 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import { walkDirectory } from "../infra/fs-safe.js";
 import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
+import type { preparePersistedInstalledPluginIndexCacheEntry } from "./installed-plugin-index-record-state.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
 import { parseInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
@@ -29,9 +30,7 @@ async function readLegacyCapture(directory: string): Promise<Stats | undefined> 
     await fs.lstat(path.join(directory, "owner.sqlite"));
     return undefined;
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     return identity;
   }
 }
@@ -175,12 +174,7 @@ export async function pruneLegacyPluginSourceCaptures(
           break;
         }
         await removeTemporaryArtifacts(root.path, "Legacy plugin capture");
-        const remaining = await fs.lstat(root.path).catch((error: unknown) => {
-          if (!hasErrnoCode(error, "ENOENT")) {
-            throw error;
-          }
-          return undefined;
-        });
+        const remaining = await fs.lstat(root.path).catch(ignoreMissingPath);
         if (remaining) {
           warnings.push(`Could not remove ${root.path}; see the capture cleanup warning.`);
         } else {
@@ -199,20 +193,33 @@ export async function pruneLegacyPluginSourceCaptures(
 /** Durable native payload is reclaimed only against current receipts under maintenance. */
 export async function pruneUnreferencedPluginNativeCaptures(
   stateDir: string,
-  assertCurrent: () => void,
+  assertCurrent: () => void | Promise<void>,
   env?: NodeJS.ProcessEnv,
-  options: { startup?: boolean } = {},
+  options: {
+    startup?: boolean;
+    installedIndex?: Awaited<ReturnType<typeof preparePersistedInstalledPluginIndexCacheEntry>>;
+  } = {},
 ) {
+  const assertCleanupCurrent = async () => {
+    await assertCurrent();
+    options.installedIndex?.assertCurrent();
+  };
   try {
-    assertCurrent();
-    const row = await readPluginMetadataStateRow(
-      "installed-index",
-      resolveInstalledPluginIndexStateDatabaseOptions({ stateDir, env }),
-    );
-    assertCurrent();
+    await assertCleanupCurrent();
+    let state = options.installedIndex?.entry.state;
+    if (!state) {
+      const row = await readPluginMetadataStateRow(
+        "installed-index",
+        resolveInstalledPluginIndexStateDatabaseOptions({ stateDir, env }),
+      );
+      await assertCleanupCurrent();
+      state = row
+        ? { status: "present", value: JSON.parse(row.value_json) }
+        : { status: "missing" };
+    }
     const retainedPaths = new Set<string>();
-    if (row) {
-      const payload: unknown = JSON.parse(row.value_json);
+    if (state.status !== "missing") {
+      const payload: unknown = state.status === "present" ? state.value : undefined;
       const rawIndex = isRecord(payload) ? payload.index : undefined;
       const index = parseInstalledPluginIndex(rawIndex);
       if (!index || !isRecord(rawIndex) || !Array.isArray(rawIndex.plugins)) {
@@ -240,8 +247,8 @@ export async function pruneUnreferencedPluginNativeCaptures(
     return await prunePluginNativeCaptureDirectories(
       stateDir,
       retainedPaths,
-      assertCurrent,
-      options,
+      assertCleanupCurrent,
+      { startup: options.startup },
     );
   } catch (error) {
     return { removed: [], warnings: [`Native capture cleanup skipped: ${String(error)}`] };

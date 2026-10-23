@@ -51,6 +51,7 @@ The following defaults reuse the corresponding files in [`ui/public/provider-ico
 | `minimax`               | `ProviderIcon-minimax.svg`     |
 | `mistral`               | `ProviderIcon-mistral.svg`     |
 | `moonshot`              | `ProviderIcon-kimi.svg`        |
+| `muse`                  | `ProviderIcon-meta.svg`        |
 | `novita`                | `ProviderIcon-novita.svg`      |
 | `nvidia`                | `ProviderIcon-nvidia.svg`      |
 | `ollama`                | `ProviderIcon-ollama.svg`      |
@@ -108,6 +109,7 @@ For LiteLLM, the small source stroke widths are unified at 1.35 source units bef
 | `twitch`                 | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `twitch.svg`         |
 | `vault`                  | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `vault.svg`          |
 | `whatsapp`               | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `whatsapp.svg`       |
+| `x`                      | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `x.svg`              |
 | `zalo`                   | [`simple-icons@13.21.0`](https://www.npmjs.com/package/simple-icons/v/13.21.0) | `zalo.svg`           |
 | `zalouser`               | [`simple-icons@13.21.0`](https://www.npmjs.com/package/simple-icons/v/13.21.0) | `zalo.svg`           |
 
@@ -117,9 +119,11 @@ TypeSafe AI preserves the single-path header mark from [typesafe.ai](https://typ
 
 ## OpenClaw action glyphs
 
-Browser, Canvas, Diffs, and the memory family preserve the approved shapes from [`icons-tools.ts`](../ui/src/components/icons-tools.ts). The optional overrides preserve Intent, memory store/forget, file fetch/write, and directory list/fetch geometry. Lobster preserves both progress-claw paths, with a solid fill and the jaw’s resting `rotate(-10 8.6 11)` transform from [`working-indicator.css`](../ui/src/styles/chat/working-indicator.css). Linux Node reuses the existing platform silhouette from [`brand-icons.ts`](../ui/src/pages/apps/brand-icons.ts).
+Browser, Canvas, Diffs, and the memory family preserve the approved shapes from [`icon-data-tools.ts`](../ui/src/components/icon-data-tools.ts). The optional overrides preserve Intent, memory store/forget, file fetch/write, and directory list/fetch geometry. Lobster preserves both progress-claw paths, with a solid fill and the jaw’s resting `rotate(-10 8.6 11)` transform from [`working-indicator.css`](../ui/src/styles/chat/working-indicator.css). Linux Node reuses the existing platform silhouette from [`brand-icons.ts`](../ui/src/pages/apps/brand-icons.ts).
 
 FaceTime reuses the existing [Voice Call phone glyph](voice-call/assets/activity.svg) byte-for-byte for its realtime voice carrier.
+
+Kie reuses the existing [Vydra video glyph](vydra/assets/activity.svg) byte-for-byte for video generation.
 
 QuickJS Code Mode reuses the existing [mxc sandbox glyph](mxc/assets/activity.svg) byte-for-byte for its isolated executor.
 
@@ -127,13 +131,13 @@ Other defaults are OpenClaw functional glyphs drawn for the 24-unit activity gri
 
 | Capability              | Plugins                                                                                                          |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Agent or task flow      | `a2a`, `acpx`, `llm-task`, `raft`, `reef`                                                                        |
-| Connections and sharing | `admin-http-rpc`, `beam`, `bonjour`, `device-pair`, `session-share`                                              |
+| Agent or task flow      | `a2a`, `acpx`, `advisor`, `llm-task`, `mcp-events`, `raft`, `reef`                                               |
+| Connections and sharing | `admin-http-rpc`, `beam`, `bonjour`, `device-pair`, `mcp-relay`, `session-share`                                 |
 | Chat and meetings       | `buzz`, `clickclack`, `feishu`, `irc`, `nostr`, `sms`, `synology-chat`, `tlon`, `zoom-meetings`                  |
 | Files and knowledge     | `document-extract`, `file-transfer`, `imap`, `logbook`, `memory-wiki`, `oc-path`, `web-readability`, `workboard` |
 | Compute and location    | `crabbox`, `cua-computer`, `geolocation`, `gmi`, `radius`, `sglang`                                              |
 | Security and migration  | `migrate-claude`, `migrate-hermes`, `mxc`, `openshell`, `policy`, `visitor-access`                               |
-| Audio and media         | `gradium`, `inworld`, `senseaudio`, `talk-voice`, `tts-local-cli`, `voice-call`, `vydra`                         |
+| Audio and media         | `gradium`, `inworld`, `kie`, `senseaudio`, `talk-voice`, `tts-local-cli`, `voice-call`, `vydra`                  |
 | Utilities and reports   | `parallel`, `qa-channel`, `qa-lab`, `team-reports`, `tokenjuice`                                                 |
 
 ## License notices

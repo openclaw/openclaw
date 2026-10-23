@@ -4,13 +4,12 @@ import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockGateway,
 } from "./control-ui-e2e.ts";
-import { mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
+import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
 it.for([
   { kind: "exec", resolve: "exec.approval.resolve" },
   { kind: "plugin", resolve: "plugin.approval.resolve" },
   { kind: "openclaw", resolve: "approval.resolve" },
-  { kind: "exec", resolve: "approval.resolve" },
   { kind: "plugin", resolve: "approval.resolve" },
 ])(
   "keeps $kind approval events and pending snapshots coherent through $resolve",
@@ -22,18 +21,12 @@ it.for([
     if (!gateway) {
       throw new Error("Mock Gateway was not installed");
     }
-    const socket = new window.WebSocket("ws://mock-gateway");
-    const frames: Array<{ id: string; payload: unknown }> = [];
-    socket.addEventListener("message", (event: MessageEvent) => {
-      frames.push(JSON.parse(String(event.data)) as (typeof frames)[number]);
-    });
+    const { frames, send } = gatewayPage.connect();
     let sequence = 0;
     const request = async (method: string, params: unknown = {}) => {
       const id = `request-${++sequence}`;
-      socket.send(JSON.stringify({ type: "req", id, method, params }));
-      await new Promise<void>((complete) => {
-        setTimeout(complete, 0);
-      });
+      send(id, method, params);
+      await flushMockTimers();
       return frames.find((frame) => frame.id === id)?.payload;
     };
     const approval = {

@@ -1,11 +1,9 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  persistSubagentRunsToDiskOrThrow,
-  useSubagentControlFixture,
-} from "./subagent-control.test-support.js";
-import { expect, it, vi } from "vitest";
+import { useSubagentControlFixture } from "./subagent-control.test-support.js";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -13,7 +11,9 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import * as internalSessionEffects from "../../internal-session-effects.js";
+import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import {
   registerSubagentRun,
@@ -21,6 +21,7 @@ import {
 } from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
+beforeEach(() => captureRuntimeConfigAsyncReader()());
 
 it.each(["completed", "failed"] as const)(
   "retains replacement transcript cleanup through restart until it has %s",
@@ -32,15 +33,17 @@ it.each(["completed", "failed"] as const)(
       agentId: "main",
       sessionKey: childSessionKey,
       defaultSessionId: "steer-session",
+      lifecycleRevision: "steer-revision",
     });
-    await registerSubagentRun({
-      runId: "run-old",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "initial task",
-      cleanup: "keep",
-    });
+    await registerSubagentRun(
+      createSubagentRunParams({
+        runId: "run-old",
+        childSessionKey,
+        childAgentId: "main",
+        sessionEntry: { sessionId: "steer-session", lifecycleRevision: "steer-revision" },
+        task: "initial task",
+      }),
+    );
     const previous = subagentRuns.get("run-old")!;
     const transcriptTarget = {
       agentId: "main",
@@ -48,11 +51,17 @@ it.each(["completed", "failed"] as const)(
       sessionKey: "agent:main:internal-session-effects:run-old",
       storePath,
     };
-    previous.execution = { status: "interrupted", transcriptTarget };
-    persistSubagentRunsToDiskOrThrow(subagentRuns, [previous.runId]);
+    await mutateSubagentRuns([previous.runId], (rows) => {
+      const interrupted = {
+        ...rows.get(previous.runId)!,
+        execution: { status: "interrupted" as const, transcriptTarget },
+      };
+      return { value: undefined, postimages: new Map([[previous.runId, interrupted]]) };
+    });
     await fixture.settle();
 
     const cleanup = createDeferred();
+    const cleanupFailure = new Error("private transcript cleanup failed");
     const remove = vi
       .spyOn(internalSessionEffects, "removeInternalSessionEffectsSession")
       .mockImplementationOnce(() => cleanup.promise);
@@ -61,10 +70,9 @@ it.each(["completed", "failed"] as const)(
         // Replacement is already admitted when the restart fence closes.
         markGatewayRestartDraining();
         expect(
-          replaceSubagentRunAfterSteerCore({
+          await replaceSubagentRunAfterSteerCore({
             previousRunId: "run-old",
             nextRunId: "run-new",
-            fallback: previous,
           }),
         ).toBe(true);
       });
@@ -74,13 +82,17 @@ it.each(["completed", "failed"] as const)(
       expect(remove).toHaveBeenCalledWith(transcriptTarget);
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       if (outcome === "failed") {
-        cleanup.reject(new Error("private transcript cleanup failed"));
+        cleanup.reject(cleanupFailure);
+        await expect(fixture.settle()).rejects.toMatchObject({
+          name: "AggregateError",
+          message: "Failed to settle subagent cleanup roots",
+          errors: [cleanupFailure],
+        });
       } else {
         cleanup.resolve();
+        await fixture.settle();
       }
-      await vi.waitFor(() => {
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-      });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
       cleanup.resolve();
       await cleanup.promise.catch(() => {});

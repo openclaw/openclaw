@@ -1,4 +1,3 @@
-/** Ensures or recreates a live ACP runtime handle for persisted session metadata. */
 import {
   createIdentityFromEnsure,
   identityEquals,
@@ -9,7 +8,6 @@ import {
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
   AcpRuntimeError,
@@ -19,10 +17,8 @@ import {
 import {
   matchesAcpSessionControlBinding,
   resolveAcpSessionControlOwner,
-  type AcpSessionControlBinding,
-  type AcpSessionRuntimeLocator,
 } from "../runtime/session-control-owner.js";
-import type { AcpSessionControlConstraint } from "../runtime/session-meta-control.types.js";
+import type { AcpSessionRuntimeLocator } from "../runtime/session-meta-control.types.js";
 import { assertAcpSessionMutationEntry } from "../runtime/session-meta-entry.kernel.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import {
@@ -32,33 +28,30 @@ import {
 } from "./manager.runtime-owner.js";
 import type {
   AcpSessionManagerDeps,
+  EnsureManagerRuntimeHandle,
   SessionAcpMeta,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
-import { hasLegacyAcpIdentityProjection, resolveAcpAgentFromSessionKey } from "./manager.utils.js";
 import {
-  normalizeRuntimeOptions,
+  assertCurrentAcpActor,
+  createSupersededActorError,
+  isSupersededActorError,
+  hasLegacyAcpIdentityProjection,
+  resolveAcpAgentFromSessionKey,
+} from "./manager.utils.js";
+import {
   normalizeText,
   resolveRuntimeOptionsFromMeta,
   runtimeOptionsEqual,
 } from "./runtime-options.js";
 
-/** Returns a reusable cached handle or initializes a fresh runtime session for the metadata. */
-export async function ensureManagerRuntimeHandle(params: {
-  assertMetadataCommitAllowed?: (expectedLocator: AcpSessionRuntimeLocator) => void;
-  readAcpControl?: () => AcpSessionControlConstraint | undefined;
-  assertActive?: () => void;
-  expectedControlBinding?: AcpSessionControlBinding;
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId: string;
-  meta: SessionAcpMeta;
-  selectedBackend?: string;
-  deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend" | "loadSessionEntryAsync">;
-  runtimeHandles: ManagerRuntimeHandleCache;
-  writeSessionMeta: WriteManagerSessionMeta;
-  isCurrentActor?: () => boolean;
-}): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
+export async function ensureManagerRuntimeHandle(
+  params: Parameters<EnsureManagerRuntimeHandle>[0] & {
+    deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend" | "loadSessionEntryAsync">;
+    runtimeHandles: ManagerRuntimeHandleCache;
+    writeSessionMeta: WriteManagerSessionMeta;
+  },
+): ReturnType<EnsureManagerRuntimeHandle> {
   const setupLocator: AcpSessionRuntimeLocator = {
     backend: params.meta.backend,
     runtimeSessionName: params.meta.runtimeSessionName,
@@ -68,9 +61,7 @@ export async function ensureManagerRuntimeHandle(params: {
     ? { ...params.expectedControlBinding }
     : undefined;
   const assertCurrent = () => {
-    if (!isCurrentActor()) {
-      throw createSupersededActorError(params.sessionKey);
-    }
+    assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
     params.assertActive?.();
   };
   const assertControlBindingCurrent = async () => {
@@ -108,9 +99,7 @@ export async function ensureManagerRuntimeHandle(params: {
     normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
   const mode = params.meta.mode;
   const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
-  const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
-  const model = normalizeText(runtimeOptions.model);
-  const thinking = normalizeText(runtimeOptions.thinking);
+  const { cwd, model, thinking } = runtimeOptions;
   const configuredBackend = (
     params.selectedBackend ||
     params.meta.backend ||
@@ -141,19 +130,14 @@ export async function ensureManagerRuntimeHandle(params: {
         sessionKey: params.sessionKey,
         runtime: cached.runtime,
         handle: cached.handle,
-        isCurrentActor,
       }));
-    if (!isCurrentActor()) {
-      throw createSupersededActorError(params.sessionKey);
-    }
+    assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
     params.assertActive?.();
     if (expectedControlBinding || params.readAcpControl?.()) {
       await assertControlBindingCurrent();
     }
     if (reusable) {
-      if (!isCurrentActor()) {
-        throw createSupersededActorError(params.sessionKey);
-      }
+      assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
       return {
         runtime: cached.runtime,
         handle: cached.handle,
@@ -167,9 +151,7 @@ export async function ensureManagerRuntimeHandle(params: {
       reason: "runtime-handle-replaced",
       expectedHandle: cached.handle,
     });
-    if (!isCurrentActor()) {
-      throw createSupersededActorError(params.sessionKey);
-    }
+    assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   }
 
   const previousMeta = params.meta;
@@ -212,12 +194,9 @@ export async function ensureManagerRuntimeHandle(params: {
     });
     try {
       assertCurrent();
-      if (params.readAcpControl?.()) {
-        await assertControlBindingCurrent();
-      }
       return ensured;
     } catch (error) {
-      // A control read can yield to reset before the caller receives this handle.
+      // Ensure may finish after its actor was reset.
       if (!isCurrentActor()) {
         await closeSupersededRuntimeHandle({
           runtime,
@@ -230,9 +209,6 @@ export async function ensureManagerRuntimeHandle(params: {
   };
   let ensured: AcpRuntimeHandle;
   if (shouldPrepareFreshPersistentSession) {
-    if (!isCurrentActor()) {
-      throw createSupersededActorError(params.sessionKey);
-    }
     if (expectedControlBinding || params.readAcpControl?.()) {
       await assertControlBindingCurrent();
     }
@@ -242,9 +218,7 @@ export async function ensureManagerRuntimeHandle(params: {
       sessionKey: params.sessionKey,
       agentId: params.agentId,
     });
-    if (!isCurrentActor()) {
-      throw createSupersededActorError(params.sessionKey);
-    }
+    assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   }
   if (persistedResumeSessionId) {
     try {
@@ -290,10 +264,10 @@ export async function ensureManagerRuntimeHandle(params: {
 
   const now = Date.now();
   const effectiveCwd = normalizeText(ensured.cwd) ?? cwd;
-  const nextRuntimeOptions = normalizeRuntimeOptions({
+  const nextRuntimeOptions = {
     ...runtimeOptions,
     ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-  });
+  };
   const ensuredIdentity = createIdentityFromEnsure({ handle: ensured, now });
   // A new physical record cannot inherit resolved IDs from the previous record.
   // In particular, a completed oneshot may be re-ensured for cleanup or status.
@@ -385,9 +359,6 @@ export async function ensureManagerRuntimeHandle(params: {
         throw publication.refusal.error;
       }
     }
-    if (expectedControlBinding || params.readAcpControl?.()) {
-      await assertControlBindingCurrent();
-    }
     assertCurrent();
     params.runtimeHandles.set(params, {
       runtime,
@@ -414,22 +385,6 @@ export async function ensureManagerRuntimeHandle(params: {
     }
     throw error;
   }
-}
-
-const SESSION_ACTOR_SUPERSEDED_DETAIL_CODE = "SESSION_ACTOR_SUPERSEDED";
-
-export function createSupersededActorError(sessionKey: string): AcpRuntimeError {
-  return new AcpRuntimeError(
-    "ACP_SESSION_INIT_FAILED",
-    `ACP session actor was superseded during runtime initialization for ${sessionKey}.`,
-    { detailCode: SESSION_ACTOR_SUPERSEDED_DETAIL_CODE },
-  );
-}
-
-export function isSupersededActorError(error: unknown): boolean {
-  return (
-    error instanceof AcpRuntimeError && error.detailCode === SESSION_ACTOR_SUPERSEDED_DETAIL_CODE
-  );
 }
 
 export async function closeSupersededRuntimeHandle(params: {

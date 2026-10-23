@@ -35,7 +35,7 @@ const launchdTestState = vi.hoisted(() => ({
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
   fileModes: new Map<string, number>(),
-  fileWrites: [] as Array<{ path: string; data: string }>,
+  fileWrites: [] as Array<{ path: string }>,
   cleanupProtectedPids: [] as Array<number | undefined>,
   realExecFile: false,
 }));

@@ -4,6 +4,7 @@ import { closedObject } from "./closed-object.js";
 import { ChatAccountSelectionSchema, ModelAuthProfileIdSchema } from "./model-account-selection.js";
 import {
   GatewayAgentRuntimeSchema,
+  GatewayCompletionRouteSchema,
   GatewayContextWindowOptionSchema,
   GatewayThinkingLevelOptionSchema,
 } from "./model-runtime-options.js";
@@ -53,6 +54,11 @@ const ModelUnavailableReasonSchema = Type.Union([
   Type.Literal("cooldown"),
 ]);
 
+const ModelServiceTierObservationSchema = closedObject({
+  requestedTier: NonEmptyString,
+  responseTier: Type.Optional(NonEmptyString),
+});
+
 const ModelRuntimeProperties = {
   available: Type.Optional(Type.Boolean()),
   /** Scoped manual-choice permission; separate from runtime readiness and automatic selection. */
@@ -68,9 +74,19 @@ const ModelRuntimeProperties = {
   reasoning: Type.Optional(Type.Boolean()),
   thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingDefault: Type.Optional(NonEmptyString),
-  effectiveFastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+  effectiveFastMode: Type.Optional(
+    Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+  ),
+  /** Account-scoped service tiers advertised for this selected runtime. Missing means unknown. */
+  serviceTiers: Type.Optional(Type.Array(NonEmptyString)),
   /** Local selected-request applicability, not preference or upstream fulfillment. */
   supportsFastMode: Type.Optional(Type.Boolean()),
+  /** Selected route can safely retry rejected service tiers before output. */
+  supportsServiceTierRecovery: Type.Optional(Type.Boolean()),
+  /** Latest receipt retained for v2026.10.5 clients; current clients use the per-tier list. */
+  serviceTierObservation: Type.Optional(ModelServiceTierObservationSchema),
+  /** Recent fulfillment per requested tier; never a capability restriction. */
+  serviceTierObservations: Type.Optional(Type.Array(ModelServiceTierObservationSchema)),
   supportsTools: Type.Optional(Type.Boolean()),
   input: Type.Optional(
     Type.Array(
@@ -104,12 +120,16 @@ export const ModelChoiceSchema = closedObject({
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),
   runtimeChoices: Type.Optional(Type.Array(ModelRuntimeChoiceSchema, { maxItems: 8 })),
+  /** Hosted-catalog recommendation; picker rows arrive recommended-first within each provider. */
+  recommended: Type.Optional(Type.Boolean()),
 });
 
 /** Model catalog result. */
 export const ModelCatalogProviderOutcomeSchema = closedObject({
   provider: NonEmptyString,
   profileId: Type.Optional(NonEmptyString),
+  /** Advisory only: configured ids missing from a successful server listing. */
+  unlistedConfiguredModelIds: Type.Optional(Type.Array(NonEmptyString)),
   status: Type.Union([
     Type.Literal("ready"),
     Type.Literal("auth-rejected"),
@@ -119,6 +139,8 @@ export const ModelCatalogProviderOutcomeSchema = closedObject({
 
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
+  /** Matches the authorized session row's saved model-selection inputs. */
+  sessionModelRevision: Type.Optional(NonEmptyString),
   /** The Gateway owns role restrictions and the effective permitted reset target. */
   modelSelectionPolicy: Type.Optional(
     closedObject({
@@ -171,6 +193,8 @@ export const ModelsListResultSchema = closedObject({
     closedObject({
       /** Auto preview from agents.defaults.model, even when utility routing is explicit or disabled. */
       automaticUtilityModel: Type.Union([NonEmptyString, Type.Null()]),
+      /** Route the utility model in effect (automatic or explicit) runs on; absent when disabled. */
+      utilityRuntime: Type.Optional(GatewayCompletionRouteSchema),
     }),
   ),
   refreshFailed: Type.Optional(Type.Boolean()),

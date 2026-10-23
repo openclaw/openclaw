@@ -7,6 +7,7 @@ import {
   createPluginManifestRecordFixture,
   createPluginMetadataSnapshotFixture,
 } from "../../plugins/plugin-metadata.test-support.js";
+import { createAuthProfileImportResult } from "./auth-profile-repair.test-support.js";
 import { mocks } from "./repair-sequencing-mocks.test-support.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 import { registerSharedRuntimeReaderDoctorTests } from "./repair-sequencing.shared-runtime.test-support.js";
@@ -43,11 +44,6 @@ describe("doctor repair sequencing", () => {
       changes: [],
     }));
     mocks.maybeRepairPluginOpenClawHostLinks.mockResolvedValue(false);
-    mocks.maybeRepairLegacyOAuthSidecarProfiles.mockResolvedValue({
-      detected: [],
-      changes: [],
-      warnings: [],
-    });
     mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValue({ changes: [], warnings: [] });
     mocks.repairMergedGatewayOwnerProfile.mockReturnValue({
       repaired: false,
@@ -55,13 +51,9 @@ describe("doctor repair sequencing", () => {
       warnings: [],
     });
     mocks.collectOpenAICodexAuthProfileStoreIdMap.mockReturnValue(new Map());
-    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValue({
-      detected: [],
-      migratedProfileIds: new Set<string>(),
-      blockedProfileIds: new Set<string>(),
-      changes: [],
-      warnings: [],
-    });
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValue(
+      createAuthProfileImportResult(),
+    );
     mocks.maybeRepairOpenAICodexAuthConfig.mockImplementation((cfg: OpenClawConfig) => ({
       changes: [],
       config: cfg,
@@ -172,13 +164,6 @@ describe("doctor repair sequencing", () => {
             discord: {
               allowFrom: [123],
             },
-            tools: {
-              exec: {
-                toolsBySender: {
-                  "bad\u001B[31m-key\u001B[0m\r\nnext": { enabled: true },
-                },
-              },
-            },
             signal: {
               accounts: {
                 "ops\u001B[31m-team\u001B[0m\r\nnext": {
@@ -192,13 +177,6 @@ describe("doctor repair sequencing", () => {
           channels: {
             discord: {
               allowFrom: [123],
-            },
-            tools: {
-              exec: {
-                toolsBySender: {
-                  "bad\u001B[31m-key\u001B[0m\r\nnext": { enabled: true },
-                },
-              },
             },
             signal: {
               accounts: {
@@ -220,7 +198,6 @@ describe("doctor repair sequencing", () => {
     expect(result.changeNotes).toStrictEqual([]);
     expect(result.configChangeNotes).toStrictEqual([
       "channels.discord.allowFrom: converted 1 numeric ID to strings",
-      "channels.tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries (bad-keynext -> id:bad-keynext)",
     ]);
     expect(result.configChangeNotes.join("\n")).not.toContain("\u001B");
     expect(result.configChangeNotes.join("\n")).not.toContain("\r");
@@ -326,14 +303,6 @@ describe("doctor repair sequencing", () => {
 
   it("repairs stale OAuth shadows before importing and removing auth JSON", async () => {
     const events: string[] = [];
-    mocks.maybeRepairLegacyOAuthSidecarProfiles.mockImplementationOnce(async () => {
-      events.push("sidecar-oauth");
-      return {
-        detected: ["auth-profiles.json"],
-        changes: ["Migrated 1 legacy Codex OAuth profile."],
-        warnings: ["Sidecar warning"],
-      };
-    });
     mocks.repairStaleOAuthProfileShadows.mockImplementationOnce(async () => {
       events.push("stale-oauth-shadows");
       return {
@@ -343,14 +312,11 @@ describe("doctor repair sequencing", () => {
     });
     mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockImplementationOnce(async () => {
       events.push("sqlite-migration");
-      return {
+      return createAuthProfileImportResult({
         detected: ["auth-profiles.json"],
-        migratedProfileIds: new Set<string>(),
-        blockedProfileIds: new Set<string>(),
         changes: ["Migrated auth profile JSON into SQLite."],
         configChanged: true,
-        warnings: [],
-      };
+      });
     });
     mocks.maybeRepairStaleConfiguredAuthOrders.mockImplementationOnce(({ cfg }) => {
       events.push("stale-auth-order");
@@ -367,36 +333,22 @@ describe("doctor repair sequencing", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(events).toEqual([
-      "sidecar-oauth",
-      "stale-oauth-shadows",
-      "sqlite-migration",
-      "stale-auth-order",
-    ]);
-    expect(mocks.maybeRepairLegacyOAuthSidecarProfiles).toHaveBeenCalledWith({
-      cfg: {},
-      prompter: { confirmAutoFix: expect.any(Function) },
-      emitNotes: false,
-      env: process.env,
-    });
+    expect(events).toEqual(["stale-oauth-shadows", "sqlite-migration", "stale-auth-order"]);
     expect(result.changeNotes).toEqual([
-      "Migrated 1 legacy Codex OAuth profile.",
       "Removed stale OAuth auth profile shadow openai-codex.",
       "Migrated auth profile JSON into SQLite.",
     ]);
     expect(result.state.pendingChanges).toBe(true);
-    expect(result.warningNotes).toEqual(["Sidecar warning"]);
+    expect(result.warningNotes).toEqual([]);
     expect(result.authProfilesRepaired).toBe(true);
   });
 
   it("reports receipt-owned OpenAI auth-provider migration as an auth repair", async () => {
-    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValueOnce({
-      detected: [],
-      changes: ["Migrated OpenAI Codex auth-provider profile openai-codex."],
-      migratedProfileIds: new Set<string>(),
-      blockedProfileIds: new Set<string>(),
-      warnings: [],
-    });
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValueOnce(
+      createAuthProfileImportResult({
+        changes: ["Migrated OpenAI Codex auth-provider profile openai-codex."],
+      }),
+    );
 
     const result = await runDoctorRepairSequence({
       state: {
@@ -543,13 +495,7 @@ describe("doctor repair sequencing", () => {
     let authMigrated = false;
     mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockImplementationOnce(async () => {
       authMigrated = true;
-      return {
-        detected: [],
-        migratedProfileIds: new Set<string>(),
-        blockedProfileIds: new Set<string>(),
-        changes: [],
-        warnings: [],
-      };
+      return createAuthProfileImportResult({});
     });
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(async () => {
       mistralInstalled = true;
@@ -825,16 +771,7 @@ describe("doctor repair sequencing", () => {
     const { repairStaleAgentModelRefs: repairStaleAgentModelRefsActual } = await vi.importActual<
       typeof import("./shared/stale-agent-model-ref-repair.js")
     >("./shared/stale-agent-model-ref-repair.js");
-    mocks.repairStaleAgentModelRefs.mockImplementationOnce(
-      (
-        cfg: OpenClawConfig,
-        options: NonNullable<Parameters<typeof repairStaleAgentModelRefsActual>[1]>,
-      ) =>
-        repairStaleAgentModelRefsActual(cfg, {
-          ...options,
-          persistedProviderIdsByAgentId: new Map([["main", new Set()]]),
-        }),
-    );
+    mocks.repairStaleAgentModelRefs.mockImplementationOnce(repairStaleAgentModelRefsActual);
     const pluginMetadataSnapshotState = {
       current: staleSnapshot,
     };
@@ -998,7 +935,7 @@ describe("doctor repair sequencing", () => {
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
       async (params: { cfg: OpenClawConfig }) => {
         expect(params.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
-        expect(params.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
+        expect(params.cfg.agents?.defaults).not.toHaveProperty("agentRuntime");
         return {
           changes: [],
           warnings: [],
@@ -1031,7 +968,7 @@ describe("doctor repair sequencing", () => {
 
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.agents?.defaults?.model).toBe("openai/gpt-5.5");
-    expect(result.state.candidate.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(result.state.candidate.agents?.defaults).not.toHaveProperty("agentRuntime");
     expect(result.changeNotes).toStrictEqual([]);
     expect(result.configChangeNotes).toStrictEqual([
       'Repaired Codex model routes:- agents.defaults.model: openai-codex/gpt-5.5 -> openai/gpt-5.5.\nSet agents.defaults.models.openai/gpt-5.5.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',

@@ -6,7 +6,7 @@ import { getContextEngineRegistration } from "../context-engine/registry.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
-  getRegisteredEventKeys,
+  hasInternalHookListeners,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
@@ -61,11 +61,11 @@ import {
 import { capturePluginLifecycleAuthority, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
+  captureActivePluginRegistrySnapshot,
   getActivePluginChannelRegistry,
   getActivePluginRegistry,
   getActivePluginRegistryKey,
   getActivePluginRegistryWorkspaceDir,
-  getActivePluginRuntimeSubagentMode,
   setActivePluginRegistry,
 } from "./runtime.js";
 
@@ -316,7 +316,7 @@ describe("loadOpenClawPlugins", () => {
       { level: "warn", message: "reload registration missing prefixes" },
       { level: "error", message: "plugin failed during register: Error: boom" },
     ]);
-    expect(getRegisteredEventKeys()).toStrictEqual([]);
+    expect(hasInternalHookListeners("gateway", "startup")).toBe(false);
     expect(getPluginCommandSpecs()).toStrictEqual([]);
     expect(registry.reloads).toStrictEqual([]);
     expect(registry.nodeHostCommands).toStrictEqual([]);
@@ -358,7 +358,7 @@ describe("loadOpenClawPlugins", () => {
       options: { onlyPluginIds: ["activation-prior"] },
     });
     const priorKey = getActivePluginRegistryKey();
-    const priorMode = getActivePluginRuntimeSubagentMode();
+    const priorMode = captureActivePluginRegistrySnapshot().runtimeSubagentMode;
     const priorWorkspaceDir = getActivePluginRegistryWorkspaceDir();
     const priorRecord = priorRegistry.plugins.find((entry) => entry.id === "activation-prior");
     expect(priorRecord).toBeDefined();
@@ -400,7 +400,7 @@ describe("loadOpenClawPlugins", () => {
     expect(isPluginRegistryRetired(priorRegistry)).toBe(false);
     expect(getGlobalPluginRegistry()).toBe(priorRegistry);
     expect(getActivePluginRegistryKey()).toBe(priorKey);
-    expect(getActivePluginRuntimeSubagentMode()).toBe(priorMode);
+    expect(captureActivePluginRegistrySnapshot().runtimeSubagentMode).toBe(priorMode);
     expect(getActivePluginRegistryWorkspaceDir()).toBe(priorWorkspaceDir);
     expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["prior"]);
     expect(priorAuthority!()).toBe(true);
@@ -432,7 +432,7 @@ describe("loadOpenClawPlugins", () => {
     expect(record?.failurePhase).toBe("register");
     expect(record?.error).toContain("hook registration missing name");
     expect(registry.hooks).toStrictEqual([]);
-    expect(getRegisteredEventKeys()).toStrictEqual([]);
+    expect(hasInternalHookListeners("gateway", "startup")).toBe(false);
     expectDiagnosticContaining({
       registry,
       level: "error",
@@ -708,7 +708,7 @@ describe("loadOpenClawPlugins", () => {
       "active wiki supplement",
     ]);
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
+    expect(resolveMemoryFlushPlan({})?.plan).toMatchObject({ relativePath: "memory/active.md" });
     expect(getMemoryRuntime()).toBe(activeRuntime);
     expect(listMemoryPromptPreparations()).toHaveLength(1);
   });

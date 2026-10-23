@@ -1,16 +1,15 @@
-// OpenClaw TUI backend runs setup-helper dialogue inside the shared local TUI shell.
 import { randomUUID } from "node:crypto";
 import type {
   SessionsPatchParams,
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import type { ChannelsAddOptions } from "../commands/channels/add.js";
 import {
   agentSessionKeysMatchByRequestKey,
   buildAgentMainSessionKey,
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { notifyListeners } from "../shared/listeners.js";
+import { resolveModelRefOverride } from "../shared/model-ref-override.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -26,6 +25,7 @@ import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
 } from "./inference-error.js";
+import { requireSystemAgentPersistentApplyInference } from "./inference-guard.js";
 import { buildOnboardingWelcome } from "./onboarding-welcome.js";
 import { loadOverviewForOperation } from "./operations-execution-helpers.js";
 import { executeSystemAgentOperation, type SystemAgentOperation } from "./operations.js";
@@ -53,32 +53,10 @@ export type SystemAgentTuiOptions = Pick<
   setupWorkspace?: string;
   /** Selected first-agent name for the proposed onboarding setup. */
   setupAgentName?: string;
-  runChannelsAdd?: (
-    opts: ChannelsAddOptions,
-    runtime: RuntimeEnv,
-    params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
-  ) => Promise<unknown>;
-  runSearchSetupHandoff?: (
-    runtime: RuntimeEnv,
-    beforePersistentEffect: () => Promise<void>,
-  ) => Promise<void>;
-  runGatewaySetupHandoff?: (
-    runtime: RuntimeEnv,
-    beforePersistentEffect: () => Promise<void>,
-  ) => Promise<void>;
 };
 
-type SystemAgentHistoryMessage = {
-  role: "assistant" | "user";
-  content: Array<{ type: "text"; text: string }>;
-  timestamp: number;
-};
-
-type SystemAgentTuiRoute = {
-  model?: string;
-  modelProvider?: string;
-  thinkingLevel: string;
-};
+type SystemAgentHistoryMessage = ReturnType<typeof message>;
+type SystemAgentTuiRoute = Awaited<ReturnType<typeof requireTuiVerifiedInference>>;
 
 const SYSTEM_AGENT_SESSION_KEY = buildAgentMainSessionKey({ agentId: SYSTEM_AGENT_ID });
 const SYSTEM_AGENT_HISTORY_LIMIT = 200;
@@ -92,26 +70,11 @@ function createChatEngine(opts: SystemAgentTuiOptions): SystemAgentChatEngine {
   });
 }
 
-function message(role: "assistant" | "user", text: string): SystemAgentHistoryMessage {
+function message(role: "assistant" | "user", text: string) {
   return {
     role,
-    content: [{ type: "text", text }],
+    content: [{ type: "text" as const, text }],
     timestamp: Date.now(),
-  };
-}
-
-function splitModelRef(ref: string | undefined): { provider?: string; model?: string } {
-  const trimmed = ref?.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
-    return { model: trimmed };
-  }
-  return {
-    provider: trimmed.slice(0, slash),
-    model: trimmed.slice(slash + 1),
   };
 }
 
@@ -180,12 +143,7 @@ class SystemAgentTuiBackend implements TuiBackend {
     return { ok: true, aborted: false };
   }
 
-  async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }): Promise<{
-    sessionId: string;
-    messages: SystemAgentHistoryMessage[];
-    thinkingLevel: string;
-    verboseLevel: string;
-  }> {
+  async loadHistory(opts: Parameters<TuiBackend["loadHistory"]>[0]) {
     const limit = Math.min(opts.limit ?? SYSTEM_AGENT_HISTORY_LIMIT, SYSTEM_AGENT_HISTORY_LIMIT);
     return {
       sessionId: "openclaw",
@@ -402,49 +360,30 @@ async function runSetupHandoff(
     return;
   }
   const beforePersistentEffect = async () => {
-    const binding = opts?.verifiedInference;
-    if (!binding) {
-      throw new SystemAgentInferenceUnavailableError("conversation");
-    }
-    try {
-      const { resolvePersistentApplyInference } = await import("./setup-inference.js");
-      const route = await resolvePersistentApplyInference({
-        binding,
-        runtime,
-        deps: opts.deps,
-      });
-      if (route) {
-        return;
-      }
-    } catch (error) {
-      if (isSystemAgentInferenceUnavailableError(error)) {
-        throw error;
-      }
-      throw new SystemAgentInferenceUnavailableError("conversation", [error]);
-    }
-    throw new SystemAgentInferenceUnavailableError("conversation");
+    await requireSystemAgentPersistentApplyInference(
+      { binding: opts?.verifiedInference, runtime },
+      (failures) => {
+        if (isSystemAgentInferenceUnavailableError(failures[0])) {
+          throw failures[0];
+        }
+        throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
+      },
+    );
   };
   if (handoff.target === "gateway" || handoff.target === "search") {
-    const run =
-      handoff.target === "gateway" ? opts.runGatewaySetupHandoff : opts.runSearchSetupHandoff;
-    if (run) {
-      await run(runtime, beforePersistentEffect);
-    } else {
-      const { createClackPrompter, hostedSetup } = await loadHostedSetupForTui();
-      const runHosted =
-        handoff.target === "gateway"
-          ? hostedSetup.runHostedGatewaySetup
-          : hostedSetup.runHostedSearchSetup;
-      await runHosted(createClackPrompter(), beforePersistentEffect, runtime);
-    }
+    const { createClackPrompter, hostedSetup } = await loadHostedSetupForTui();
+    const runHosted =
+      handoff.target === "gateway"
+        ? hostedSetup.runHostedGatewaySetup
+        : hostedSetup.runHostedSearchSetup;
+    await runHosted(createClackPrompter(), beforePersistentEffect, runtime);
     if (handoff.target === "gateway") {
       runtime.log("Done — gateway settings saved. Run `openclaw gateway restart` to apply them.");
     }
     return;
   }
-  const runChannelsAdd =
-    opts.runChannelsAdd ?? (await import("../commands/channels/add.js")).channelsAddCommand;
-  await runChannelsAdd(handoff.channel ? { channel: handoff.channel } : {}, runtime, {
+  const { channelsAddCommand } = await import("../commands/channels/add.js");
+  await channelsAddCommand(handoff.channel ? { channel: handoff.channel } : {}, runtime, {
     hasFlags: false,
     beforePersistentEffect,
   });
@@ -528,15 +467,13 @@ export async function runSystemAgentTui(
   }
 }
 
-async function requireTuiVerifiedInference(
-  opts: SystemAgentTuiOptions,
-): Promise<SystemAgentTuiRoute> {
+async function requireTuiVerifiedInference(opts: SystemAgentTuiOptions) {
   const binding = opts?.verifiedInference;
   if (!binding) {
     throw new SystemAgentInferenceUnavailableError("conversation");
   }
   try {
-    const verified = await resolveSystemAgentVerifiedInferenceState(binding, opts.deps);
+    const verified = await resolveSystemAgentVerifiedInferenceState(binding);
     if (verified) {
       const { config, route } = verified;
       const [{ getPreparedModelCatalogSnapshot }, { resolveThinkingDefault }] = await Promise.all([
@@ -551,7 +488,7 @@ async function requireTuiVerifiedInference(
         agentDir: route.agentDir,
         readOnly: true,
       })?.entries;
-      const model = splitModelRef(route.modelLabel);
+      const model = resolveModelRefOverride(route.modelLabel);
       return {
         model: model.model,
         modelProvider: model.provider,
@@ -565,7 +502,7 @@ async function requireTuiVerifiedInference(
       };
     }
   } catch (error) {
-    throw new SystemAgentInferenceUnavailableError("conversation", [error]);
+    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
   }
-  throw new SystemAgentInferenceUnavailableError("conversation");
+  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
 }

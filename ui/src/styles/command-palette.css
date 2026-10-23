@@ -1,6 +1,21 @@
+.cmd-palette__session-heading {
+  padding: 12px 18px 0;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cmd-palette[data-attachment-drop-active] {
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+}
+
+.cmd-palette[data-attachment-drop-active] > * {
+  opacity: 0.5;
+}
+
 .cmd-palette__attachments {
   --chat-composer-editor-inset-inline: 14px;
-  --chat-composer-editor-inset-block: 6px;
+  --chat-attachment-inset-block: 6px;
   --chat-attachment-hit-slop: 12px;
   --chat-box-inset: 8px;
   flex: 0 0 auto;
@@ -358,7 +373,7 @@
   gap: 12px;
   padding: 8px 18px;
   border-top: 1px solid var(--border);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -377,7 +392,7 @@
   border-radius: var(--radius-sm);
   background: var(--bg);
   font-family: var(--mono);
-  font-size: 12px; /* was 10px */
+  font-size: 12px;
   line-height: 1.4;
 }
 

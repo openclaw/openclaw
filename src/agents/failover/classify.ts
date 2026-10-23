@@ -4,9 +4,8 @@ import {
   type PreparedProviderFailoverOwner,
 } from "./provider-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
-export { isCloudCodeAssistFormatError } from "./classify-core.js";
 export { isUnclassifiedNoBodyHttpSignal } from "./classification-rules.js";
-export { isContextOverflowError, isLikelyContextOverflowError } from "./context-overflow.js";
+export { isLikelyContextOverflowError } from "./context-overflow.js";
 export {
   isAuthErrorMessage,
   isBillingErrorMessage,
@@ -35,8 +34,4 @@ export function classifyFailoverReason(
   return classifyFailoverReasonCore(raw, opts, (context) =>
     classifyProviderPluginError({ ...context, providerPlugin: opts?.providerPlugin }),
   );
-}
-
-export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }): boolean {
-  return classifyFailoverReason(raw, opts) !== null;
 }

@@ -3,13 +3,7 @@ import {
   requestXaiResponsesTool,
   resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextCitationsAndInline,
-  resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
-import {
-  coerceXaiToolConfig,
-  resolveNormalizedXaiToolModel,
-  resolvePositiveIntegerToolConfig,
-} from "./tool-config-shared.js";
 import { buildXaiWebSearchPayload, type XaiWebSearchResponse } from "./web-search-shared.js";
 
 export const XAI_DEFAULT_X_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
@@ -24,32 +18,6 @@ export type XaiXSearchOptions = {
   enableImageUnderstanding?: boolean;
   enableVideoUnderstanding?: boolean;
 };
-
-type XaiXSearchResult = {
-  content: string;
-  citations: string[];
-  inlineCitations?: XaiWebSearchResponse["inline_citations"];
-  truncated?: true;
-};
-
-export function resolveXaiXSearchModel(config?: Record<string, unknown>): string {
-  return resolveNormalizedXaiToolModel({
-    config,
-    defaultModel: XAI_DEFAULT_X_SEARCH_MODEL,
-  });
-}
-
-export function resolveXaiXSearchEndpoint(config?: Record<string, unknown>): string {
-  return resolveXaiResponsesEndpoint(coerceXaiToolConfig(config).baseUrl);
-}
-
-export function resolveXaiXSearchInlineCitations(config?: Record<string, unknown>): boolean {
-  return coerceXaiToolConfig(config).inlineCitations === true;
-}
-
-export function resolveXaiXSearchMaxTurns(config?: Record<string, unknown>): number | undefined {
-  return resolvePositiveIntegerToolConfig(config, "maxTurns");
-}
 
 function buildXSearchTool(options: XaiXSearchOptions): Record<string, unknown> {
   return {
@@ -97,7 +65,7 @@ export async function requestXaiXSearch(params: {
   maxTurns?: number;
   options: XaiXSearchOptions;
   signal?: AbortSignal;
-}): Promise<XaiXSearchResult> {
+}) {
   params.signal?.throwIfAborted();
   return await requestXaiResponsesTool(
     {

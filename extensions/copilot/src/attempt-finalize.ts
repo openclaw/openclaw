@@ -39,6 +39,7 @@ export async function completeCopilotAttempt(params: {
   promptError: Error | undefined;
   releaseError: Error | undefined;
   resumeFailureRecovered: boolean;
+  runtimeArtifact?: AgentHarnessAttemptResult["runtimeArtifact"];
   sdkSessionId: string | undefined;
   sentTurnStarted: boolean;
   settledFinalizationAssistantCompleted: boolean;
@@ -96,6 +97,7 @@ export async function completeCopilotAttempt(params: {
           currentRunUserKey,
         ));
   const result = createResult(input, {
+    runtimeArtifact: params.runtimeArtifact,
     acceptedSessionSpawns,
     aborted,
     assistantTexts,
@@ -127,13 +129,12 @@ export async function completeCopilotAttempt(params: {
     assistantTranscriptIdempotencyKey: transcript?.assistantTranscriptIdempotencyKey,
     contextEngineTerminalAnchor: transcript?.terminalAnchor,
     nativeReplayInvalid: transcript?.replayInvalid === true || nativeSessionHistoryUnvalidated,
-    now,
     promptError,
     resumeFailureRecovered,
     sdkSessionId,
     timedOut,
     timedOutDuringCompaction,
-    toolMetas: snap ? [...snap.toolMetas] : [],
+    toolMetas: snap?.toolMetas ?? [],
     usage: snap?.usage,
     yieldDetected,
     yieldAcknowledgment,

@@ -46,12 +46,12 @@ export function createEditorSubmitHandler(params: {
     setText: (value: string) => void;
     addToHistory: (value: string) => void;
   };
-  handleCommand: (value: string) => Promise<void> | void;
+  handleCommand: (value: string, onBlockedChat?: () => void) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
   onSubmitError: (action: TuiSubmitAction, error: unknown) => void;
   admitMessage?: (value: string, snapshot?: TuiChatSubmitSnapshot) => TuiChatSubmitAdmission;
-  onBlockedMessageSubmit?: (value: string, admission: TuiChatSubmitBlock) => void;
+  onBlockedMessageSubmit?: (admission: TuiChatSubmitBlock) => void;
 }) {
   const clearSubmittedEditor = () => {
     // pi-tui clears before onSubmit; a delayed paste flush must not erase a newer draft.
@@ -81,11 +81,17 @@ export function createEditorSubmitHandler(params: {
     if (action !== "message") {
       clearSubmittedEditor();
       const command = action === "local shell" ? raw : value;
-      const handle = action === "local shell" ? params.handleBangLine : params.handleCommand;
       if (!isBrowserSetupInput(command)) {
         params.editor.addToHistory(command);
       }
-      runSubmitAction(action, () => handle(command), params.onSubmitError);
+      runSubmitAction(
+        action,
+        () =>
+          action === "local shell"
+            ? params.handleBangLine(command)
+            : params.handleCommand(command, () => restoreBlockedEditor(command)),
+        params.onSubmitError,
+      );
       return;
     }
 
@@ -94,7 +100,7 @@ export function createEditorSubmitHandler(params: {
       : params.admitMessage?.(value)) ?? { status: "allowed" };
     if (admission.status === "blocked") {
       restoreBlockedEditor(trimChangesAction ? raw : value);
-      params.onBlockedMessageSubmit?.(value, admission);
+      params.onBlockedMessageSubmit?.(admission);
       return;
     }
 
@@ -141,25 +147,16 @@ export function createSubmitBurstCoalescer(params: {
   captureSnapshot?: () => TuiChatSubmitSnapshot;
   enabled: boolean;
   burstWindowMs?: number;
-  now?: () => number;
-  setTimer?: typeof setTimeout;
-  clearTimer?: typeof clearTimeout;
   onCapture?: (value: string, snapshot?: TuiChatSubmitSnapshot) => void;
 }) {
   const windowMs = Math.max(1, params.burstWindowMs ?? 50);
-  const now = params.now ?? (() => Date.now());
-  const setTimer = params.setTimer ?? setTimeout;
-  const clearTimer = params.clearTimer ?? clearTimeout;
   let pending: { value: string; snapshot?: TuiChatSubmitSnapshot } | null = null;
   let pendingAt = 0;
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
 
   const clearFlushTimer = () => {
-    if (!flushTimer) {
-      return;
-    }
-    clearTimer(flushTimer);
+    clearTimeout(flushTimer ?? undefined);
     flushTimer = null;
   };
 
@@ -182,13 +179,6 @@ export function createSubmitBurstCoalescer(params: {
     submit(value, snapshot);
   };
 
-  const scheduleFlush = () => {
-    clearFlushTimer();
-    flushTimer = setTimer(() => {
-      flushPending();
-    }, windowMs);
-  };
-
   const submitBurst = (value: string) => {
     if (disposed) {
       return;
@@ -202,7 +192,7 @@ export function createSubmitBurstCoalescer(params: {
       submit(value, params.captureSnapshot?.());
       return;
     }
-    const ts = now();
+    const ts = Date.now();
     const snapshot = params.captureSnapshot?.();
     params.onCapture?.(value, snapshot);
     if (pending && ts - pendingAt <= windowMs) {
@@ -215,7 +205,8 @@ export function createSubmitBurstCoalescer(params: {
       pending = { value, ...(snapshot ? { snapshot } : {}) };
     }
     pendingAt = ts;
-    scheduleFlush();
+    clearFlushTimer();
+    flushTimer = setTimeout(flushPending, windowMs);
   };
 
   const dispose = () => {

@@ -9,6 +9,11 @@ export const diagnosticProfileEntrypoints = {
     sourceWorkerName: "diagnostic-heap-profile",
     distWorkerPath: "logging/diagnostic-heap-profile.js",
   },
+  snapshot: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "diagnostic-heap-snapshot",
+    distWorkerPath: "logging/diagnostic-heap-snapshot.js",
+  },
   workload: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "diagnostic-heap-profile.test-helpers",

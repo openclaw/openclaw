@@ -1,20 +1,43 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createWorkerEnvironmentTransportLifecycle } from "./environment-access.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import * as nodeTunnelSupport from "./node-worker-tunnel.test-support.js";
+import { providerService } from "./provider-lifecycle.test-support.js";
 import * as support from "./service.test-support.js";
 
-async function disconnectedNodeOwner(environmentId: string, sharedHost: boolean | null = false) {
-  const deviceId = `node:${environmentId}`;
+const retiredOwner = { state: "failed", attachedSessionIds: [], leaseId: null, nodeDeviceId: null };
+
+async function attachedNode(
+  environmentId: string,
+  sharedHost: boolean | null = false,
+  sessionId = "session-destroyed",
+) {
   await support.seedReadyNodeDesktop(environmentId);
-  const attached = await support.testState.store.transition({
+  return support.testState.store.transition({
     environmentId,
     from: "ready",
     to: "attached",
     patch: {
-      ...support.attachedPatch(environmentId, "session-destroyed"),
+      ...support.attachedPatch(environmentId, sessionId),
       ...(sharedHost === null ? {} : { sharedHost }),
     },
   });
+}
+
+function nodeService(
+  nodeTunnelManager: ReturnType<typeof createNodeWorkerTunnelManager>,
+  overrides: Parameters<typeof support.createProvider>[0] = {},
+) {
+  return providerService(
+    { supportedExecutionModes: ["worker-turn", "remote-exec"], ...overrides },
+    { nodeTunnelManager },
+  );
+}
+
+async function disconnectedNodeOwner(environmentId: string, sharedHost: boolean | null = false) {
+  const deviceId = `node:${environmentId}`;
+  const attached = await attachedNode(environmentId, sharedHost);
   const transport = nodeTunnelSupport.transport();
   const connectedNodes = await transport.listCurrentNodes();
   for (const node of connectedNodes) {
@@ -54,17 +77,107 @@ async function disconnectedNodeOwner(environmentId: string, sharedHost: boolean 
 describe("worker provider node teardown", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  // Unknown (null) hosts take the same non-dedicated path; transition patches cannot express null.
+  it("rejects stalled computer cleanup on a shared host despite a provider stop reason", async () => {
+    const environmentId = "shared-wedged-desktop";
+    const record = await attachedNode(environmentId, true, "session-1");
+    const driverFinished = createDeferred();
+    const warn = vi.fn();
+    const transports = createWorkerEnvironmentTransportLifecycle({
+      store: support.testState.store,
+      nodeTunnelManager: { stop: async () => {} },
+      closeEnvironmentComputers: () => driverFinished.promise,
+      logger: { warn },
+    });
+    if (!transports) {
+      throw new Error("Expected worker transport lifecycle");
+    }
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stopped = transports
+      .stop(environmentId, record.ownerEpoch, "provider-destroying")
+      .catch((error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await stopped).toMatchObject({
+        message: "Worker computer cleanup timed out after 60000ms",
+      });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      driverFinished.resolve();
+      vi.useRealTimers();
+      await stopped;
+    }
+  });
+
+  it.each(["stop", "force"] as const)(
+    "continues %s after a computer driver never settles",
+    async (entrance) => {
+      const environmentId = "wedged-desktop";
+      await attachedNode(environmentId, false, "session-1");
+      const cleanupStarted = createDeferred();
+      const finalCleanupStarted = createDeferred();
+      const driverFinished = createDeferred();
+      const destroy = vi.fn(async () => {});
+      const warn = vi.fn();
+      let cleanupCalls = 0;
+      const service = providerService(
+        { destroy },
+        {
+          // The driver ignores cancellation and only settles when finally releases it.
+          closeEnvironmentComputers: () => {
+            cleanupCalls += 1;
+            (cleanupCalls === 1 ? cleanupStarted : finalCleanupStarted).resolve();
+            return driverFinished.promise;
+          },
+          logger: { warn },
+          nodeTunnelManager: {
+            status: () => "stopped",
+            start: vi.fn(),
+            stop: async () => {},
+            stopAll: async () => {},
+            beginClose: vi.fn(),
+            observeProcesses: vi.fn(),
+          },
+        },
+      );
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const forceAbandon = vi.fn(async () => {});
+      const stopping = service.destroy(
+        environmentId,
+        undefined,
+        entrance === "force" ? forceAbandon : undefined,
+      );
+      try {
+        await cleanupStarted.promise;
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(destroy).toHaveBeenCalledOnce();
+        await finalCleanupStarted.promise;
+        await vi.advanceTimersByTimeAsync(60_000);
+        await expect(stopping).resolves.toMatchObject({ state: "destroyed" });
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringMatching(
+            /computer cleanup.*wedged-desktop.*continuing provider teardown.*retry Stop/i,
+          ),
+        );
+        expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+        if (entrance === "force") {
+          expect(forceAbandon).toHaveBeenCalledOnce();
+        }
+      } finally {
+        driverFinished.resolve();
+        vi.useRealTimers();
+        await stopping;
+      }
+    },
+  );
+
   it.each(["retained", "restarted"] as const)(
     "cleans the %s node owner after the provider proves the machine is destroyed",
     async (owner) => {
       const environmentId = `worker-destroyed-node-${owner}`;
       const { attached, nodeTunnels, listNodes, workspaceTransfer, start, reconnect } =
         await disconnectedNodeOwner(environmentId);
-      const provider = support.createProvider({
-        supportedExecutionModes: ["worker-turn", "remote-exec"],
-        inspect: async () => ({ status: "destroyed" }),
-      });
-      const service = support.createService(provider, { nodeTunnelManager: nodeTunnels });
+      const service = nodeService(nodeTunnels, { inspect: async () => ({ status: "destroyed" }) });
       try {
         if (owner === "retained") {
           await start();
@@ -78,10 +191,7 @@ describe("worker provider node teardown", () => {
         await service.reconcileOnce();
 
         expect(support.testState.store.get(environmentId)).toMatchObject({
-          state: "failed",
-          attachedSessionIds: [],
-          leaseId: null,
-          nodeDeviceId: null,
+          ...retiredOwner,
           lastError: "Worker environment disappeared before teardown was requested",
         });
         await nodeTunnels.stopAll();
@@ -102,14 +212,10 @@ describe("worker provider node teardown", () => {
       const destroy = vi
         .fn(async () => {})
         .mockRejectedValueOnce(new Error("provider destruction is indeterminate"));
-      const service = support.createService(
-        support.createProvider({
-          supportedExecutionModes: ["worker-turn", "remote-exec"],
-          inspect: async () => ({ status: "unknown" }),
-          destroy,
-        }),
-        { nodeTunnelManager: nodeTunnels },
-      );
+      const service = nodeService(nodeTunnels, {
+        inspect: async () => ({ status: "unknown" }),
+        destroy,
+      });
       try {
         const credential = support.testState.store.getCredential(environmentId);
         await expect(
@@ -157,23 +263,17 @@ describe("worker provider node teardown", () => {
   );
 
   it.each([
-    { sharedHost: true, providersEnabled: true },
-    { sharedHost: true, providersEnabled: false },
-    { sharedHost: null, providersEnabled: true },
-    { sharedHost: null, providersEnabled: false },
-  ])(
-    "requires confirmed worker stop before retiring a disconnected lease ($sharedHost, provider=$providersEnabled)",
-    async ({ sharedHost, providersEnabled }) => {
+    [true, true],
+    [true, false],
+    [null, true],
+    [null, false],
+  ] as const)(
+    "requires confirmed worker stop before retiring a disconnected lease (%s, provider=%s)",
+    async (sharedHost, providersEnabled) => {
       const environmentId = "worker-offline-shared-destroy";
       const { nodeTunnels, reconnect } = await disconnectedNodeOwner(environmentId, sharedHost);
       const destroy = vi.fn(async () => {});
-      const service = support.createService(
-        support.createProvider({
-          supportedExecutionModes: ["worker-turn", "remote-exec"],
-          destroy,
-        }),
-        { nodeTunnelManager: nodeTunnels },
-      );
+      const service = nodeService(nodeTunnels, { destroy });
       support.testState.providersEnabled = providersEnabled;
       try {
         await expect(service.destroy(environmentId)).rejects.toThrow("not connected");
@@ -187,13 +287,13 @@ describe("worker provider node teardown", () => {
   );
 
   it.each([
-    { status: "destroyed", isolation: "shared", sharedHost: true },
-    { status: "destroyed", isolation: "unknown", sharedHost: null },
-    { status: "unknown", isolation: "shared", sharedHost: true },
-    { status: "unknown", isolation: "unknown", sharedHost: null },
+    ["destroyed", true],
+    ["destroyed", null],
+    ["unknown", true],
+    ["unknown", null],
   ] as const)(
-    "requires exact worker stop for a $status lease with $isolation host isolation",
-    async ({ status, sharedHost }) => {
+    "requires exact worker stop for a %s lease with sharedHost=%s",
+    async (status, sharedHost) => {
       const environmentId = "worker-inspected-destroyed-shared";
       const { attached, nodeTunnels, start, reconnect } = await disconnectedNodeOwner(
         environmentId,
@@ -204,14 +304,7 @@ describe("worker provider node teardown", () => {
         status === "unknown"
           ? "Worker provider no longer recognizes the lease"
           : "Worker environment disappeared before teardown was requested";
-      const service = support.createService(
-        support.createProvider({
-          supportedExecutionModes: ["worker-turn", "remote-exec"],
-          inspect: async () => ({ status }),
-          destroy,
-        }),
-        { nodeTunnelManager: nodeTunnels },
-      );
+      const service = nodeService(nodeTunnels, { inspect: async () => ({ status }), destroy });
       try {
         await start();
         await service.reconcileOnce();
@@ -233,10 +326,7 @@ describe("worker provider node teardown", () => {
         await service.reconcileOnce();
 
         expect(support.testState.store.get(environmentId)).toMatchObject({
-          state: "failed",
-          attachedSessionIds: [],
-          nodeDeviceId: null,
-          leaseId: null,
+          ...retiredOwner,
           lastError,
         });
         expect(destroy).toHaveBeenCalledTimes(status === "unknown" ? 1 : 0);

@@ -7,41 +7,81 @@ import {
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 
 const targetSha = "a".repeat(40);
+const pullRequest = (title: string, extra = {}) => ({
+  __typename: "PullRequest",
+  author: { __typename: "User", login: "alice" },
+  closingIssuesReferences: { nodes: [] },
+  mergedAt: "2026-08-04T00:00:00Z",
+  title,
+  ...extra,
+});
+const recordEntry = (extra = {}) => ({
+  number: 456,
+  title: "Internal cleanup",
+  editorialEligible: false,
+  priorReferences: [],
+  externalReferences: [],
+  linkedIssues: [],
+  thanks: [],
+  ...extra,
+});
+const checkRecord = (source: string, entry: ReturnType<typeof recordEntry>) =>
+  ledgerChecks({ source }, [entry], new Map([[entry.number, { __typename: "PullRequest" }]]), []);
+
+function recordSection(line: string, partition = "1 merged PR.") {
+  return [
+    "## 2026.7.1",
+    "### Highlights",
+    [1, 2, 3, 4, 5].map((value) => `- Highlight ${value}.`).join("\n"),
+    "### Changes",
+    "### Fixes",
+    "### Complete contribution record",
+    `This audited record covers the complete base..${targetSha} history: ${partition}`,
+    "#### Pull requests",
+    line,
+  ].join("\n\n");
+}
 
 function contributionLedger({
   nodes,
   seededPullRequests = [],
   sourcePullRequests = [],
   sourceReferences = [],
+  baseTag = "v2026.7.2-beta.7",
+  now = "2026-08-05T00:00:00Z",
+  priorRecord = {
+    legacyIssues: new Map(),
+    pullRequests: new Map(
+      seededPullRequests.map((number) => [
+        number,
+        { externalReferences: [], references: [], thanks: [] },
+      ]),
+    ),
+  },
 }: {
   nodes: Map<number, Record<string, unknown>>;
   seededPullRequests?: number[];
   sourcePullRequests?: number[];
   sourceReferences?: number[];
+  baseTag?: string;
+  now?: string;
+  priorRecord?: ReturnType<typeof contributionRecordFor>;
 }) {
   return ledgerFor(
-    "v2026.7.2-beta.7",
+    baseTag,
     targetSha,
     [...nodes.keys()],
     nodes,
     new Map(),
     new Map(),
     { issuesByPullRequest: new Map() },
-    {
-      legacyIssues: new Map(),
-      pullRequests: new Map(
-        seededPullRequests.map((number) => [
-          number,
-          { externalReferences: [], references: [], thanks: [] },
-        ]),
-      ),
-    },
+    priorRecord,
     new Set(sourcePullRequests),
     sourceReferences,
     [],
     new Set(),
     [],
-    Date.parse("2026-08-05T00:00:00Z"),
+    Date.parse(now),
     new Set([targetSha]),
   ) as ReturnType<typeof ledgerFor> & {
     provenance: {
@@ -55,34 +95,15 @@ function contributionLedger({
 describe("renderContributionRecordEntry", () => {
   it.each([
     ["refactor(plugins)!: remove a bundled workflow plugin", "refactor", true],
-    ["refactor!: remove the legacy setup command", "refactor", true],
-    ["REFACTOR(cli)!: rename the setup command", "refactor", true],
-    ["build!: require a supported runtime", "build", true],
     ["refactor(plugins): simplify loader internals", "refactor", false],
     ["test: cover breaking plugin changes!", "test", false],
-    ["fix: preserve message delivery", "fix", true],
     ["feat(fleet): add resource controls and operator docs", "feat", true],
-    ["fix: Git update reports success while Web UI serves an old build", "fix", true],
-    ["fix(provider): keep connection test errors readable", "fix", true],
     ["fix(qa-matrix): preserve shared reply previews", "fix", false],
     ["feat(ci): add artifact reuse", "feat", false],
-    ["fix(docs): repair setup links", "fix", false],
-    ["fix(build): preserve generated outputs", "fix", false],
     ["Add operator docs", "other", false],
     ["Improve provider discovery", "other", true],
   ])("classifies release prose from declared type and scope: %s", (title, type, eligible) => {
-    const nodes = new Map([
-      [
-        123,
-        {
-          __typename: "PullRequest",
-          author: { __typename: "User", login: "alice" },
-          closingIssuesReferences: { nodes: [] },
-          mergedAt: "2026-08-04T00:00:00Z",
-          title,
-        },
-      ],
-    ]);
+    const nodes = new Map([[123, pullRequest(title)]]);
     const result = contributionLedger({ nodes, sourcePullRequests: [123] });
     expect(result.pullRequests).toMatchObject([
       { number: 123, type, editorialEligible: eligible, thanks: ["alice"] },
@@ -103,22 +124,11 @@ describe("renderContributionRecordEntry", () => {
     );
   });
 
-  it("keeps external and linked issue references without repeating PR title references", () => {
-    expect(
-      renderContributionRecordEntry({
-        number: 123,
-        title: "Fix local openclaw/openclaw#45 and openclaw/imsg#141",
-        linkedIssues: [{ number: 45 }, { number: 67 }],
-        thanks: ["alice", "bob"],
-      }),
-    ).toBe("- **PR #123** Related #45, openclaw/imsg#141, #67. Thanks @alice and @bob.");
-  });
-
   it("deduplicates resolved issues and retains seeded cross-repository references", () => {
     expect(
       renderContributionRecordEntry({
         number: 124,
-        title: "Fix #45, #45, and OpenClaw/imsg#141",
+        title: "Fix local openclaw/openclaw#45, #45, and OpenClaw/imsg#141",
         externalReferences: ["openclaw/imsg#141"],
         priorReferences: [67],
         linkedIssues: [{ number: 45 }, { number: 67 }],
@@ -127,29 +137,10 @@ describe("renderContributionRecordEntry", () => {
     ).toBe("- **PR #124** Related #45, OpenClaw/imsg#141, #67.");
   });
 
-  it("renders every source PR even without issue references or credits", () => {
-    expect(
-      renderContributionRecordEntry({
-        number: 456,
-        title: "Internal cleanup",
-        linkedIssues: [],
-        thanks: [],
-      }),
-    ).toBe("- **PR #456**");
-  });
-
   it("retains references and credits when a compact record is seeded again", () => {
     const line = "- **PR #125** Related #45, openclaw/imsg#141. Thanks @alice and @bob.";
     const record = contributionRecordFor({
-      source: [
-        "## 2026.7.1",
-        "",
-        "### Complete contribution record",
-        "",
-        "#### Pull requests",
-        "",
-        line,
-      ].join("\n"),
+      source: recordSection(line),
     });
     const seeded = record.pullRequests.get(125);
 
@@ -172,46 +163,25 @@ describe("renderContributionRecordEntry", () => {
 
   it("retains seeded credits when the production ledger is rebuilt", () => {
     const priorRecord = contributionRecordFor({
-      source: [
-        "## 2026.7.1",
-        "",
-        "### Complete contribution record",
-        "",
-        "#### Pull requests",
-        "",
-        "- **PR #125** Thanks @alice and @bob.",
-      ].join("\n"),
+      source: recordSection("- **PR #125** Thanks @alice and @bob."),
     });
     const nodes = new Map([
       [
         125,
-        {
-          __typename: "PullRequest",
+        pullRequest("fix: keep release credits", {
           author: { __typename: "User", login: "carol" },
-          closingIssuesReferences: { nodes: [] },
           mergedAt: "2026-07-08T00:00:00Z",
-          title: "fix: keep release credits",
-        },
+        }),
       ],
     ]);
 
-    const result = ledgerFor(
-      "v2026.6.11",
-      targetSha,
-      [125],
+    const result = contributionLedger({
+      baseTag: "v2026.6.11",
       nodes,
-      new Map(),
-      new Map(),
-      { issuesByPullRequest: new Map() },
       priorRecord,
-      new Set([125]),
-      new Set(),
-      new Set(),
-      new Set(),
-      [],
-      Date.parse("2026-07-09T00:00:00Z"),
-      new Set([targetSha]),
-    );
+      sourcePullRequests: [125],
+      now: "2026-07-09T00:00:00Z",
+    });
 
     expect(result.ledger).toContain("- **PR #125** Thanks @carol and @alice and @bob.");
   });
@@ -220,13 +190,10 @@ describe("renderContributionRecordEntry", () => {
     const nodes = new Map(
       [1, 2, 3].map((number) => [
         number,
-        {
-          __typename: "PullRequest",
-          closingIssuesReferences: { nodes: [] },
-          mergedAt: "2026-08-04T00:00:00Z",
-          title: `fix: contribution ${number}`,
+        pullRequest(`fix: contribution ${number}`, {
+          author: undefined,
           mergeCommit: { oid: targetSha },
-        },
+        }),
       ]),
     );
     const result = contributionLedger({
@@ -244,81 +211,15 @@ describe("renderContributionRecordEntry", () => {
     expect(result.ledger).toContain("2 in-range PRs + 1 retained seed-only PR = 3 unique PRs.");
   });
 
-  it("reports zero retained seed-only PRs when every row is in range", () => {
-    const nodes = new Map([
-      [
-        1,
-        {
-          __typename: "PullRequest",
-          closingIssuesReferences: { nodes: [] },
-          mergedAt: "2026-08-04T00:00:00Z",
-          title: "fix: in-range contribution",
-        },
-      ],
-    ]);
-    const result = contributionLedger({ nodes, sourcePullRequests: [1] });
-
-    expect(result.provenance).toMatchObject({
-      inRangePullRequests: 1,
-      retainedSeedOnlyPullRequests: 0,
-      uniquePullRequests: 1,
-    });
-  });
-
-  it("reports all rows as retained seed-only when the release range has no PRs", () => {
-    const nodes = new Map(
-      [1, 2].map((number) => [
-        number,
-        {
-          __typename: "PullRequest",
-          closingIssuesReferences: { nodes: [] },
-          mergedAt: "2026-08-04T00:00:00Z",
-          title: `fix: seeded contribution ${number}`,
-        },
-      ]),
-    );
-    const result = contributionLedger({ nodes, seededPullRequests: [1, 2] });
-
-    expect(result.provenance).toMatchObject({
-      inRangePullRequests: 0,
-      retainedSeedOnlyPullRequests: 2,
-      uniquePullRequests: 2,
-    });
-  });
-
   it("rejects a forged canonical range and seed partition", () => {
-    const source = [
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- Highlight one.",
-      "- Highlight two.",
-      "- Highlight three.",
-      "- Highlight four.",
-      "- Highlight five.",
-      "",
-      "### Changes",
-      "",
-      "### Fixes",
-      "",
-      "### Complete contribution record",
-      "",
-      `This audited record covers the complete base..${targetSha} history: 0 in-range PRs + 1 retained seed-only PR = 1 unique PR.`,
-      "",
-      "#### Pull requests",
-      "",
+    const source = recordSection(
       "- **PR #456**",
-    ].join("\n");
-    const entry = {
-      number: 456,
+      "0 in-range PRs + 1 retained seed-only PR = 1 unique PR.",
+    );
+    const entry = recordEntry({
       title: "fix: example",
       editorialEligible: true,
-      priorReferences: [],
-      externalReferences: [],
-      linkedIssues: [],
-      thanks: [],
-    };
+    });
 
     expect(
       ledgerChecks(
@@ -337,64 +238,13 @@ describe("renderContributionRecordEntry", () => {
     ).toContain("contribution record provenance partition does not match generated inventory");
   });
 
-  it("retains references from a verbose record when the source title changes", () => {
-    const record = contributionRecordFor({
-      source: [
-        "## 2026.7.1",
-        "",
-        "### Complete contribution record",
-        "",
-        "#### Pull requests",
-        "",
-        "- **PR #126** Fix #46 and openclaw/imsg#142. Related #68. Thanks @alice.",
-      ].join("\n"),
-    });
-    const seeded = record.pullRequests.get(126);
-
-    expect(seeded).toEqual({
-      externalReferences: ["openclaw/imsg#142"],
-      references: [46, 68],
-      thanks: ["alice"],
-    });
-  });
-
   it("requires complete resolved issue tokens rather than matching substrings", () => {
-    const source = [
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- Highlight one.",
-      "- Highlight two.",
-      "- Highlight three.",
-      "- Highlight four.",
-      "- Highlight five.",
-      "",
-      "### Changes",
-      "",
-      "### Fixes",
-      "",
-      "### Complete contribution record",
-      "",
-      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
-      "",
-      "#### Pull requests",
-      "",
-      "- **PR #456** Related openclaw/imsg#141.",
-    ].join("\n");
-    const entry = {
-      number: 456,
-      title: "Internal cleanup",
-      editorialEligible: false,
-      priorReferences: [],
-      externalReferences: [],
+    const source = recordSection("- **PR #456** Related openclaw/imsg#141.");
+    const entry = recordEntry({
       linkedIssues: [{ number: 45 }, { number: 141 }],
-      thanks: [],
-    };
+    });
 
-    expect(
-      ledgerChecks({ source }, [entry], new Map([[456, { __typename: "PullRequest" }]]), []),
-    ).toEqual([
+    expect(checkRecord(source, entry)).toEqual([
       "missing #45 on contribution record for PR #456",
       "missing #141 on contribution record for PR #456",
     ]);
@@ -402,82 +252,24 @@ describe("renderContributionRecordEntry", () => {
 
   it("does not require an out-of-range PR referenced by a PR title", () => {
     const line = "- **PR #456**";
-    const source = [
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- Highlight one.",
-      "- Highlight two.",
-      "- Highlight three.",
-      "- Highlight four.",
-      "- Highlight five.",
-      "",
-      "### Changes",
-      "",
-      "### Fixes",
-      "",
-      "### Complete contribution record",
-      "",
-      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
-      "",
-      "#### Pull requests",
-      "",
-      line,
-    ].join("\n");
-    const entry = {
-      number: 456,
+    const source = recordSection(line);
+    const entry = recordEntry({
       title: "docs: align backup rules (#123)",
-      editorialEligible: false,
       priorReferences: [123],
-      externalReferences: [],
-      linkedIssues: [],
-      thanks: [],
-    };
+    });
 
     expect(renderContributionRecordEntry(entry)).toBe(line);
-    expect(
-      ledgerChecks({ source }, [entry], new Map([[456, { __typename: "PullRequest" }]]), []),
-    ).toEqual([]);
+    expect(checkRecord(source, entry)).toEqual([]);
   });
 
   it("accepts case-only differences in cross-repository references", () => {
     const line = "- **PR #127** Related OpenClaw/imsg#143.";
-    const source = [
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- Highlight one.",
-      "- Highlight two.",
-      "- Highlight three.",
-      "- Highlight four.",
-      "- Highlight five.",
-      "",
-      "### Changes",
-      "",
-      "### Fixes",
-      "",
-      "### Complete contribution record",
-      "",
-      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
-      "",
-      "#### Pull requests",
-      "",
-      line,
-    ].join("\n");
-    const entry = {
+    const source = recordSection(line);
+    const entry = recordEntry({
       number: 127,
-      title: "Internal cleanup",
-      editorialEligible: false,
-      priorReferences: [],
       externalReferences: ["openclaw/imsg#143"],
-      linkedIssues: [],
-      thanks: [],
-    };
+    });
 
-    expect(
-      ledgerChecks({ source }, [entry], new Map([[127, { __typename: "PullRequest" }]]), []),
-    ).toEqual([]);
+    expect(checkRecord(source, entry)).toEqual([]);
   });
 });

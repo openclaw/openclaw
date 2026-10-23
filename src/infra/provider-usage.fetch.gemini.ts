@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// Fetches Gemini provider usage windows.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, providerUsageLabel } from "./provider-usage.shared.js";
@@ -45,11 +44,10 @@ export async function fetchGeminiUsage(
     if (!isRecord(bucket)) {
       continue;
     }
-    const model = typeof bucket.modelId === "string" ? bucket.modelId : "unknown";
+    const model = normalizeLowercaseStringOrEmpty(bucket.modelId);
     const frac = typeof bucket.remainingFraction === "number" ? bucket.remainingFraction : 1;
-    const lower = normalizeLowercaseStringOrEmpty(model);
     for (const family of families) {
-      if (lower.includes(family.match)) {
+      if (model.includes(family.match)) {
         family.found = true;
         if (frac < family.remaining) {
           family.remaining = frac;

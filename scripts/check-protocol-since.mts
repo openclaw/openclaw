@@ -4,9 +4,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const descriptorPath = "src/gateway/methods/core-descriptors.ts";
@@ -77,11 +78,7 @@ function stringProperty(object: ts.ObjectLiteralExpression, key: string): string
     if (!ts.isPropertyAssignment(property)) {
       continue;
     }
-    const propertyName = property.name;
-    const name =
-      ts.isIdentifier(propertyName) || ts.isStringLiteral(propertyName)
-        ? propertyName.text
-        : undefined;
+    const name = getPropertyNameText(property.name);
     if (name === key && ts.isStringLiteralLikeNode(property.initializer)) {
       return property.initializer.text;
     }
@@ -94,11 +91,7 @@ function trueProperty(object: ts.ObjectLiteralExpression, key: string): boolean 
     if (!ts.isPropertyAssignment(property)) {
       return false;
     }
-    const propertyName = property.name;
-    const name =
-      ts.isIdentifier(propertyName) || ts.isStringLiteral(propertyName)
-        ? propertyName.text
-        : undefined;
+    const name = getPropertyNameText(property.name);
     return name === key && property.initializer.kind === ts.SyntaxKind.TrueKeyword;
   });
 }

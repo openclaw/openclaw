@@ -242,18 +242,10 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
     {
         OpenClawChatSessionEntry(
             key: key,
-            kind: nil,
             displayName: displayName,
             surface: "ios",
-            subject: nil,
-            room: nil,
-            space: nil,
             updatedAt: updatedAt,
-            sessionId: nil,
-            systemSent: nil,
-            abortedLastRun: nil,
             thinkingLevel: "medium",
-            verboseLevel: nil,
             inputTokens: 2500,
             outputTokens: 900,
             totalTokens: 3400,

@@ -1,102 +1,80 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   prepareOperatorModelPolicy,
   resolveOperatorModelDefault,
 } from "./operator-model-policy.js";
 
-function config(): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        systemAgent: { agentId: "shared" },
-        model: "vendor/global",
-        models: { "vendor/unrelated": { alias: "fast" } },
-      },
-      entries: {
-        shared: {
-          model: {
-            primary: "vendor/primary",
-            fallbacks: ["fast", "vendor/restricted-v1", "vendor/fallback"],
-          },
-          models: { "vendor/fallback": { alias: "fast" } },
-        },
-        other: { model: "vendor/other" },
-      },
+const cfg: OpenClawConfig = {
+  agents: {
+    defaults: {
+      systemAgent: { agentId: "shared" },
+      model: "vendor/global",
+      models: { "vendor/unrelated": { alias: "fast" } },
     },
-  };
-}
+    entries: {
+      shared: {
+        model: {
+          primary: "vendor/primary",
+          fallbacks: ["fast", "vendor/restricted-v1", "vendor/fallback"],
+        },
+        models: { "vendor/fallback": { alias: "fast" } },
+      },
+      other: { model: "vendor/other" },
+    },
+  },
+};
 
-describe("operator model policy", () => {
-  it("derives ordered choices from the designated agent and resolves its aliases before exclusions", () => {
-    const cfg = config();
-    const policy = prepareOperatorModelPolicy({
-      cfg,
+it("derives membership from source models, aliases, wildcards, and explicit empty policies", () => {
+  const cases: Array<{
+    policy: Parameters<typeof prepareOperatorModelPolicy>[0]["policy"];
+    models?: string[];
+    checks: Array<[provider: string, models: string[], allowed: boolean]>;
+  }> = [
+    {
       policy: { deny: ["vendor/restricted-*"] },
-      manifestPlugins: [],
-    })!;
-    expect(policy.models).toEqual([
-      { provider: "vendor", model: "primary" },
-      { provider: "vendor", model: "fallback" },
-    ]);
-    expect(policy.allows({ provider: "vendor", model: "unrelated" })).toBe(false);
-    expect(policy.allows({ provider: "vendor", model: "global" })).toBe(false);
-    expect(policy.allows({ provider: "vendor", model: "restricted-v1" })).toBe(false);
-    expect(policy.allows({ provider: "vendor", model: "vendor/primary" })).toBe(false);
-
-    const deniedAlias = prepareOperatorModelPolicy({
-      cfg,
+      models: ["primary", "fallback"],
+      checks: [["vendor", ["unrelated", "global", "restricted-v1", "vendor/primary"], false]],
+    },
+    {
       policy: { sourceAgent: "shared", deny: ["fast"] },
-      manifestPlugins: [],
-    })!;
-    expect(deniedAlias.allows({ provider: "vendor", model: "fallback" })).toBe(false);
-  });
-
-  it("supports explicit membership and provider-normalized exclusions without widening empty policies", () => {
-    const cfg = config();
-    const policy = prepareOperatorModelPolicy({
-      cfg,
+      checks: [["vendor", ["fallback"], false]],
+    },
+    {
       policy: { allow: ["vendor/*", "second/manual"], deny: [" VENDOR / restricted-* "] },
-      manifestPlugins: [],
-    })!;
-    expect(policy.allows({ provider: "VENDOR", model: "new" })).toBe(true);
-    expect(policy.allows({ provider: "vendor", model: "restricted-new" })).toBe(false);
-    expect(policy.allows({ provider: "second", model: "manual" })).toBe(true);
-    expect(policy.allows({ provider: "second", model: "other" })).toBe(false);
-    expect(
-      prepareOperatorModelPolicy({ cfg, policy: undefined, manifestPlugins: [] }),
-    ).toBeUndefined();
-    const empty = prepareOperatorModelPolicy({ cfg, policy: { allow: [] }, manifestPlugins: [] })!;
-    expect(empty.models).toEqual([]);
-    expect(empty.allows({ provider: "vendor", model: "primary" })).toBe(false);
-  });
+      checks: [
+        ["VENDOR", ["new"], true],
+        ["vendor", ["restricted-new"], false],
+        ["second", ["manual"], true],
+        ["second", ["other"], false],
+      ],
+    },
+    { policy: undefined, checks: [] },
+    { policy: { allow: [] }, models: [], checks: [["vendor", ["primary"], false]] },
+  ];
+  for (const row of cases) {
+    const policy = prepareOperatorModelPolicy({ cfg, policy: row.policy, manifestPlugins: [] });
+    if (!row.policy) {
+      expect(policy).toBeUndefined();
+      continue;
+    }
+    if (row.models) {
+      expect(policy!.models).toEqual(row.models.map((model) => ({ provider: "vendor", model })));
+    }
+    for (const [provider, models, allowed] of row.checks) {
+      for (const model of models) {
+        expect(policy!.allows({ provider, model }), `${provider}/${model}`).toBe(allowed);
+      }
+    }
+  }
+});
 
-  it("replaces a denied default with an existing automatic fallback without granting a manual override", () => {
-    const cfg = config();
-    const policy = prepareOperatorModelPolicy({
-      cfg,
-      policy: { deny: ["vendor/primary", "vendor/restricted-*"] },
-      manifestPlugins: [],
-    });
-    expect(
-      resolveOperatorModelDefault({
-        cfg,
-        agentId: "shared",
-        policy,
-        model: { provider: "vendor", model: "primary" },
-        allows: () => false,
-        manifestPlugins: [],
-      }),
-    ).toEqual({ provider: "vendor", model: "fallback" });
-    expect(
-      resolveOperatorModelDefault({
-        cfg,
-        agentId: "other",
-        policy,
-        model: { provider: "vendor", model: "other" },
-        allows: () => false,
-        manifestPlugins: [],
-      }),
-    ).toBeUndefined();
-  });
+it("replaces a denied default with an existing automatic fallback without granting a manual override", () => {
+  const denied = ["vendor/primary", "vendor/restricted-*"];
+  const policy = prepareOperatorModelPolicy({ cfg, policy: { deny: denied }, manifestPlugins: [] });
+  const defaults = { cfg, policy, allows: () => false, manifestPlugins: [] };
+  const resolve = (agentId: string, model: string) =>
+    resolveOperatorModelDefault({ ...defaults, agentId, model: { provider: "vendor", model } });
+  expect(resolve("shared", "primary")).toEqual({ provider: "vendor", model: "fallback" });
+  expect(resolve("other", "other")).toBeUndefined();
 });

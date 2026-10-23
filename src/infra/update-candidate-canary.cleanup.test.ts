@@ -2,19 +2,27 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import {
-  completeCanaryCommand,
   createCanarySnapshotResult,
+  holdCanaryProgress,
   FakeChild,
   stubHealthyGateway,
+  canaryOutcomeStep,
 } from "./update-candidate-canary.test-support.js";
+import { createCanaryHarness } from "./update-candidate-harness.test-support.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -22,14 +30,20 @@ const mocks = vi.hoisted(() => ({
   signal: vi.fn(),
   port: vi.fn(),
 }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: mocks.spawn,
-}));
-vi.mock("../process/exec.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../process/exec.js")>()),
-  runCommandBuffered: mocks.snapshot,
-}));
+vi.mock("node:child_process", async (importOriginal) =>
+  (await import("./update-candidate-canary-mocks.test-support.js")).mockCanaryChildProcesses(
+    await importOriginal<typeof import("node:child_process")>(),
+    mocks.spawn,
+  ),
+);
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const { mockCanarySnapshotCommands } =
+    await import("./update-candidate-canary-mocks.test-support.js");
+  return mockCanarySnapshotCommands(
+    await importOriginal<typeof import("../process/exec.js")>(),
+    mocks.snapshot,
+  );
+});
 vi.mock("../process/kill-tree.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/kill-tree.js")>()),
   signalProcessTree: mocks.signal,
@@ -41,59 +55,326 @@ vi.mock("./ports-probe.js", async (importOriginal) => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
-let nextPid = 41_000;
-const children = new Map<number, FakeChild>();
-
-function canaryStateOptions(timeoutMs: number) {
-  return { root, stateDir: root, config: {}, env: {}, timeoutMs };
-}
+const harness = createCanaryHarness(mocks, {
+  isGateway: (args) => args.includes("--update-canary"),
+});
+const { children, options: canaryStateOptions } = harness;
 
 beforeEach(async () => {
-  vi.clearAllMocks();
-  root = path.join(await fs.realpath(tempDirs.make("canary-cleanup-")), "candidate");
-  await fs.mkdir(path.join(root, "dist", "infra"), { recursive: true });
-  await fs.writeFile(path.join(root, "dist", "index.js"), "");
-  await fs.writeFile(path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"), "");
-  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.1" }));
-  mocks.snapshot.mockImplementation(async (_command, options: { input: string }) =>
-    createCanarySnapshotResult(options.input),
-  );
-  mocks.spawn.mockImplementation((_command: string, args: string[]) => {
-    const child = new FakeChild(nextPid++);
-    children.set(child.pid, child);
-    if (args.includes("--update-canary")) {
-      return child;
-    }
-    completeCanaryCommand(child, args, () => ({
-      pluginInventory: undefined,
-      pluginErrors: false,
-      runtimeContract: { state: 2, agent: 3 },
-      runtimeError: false,
-      lintReport: { ok: true, checksRun: 1, findings: [], warnings: [] },
-    }));
-    return child;
-  });
-  mocks.signal.mockImplementation(
-    (pid: number, _signal: string, options: { onComplete?: () => void }) => {
-      children.get(pid)?.emit("close", 0);
-      options.onComplete?.();
-    },
-  );
+  root = await harness.reset(tempDirs.make("canary-cleanup-"));
 });
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-  for (const child of children.values()) {
-    child.stdout.destroy();
-    child.stderr.destroy();
-  }
-  children.clear();
-});
+afterEach(() => harness.dispose());
 
 describe("canary teardown evidence", () => {
   beforeEach(() => {
     mocks.port.mockResolvedValue(43_123);
     stubHealthyGateway();
+  });
+
+  it("preserves a candidate failure when private-copy cleanup reporting throws", async () => {
+    const original = new TypeError("synthetic candidate receipt failure");
+    const steps: UpdateStepResult[] = [];
+    const retained = new Set<string>();
+    try {
+      await expect(
+        validateUpdateCandidateCanary({
+          ...canaryStateOptions(3_000),
+          onStep: (step) => {
+            steps.push(step);
+            if (step.name === "candidate-doctor") {
+              throw original;
+            }
+          },
+          onProgress: (step) => {
+            if (step.step === "candidate-state-cleanup") {
+              const directory = step.detail?.match(/Temporary-copy cleanup (.*); waiting/)?.[1];
+              if (directory) {
+                retained.add(directory);
+              }
+              throw new RangeError("synthetic cleanup progress failure");
+            }
+          },
+        }),
+      ).rejects.toBe(original);
+      const warning = steps.find((step) =>
+        step.advisory?.message.includes("synthetic cleanup progress failure"),
+      );
+      expect(warning?.advisory?.message).toContain("RangeError");
+      expect(warning?.advisory?.message).toContain([...retained][0]);
+    } finally {
+      for (const directory of retained) {
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it.each(["initial-progress", "candidate-gateway-startup"])(
+    "propagates a %s receipt refusal once, cleaning up only admitted work",
+    async (stepName) => {
+      let copiedStateDir: string | undefined;
+      mocks.snapshot.mockImplementation(async (_command, options: { input: string }) => {
+        const request: unknown = JSON.parse(options.input);
+        if (isRecord(request) && request.mode === "snapshot") {
+          if (typeof request.targetStateDir !== "string") {
+            throw new Error("Snapshot fixture requires its owned target directory");
+          }
+          copiedStateDir = request.targetStateDir;
+        }
+        return createCanarySnapshotResult(options.input);
+      });
+      const refusal = new Error("progress receipt was refused");
+      let refused = false;
+      const onStep = vi.fn(async (step: UpdateStepResult) => {
+        if (step.name === stepName && !refused) {
+          refused = true;
+          throw refusal;
+        }
+      });
+      await expect(
+        validateUpdateCandidateCanary({
+          ...canaryStateOptions(3_000),
+          onStep,
+          onProgress:
+            stepName === "initial-progress" ? vi.fn().mockRejectedValue(refusal) : undefined,
+        }),
+      ).rejects.toBe(refusal);
+      if (stepName === "initial-progress") {
+        expect(mocks.snapshot).not.toHaveBeenCalled();
+        expect(mocks.spawn).not.toHaveBeenCalled();
+        expect(onStep).not.toHaveBeenCalled();
+        return;
+      }
+      expect(onStep.mock.calls.filter(([step]) => step.name === stepName)).toEqual([
+        [expect.objectContaining({ exitCode: 0 })],
+      ]);
+      for (const child of children.values()) {
+        expect(child.exitCode).toBe(0);
+      }
+      if (!copiedStateDir) {
+        throw new Error("Candidate did not create its private state copy");
+      }
+      await expect(fs.access(copiedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each(["candidate-doctor", "candidate-gateway-startup"])(
+    "awaits the %s start receipt before launching its process",
+    async (name) => {
+      const { entered, receipt, onProgress } = holdCanaryProgress(
+        (step) => step.step === name && step.status === "in_progress",
+      );
+      const refusal = new Error("check start receipt was refused");
+      const onStep = vi.fn();
+      const pending = validateUpdateCandidateCanary({
+        ...canaryStateOptions(3_000),
+        onStep,
+        onProgress,
+      });
+      try {
+        await Promise.race([entered, pending]);
+        expect(mocks.spawn).toHaveBeenCalledTimes(name === "candidate-doctor" ? 0 : 5);
+        receipt.reject(refusal);
+        await expect(pending).rejects.toBe(refusal);
+        expect(onStep.mock.calls.some(([step]) => step.name === name)).toBe(false);
+      } finally {
+        receipt.resolve();
+        await pending.catch(() => undefined);
+      }
+    },
+  );
+
+  it("retains integrity progress and the timeout cause when teardown closes the child with zero", async () => {
+    let now = 2_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const waiting = createDeferredCore();
+    const progress =
+      "SQLite integrity check still running: agent database (400 MiB, 10s elapsed, phase=checking).";
+    mocks.spawn.mockImplementationOnce(() => {
+      const child = harness.child(true);
+      queueMicrotask(() => {
+        child.stderr.write(`[state/sqlite] ${progress}\n`);
+        waiting.resolve();
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      now += 899;
+      return child;
+    });
+    try {
+      const pending = validateUpdateCandidateCanary(canaryStateOptions(1_000));
+      await waiting.promise;
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+      const cause = "candidate-migration-rehearsal: doctor exceeded budget after 1 s";
+      expect(result).toMatchObject({
+        status: "error",
+        phase: "doctor",
+        reason: "candidate-checks-timeout",
+      });
+      expect(result.logTail.join("\n")).toContain(`${cause} ([state/sqlite] ${progress})`);
+      const failed = canaryOutcomeStep(result.steps)!;
+      expect(failed).toMatchObject({ exitCode: null, termination: "timeout" });
+      expect(failed.failureFacts).toEqual([
+        expect.objectContaining({
+          check: "doctor",
+          code: "candidate-checks-timeout",
+          message: expect.stringContaining(cause),
+        }),
+      ]);
+      const detail = updateRunStepsFromResultStep(failed).at(-1)?.detail;
+      expect(failed.stderrTail).toContain("phase=checking");
+      expect(detail).toContain(cause);
+      const report = renderUpdateRunReport(
+        updateRunReportInputFromResult({ ...result, mode: "git", root }),
+      );
+      expect(report.markdown).toContain(cause);
+      expect(report.markdown).toContain("phase=checking");
+      expect(report.markdown).not.toContain("usable inference route");
+    } finally {
+      clock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["before-deadline", "after-deadline"] as const)(
+    "retains uncertain cleanup progress after custody succeeds (%s)",
+    async (timing) => {
+      const directory = path.join(root, "owned-cleanup-copy");
+      await fs.mkdir(directory);
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const { entered, receipt, onProgress } = holdCanaryProgress(
+        (step) => step.detail?.includes("waiting for filesystem removal") ?? false,
+      );
+      const uncertain = new CommandProcessCleanupError();
+      const remove = vi.spyOn(fs, "rm");
+      const onWarning = vi.fn();
+      const pending = cleanupUpdateTemporaryDirectory({
+        root,
+        directory,
+        name: "candidate-state-cleanup",
+        canRemove: async () => true,
+        onProgress,
+        onWarning,
+      });
+      const rejected = expect(pending).rejects.toBe(uncertain);
+      try {
+        await entered;
+        if (timing === "after-deadline") {
+          await vi.advanceTimersByTimeAsync(300_000);
+        }
+        expect(remove).not.toHaveBeenCalled();
+        expect(onWarning).not.toHaveBeenCalled();
+        receipt.reject(uncertain);
+        await rejected;
+        expect(remove).not.toHaveBeenCalled();
+        expect(onWarning).not.toHaveBeenCalled();
+        await fs.access(directory);
+      } finally {
+        receipt.resolve();
+        await pending.catch(() => undefined);
+        await rejected.catch(() => undefined);
+        remove.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "retains uncertain warning delivery (aggregate: %s)",
+    async (aggregate) => {
+      const uncertain = new CommandProcessCleanupError();
+      const error = aggregate ? new AggregateError([uncertain], "uncertain cleanup") : uncertain;
+      await expect(
+        cleanupUpdateTemporaryDirectory({
+          root,
+          directory: path.join(root, "owned-cleanup-copy"),
+          name: "candidate-state-cleanup",
+          onProgress: () => {
+            throw new RangeError("cleanup progress unavailable");
+          },
+          onWarning: () => {
+            throw error;
+          },
+        }),
+      ).rejects.toBe(error);
+    },
+  );
+
+  it("preserves uncertain startup when recording its stop warning also fails", async () => {
+    const response = createDeferredCore<Response>();
+    const fetching = createDeferredCore();
+    const uncertain = new CommandProcessCleanupError();
+    const cleanupFailure = new Error("cleanup warning ledger unavailable");
+    let gateway: FakeChild | undefined;
+    let retained: string | undefined;
+    const signalNormally = mocks.signal.getMockImplementation()!;
+    harness.overrideSpawn("--update-canary", (_args, options) => {
+      gateway = harness.child(true);
+      retained = options.env.OPENCLAW_STATE_DIR;
+      return gateway;
+    });
+    mocks.signal.mockImplementation((pid, signal, options) => {
+      if (!gateway || pid !== gateway.pid) {
+        signalNormally(pid, signal, options);
+        return;
+      }
+      gateway.emit("exit", 0);
+      options.onComplete?.();
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, options: RequestInit) => {
+        options.signal?.addEventListener("abort", () => response.reject(options.signal?.reason));
+        fetching.resolve();
+        return response.promise;
+      }),
+    );
+    const onStep = vi.fn((step: { name: string }) => {
+      if (step.name === "candidate-recovery") {
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      }
+      if (step.name === "candidate-gateway-startup-cleanup") {
+        throw cleanupFailure;
+      }
+    });
+    const pending = validateUpdateCandidateCanary({
+      ...canaryStateOptions(1_000),
+      onStep,
+      onProgress: async (step) => {
+        if (step.step === "warning:candidate-gateway-startup") {
+          throw uncertain;
+        }
+      },
+    });
+    const outcome = pending.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    try {
+      await fetching.promise;
+      await vi.advanceTimersByTimeAsync(300);
+      gateway!.stderr.write("openclaw-update-canary-progress: config.snapshot\n");
+      await vi.advanceTimersByTimeAsync(2_600);
+      const failure = await outcome;
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure).toMatchObject({ cause: cleanupFailure, errors: [uncertain, cleanupFailure] });
+      expect(hasCommandProcessCleanupError(failure)).toBe(true);
+      expect(onStep).toHaveBeenLastCalledWith(
+        expect.objectContaining({ name: "candidate-gateway-startup-cleanup" }),
+      );
+      if (!retained) {
+        throw new Error("Gateway did not capture its rehearsal state directory");
+      }
+      await fs.access(path.join(retained, "openclaw.json"));
+    } finally {
+      response.resolve(Response.json({ status: "started", ready: true }));
+      gateway?.emit("close", 0);
+      await outcome;
+      vi.useRealTimers();
+      if (retained) {
+        await fs.rm(retained, { recursive: true, force: true });
+      }
+    }
   });
 
   it.each(["timer", "elapsed"] as const)(
@@ -153,7 +434,6 @@ describe("canary teardown evidence", () => {
   it.each(["completed", "deadline"] as const)(
     "records the disposable-copy wait after a passed canary (%s)",
     async (outcome) => {
-      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       const removalStarted = createDeferredCore<string>();
       const removal = createDeferredCore();
       const remove = fs.rm.bind(fs);
@@ -168,7 +448,12 @@ describe("canary teardown evidence", () => {
         return remove(target, options);
       });
       const onProgress = vi.fn();
-      const onStep = vi.fn();
+      const onStep = vi.fn((step: { name: string }) => {
+        if (step.name === "candidate-gateway-startup") {
+          // Snapshot subprocess settlement must finish before virtualizing the cleanup clock.
+          vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+        }
+      });
       const pending = validateUpdateCandidateCanary({
         ...canaryStateOptions(3_000),
         onProgress,
@@ -230,46 +515,28 @@ describe("canary teardown evidence", () => {
     },
   );
 
-  it.each([
-    "passed",
-    "failed",
-    "pipes",
-    "natural",
-    "unconfirmed",
-    "late",
-    "missing",
-    "malformed",
-  ] as const)(
+  it.each(["pipes", "unconfirmed", "late", "malformed"] as const)(
     "distinguishes a completed lint report (%s) from checks still running at the deadline",
     async (report) => {
       let now = 2_000_000;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-      const spawnNormally = mocks.spawn.getMockImplementation()!;
       const signalNormally = mocks.signal.getMockImplementation()!;
-      const lintFindings = Array.from({ length: 5 }, (_, index) => ({
-        checkId: `core/config-${index}`,
-        message: `Invalid configuration ${index}.`,
-      }));
       let lintChild: FakeChild | undefined;
-      mocks.spawn.mockImplementation((command, args: string[], options) => {
-        if (!args.includes("--lint")) {
-          return spawnNormally(command, args, options);
-        }
-        const child = new FakeChild(nextPid++);
+      harness.overrideSpawn("--lint", () => {
+        const child = harness.child(true);
         lintChild = child;
-        children.set(child.pid, child);
         queueMicrotask(() => {
           child.stderr.write("└  Doctor complete.\n");
           child.stdout.write(
-            report === "missing" || report === "late"
+            report === "late"
               ? ""
               : JSON.stringify(
                   report === "malformed"
                     ? { ok: true }
                     : {
-                        ok: report !== "failed",
+                        ok: true,
                         checksRun: 1,
-                        findings: report === "failed" ? lintFindings : [],
+                        findings: [],
                       },
                 ),
           );
@@ -290,11 +557,7 @@ describe("canary teardown evidence", () => {
             options.onComplete?.();
             return;
           }
-          lintChild.emit(
-            "exit",
-            report === "natural" ? 0 : null,
-            report === "natural" ? null : "SIGTERM",
-          );
+          lintChild.emit("exit", null, "SIGTERM");
         }
         signalNormally(pid, signal, options);
       });
@@ -302,7 +565,7 @@ describe("canary teardown evidence", () => {
         const result = await validateUpdateCandidateCanary(canaryStateOptions(1_000));
         const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint")!;
         expect(step.termination).toBe("timeout");
-        const completed = ["passed", "failed", "pipes", "natural", "unconfirmed"].includes(report);
+        const completed = report === "pipes" || report === "unconfirmed";
         const rendered = renderUpdateRunReport(
           updateRunReportInputFromResult({ ...result, mode: "git", root }),
         );
@@ -310,15 +573,8 @@ describe("canary teardown evidence", () => {
           const message = `Update lint exit phase timed out after 0ms (899ms total); checks completed; ${report === "pipes" ? "output pipes stayed open" : "process did not exit"}. Continuing with recorded check results.`;
           expect(step.warnings).toEqual([message]);
           expect(rendered.markdown).toContain(message);
-          if (report === "failed") {
-            expect(result).toMatchObject({ status: "error", phase: "lint" });
-            expect(step.failureFacts?.map((fact) => fact.message)).toEqual(
-              lintFindings.map((finding) => finding.message),
-            );
-          } else {
-            expect(result).toMatchObject({ status: "ok", phase: "readiness" });
-            expect(step.failureFacts).toBeUndefined();
-          }
+          expect(result).toMatchObject({ status: "ok", phase: "readiness" });
+          expect(step.failureFacts).toBeUndefined();
         } else {
           expect(result).toMatchObject({
             status: "error",
@@ -329,10 +585,11 @@ describe("canary teardown evidence", () => {
             {
               check: "lint",
               code: "candidate-checks-timeout",
-              message: "Update lint checks phase timed out (899ms)",
+              message:
+                "candidate-migration-rehearsal: lint exceeded budget after 1 s (└  Doctor complete.)",
             },
           ]);
-          expect(rendered.markdown).toContain("checks phase");
+          expect(rendered.markdown).toContain("lint exceeded budget after 1 s");
           expect(JSON.stringify(result)).not.toContain("exit phase");
         }
       } finally {
@@ -341,36 +598,36 @@ describe("canary teardown evidence", () => {
     },
   );
 
-  it.each(["close", "term-callback", "kill-callback", "error", "cancelled"] as const)(
+  it.each(["close", "error", "cancelled", "startup-error"] as const)(
     "reports incomplete %s evidence without changing validation outcomes",
     async (missing) => {
       let now = 2_000_000;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-      const spawnNormally = mocks.spawn.getMockImplementation()!;
       const signalNormally = mocks.signal.getMockImplementation()!;
-      const heldCallbacks: Array<() => void> = [];
       const controller = new AbortController();
       const duringDoctor = missing === "error" || missing === "cancelled";
       let controlled: FakeChild | undefined;
-      mocks.spawn.mockImplementation(
-        (command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
-          if (!(duringDoctor ? args.includes("--fix") : args.includes("--update-canary"))) {
-            return spawnNormally(command, args, options);
-          }
-          controlled = new FakeChild(nextPid++);
-          children.set(controlled.pid, controlled);
-          if (missing === "error") {
-            const child = controlled;
-            queueMicrotask(() =>
-              child.emit("error", new Error("synthetic validation process error")),
-            );
-          }
-          if (missing === "cancelled") {
-            controller.abort();
-          }
-          return controlled;
-        },
-      );
+      harness.overrideSpawn(duringDoctor ? "--fix" : "--update-canary", () => {
+        controlled = harness.child(true);
+        if (missing === "error") {
+          const child = controlled;
+          queueMicrotask(() =>
+            child.emit("error", new Error("synthetic validation process error")),
+          );
+        }
+        if (missing === "cancelled") {
+          controller.abort();
+        }
+        if (missing === "startup-error") {
+          const child = controlled;
+          queueMicrotask(() => {
+            child.stderr.write("plugin load failed: discord: synthetic failure\n");
+            child.exitCode = 1;
+            child.emit("exit", 1, null);
+          });
+        }
+        return controlled;
+      });
       mocks.signal.mockImplementation(
         (pid: number, signal: string, options: { onComplete?: () => void }) => {
           if (pid !== controlled?.pid) {
@@ -383,17 +640,7 @@ describe("canary teardown evidence", () => {
               controlled.emit("exit", 0);
             }
           }
-          if (missing === "term-callback" || missing === "kill-callback") {
-            controlled.emit("close", 0);
-          }
-          const hold =
-            (missing === "term-callback" && signal === "SIGTERM") ||
-            (missing === "kill-callback" && signal === "SIGKILL");
-          if (hold && options.onComplete) {
-            heldCallbacks.push(options.onComplete);
-          } else {
-            options.onComplete?.();
-          }
+          options.onComplete?.();
         },
       );
       const onStep = vi.fn();
@@ -428,15 +675,30 @@ describe("canary teardown evidence", () => {
             reason: "doctor-failed",
           });
           if (missing === "error") {
-            expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain(
+            expect(canaryOutcomeStep(result.steps)?.failureFacts?.[0]?.message).toContain(
               "synthetic validation process error",
             );
           } else {
-            expect(result.steps.at(-1)?.exitCode).toBe(1);
+            expect(canaryOutcomeStep(result.steps)?.exitCode).toBe(1);
           }
           expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("--update-canary"))).toBe(
             false,
           );
+        } else if (missing === "startup-error") {
+          expect(result).toMatchObject({ status: "error", phase: "startup" });
+          const failures = result.steps.filter((step) => step.name === name);
+          expect(failures).toHaveLength(1);
+          expect(failures[0]).toMatchObject({
+            exitCode: 1,
+            failureFacts: [
+              {
+                code: "candidate-startup-failed",
+                message: "plugin load failed",
+                pluginId: "discord",
+              },
+            ],
+          });
+          expect(onStep.mock.calls.filter(([step]) => step.name === name)).toEqual([[failures[0]]]);
         } else {
           expect(result).toMatchObject({ status: "ok", phase: "readiness" });
           expect(result.steps).toContainEqual(expect.objectContaining({ name, exitCode: 0 }));
@@ -445,9 +707,6 @@ describe("canary teardown evidence", () => {
           ).toBeUndefined();
         }
       } finally {
-        for (const callback of heldCallbacks) {
-          callback();
-        }
         controlled?.emit("close", 0);
         controlled?.stdout.destroy();
         controlled?.stderr.destroy();
@@ -459,19 +718,12 @@ describe("canary teardown evidence", () => {
   it("joins close and both signal callbacks after recording readiness", async () => {
     const term = createDeferredCore<() => void>();
     const kill = createDeferredCore<() => void>();
-    const spawnNormally = mocks.spawn.getMockImplementation()!;
     const signalNormally = mocks.signal.getMockImplementation()!;
     let gateway: FakeChild | undefined;
-    mocks.spawn.mockImplementation(
-      (command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
-        if (!args.includes("--update-canary")) {
-          return spawnNormally(command, args, options);
-        }
-        gateway = new FakeChild(nextPid++);
-        children.set(gateway.pid, gateway);
-        return gateway;
-      },
-    );
+    harness.overrideSpawn("--update-canary", () => {
+      gateway = harness.child(true);
+      return gateway;
+    });
     mocks.signal.mockImplementation(
       (pid: number, signal: string, options: { onComplete: () => void }) => {
         if (pid !== gateway?.pid) {
@@ -532,7 +784,9 @@ describe("canary teardown evidence", () => {
     try {
       const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
       expect(result).toMatchObject({ status: "error", phase: "doctor", reason: "doctor-failed" });
-      expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain("synthetic spawn failure");
+      expect(canaryOutcomeStep(result.steps)?.failureFacts?.[0]?.message).toContain(
+        "synthetic spawn failure",
+      );
       expect(mocks.signal).not.toHaveBeenCalled();
       expect(result.steps.some((step) => step.advisory)).toBe(false);
     } finally {

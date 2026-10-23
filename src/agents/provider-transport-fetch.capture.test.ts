@@ -3,8 +3,10 @@ import type { ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { Model } from "@openclaw/llm-core";
+import OpenAI from "openai";
 import { Stream } from "openai/core/streaming";
 import { describe, expect, it, vi } from "vitest";
+import { createResponsesStreamWithRecovery } from "../../packages/ai/src/transports/openai-responses-replay-internal.js";
 import { createOpenAIResponsesAssistantOutput } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
 import { buildGuardedModelFetch } from "../plugin-sdk/provider-transport-runtime.js";
@@ -117,7 +119,22 @@ describe("managed provider response capture", () => {
               },
             );
             try {
-              const sdk = Stream.fromSSEResponse(response, controller);
+              const request = {
+                model: model.id,
+                stream: true,
+                input: [{ role: "user", content: "fixture" }],
+              } satisfies Parameters<typeof createResponsesStreamWithRecovery>[0]["request"];
+              const { stream: sdk } = await createResponsesStreamWithRecovery({
+                client: new OpenAI({
+                  apiKey: "fixture-key",
+                  baseURL: localModel.baseUrl,
+                  fetch: async () => response,
+                }),
+                request,
+                buildFullHistoryRequest: () => request,
+                requestOptions: { signal: controller.signal },
+                model: localModel,
+              });
               async function* observed() {
                 for await (const event of sdk) {
                   firstEvent.resolve();

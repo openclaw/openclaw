@@ -17,6 +17,7 @@ export async function beginCodexAttemptSettlement(
   const { state: resourceState } = resources;
   const { connection } = resources.prompt.context.runtime;
   const { params, runAbortController, appServer } = connection;
+  const { toolBridge } = resources.prompt.context.attemptTools;
   const { state, deadlines, settlementExpired } = turnRuntime;
   const { drainNotificationQueue } = notifications;
   const { activeProjector, activeTurnId } = activeTurn;
@@ -29,6 +30,9 @@ export async function beginCodexAttemptSettlement(
     }
     drainGraceTimer = setTimeout(() => {
       settlementPhase = "expired";
+      // The cutoff also closes optional native binding/subscription admission.
+      // Queuing fresh row authority after this point would rejoin the blocked writer.
+      resourceState.nativeSettlementExpired = true;
       drainGraceElapsed.resolve();
     }, TURN_FINALIZE_DRAIN_ABORT_GRACE_MS);
     drainGraceTimer.unref?.();
@@ -79,6 +83,7 @@ export async function beginCodexAttemptSettlement(
             return new Map();
           }
         };
+        state.readRetainedNativeCommands = readRetainedNativeCommands;
       } catch (error) {
         embeddedAgentLog.debug("could not confirm retained native commands", {
           threadId: resourceState.thread.threadId,
@@ -88,6 +93,9 @@ export async function beginCodexAttemptSettlement(
       // Native exit may arrive while the inventory RPC is pending.
       await drainNotificationQueue();
     }
+    activeProjector.prepareTerminalToolResultCheckpoint(toolBridge.telemetry, {
+      readRetainedNativeCommands: () => readRetainedNativeCommands?.() ?? new Map(),
+    });
     await closeProjection();
     await activeProjector.settlement.drain();
   });

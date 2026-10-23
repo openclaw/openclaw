@@ -2,6 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaBusConversationKind } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BuzzInboundMessage } from "../message-event.js";
 import { buildBuzzTarget } from "../target.js";
 import { parseBuzzQaCredentialPayload, readBuzzQaCredentialFile } from "./credentials.js";
@@ -9,9 +10,7 @@ import { createBuzzQaRelayDriver } from "./relay-client.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
-type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>> & {
-  cleanupAfterGatewayStop?: () => Promise<void>;
-};
+type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 const BUZZ_GATEWAY_ACCOUNT_ID = "default";
 const BUZZ_MESSAGE_ID_MAPPING_TIMEOUT_MS = 5_000;
@@ -54,7 +53,7 @@ export async function createBuzzQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
-  const credentialFile = options.credentialFile?.trim();
+  const credentialFile = readNonBlankString(options.credentialFile);
   const requestedCredentialSource =
     options.credentialSource?.trim().toLowerCase() || (credentialFile ? "file" : undefined);
   if (
@@ -208,8 +207,7 @@ export async function createBuzzQaTransportAdapter(
       }) as Pick<OpenClawConfig, "channels" | "messages">,
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
       await waitForBuzzChannelRunning({
-        // Buzz is currently single-account; the QA bus keeps its portable SUT
-        // label while Gateway status reports the plugin's canonical account id.
+        // QA config uses the default account; the bus keeps its portable SUT label.
         accountId: BUZZ_GATEWAY_ACCOUNT_ID,
         gateway,
         timeoutMs,

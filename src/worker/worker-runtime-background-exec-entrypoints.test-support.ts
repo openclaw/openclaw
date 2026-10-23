@@ -47,4 +47,9 @@ export const workerBackgroundExecEntrypoints = {
     sourceWorkerName: "../plugins/plugin-module-loader-cache",
     distWorkerPath: "plugins/plugin-module-loader-cache.js",
   },
+  thinking: {
+    currentModuleUrl,
+    sourceWorkerName: "../auto-reply/thinking",
+    distWorkerPath: "auto-reply/thinking.js",
+  },
 } as const;

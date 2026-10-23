@@ -1,4 +1,5 @@
 import { channel } from "node:diagnostics_channel";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it } from "vitest";
 import { startGatewayBenchDiagnostics } from "../../scripts/lib/gateway-bench-diagnostics.js";
 
@@ -40,6 +41,7 @@ it("aggregates captured work with bounded memory and drops content-bearing field
   expect(result.groups).toHaveLength(256);
   expect(result.droppedEvents).toBe(46);
   expect(result.collectionErrors).toBe(0);
+  expect(result.droppedHistogramSamples).toBe(6);
   expect(result.groups[0]).toMatchObject({
     operation: "session-entry.patch",
     count: 2,
@@ -64,4 +66,61 @@ it("aggregates captured work with bounded memory and drops content-bearing field
   expect(JSON.stringify(result)).not.toContain("private");
   source.publish({ operation: "session-entry.patch", outcome: "ok", queueWaitMs: 999 });
   expect(result.groups[0]).toMatchObject({ count: 2 });
+});
+
+it("reports latency tails, preserves zero, and bounds outliers without changing raw aggregates", () => {
+  const source = channel("openclaw.worker.task");
+  const finish = startGatewayBenchDiagnostics();
+  let result;
+  try {
+    for (const runMs of [0, 1, 2, 3, 4, 1_000_000_000]) {
+      source.publish({
+        worker: "synthetic",
+        outcome: "ok",
+        runMs,
+        queueMs: 0,
+        pendingBytes: 12,
+        transferMs: Number.NaN,
+        preparationMs: -1,
+        hostWaitMs: Number.POSITIVE_INFINITY,
+      });
+    }
+  } finally {
+    result = finish();
+  }
+  const metrics = expectDefined(result.groups[0], "worker diagnostic group").metrics;
+  expect(metrics.runMs).toMatchObject({
+    count: 6,
+    total: 1_000_000_010,
+    max: 1_000_000_000,
+    histogramCount: 6,
+    clampedCount: 1,
+    p50: expect.closeTo(2, 1),
+    p95: expect.closeTo(3_600_000, -5),
+    p99: expect.closeTo(3_600_000, -5),
+  });
+  expect(metrics.queueMs).toMatchObject({ p50: 0, p95: 0, p99: 0, clampedCount: 0 });
+  expect(metrics.pendingBytes).toEqual({ count: 6, total: 72, max: 12 });
+  expect(Object.keys(metrics).toSorted()).toEqual(["pendingBytes", "queueMs", "runMs"]);
+  expect(result.collectionErrors).toBe(0);
+});
+
+it("separates transcript hydration and model reads within shared database reservations", () => {
+  const source = channel("openclaw.agent-database.reservation");
+  const finish = startGatewayBenchDiagnostics();
+  try {
+    for (const caller of ["history.hydration", "history.hydration", "history.model-context"]) {
+      source.publish({ operation: "direct", caller, outcome: "ok", writerExecutionMs: 3 });
+    }
+  } finally {
+    const result = finish();
+    expect(result.groups).toMatchObject([
+      { operation: "history.hydration", count: 2, metrics: { writerExecutionMs: { total: 6 } } },
+      {
+        operation: "history.model-context",
+        count: 1,
+        metrics: { writerExecutionMs: { total: 3 } },
+      },
+    ]);
+  }
 });

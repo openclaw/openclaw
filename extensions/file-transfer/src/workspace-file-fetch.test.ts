@@ -1,10 +1,14 @@
 import crypto from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginServiceContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
-import { fetchWorkspaceFile } from "./workspace-file-fetch.js";
+import { FILE_FETCH_CHUNK_BYTES } from "./shared/file-fetch-protocol.js";
+import { createNodeWorkspaceBridge } from "./workspace-bridge.js";
 
-function fixture(options: { maxBytes?: number; receipt?: Record<string, unknown> } = {}) {
+function fixture(options: { excess?: boolean; receipt?: Record<string, unknown> } = {}) {
   const bytes = Buffer.from("output");
   const closed = createDeferred<unknown>();
   let receiver: ((message: Uint8Array) => void | Promise<void>) | undefined;
@@ -22,7 +26,14 @@ function fixture(options: { maxBytes?: number; receipt?: Record<string, unknown>
             if (!receiver) {
               throw new Error("receiver was not registered before START");
             }
-            await receiver(bytes);
+            if (options.excess) {
+              const chunk = Buffer.alloc(FILE_FETCH_CHUNK_BYTES);
+              for (let index = 0; index < 17; index += 1) {
+                await receiver(chunk);
+              }
+            } else {
+              await receiver(bytes);
+            }
             closed.resolve({
               payload: {
                 ok: true,
@@ -44,32 +55,31 @@ function fixture(options: { maxBytes?: number; receipt?: Record<string, unknown>
       close,
     }),
   );
+  const invoke = vi.fn<OpenClawPluginApi["runtime"]["nodes"]["invoke"]>(async () => ({
+    payload: { ok: false, code: "FILE_TOO_LARGE" },
+  }));
+  const bridge = createNodeWorkspaceBridge({
+    nodeId: "node",
+    workspaceDir: "/workspace",
+    remoteRoot: "/remote",
+    invoke,
+    openDuplex,
+    signal: new AbortController().signal,
+  });
   return {
     close,
     unsubscribe,
-    bytes,
     read: () =>
-      fetchWorkspaceFile({
-        nodeId: "node",
-        params: { path: "/remote/output" },
-        openDuplex,
-        maxBytes: options.maxBytes ?? bytes.length,
-        signal: new AbortController().signal,
-        assertCurrent: () => {},
+      bridge.readFile({
+        filePath: "/workspace/output",
+        maxBytes: 16 * 1024 * 1024 + 1,
       }),
   };
 }
 
-describe("workspace binary file.fetch receiver", () => {
-  it("returns bytes only after a matching final receipt and closes its channel", async () => {
-    const value = fixture();
-    expect(await value.read()).toEqual({ data: value.bytes, canonicalPath: "/remote/output" });
-    expect(value.close).toHaveBeenCalledOnce();
-    expect(value.unsubscribe).toHaveBeenCalledOnce();
-  });
-
+describe("node workspace binary reads", () => {
   it("rejects excess bytes before accepting the final receipt", async () => {
-    const value = fixture({ maxBytes: 5 });
+    const value = fixture({ excess: true });
     await expect(value.read()).rejects.toThrow("oversized");
     expect(value.close).toHaveBeenCalledOnce();
     expect(value.unsubscribe).toHaveBeenCalledOnce();

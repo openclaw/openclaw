@@ -1,13 +1,19 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
-import {
-  matchesAcpSessionControlBinding,
-  type AcpSessionControlBinding,
-} from "./session-control-owner.js";
+import { matchesAcpSessionControlBinding } from "./session-control-owner.js";
+import type { AcpSessionControlBinding } from "./session-meta-control.types.js";
 
 export type AcpSessionEntryExpectation = Pick<
   SessionEntry,
   "sessionId" | "lifecycleRevision" | "sessionStartedAt"
 > | null;
+
+export function captureAcpSessionEntryBinding({
+  sessionId,
+  lifecycleRevision,
+  sessionStartedAt,
+}: NonNullable<AcpSessionEntryExpectation>): NonNullable<AcpSessionEntryExpectation> {
+  return { sessionId, lifecycleRevision, sessionStartedAt };
+}
 
 /** A fresh row may change metadata, but cannot replace the lifecycle or cleanup target. */
 export function assertAcpSessionMutationEntry(

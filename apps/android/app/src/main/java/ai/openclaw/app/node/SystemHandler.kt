@@ -34,10 +34,10 @@ private class AndroidSystemNotificationPoster(
 ) : SystemNotificationPoster {
   /** Posts through a priority-specific channel so Android's immutable channel importance is respected. */
   override fun post(request: SystemNotifyRequest) {
+    // Android lint must see the platform check before notify().
     if (
       Build.VERSION.SDK_INT >= 33 &&
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
-      PackageManager.PERMISSION_GRANTED
+      ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
     ) {
       throw SecurityException("notifications permission missing")
     }
@@ -85,13 +85,6 @@ private class AndroidSystemNotificationPoster(
   }
 }
 
-private fun compatPriority(priority: String?): Int =
-  when (priority.orEmpty().trim().lowercase()) {
-    "passive" -> NotificationCompat.PRIORITY_LOW
-    "timesensitive" -> NotificationCompat.PRIORITY_HIGH
-    else -> NotificationCompat.PRIORITY_DEFAULT
-  }
-
 private fun isSilentSound(sound: String?): Boolean {
   val normalized = sound?.trim()?.lowercase() ?: return false
   return normalized in setOf("none", "silent", "off", "false", "0")
@@ -108,7 +101,6 @@ internal fun buildSystemNotification(
     .setContentTitle(request.title)
     .setContentText(request.body)
     .setContentIntent(mainActivityPendingIntent(appContext, NOTIFICATION_CONTENT_REQUEST_CODE))
-    .setPriority(compatPriority(request.priority))
     .setAutoCancel(true)
     .setOnlyAlertOnce(true)
     .setSilent(isSilentSound(request.sound))
@@ -122,24 +114,15 @@ class SystemHandler internal constructor(
   fun handleSystemNotify(paramsJson: String?): GatewaySession.InvokeResult {
     val params =
       parseNotifyRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object with title/body",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object with title/body")
     if (params.title.isEmpty() && params.body.isEmpty()) {
-      return GatewaySession.InvokeResult.error(
-        code = "INVALID_REQUEST",
-        message = "INVALID_REQUEST: empty notification",
-      )
+      return nodeInvokeError("INVALID_REQUEST", "empty notification")
     }
     return try {
       poster.post(params)
       GatewaySession.InvokeResult.ok(null)
     } catch (_: SecurityException) {
-      GatewaySession.InvokeResult.error(
-        code = "NOT_AUTHORIZED",
-        message = "NOT_AUTHORIZED: enable OpenClaw notifications and the selected priority in Android Settings",
-      )
+      nodeInvokeError("NOT_AUTHORIZED", "enable OpenClaw notifications and the selected priority in Android Settings")
     } catch (err: Throwable) {
       GatewaySession.InvokeResult.error(
         code = "UNAVAILABLE",

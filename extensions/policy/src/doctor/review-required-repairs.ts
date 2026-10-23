@@ -5,13 +5,12 @@ import type {
   HealthRepairEffect,
   HealthRepairResult,
 } from "openclaw/plugin-sdk/health";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CHECK_IDS, type POLICY_CHECK_IDS } from "./check-ids.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
 
 type PolicyCheckId = (typeof POLICY_CHECK_IDS)[number];
 
-const REVIEW_REQUIRED_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
+export const REVIEW_REQUIRED_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
   CHECK_IDS.policyGatewayNonLoopbackBind,
   CHECK_IDS.policyGatewayNodeCommandDenied,
 ]);
@@ -29,14 +28,7 @@ export function previewPolicyReviewRequiredRepair(
       changes: [],
     });
   }
-  if (
-    findings.length === 0 ||
-    findings.some(
-      (finding) =>
-        finding.checkId !== checkId ||
-        POLICY_FIX_METADATA_BY_CHECK_ID.get(finding.checkId)?.fixClass !== "reviewRequired",
-    )
-  ) {
+  if (findings.length === 0 || findings.some((finding) => finding.checkId !== checkId)) {
     return Promise.resolve({
       status: "skipped",
       reason: "policy finding is not classified as review-required",
@@ -44,8 +36,12 @@ export function previewPolicyReviewRequiredRepair(
     });
   }
 
-  const previews = findings.flatMap((finding) => previewForFinding(finding, checkId));
-  if (previews.length === 0) {
+  const previews = new Map(
+    findings
+      .flatMap((finding) => previewForFinding(finding, checkId))
+      .map((preview) => [preview.change, preview.effect]),
+  );
+  if (previews.size === 0) {
     return Promise.resolve({
       status: "skipped",
       reason: "policy review-required repair had no previewable config changes",
@@ -56,9 +52,9 @@ export function previewPolicyReviewRequiredRepair(
   return Promise.resolve({
     status: "skipped",
     reason: "policy repair requires review before changing config",
-    changes: uniqueStrings(previews.map((preview) => preview.change)),
-    warnings: uniqueStrings(previews.map((preview) => preview.change)),
-    effects: uniqueEffects(previews.map((preview) => preview.effect)),
+    changes: [...previews.keys()],
+    warnings: [...previews.keys()],
+    effects: [...previews.values()],
   });
 }
 
@@ -66,70 +62,37 @@ function previewForFinding(
   finding: HealthFinding,
   checkId: PolicyCheckId,
 ): readonly { readonly change: string; readonly effect: HealthRepairEffect }[] {
+  let change: string;
+  let action: string;
+  let target: string;
   switch (checkId) {
     case CHECK_IDS.policyGatewayNonLoopbackBind:
-      return previewGatewayLoopbackBind(finding);
-    case CHECK_IDS.policyGatewayNodeCommandDenied:
-      return previewGatewayNodeDenyCommand(finding);
+      if (
+        finding.ocPath !== "oc://openclaw.config/gateway/bind" &&
+        finding.ocPath !== "oc://openclaw.config/gateway/customBindHost"
+      ) {
+        return [];
+      }
+      change = "Review required: set gateway.bind=loopback for policy conformance.";
+      action = "would-set-after-review";
+      target = "gateway.bind=loopback";
+      break;
+    case CHECK_IDS.policyGatewayNodeCommandDenied: {
+      const command = finding.message.match(/Gateway node command '([^']+)'/)?.[1]?.trim();
+      if (
+        command === undefined ||
+        command === "" ||
+        finding.ocPath !== "oc://openclaw.config/gateway/nodes/commands/deny"
+      ) {
+        return [];
+      }
+      change = `Review required: add ${command} to gateway.nodes.commands.deny for policy conformance.`;
+      action = "would-append-after-review";
+      target = `gateway.nodes.commands.deny += ${command}`;
+      break;
+    }
     default:
       return [];
   }
-}
-
-function previewGatewayLoopbackBind(
-  finding: HealthFinding,
-): readonly { readonly change: string; readonly effect: HealthRepairEffect }[] {
-  if (
-    finding.ocPath !== "oc://openclaw.config/gateway/bind" &&
-    finding.ocPath !== "oc://openclaw.config/gateway/customBindHost"
-  ) {
-    return [];
-  }
-  return [
-    {
-      change: "Review required: set gateway.bind=loopback for policy conformance.",
-      effect: {
-        kind: "config",
-        action: "would-set-after-review",
-        target: "gateway.bind=loopback",
-        dryRunSafe: true,
-      },
-    },
-  ];
-}
-
-function previewGatewayNodeDenyCommand(
-  finding: HealthFinding,
-): readonly { readonly change: string; readonly effect: HealthRepairEffect }[] {
-  const command = finding.message.match(/Gateway node command '([^']+)'/)?.[1]?.trim();
-  if (
-    command === undefined ||
-    command === "" ||
-    finding.ocPath !== "oc://openclaw.config/gateway/nodes/commands/deny"
-  ) {
-    return [];
-  }
-  return [
-    {
-      change: `Review required: add ${command} to gateway.nodes.commands.deny for policy conformance.`,
-      effect: {
-        kind: "config",
-        action: "would-append-after-review",
-        target: `gateway.nodes.commands.deny += ${command}`,
-        dryRunSafe: true,
-      },
-    },
-  ];
-}
-
-function uniqueEffects(values: readonly HealthRepairEffect[]): readonly HealthRepairEffect[] {
-  const seen = new Set<string>();
-  return values.filter((value) => {
-    const key = JSON.stringify(value);
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
+  return [{ change, effect: { kind: "config", action, target, dryRunSafe: true } }];
 }

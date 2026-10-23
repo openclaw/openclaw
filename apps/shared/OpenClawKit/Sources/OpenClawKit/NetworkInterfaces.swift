@@ -2,14 +2,7 @@ import Foundation
 
 public enum NetworkInterfaces {
     public static func primaryIPv4Address() -> String? {
-        var fallback: String?
-        for entry in NetworkInterfaceIPv4.addresses() {
-            if entry.name == "en0" {
-                return entry.ip
-            }
-            if fallback == nil { fallback = entry.ip }
-        }
-
-        return fallback
+        let addresses = NetworkInterfaceIPv4.addresses()
+        return addresses.first(where: { $0.name == "en0" })?.ip ?? addresses.first?.ip
     }
 }

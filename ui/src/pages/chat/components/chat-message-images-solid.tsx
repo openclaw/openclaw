@@ -1,0 +1,752 @@
+import type { JSX } from "@solidjs/web";
+import { For, Show, createMemo, onCleanup, refresh, untrack, useContext } from "solid-js";
+import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
+import { ChatImageActions } from "./chat-image-actions.tsx";
+import {
+  MIN_CHAT_IMAGE_PREVIEW_WIDTH,
+  resolveChatImagePreviewSize,
+} from "./chat-image-preview-size.ts";
+import { chatImageRenditionWidth } from "./chat-image-rendition.ts";
+import {
+  isManagedOutgoingMediaSource,
+  loadAssistantAttachmentAvailability,
+  reportAssistantImageFailure,
+  resolveAssistantAttachmentAvailability,
+  retryAssistantAttachmentAvailability,
+  retainAssistantImage,
+  takeRetainedAssistantImage,
+} from "./chat-message-attachment-availability.ts";
+import {
+  AssistantAttachmentStatusCard,
+  type AssistantAttachmentStatusCardProps,
+} from "./chat-message-attachment-status-solid.tsx";
+import {
+  managedImageInlineVariant,
+  readCachedManagedImageUrl,
+  resolveManagedImageResource,
+} from "./chat-message-image-loading.ts";
+import { imageTitle, openMessageImage, readImageOriginalBlob } from "./chat-message-image-open.ts";
+import {
+  buildAssistantAttachmentUrl,
+  isCanonicalInboundMediaSource,
+  isLocalAssistantAttachmentSource,
+} from "./chat-message-local-media.ts";
+import {
+  observeChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
+  type ImageBlock,
+  type ImageRenderOptions,
+  type MessageMediaAction,
+} from "./chat-message-media.ts";
+import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
+
+const CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS = 30_000;
+
+type RetainedInlineImage = {
+  status: "retaining";
+  previewUrl: string;
+  timeout?: ReturnType<typeof setTimeout>;
+};
+
+function isInlineImageSource(source: string | undefined): source is string {
+  return source?.startsWith("data:image/") === true || source?.startsWith("blob:") === true;
+}
+
+type ImagePresentation = {
+  image: ImageBlock;
+  key?: symbol;
+  managed: boolean;
+  originalUnavailable?: boolean;
+  previewUrl?: string;
+  state?: "loading" | "unavailable";
+  actions?: Pick<AssistantAttachmentStatusCardProps, "path" | "onAllow" | "onRetry" | "onOpen">;
+  reason?: string;
+};
+
+function createMessageImagePresentation(props: MessageImageProps) {
+  let active = true;
+  let currentImage: ImageBlock | undefined;
+  let currentOptions: ImageRenderOptions | undefined;
+  let loadedElement: HTMLImageElement | undefined;
+  let previewElement: HTMLImageElement | undefined;
+  let previewEvents: { element: HTMLImageElement; stop: () => void } | undefined;
+  let managed = false;
+  const previewWidth = chatImageRenditionWidth("inline");
+  let pendingPreview: Promise<unknown> | undefined;
+  let imageKey = Symbol("image-presentation");
+  let retainedImage: RetainedInlineImage | { status: "unavailable" } | undefined;
+  let admitted = false;
+  let stopObserving: (() => void) | undefined;
+  const observeFrame = (element: Element | undefined) => {
+    stopObserving?.();
+    stopObserving = undefined;
+    if (!element || !active || admitted || isInlineImageSource(currentImage?.url)) {
+      return;
+    }
+    const presentationKey = imageKey;
+    stopObserving = observeChatAttachmentViewport(element, () => {
+      if (presentationKey === imageKey) {
+        admit();
+      }
+    });
+  };
+  const admit = () => {
+    if (active && !admitted) {
+      admitted = true;
+      stopObserving?.();
+      stopObserving = undefined;
+      refreshImage();
+    }
+  };
+  // Resource updates stay in this part; row ResizeObserver owns layout changes.
+  const refreshImage = () => {
+    if (active && currentImage) {
+      void refresh(model);
+    }
+  };
+  const onSettled = (event: Event) => {
+    // A removed IMG may finish after denial; it no longer owns displayed pixels.
+    const element = event.currentTarget;
+    if (
+      !active ||
+      element !== previewElement ||
+      !(element instanceof HTMLImageElement) ||
+      !element.isConnected
+    ) {
+      return;
+    }
+    loadedElement = event.type === "load" ? element : undefined;
+    if (
+      retainedImage?.status === "retaining" &&
+      loadedElement?.getAttribute("src") !== retainedImage.previewUrl
+    ) {
+      if (event.type === "error") {
+        failImage();
+      } else {
+        releaseRetainedImage();
+      }
+    } else if (
+      event.type === "error" &&
+      !managed &&
+      currentImage?.url &&
+      !isInlineImageSource(currentImage.url)
+    ) {
+      failImage();
+    }
+  };
+
+  function readPresentation(image: ImageBlock, options: ImageRenderOptions | undefined) {
+    const previous = currentImage;
+    if (previous?.url !== image.url || previous?.artifactId !== image.artifactId) {
+      managed = image.url === undefined || isManagedOutgoingMediaSource(image.url);
+      pendingPreview = undefined;
+      releaseRetainedImage();
+      // The gallery binds the exact submission/slot. Retain only pixels this
+      // mounted IMG has loaded, never another pane's cached preview.
+      retainedImage =
+        image.factIndex !== undefined &&
+        previous &&
+        isInlineImageSource(previous.url) &&
+        previous.artifactId === image.artifactId &&
+        image.url !== undefined &&
+        isCanonicalInboundMediaSource(image.url) &&
+        loadedElement?.getAttribute("src") === previous.url &&
+        loadedElement.naturalWidth > 0
+          ? { status: "retaining", previewUrl: previous.url }
+          : undefined;
+      const inlineReplacement =
+        options?.localSubmission &&
+        previous &&
+        isInlineImageSource(previous.url) &&
+        isInlineImageSource(image.url);
+      if (!retainedImage && !inlineReplacement) {
+        loadedElement = undefined;
+        previewElement = undefined;
+        admitted = false;
+        imageKey = Symbol("image-presentation");
+      }
+      releaseChatMediaResourceOwner(refreshImage);
+    }
+    currentImage = image;
+    currentOptions = options;
+    if (!active) {
+      releaseRetainedImage();
+      releaseChatMediaResourceOwner(refreshImage);
+      return renderImagePlaceholder(image);
+    }
+    // A warm preview needs no network admission. Native images retain their
+    // decoded node only within the existing metadata cache and ticket lifetime.
+    if (!admitted) {
+      if (managed) {
+        admitted = Boolean(
+          readCachedManagedImageUrl(
+            image.url,
+            options,
+            image.artifactId,
+            managedImageInlineVariant(image),
+            previewWidth,
+          ),
+        );
+      } else if (image.url && !loadedElement) {
+        loadedElement = takeRetainedAssistantImage(image.url, options);
+        previewElement = loadedElement;
+        admitted = Boolean(loadedElement);
+      }
+    }
+    // Admit network work before resolving metadata, artifact tickets, or blobs.
+    // Local bytes and a mounted decoded handoff never wait for the observer.
+    if (
+      !admitted &&
+      !isInlineImageSource(image.url) &&
+      !retainedImage &&
+      typeof IntersectionObserver === "function"
+    ) {
+      return renderImagePlaceholder(image);
+    }
+    admitted = true;
+    // A pane owns cancellation; this image alone owns its presentation updates.
+    const observed = options?.mediaOwner !== undefined || options?.onMediaChange !== undefined;
+    if (observed) {
+      pendingPreview = undefined;
+      observeChatMediaResourceSubscriber(options?.mediaOwner, refreshImage);
+    } else {
+      releaseChatMediaResourceOwner(refreshImage);
+    }
+    const subscriptionOptions = observed ? { ...options, onMediaChange: refreshImage } : options;
+    const source = image.url;
+    if (source === undefined) {
+      return renderManagedImage(image, subscriptionOptions);
+    }
+    const availability = resolveAssistantAttachmentAvailability(source, subscriptionOptions);
+    const decodeFailed = retainedImage?.status === "unavailable";
+    // Tickets authorize new reads, not already decoded pixels. Only this
+    // mounted image can survive an unconfirmed renewal; denial still clears it.
+    const unconfirmed =
+      availability.status === "checking" ||
+      (availability.status === "unavailable" && availability.unconfirmed);
+    const displayUrl =
+      availability.status === "available"
+        ? buildAssistantAttachmentUrl(
+            source,
+            options?.resourceBasePath,
+            availability.mediaTicket,
+            options,
+            image.fileName,
+          )
+        : unconfirmed
+          ? loadedElement?.getAttribute("src")
+          : undefined;
+    if (!displayUrl || decodeFailed) {
+      loadedElement = undefined;
+      previewElement = undefined;
+      if (!decodeFailed) {
+        releaseRetainedImage();
+      }
+      const reason =
+        availability.status === "unavailable"
+          ? availability.reason
+          : decodeFailed
+            ? t("chat.imageLightbox.loadFailed")
+            : undefined;
+      const retryAvailability = (allowImage = false) => {
+        retryAssistantAttachmentAvailability(source, subscriptionOptions, allowImage);
+        if (!subscriptionOptions?.onMediaChange) {
+          observeStandalonePreview(
+            loadAssistantAttachmentAvailability(source, subscriptionOptions),
+          );
+          refreshImage();
+        }
+      };
+      const placeholder = renderImagePlaceholder(image, reason, {
+        path: isLocalAssistantAttachmentSource(source) ? source : undefined,
+        onAllow:
+          !decodeFailed && availability.status === "unavailable" && availability.canAllow
+            ? () => retryAvailability(true)
+            : undefined,
+        onRetry: decodeFailed
+          ? () => {
+              releaseRetainedImage();
+              refreshImage();
+            }
+          : availability.status === "unavailable" && availability.recoverable
+            ? () => retryAvailability()
+            : undefined,
+      });
+      return {
+        ...placeholder,
+        originalUnavailable: availability.status === "unavailable" && !availability.unconfirmed,
+      };
+    }
+    if (!managed) {
+      const retained = retainedImage;
+      if (
+        availability.status === "available" &&
+        retained?.status === "retaining" &&
+        retained.timeout === undefined
+      ) {
+        // IMG keeps its current decoded request while the new src loads. One
+        // native load/error boundary replaces the detached decode preloader.
+        retained.timeout = setTimeout(() => failImage(), CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS);
+      }
+      return renderImageElement(
+        image,
+        availability.status === "available"
+          ? buildAssistantAttachmentUrl(
+              source,
+              options?.resourceBasePath,
+              availability.mediaTicket,
+              options,
+              image.fileName,
+              "thumbnail",
+              previewWidth,
+            )
+          : displayUrl,
+      );
+    }
+    return renderManagedImage(image, subscriptionOptions, displayUrl);
+  }
+
+  function renderManagedImage(
+    image: ImageBlock,
+    subscriptionOptions: ImageRenderOptions | undefined,
+    source = image.url,
+  ) {
+    const resource = resolveManagedImageResource(
+      source,
+      subscriptionOptions,
+      image.artifactId,
+      managedImageInlineVariant(image),
+      false,
+      previewWidth,
+    );
+    const pending = resource.pending;
+    // Standalone previews settle once without opting into a pane's automatic retries.
+    if (!subscriptionOptions?.onMediaChange && pending) {
+      observeStandalonePreview(pending);
+    }
+    return resource.value
+      ? renderImageElement(image, resource.value)
+      : renderImagePlaceholder(
+          image,
+          resource.value === null ? t("chat.imageLightbox.loadFailed") : undefined,
+        );
+  }
+
+  function observeStandalonePreview(pending: Promise<unknown>) {
+    if (pendingPreview === pending) {
+      return;
+    }
+    pendingPreview = pending;
+    void pending.then(() => {
+      if (pendingPreview === pending && active && currentImage) {
+        pendingPreview = undefined;
+        refreshImage();
+      }
+    });
+  }
+
+  function renderImageElement(image: ImageBlock, previewUrl: string): ImagePresentation {
+    return { image, previewUrl, managed, key: imageKey };
+  }
+
+  function renderPreviewElement(image: ImageBlock, url: string, title: string) {
+    if (!previewElement) {
+      previewElement = document.createElement("img");
+      previewElement.className = "chat-message-image";
+      previewElement.referrerPolicy = "no-referrer";
+      previewElement.decoding = "async";
+    }
+    const element = previewElement;
+    // Decoded images transfer between rows through the media owner. Bind this
+    // presentation only while it has custody of that foreign DOM node.
+    if (previewEvents?.element !== element) {
+      previewEvents?.stop();
+      const stopLoad = listen(element, "load", onSettled);
+      const stopError = listen(element, "error", onSettled);
+      previewEvents = {
+        element,
+        stop() {
+          stopLoad();
+          stopError();
+        },
+      };
+    }
+    if (element.alt !== title) {
+      element.alt = title;
+    }
+    // Local bytes and a mounted handoff are already admitted. Deferring their
+    // replacement decode can introduce blank frames during custody updates.
+    const loading =
+      isInlineImageSource(url) || retainedImage?.status === "retaining" ? "eager" : "lazy";
+    if (element.loading !== loading) {
+      element.loading = loading;
+    }
+    if (url.includes("&variant=thumbnail&width=")) {
+      // Signed native requests let the browser choose density and apply its own
+      // data-saving policy; authenticated blob requests select a bounded tier above.
+      const srcset =
+        url.replace(/&width=\d+/u, "&width=480") +
+        " 1x, " +
+        url.replace(/&width=\d+/u, "&width=960") +
+        " 2x";
+      if (element.srcset !== srcset) {
+        element.srcset = srcset;
+      }
+    } else {
+      element.removeAttribute("srcset");
+    }
+    for (const name of ["width", "height"] as const) {
+      if (image[name] === undefined) {
+        element.removeAttribute(name);
+      } else if (element.getAttribute(name) !== String(image[name])) {
+        element.setAttribute(name, String(image[name]));
+      }
+    }
+    // Assigning even an unchanged src can restart a no-cache native request.
+    if (element.getAttribute("src") !== url) {
+      element.setAttribute("src", url);
+    }
+    return element;
+  }
+
+  function renderImagePlaceholder(
+    image: ImageBlock,
+    reason?: string,
+    actions?: Pick<AssistantAttachmentStatusCardProps, "path" | "onAllow" | "onRetry" | "onOpen">,
+  ): ImagePresentation {
+    return {
+      image,
+      managed,
+      key: active ? imageKey : undefined,
+      state: reason === undefined ? "loading" : "unavailable",
+      reason,
+      actions: {
+        onRetry: managed
+          ? () => {
+              resolveManagedImageResource(
+                image.url,
+                currentOptions?.mediaOwner !== undefined ||
+                  currentOptions?.onMediaChange !== undefined
+                  ? { ...currentOptions, onMediaChange: refreshImage }
+                  : currentOptions,
+                image.artifactId,
+                managedImageInlineVariant(image),
+                true,
+                previewWidth,
+              );
+              refreshImage();
+            }
+          : undefined,
+        ...actions,
+      },
+    };
+  }
+
+  function releaseRetainedImage() {
+    const retained = retainedImage;
+    retainedImage = undefined;
+    if (retained?.status === "retaining") {
+      clearTimeout(retained.timeout);
+    }
+  }
+
+  function failImage() {
+    releaseRetainedImage();
+    loadedElement = undefined;
+    if (currentImage?.url && isLocalAssistantAttachmentSource(currentImage.url)) {
+      reportAssistantImageFailure(
+        currentImage.url,
+        currentOptions?.mediaOwner !== undefined || currentOptions?.onMediaChange !== undefined
+          ? { ...currentOptions, onMediaChange: refreshImage }
+          : currentOptions,
+      );
+    } else {
+      retainedImage = { status: "unavailable" };
+    }
+    refreshImage();
+  }
+
+  const retireHandoff = () => {
+    if (retainedImage?.status !== "retaining") {
+      return;
+    }
+    releaseRetainedImage();
+    retainedImage = { status: "unavailable" };
+    previewEvents?.stop();
+    previewEvents = undefined;
+    previewElement?.remove();
+    previewElement = undefined;
+    loadedElement = undefined;
+    releaseChatMediaResourceOwner(refreshImage);
+    // Transcript disposal can run inside a render computation; only invalidation waits.
+    queueMicrotask(refreshImage);
+  };
+
+  const model = createMemo(() => readPresentation(props.image, props.options));
+  const disconnect = useContext(TranscriptMediaDisconnect);
+  disconnect?.add(retireHandoff);
+  onCleanup(() => {
+    disconnect?.delete(retireHandoff);
+    active = false;
+    previewEvents?.stop();
+    previewEvents = undefined;
+    // Do not retain the removed row through the image's parent or listeners.
+    previewElement?.remove();
+    if (loadedElement && currentImage?.url) {
+      retainAssistantImage(
+        currentImage.url,
+        loadedElement,
+        currentOptions,
+        currentImage.fileName,
+        previewWidth,
+      );
+    }
+    previewElement = undefined;
+    stopObserving?.();
+    stopObserving = undefined;
+    admitted = false;
+    releaseRetainedImage();
+    loadedElement = undefined;
+    pendingPreview = undefined;
+    imageKey = Symbol("image-presentation");
+    releaseChatMediaResourceOwner(refreshImage);
+  });
+  return { model, observeFrame, admit, renderPreviewElement };
+}
+
+export type MessageImagesProps = {
+  images: ImageBlock[];
+  options?: ImageRenderOptions;
+  previews?: JSX.Element[];
+};
+
+export function MessageImages(props: MessageImagesProps): JSX.Element {
+  let slots: { image: ImageBlock; key: symbol; options: ImageRenderOptions }[] = [];
+  let scope = "";
+  let policyKey: string | undefined;
+  let canonicalMessageKey: string | undefined;
+  let localSubmission = false;
+  const projection = createMemo(() => {
+    const images = props.images;
+    const options = props.options;
+    const nextScope = JSON.stringify([
+      options?.connectionEpoch,
+      options?.authToken?.trim(),
+      options?.resourceBasePath,
+      options?.sessionKey,
+      options?.agentId,
+    ]);
+    const continuing =
+      scope === nextScope &&
+      (!localSubmission || options?.localSubmission !== false) &&
+      (canonicalMessageKey === options?.canonicalMessageKey ||
+        (localSubmission && !canonicalMessageKey));
+    const nextLocalSubmission = continuing ? localSubmission : options?.localSubmission === true;
+    const adoptingSlots =
+      continuing &&
+      nextLocalSubmission &&
+      images.length === slots.length &&
+      slots.every(({ image }) => isInlineImageSource(image.url)) &&
+      images.every((image) => image.factIndex !== undefined);
+    const previousImages = adoptingSlots
+      ? images.toSorted((left, right) => (left.factIndex ?? 0) - (right.factIndex ?? 0))
+      : slots.map(({ image }) => image);
+    const previousSlots = new Map(
+      previousImages.map((image, index) => [image.factIndex, slots[index]?.key]),
+    );
+    // Publish options with the slot key so retiring images keep their previous policy.
+    const imageOptions = { ...options, galleryImages: options?.galleryImages ?? images };
+    slots = images.map((image, index) => {
+      const slot = slots[index];
+      const previous =
+        image.factIndex !== undefined
+          ? previousSlots.get(image.factIndex)
+          : slot?.image.factIndex === undefined
+            ? slot?.key
+            : undefined;
+      const preservePresentation =
+        policyKey === options?.policyKey ||
+        isInlineImageSource(image.url) ||
+        (image.url !== undefined && isCanonicalInboundMediaSource(image.url));
+      return {
+        image,
+        key: (continuing && preservePresentation && previous) || Symbol("image-slot"),
+        options: imageOptions,
+      };
+    });
+    scope = nextScope;
+    policyKey = options?.policyKey;
+    canonicalMessageKey = options?.canonicalMessageKey;
+    localSubmission =
+      nextLocalSubmission &&
+      !(options?.canonicalMessageKey && images.every((image) => image.factIndex !== undefined));
+    return slots;
+  });
+  const count = () => props.images.length + (props.previews?.length ?? 0);
+  return (
+    <Show when={count()}>
+      <div
+        class={[
+          "chat-message-images",
+          {
+            "chat-message-images--single": count() === 1,
+            "chat-message-images--gallery": count() !== 1,
+            "chat-message-images--two-column": count() === 2 || count() === 4,
+            "chat-message-images--five": count() === 5,
+          },
+        ]}
+      >
+        <For each={projection()} keyed={(slot) => slot.key}>
+          {(slot) => <MessageImage image={slot().image} options={slot().options} />}
+        </For>
+        {props.previews}
+      </div>
+    </Show>
+  );
+}
+
+type MessageImageProps = { image: ImageBlock; options: ImageRenderOptions };
+
+function MessageImage(props: MessageImageProps): JSX.Element {
+  const presented = useContext(ContentPresentation);
+  // Parked content releases active image subscriptions.
+  return (
+    <Show when={presented()}>
+      <MessageImageContent image={props.image} options={props.options} />
+    </Show>
+  );
+}
+
+function MessageImageContent(props: MessageImageProps): JSX.Element {
+  const presentation = createMessageImagePresentation(props);
+  const model = presentation.model;
+  return (
+    <Show when={model().key} keyed>
+      {(_key) => <ImageFrame model={model()} presentation={presentation} options={props.options} />}
+    </Show>
+  );
+}
+
+function ImageFrame(props: {
+  model: ImagePresentation;
+  presentation: ReturnType<typeof createMessageImagePresentation>;
+  options: ImageRenderOptions;
+}): JSX.Element {
+  const image = () => props.model.image;
+  const title = () => imageTitle(image());
+  const compact = () => props.model.state === "unavailable";
+  const pending = () => props.model.state === "loading";
+  const loadOriginal = () => readImageOriginalBlob(image(), props.options);
+  // Native previews use the viewer’s file controls. Show their inline menu only
+  // when a failed preview cannot open that viewer, never over retained pixels.
+  const hasFileActions = () =>
+    !props.model.originalUnavailable &&
+    (props.model.managed || (compact() && isLocalAssistantAttachmentSource(image().url ?? "")));
+  // A mounted preview keeps its initial frame when the upload receipt adds dimensions.
+  // Fresh history mounts use those durable dimensions; older facts retain a stable fallback.
+  const initialDimensions = untrack(() => resolveChatImagePreviewSize(props.model.image));
+  return (
+    <span
+      ref={props.presentation.observeFrame}
+      class={[
+        "chat-image-frame chat-image-frame--image",
+        {
+          "chat-image-frame--managed": props.model.managed,
+          "chat-image-frame--compact": compact(),
+          "chat-image-frame--compact-actions": compact() && hasFileActions(),
+        },
+      ]}
+      style={{
+        "--chat-image-width": `${compact() ? Math.max(MIN_CHAT_IMAGE_PREVIEW_WIDTH, initialDimensions.width) : initialDimensions.width}px`,
+        "--chat-image-ratio": compact()
+          ? "auto"
+          : `${initialDimensions.width} / ${initialDimensions.height}`,
+      }}
+      aria-busy={pending() ? "true" : "false"}
+      role={pending() ? "status" : undefined}
+      aria-label={pending() ? t("common.loading") : undefined}
+    >
+      <Show
+        when={!compact()}
+        fallback={
+          <AssistantAttachmentStatusCard
+            label={image().fileName ?? image().alt ?? t("chat.imageLightbox.untitled")}
+            badge={t("chat.attachments.unavailable")}
+            reason={props.model.reason}
+            {...props.model.actions}
+          />
+        }
+      >
+        <span class="chat-image-surface">
+          <button
+            type="button"
+            class="chat-message-image-button"
+            aria-label={t("chat.imageLightbox.open", { title: title() })}
+            aria-disabled={props.model.previewUrl ? undefined : "true"}
+            onFocus={() => props.presentation.admit()}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (props.model.previewUrl) {
+                openMessageImage(image(), props.model.previewUrl, props.options);
+              } else {
+                props.presentation.admit();
+              }
+            }}
+          >
+            <Show
+              when={props.model.previewUrl}
+              fallback={<span class="chat-image-skeleton skeleton" aria-hidden="true" />}
+            >
+              {(url) => <>{props.presentation.renderPreviewElement(image(), url(), title())}</>}
+            </Show>
+          </button>
+        </span>
+      </Show>
+      <Show when={!pending() && hasFileActions()}>
+        <ChatImageActions title={title()} readOriginalBlob={loadOriginal} overlay={!compact()} />
+      </Show>
+    </span>
+  );
+}
+
+/** Catalogs consume the same admitted image resource and viewer as transcript tiles. */
+type MessageImageActionProps = MessageImageProps & {
+  render: (action: () => MessageMediaAction) => JSX.Element;
+};
+export function MessageImageAction(props: MessageImageActionProps): JSX.Element {
+  // Match the transcript slot's retirement when its scope or policy changes.
+  const scope = () =>
+    JSON.stringify([
+      props.options.sessionKey,
+      props.options.agentId,
+      props.options.connectionEpoch,
+      props.options.resourceBasePath,
+      props.options.authToken,
+      props.options.policyKey,
+      props.options.canonicalMessageKey,
+    ]);
+  return (
+    <Show when={scope()} keyed>
+      {(_scope) => {
+        const presentation = createMessageImagePresentation(props);
+        const action = createMemo<MessageMediaAction>(() => {
+          const { actions, state, reason, previewUrl } = presentation.model();
+          return {
+            ...actions,
+            pending: state === "loading",
+            reason,
+            observeElement: presentation.observeFrame,
+            onFocus: state === "unavailable" ? undefined : presentation.admit,
+            onOpen: previewUrl
+              ? () => openMessageImage(props.image, previewUrl, props.options)
+              : undefined,
+          };
+        });
+        return props.render(action);
+      }}
+    </Show>
+  );
+}

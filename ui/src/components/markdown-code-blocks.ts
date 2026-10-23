@@ -1,21 +1,8 @@
-import hljs from "highlight.js/lib/core";
-import bash from "highlight.js/lib/languages/bash";
-import cpp from "highlight.js/lib/languages/cpp";
-import css from "highlight.js/lib/languages/css";
-import diff from "highlight.js/lib/languages/diff";
-import go from "highlight.js/lib/languages/go";
-import java from "highlight.js/lib/languages/java";
-import javascript from "highlight.js/lib/languages/javascript";
-import json from "highlight.js/lib/languages/json";
-import markdown from "highlight.js/lib/languages/markdown";
-import python from "highlight.js/lib/languages/python";
-import rust from "highlight.js/lib/languages/rust";
-import typescript from "highlight.js/lib/languages/typescript";
-import xml from "highlight.js/lib/languages/xml";
-import yaml from "highlight.js/lib/languages/yaml";
+import { createSignal } from "solid-js";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
 import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
-import { copyToClipboard } from "../lib/clipboard.ts";
+import { copyMarkdownText } from "./markdown-copy.ts";
 import {
   parseMarkdownJson,
   renderMarkdownJsonModes,
@@ -23,35 +10,41 @@ import {
   type MarkdownJson,
 } from "./markdown-json.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
-import { escapeMarkdownHtml, isMarkdownBlockArtText } from "./markdown-text.ts";
+import { isMarkdownBlockArtText } from "./markdown-text.ts";
 
 registerCodeBlocksEnglish();
 
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
 const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
 const CODE_PREVIEW_LINE_COUNT = 7;
-const codeBlockCopyAttempts = new WeakMap<HTMLElement, number>();
-const codeBlockCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
+const CODE_STICKY_ACTIONS_LINE_THRESHOLD = 300;
 
-for (const [language, definition] of Object.entries({
-  bash,
-  cpp,
-  css,
-  diff,
-  go,
-  java,
-  javascript,
-  json,
-  markdown,
-  python,
-  rust,
-  typescript,
-  xml,
-  yaml,
-})) {
-  hljs.registerLanguage(language, definition);
+type Highlighter = typeof import("./markdown-highlight-runtime.ts").highlightCodeHtml;
+const [readHighlighter, setHighlighter] = createSignal<Highlighter | null | undefined>(undefined);
+let highlighterLoad: Promise<void> | undefined;
+
+/** Shared by code renderers; a failed optional chunk leaves escaped, copyable text. */
+function loadMarkdownHighlighter(): Promise<void> {
+  highlighterLoad ??= import("./markdown-highlight-runtime.ts").then(
+    (runtime) => {
+      setHighlighter(() => runtime.highlightCodeHtml);
+    },
+    () => {
+      setHighlighter(null);
+      console.warn("[markdown] Syntax highlighting could not be loaded; showing plain code.");
+    },
+  );
+  return highlighterLoad;
 }
-hljs.registerAliases("shell", { languageName: "bash" });
+
+// Cached Markdown must subscribe even when a previous render already filled its cache.
+export function markdownHighlightingReady(): boolean {
+  return typeof readHighlighter() === "function";
+}
+
+export function markdownHighlightingPending(): boolean {
+  return highlighterLoad !== undefined && readHighlighter() === undefined;
+}
 
 function encodeCodeBlockCopyPayload(value: string): string {
   // DOMPurify removes attributes containing XML comment ends or closing tags.
@@ -95,34 +88,21 @@ export function handleMarkdownCodeBlockClick(event: Event): void {
     return;
   }
   const code = readMarkdownCodeBlockCopyText(button);
-  const attempt = (codeBlockCopyAttempts.get(button) ?? 0) + 1;
-  codeBlockCopyAttempts.set(button, attempt);
-  // Streaming retains the control while its payload changes; old content must
-  // not trigger a fallback write or claim the current control's feedback.
-  const isCurrent = () =>
-    button.isConnected &&
-    codeBlockCopyAttempts.get(button) === attempt &&
-    readMarkdownCodeBlockCopyText(button) === code;
-  void copyToClipboard(code, isCurrent).then((copied) => {
-    // Clipboard writes can finish out of click order; older attempts must not own feedback.
-    if (!isCurrent()) {
-      return;
-    }
-    button.classList.toggle("copied", copied);
-    button.classList.toggle("copy-failed", !copied);
-    button.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
-    clearTimeout(codeBlockCopyResetTimers.get(button));
-    const resetTimer = setTimeout(
-      () => {
-        button.classList.remove("copied");
-        button.classList.remove("copy-failed");
+  copyMarkdownText(
+    button,
+    code,
+    () => readMarkdownCodeBlockCopyText(button) === code,
+    (copied) => {
+      if (copied === undefined) {
+        button.classList.remove("copied", "copy-failed");
         button.setAttribute("aria-label", t("common.copyCode"));
-        codeBlockCopyResetTimers.delete(button);
-      },
-      copied ? 1500 : 2000,
-    );
-    codeBlockCopyResetTimers.set(button, resetTimer);
-  });
+      } else {
+        button.classList.toggle("copied", copied);
+        button.classList.toggle("copy-failed", !copied);
+        button.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
+      }
+    },
+  );
 }
 
 function handleCodeBlockDisclosure(target: Element): void {
@@ -130,9 +110,22 @@ function handleCodeBlockDisclosure(target: Element): void {
   if (!wrapper) {
     return;
   }
-  if (target.closest(".code-block-expand")) {
+  const expandButton = target.closest<HTMLButtonElement>(".code-block-expand");
+  if (expandButton) {
+    const transferFocus = expandButton.matches(":focus-visible");
     wrapper.classList.add("is-expanded");
-    target.closest<HTMLButtonElement>(".code-block-expand")?.setAttribute("aria-expanded", "true");
+    expandButton.setAttribute("aria-expanded", "true");
+    // Revealing hides this one-way control. Keep keyboard readers on the code
+    // without moving pointer focus or scrolling the transcript to the block's start.
+    if (transferFocus) {
+      const viewport = expandButton.ownerDocument.getElementById(
+        expandButton.getAttribute("aria-controls") ?? "",
+      );
+      if (viewport) {
+        viewport.tabIndex = -1;
+        viewport.focus({ preventScroll: true });
+      }
+    }
   }
   const jsonMode = target.closest<HTMLButtonElement>(".code-block-json-mode");
   if (jsonMode) {
@@ -165,23 +158,16 @@ export function updateCodeBlockWidthOverflow(wrapper: HTMLElement): void {
   wrapper.classList.toggle("has-horizontal-overflow", overflowing);
 }
 
-/** Highlight a snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
+/** Highlight when available; plain escaped code remains readable while the chunk loads. */
 export function highlightCodeHtml(text: string, lang: string): string {
-  const language = lang.trim().toLowerCase();
-  try {
-    if (language && hljs.getLanguage(language)) {
-      return hljs.highlight(text, { language, ignoreIllegals: true }).value;
-    }
-    if (!language && text.trim()) {
-      const result = hljs.highlightAuto(text);
-      if (result.relevance >= 2) {
-        return result.value;
-      }
-    }
-  } catch {
-    // Fall back to escaped plaintext; malformed input should not break chat rendering.
+  const highlighter = readHighlighter();
+  if (highlighter) {
+    return highlighter(text, lang);
   }
-  return escapeMarkdownHtml(text);
+  if (text.trim()) {
+    void loadMarkdownHighlighter();
+  }
+  return escapeHtml(text);
 }
 
 /** Highlight a JSON/JSON5 snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
@@ -194,18 +180,18 @@ function codeClassAttribute(lang: string, highlighted: string): string {
     highlighted.includes("hljs-") ? "hljs" : "",
     lang ? `language-${lang}` : "",
   ].filter(Boolean);
-  return classes.length > 0 ? ` class="${escapeMarkdownHtml(classes.join(" "))}"` : "";
+  return classes.length > 0 ? ` class="${escapeHtml(classes.join(" "))}"` : "";
 }
 
 function renderCodeBlockHeader(lang: string, actions: string): string {
-  const language = escapeMarkdownHtml(lang || t("chat.codeBlock.languageFallback"));
+  const language = escapeHtml(lang || t("chat.codeBlock.languageFallback"));
   return `<div class="code-block-header" data-markdown-key="header"><span class="code-block-lang">${language}</span><div class="code-block-actions">${actions}</div></div>`;
 }
 
 function renderCodeBlockCopyButton(text: string): string {
   // Attribute sanitization trims plain values; encode copied whitespace with the text.
-  const attrSafe = escapeMarkdownHtml(encodeCodeBlockCopyPayload(text));
-  return `<button type="button" class="code-block-copy" data-markdown-key="copy" data-code="${attrSafe}" data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}" aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
+  const attrSafe = escapeHtml(encodeCodeBlockCopyPayload(text));
+  return `<button type="button" class="code-block-copy" data-markdown-key="copy" data-code="${attrSafe}" data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
 }
 
 export function renderMarkdownCodeBlock(
@@ -217,7 +203,7 @@ export function renderMarkdownCodeBlock(
   const blockArt = options.blockArt || isMarkdownBlockArtText(text);
   const highlight = options.highlight;
   const highlighted =
-    blockArt || highlight === false ? escapeMarkdownHtml(text) : highlightCodeHtml(text, lang);
+    blockArt || highlight === false ? escapeHtml(text) : highlightCodeHtml(text, lang);
   const classAttr = blockArt
     ? ' class="markdown-block-art"'
     : codeClassAttribute(lang, highlighted);
@@ -230,11 +216,13 @@ export function renderMarkdownCodeBlock(
   if (!copyEnabled && !interactive) {
     return codeBlock;
   }
+  const lineCount = countCodeBlockLines(text);
+  const wrapperClass = `code-block-wrapper${lineCount > CODE_STICKY_ACTIONS_LINE_THRESHOLD ? " code-block-wrapper--long" : ""}`;
   const copyButton = copyEnabled ? renderCodeBlockCopyButton(options.copyText ?? text) : "";
   // Reveal and wrap controls are inert without a host that runs the code-block
   // lifecycle, so only interaction-owning hosts get the collapsible markup.
   if (!interactive) {
-    return `<div class="code-block-wrapper">${renderCodeBlockHeader(lang, copyButton)}${codeBlock}</div>`;
+    return `<div class="${wrapperClass}">${renderCodeBlockHeader(lang, copyButton)}${codeBlock}</div>`;
   }
   const jsonSource =
     !blockArt && highlight !== false && (!lang || lang.toLowerCase() === "json")
@@ -243,7 +231,7 @@ export function renderMarkdownCodeBlock(
   const tree = jsonSource ? renderMarkdownJsonTree(jsonSource) : "";
   const hiddenLineCount = ["text", "md", "markdown"].includes(lang.trim().toLowerCase())
     ? 0
-    : Math.max(0, countCodeBlockLines(text) - CODE_PREVIEW_LINE_COUNT);
+    : Math.max(0, lineCount - CODE_PREVIEW_LINE_COUNT);
   const hiddenCount = { count: String(hiddenLineCount) };
   const expandLabel = t(
     hiddenLineCount === 1 ? "chat.codeBlock.showHiddenLine" : "chat.codeBlock.showHiddenLines",
@@ -254,15 +242,15 @@ export function renderMarkdownCodeBlock(
     hiddenCount,
   );
   const expandButton = hiddenLineCount
-    ? `<button type="button" class="code-block-expand" data-markdown-key="expand" aria-label="${escapeMarkdownHtml(expandLabel)}" aria-expanded="false"><span class="code-block-chevron" aria-hidden="true"></span><span>${escapeMarkdownHtml(hiddenLabel)}</span></button>`
+    ? `<button type="button" class="code-block-expand" data-markdown-key="expand" aria-label="${escapeHtml(expandLabel)}" aria-expanded="false"><span class="code-block-chevron" aria-hidden="true"></span><span>${escapeHtml(hiddenLabel)}</span></button>`
     : "";
-  const wrapLabel = escapeMarkdownHtml(t("chat.codeBlock.enableWrap"));
-  const wrapButton = `<button type="button" class="code-block-wrap" data-markdown-key="wrap" aria-label="${wrapLabel}" title="${wrapLabel}" aria-pressed="false"><span class="code-block-wrap__enable" aria-hidden="true"></span><span class="code-block-wrap__disable" aria-hidden="true"></span></button>`;
+  const wrapLabel = escapeHtml(t("chat.codeBlock.enableWrap"));
+  const wrapButton = `<button type="button" class="code-block-wrap" data-markdown-key="wrap" aria-label="${wrapLabel}" title="${wrapLabel}" aria-pressed="false"><span class="code-block-wrap__icon" aria-hidden="true"></span></button>`;
   const header = renderCodeBlockHeader(
     lang,
     `${tree ? renderMarkdownJsonModes() : ""}${wrapButton}${copyButton}`,
   );
-  return `<div class="code-block-wrapper${tree ? " code-block-wrapper--json" : ""}${hiddenLineCount ? " is-collapsible" : ""}">${header}${tree}<div class="code-block-viewport" data-markdown-key="viewport">${codeBlock}</div>${expandButton}</div>`;
+  return `<div class="${wrapperClass}${tree ? " code-block-wrapper--json" : ""}${hiddenLineCount ? " is-collapsible" : ""}">${header}${tree}<div class="code-block-viewport" data-markdown-key="viewport">${codeBlock}</div>${expandButton}</div>`;
 }
 
 function countCodeBlockLines(text: string): number {

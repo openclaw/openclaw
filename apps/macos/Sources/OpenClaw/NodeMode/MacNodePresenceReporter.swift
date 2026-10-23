@@ -26,12 +26,12 @@ final class MacNodePresenceReporter {
         let source: ActivitySource
     }
 
-    private enum ActivitySource {
+    enum ActivitySource {
         case app
         case system
     }
 
-    private struct DeliveryState {
+    struct DeliveryState {
         let sentAtMs: Int64
         let lastActiveAtMs: Int64
         let source: ActivitySource
@@ -248,7 +248,7 @@ final class MacNodePresenceReporter {
         return IdleSample(seconds: bounded, saturated: seconds > self.maximumIdleSeconds, source: source)
     }
 
-    private static func shouldSend(
+    static func shouldSend(
         idleSeconds: Int,
         saturated: Bool,
         nowMs: Int64,
@@ -270,26 +270,3 @@ final class MacNodePresenceReporter {
         Int64(Date().timeIntervalSince1970 * 1000)
     }
 }
-
-#if DEBUG
-extension MacNodePresenceReporter {
-    static func _testShouldSend(
-        idleSeconds: Int,
-        nowMs: Int64,
-        lastSentAtMs: Int64?,
-        lastSentActiveAtMs: Int64?,
-        saturated: Bool = false) -> Bool
-    {
-        let delivery: DeliveryState? = if let lastSentAtMs, let lastSentActiveAtMs {
-            DeliveryState(sentAtMs: lastSentAtMs, lastActiveAtMs: lastSentActiveAtMs, source: .system)
-        } else {
-            nil
-        }
-        return self.shouldSend(
-            idleSeconds: idleSeconds,
-            saturated: saturated,
-            nowMs: nowMs,
-            delivery: delivery)
-    }
-}
-#endif

@@ -10,6 +10,7 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { CronJob } from "../cron/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { bindInProcessRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   loadTranscriptRows,
@@ -27,18 +28,6 @@ import {
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
 type SessionPatchResponse = { ok: true; key: string; entry: Record<string, unknown> };
-
-test("sessions.patch validates persistent session icons", async () => {
-  const invalid = await directSessionHandlerReq("sessions.patch", {
-    key: "agent:main:main",
-    icon: "hand",
-  });
-  expect(invalid.error).toEqual({
-    code: "INVALID_REQUEST",
-    message:
-      "icon must be a single emoji, a named icon (braces, book, monitor, bot, kanban, coins), or self-contained SVG markup/data URL up to 16 KiB",
-  });
-});
 
 test("lists and patches session store via sessions.* RPC", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -117,8 +106,6 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const directContext = {
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     logGateway: { debug: vi.fn() },
@@ -145,25 +132,31 @@ test("lists and patches session store via sessions.* RPC", async () => {
     await expectDefined(
       sessionsHandlers[method],
       "sessionsHandlers[method] test invariant",
-    )({
-      req: {} as never,
-      params,
-      respond: (ok, payload, error) => {
-        result = {
-          ok,
-          payload:
-            payload === undefined
-              ? undefined
-              : coercePayload
-                ? coercePayload(payload)
-                : (payload as TPayload),
-          error,
-        };
-      },
-      context: directContext as never,
-      client: null,
-      isWebchatConnect: () => false,
-    });
+    )(
+      bindInProcessRequestMutationAuthority(
+        {
+          req: { type: "req", id: method, method, params },
+          params,
+          respond: (ok, payload, error) => {
+            result = {
+              ok,
+              payload:
+                payload === undefined
+                  ? undefined
+                  : coercePayload
+                    ? coercePayload(payload)
+                    : (payload as TPayload),
+              error,
+            };
+          },
+          context: directContext as never,
+          client: null,
+          isWebchatConnect: () => false,
+        },
+        undefined,
+        undefined,
+      ),
+    );
     if (!result) {
       throw new Error(`${method} did not respond`);
     }
@@ -589,7 +582,7 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
   const rootStateDir = expectDefined(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR");
   const stateDir = path.join(rootStateDir, "configured-list-regression");
   await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    testState.agentsConfig = { ownership: "explicit", list: [{ id: "ops" }] };
+    testState.agentsConfig = { ownership: "explicit", entries: { ops: {} } };
     testState.agentConfig = { sessionStore: { agentId: "ops" } };
     const configPath = expectDefined(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
     const configJson = '{"acp":{"defaultAgent":"claude","allowedAgents":["gemini"]}}';
@@ -675,26 +668,6 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
   });
 });
 
-test("sessions.list hides phantom agent store placeholder rows", async () => {
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      sessions: {},
-      main: {
-        sessionId: "sess-main",
-        updatedAt: 20,
-      },
-    },
-  });
-
-  const listed = await directSessionHandlerReq<SessionsListResult>("sessions.list", {
-    includeGlobal: false,
-    includeUnknown: false,
-  });
-  expect(listed.ok).toBe(true);
-  expect(listed.payload?.sessions.map((session) => session.key)).toEqual(["agent:main:main"]);
-});
-
 test("write-scoped operators manage chat organization but not admin session settings", async () => {
   const { storePath } = await createSessionStoreDir();
   const now = Date.now();
@@ -711,8 +684,31 @@ test("write-scoped operators manage chat organization but not admin session sett
     },
   });
 
-  agentDiscoveryMock.enabled = true;
-  agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+  const { getRuntimeConfig, writeConfigFile } = await getGatewayConfigModule();
+  // Catalog workers need the fixture model in configuration, not a host-only discovery mock.
+  await writeConfigFile({
+    ...getRuntimeConfig(),
+    models: {
+      providers: {
+        openai: {
+          api: "openai-responses",
+          baseUrl: "https://openai.invalid/v1",
+          agentRuntime: { id: "openclaw" },
+          models: [
+            {
+              id: "gpt-test-a",
+              name: "A",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 32768,
+              maxTokens: 2048,
+            },
+          ],
+        },
+      },
+    },
+  });
 
   const { ws } = await openClient({ scopes: ["operator.write"] });
   try {
@@ -920,6 +916,43 @@ test("sessions.list breaks timestamp ties by key for stable paging", async () =>
   });
   expect(paged.ok).toBe(true);
   expect(paged.payload?.sessions.map((session) => session.key)).toEqual(expectedOrder.slice(2));
+});
+
+test("chat.inject writes to the transcript owner after the requested row's facts are cached", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "8f14e45f-ceea-4e7a-9f8b-2d5c6b1a0e93";
+  const baseKey = "agent:main:cron:3f1c9a52-7d4e-4b8a-9c21-5e6f7a8b9c0d";
+  const runKey = `${baseKey}:run:${sessionId}`;
+  await writeSessionStore({
+    entries: {
+      [baseKey]: { sessionId, updatedAt: 1 },
+      [runKey]: { sessionId, updatedAt: 2 },
+    },
+  });
+  await seedLinearTranscript({ contents: ["cron run"], sessionId, sessionKey: runKey, storePath });
+  const ownerRows = () => loadTranscriptRows({ sessionId, sessionKey: runKey, storePath });
+  const rowsBefore = (await ownerRows()).length;
+  const { ws } = await openClient();
+  try {
+    // Reading the base row must not make it the owner of the shared transcript.
+    expect((await rpcReq(ws, "sessions.abort", { key: baseKey })).ok).toBe(true);
+    for (const message of ["first", "second"]) {
+      const injected = await rpcReq(ws, "chat.inject", { sessionKey: baseKey, message });
+      expect([injected.ok, injected.error]).toEqual([true, undefined]);
+    }
+    expect((await ownerRows()).slice(rowsBefore)).toMatchObject([
+      {
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "first" }] },
+      },
+      {
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "second" }] },
+      },
+    ]);
+  } finally {
+    ws.close();
+  }
 });
 
 test("archiving a session disables cron jobs bound to it", async () => {

@@ -10,7 +10,11 @@ describe("Anthropic OAuth client identity", () => {
   it.each<{ name: string; headers?: Record<string, string>; expected: string }>([
     { name: "missing CLI", headers: undefined, expected: "2.1.280" },
     { name: "older CLI", headers: { "user-agent": "claude-cli/2.1.234" }, expected: "2.1.280" },
-    { name: "newer CLI", headers: { "User-Agent": "claude-cli/3.0.0" }, expected: "3.0.0" },
+    {
+      name: "newer CLI",
+      headers: { "User-Agent": "claude-cli/3.0.0", "Anthropic-Beta": "synthetic-beta" },
+      expected: "3.0.0",
+    },
     {
       name: "prerelease",
       headers: { "user-agent": "claude-cli/3.0.0-beta.1" },
@@ -24,6 +28,9 @@ describe("Anthropic OAuth client identity", () => {
         headers,
       });
       expect(request.headers.get("user-agent")).toBe(`claude-cli/${expected}`);
+      if (headers?.["Anthropic-Beta"]) {
+        expect(request.headers.get("anthropic-beta")).toBe("synthetic-beta");
+      }
       expect(request.payload.system).toEqual(
         expect.arrayContaining([
           {
@@ -32,17 +39,6 @@ describe("Anthropic OAuth client identity", () => {
           },
         ]),
       );
-    }
-  });
-
-  it("preserves case-insensitive header replacement on OAuth requests", async () => {
-    for (const implementation of ["provider", "transport"] as const) {
-      const request = await captureAnthropicRequest(implementation, {
-        apiKey: "sk-ant-oat01-synthetic",
-        headers: { "Anthropic-Beta": "synthetic-beta", "User-Agent": "claude-cli/3.0.0" },
-      });
-      expect(request.headers.get("anthropic-beta")).toBe("synthetic-beta");
-      expect(request.headers.get("user-agent")).toBe("claude-cli/3.0.0");
     }
   });
 

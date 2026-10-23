@@ -1,4 +1,3 @@
-// Xai plugin module implements responses tool shared behavior.
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
 import { truncateSanitizedExternalContent } from "openclaw/plugin-sdk/security-runtime";
@@ -20,18 +19,15 @@ function normalizeXaiCitationUrl(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > XAI_CITATION_URL_MAX_CHARS) {
     return undefined;
   }
-  try {
-    const url = new URL(value);
-    if (
-      (url.protocol !== "http:" && url.protocol !== "https:") ||
-      url.href.length > XAI_CITATION_URL_MAX_CHARS
-    ) {
-      return undefined;
-    }
-    return url.href === `${value}/` ? value : url.href;
-  } catch {
+  const url = URL.parse(value);
+  if (
+    !url ||
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.href.length > XAI_CITATION_URL_MAX_CHARS
+  ) {
     return undefined;
   }
+  return url.href === `${value}/` ? value : url.href;
 }
 
 function collectUrlCitations(annotations: unknown, citations: Set<string>): void {

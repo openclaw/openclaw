@@ -1,12 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { applyCodeModeCatalog, runCodeModeScriptHeadless } from "./code-mode.js";
+import { resolveCodeModeConfig } from "./code-mode-runtime.js";
+import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "./code-mode.js";
 import {
+  createCatalogCodeModeHarness,
   createCodeModeHarness,
   createHeadlessCodeModeHarness,
   expectCodeModeSharedBudget,
   expectOriginalCodeModeMarker,
+  expectToolCalls,
   pluginTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
@@ -15,6 +18,8 @@ import {
 } from "./code-mode.test-support.js";
 
 afterEach(resetCodeModeTestState);
+const quickjs = { codeMode: { executor: "quickjs" as const } };
+const textOutput = (...texts: string[]) => texts.map((text) => ({ type: "text", text }));
 
 function snapshotFixture() {
   const pendingStarted = createDeferred<AbortSignal>();
@@ -47,96 +52,97 @@ function snapshotFixture() {
   return { pendingStarted, pending, fixture, fresh, code };
 }
 
-describe("QuickJS checkpoint admission through Code Mode", () => {
-  it.each(["exec", "wait"])(
-    "preserves output and cancels earlier tools when a %s resume exceeds the snapshot cap",
-    async (mode) => {
-      const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor: "quickjs" } });
-      const { pendingStarted, pending, fixture, fresh, code } = snapshotFixture();
-      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, pending, fixture, fresh] });
-      const exec = expectDefined(tools[0], "exec");
-      const wait = expectDefined(tools[1], "wait");
-      const input = {
-        code: `${mode === "wait" ? 'text("delivered"); await yield_control();' : ""}${code}`,
-      };
-      const first = mode === "wait" ? resultDetails(await exec.execute("park", input)) : undefined;
+it("yields and resumes a direct executor call without an inline host", async () => {
+  const { ctx } = createCodeModeHarness(quickjs);
+  const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
+  const options = {
+    executor: "quickjs" as const,
+    runtimeConfig: ctx.config,
+    timeoutMs: config.timeoutMs,
+  };
+  const result = await testing.runCodeModeExecutor(
+    {
+      kind: "exec",
+      source: "const value = 42; await yield_control(); return value;",
+      config,
+      catalog: [],
+      namespaces: [],
+    },
+    options,
+  );
+  assert(result.status === "waiting", JSON.stringify(result));
+  expect(
+    await testing.runCodeModeExecutor(
+      {
+        kind: "resume",
+        continuation: result.continuation,
+        config,
+        settledRequests: result.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })),
+        pendingRequests: [],
+      },
+      options,
+    ),
+  ).toMatchObject({ status: "completed", value: { json: "42" } });
+});
+it.each(["exec", "wait", "headless"] as const)(
+  "preserves output and cancels earlier tools when a %s resume exceeds the snapshot cap",
+  async (mode) => {
+    const { pendingStarted, pending, fixture, fresh, code } = snapshotFixture();
+    let result: CodeModeHeadlessResult | ReturnType<typeof resultDetails>;
+    if (mode === "headless") {
+      result = await runCodeModeScriptHeadless({
+        ctx: createHeadlessCodeModeHarness([pending, fixture, fresh], quickjs),
+        code,
+      });
+      expect(result.toolCallCount).toBe(2);
+    } else {
+      const h = createCatalogCodeModeHarness([pending, fixture, fresh], quickjs);
+      const first =
+        mode === "wait"
+          ? await h.run(`text("delivered"); await yield_control(); ${code}`)
+          : undefined;
       if (first) {
         expect(first).toMatchObject({
           status: "waiting",
-          output: [{ type: "text", text: "delivered" }],
+          output: textOutput("delivered"),
         });
       }
-      const result = resultDetails(
-        await (first
-          ? wait.execute("resume", { runId: first.runId })
-          : exec.execute("inline", input)),
-      );
-      expect(result).toMatchObject({ status: "failed", code: "snapshot_limit_exceeded" });
-      expect(pending.execute).toHaveBeenCalledOnce();
-      expect(fixture.execute).toHaveBeenCalledOnce();
-      expect(fresh.execute).not.toHaveBeenCalled();
-      expect((await pendingStarted.promise).aborted).toBe(true);
-      expect(result.output).toEqual([
-        { type: "text", text: "accepted first" },
-        { type: "text", text: "accepted inline" },
-      ]);
-      expect(testing.activeRuns.size).toBe(0);
-    },
-  );
-
-  it.each(["abort", "restart-safe"])(
-    "shares the output budget with %s diagnostics",
-    async (mode) => {
-      const { ctx, config, tools } = createCodeModeHarness({
-        codeMode: { executor: "quickjs", maxOutputBytes: 1024 },
-      });
-      const controller = new AbortController();
-      const fixture = pluginToolWithExecute("output_fixture", "Output fixture", async () => {
-        controller.abort();
-        return { content: [], details: true };
-      });
-      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, fixture] });
-      const result = resultDetails(
-        await expectDefined(tools[0], "exec").execute(
-          "failure",
-          {
-            code: 'text("🦞".repeat(1000)); await output_fixture({}); return true;',
-            restartSafe: mode === "restart-safe",
-          },
-          controller.signal,
-        ),
-      );
-      expect(result).toMatchObject({
-        status: "failed",
-        code: mode === "abort" ? "aborted" : "invalid_input",
-      });
-      expect(fixture.execute).toHaveBeenCalledTimes(mode === "abort" ? 1 : 0);
-      expectOriginalCodeModeMarker((result.output as unknown[])[0], [
-        { type: "text", text: "🦞".repeat(1000) },
-      ]);
-      expectCodeModeSharedBudget(result, 1024);
-      expect(testing.activeRuns.size).toBe(0);
-    },
-  );
-
-  it("preserves output and cancels earlier tools when a headless resume exceeds the snapshot cap", async () => {
-    const { pendingStarted, pending, fixture, fresh, code } = snapshotFixture();
-    const result = await runCodeModeScriptHeadless({
-      ctx: createHeadlessCodeModeHarness([pending, fixture, fresh], {
-        codeMode: { executor: "quickjs" },
-      }),
-      code,
-    });
-
+      result = first ? await h.resume(first) : await h.run(code);
+    }
     expect(result).toMatchObject({ status: "failed", code: "snapshot_limit_exceeded" });
-    expect(result.toolCallCount).toBe(2);
-    expect(result.output).toEqual([
-      { type: "text", text: "accepted first" },
-      { type: "text", text: "accepted inline" },
-    ]);
-    expect(pending.execute).toHaveBeenCalledOnce();
-    expect(fixture.execute).toHaveBeenCalledOnce();
-    expect(fresh.execute).not.toHaveBeenCalled();
+    expectToolCalls(1, pending, fixture);
+    expectToolCalls(0, fresh);
     expect((await pendingStarted.promise).aborted).toBe(true);
+    expect(result.output).toEqual(textOutput("accepted first", "accepted inline"));
+    expect(testing.activeRuns.size).toBe(0);
+  },
+);
+
+it.each(["abort", "restart-safe"])("shares the output budget with %s diagnostics", async (mode) => {
+  const controller = new AbortController();
+  const fixture = pluginToolWithExecute("output_fixture", "Output fixture", async () => {
+    controller.abort();
+    return { content: [], details: true };
   });
+  const { tools } = createCatalogCodeModeHarness([fixture], {
+    codeMode: { executor: "quickjs", maxOutputBytes: 1024 },
+  });
+  const result = resultDetails(
+    await expectDefined(tools[0], "exec").execute(
+      "failure",
+      {
+        code: 'text("🦞".repeat(1000)); await output_fixture({}); return true;',
+        restartSafe: mode === "restart-safe",
+      },
+      controller.signal,
+    ),
+  );
+  expect(result).toMatchObject({
+    status: "failed",
+    code: mode === "abort" ? "aborted" : "invalid_input",
+  });
+  expect(fixture.execute).toHaveBeenCalledTimes(mode === "abort" ? 1 : 0);
+  expectOriginalCodeModeMarker((result.output as unknown[])[0], textOutput("🦞".repeat(1000)));
+  expectCodeModeSharedBudget(result, 1024);
+  expect(testing.activeRuns.size).toBe(0);
 });

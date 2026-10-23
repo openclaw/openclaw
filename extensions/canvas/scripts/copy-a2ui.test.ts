@@ -1,70 +1,45 @@
-// Canvas tests cover copy a2ui plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { copyA2uiAssets } from "./copy-a2ui.mjs";
-
-const ORIGINAL_SKIP_MISSING = process.env.OPENCLAW_A2UI_SKIP_MISSING;
-const ORIGINAL_SPARSE_PROFILE = process.env.OPENCLAW_SPARSE_PROFILE;
 
 describe("canvas a2ui copy", () => {
   beforeEach(() => {
-    delete process.env.OPENCLAW_A2UI_SKIP_MISSING;
-    delete process.env.OPENCLAW_SPARSE_PROFILE;
+    vi.stubEnv("OPENCLAW_A2UI_SKIP_MISSING", undefined);
+    vi.stubEnv("OPENCLAW_SPARSE_PROFILE", undefined);
   });
+  afterEach(() => vi.unstubAllEnvs());
 
-  afterEach(() => {
-    if (ORIGINAL_SKIP_MISSING === undefined) {
-      delete process.env.OPENCLAW_A2UI_SKIP_MISSING;
-    } else {
-      process.env.OPENCLAW_A2UI_SKIP_MISSING = ORIGINAL_SKIP_MISSING;
-    }
-
-    if (ORIGINAL_SPARSE_PROFILE === undefined) {
-      delete process.env.OPENCLAW_SPARSE_PROFILE;
-    } else {
-      process.env.OPENCLAW_SPARSE_PROFILE = ORIGINAL_SPARSE_PROFILE;
-    }
-  });
-
-  async function withA2uiFixture(run: (dir: string) => Promise<void>) {
-    await withTempWorkspace(
+  function withA2uiFixture(run: (paths: { srcDir: string; outDir: string }) => Promise<void>) {
+    return withTempWorkspace(
       { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-a2ui-" },
-      async ({ dir }) => await run(dir),
+      ({ dir }) => run({ srcDir: path.join(dir, "src"), outDir: path.join(dir, "out") }),
     );
   }
 
   it("throws a helpful error when assets are missing", async () => {
-    await withA2uiFixture(async (dir) => {
-      await expect(
-        copyA2uiAssets({ srcDir: path.join(dir, "src"), outDir: path.join(dir, "out") }),
-      ).rejects.toThrow('Run "pnpm canvas:a2ui:bundle"');
+    await withA2uiFixture(async (paths) => {
+      await expect(copyA2uiAssets(paths)).rejects.toThrow('Run "pnpm canvas:a2ui:bundle"');
     });
   });
 
   it("skips missing assets when OPENCLAW_A2UI_SKIP_MISSING=1", async () => {
-    await withA2uiFixture(async (dir) => {
-      process.env.OPENCLAW_A2UI_SKIP_MISSING = "1";
-      await expect(
-        copyA2uiAssets({ srcDir: path.join(dir, "src"), outDir: path.join(dir, "out") }),
-      ).resolves.toBeUndefined();
+    await withA2uiFixture(async (paths) => {
+      vi.stubEnv("OPENCLAW_A2UI_SKIP_MISSING", "1");
+      await expect(copyA2uiAssets(paths)).resolves.toBeUndefined();
     });
   });
 
   it("skips missing assets when OPENCLAW_SPARSE_PROFILE is set", async () => {
-    await withA2uiFixture(async (dir) => {
-      process.env.OPENCLAW_SPARSE_PROFILE = "core";
-      await expect(
-        copyA2uiAssets({ srcDir: path.join(dir, "src"), outDir: path.join(dir, "out") }),
-      ).resolves.toBeUndefined();
+    await withA2uiFixture(async (paths) => {
+      vi.stubEnv("OPENCLAW_SPARSE_PROFILE", "core");
+      await expect(copyA2uiAssets(paths)).resolves.toBeUndefined();
     });
   });
 
   it("copies nested bundled assets and removes stale output", async () => {
-    await withA2uiFixture(async (dir) => {
-      const srcDir = path.join(dir, "src");
-      const outDir = path.join(dir, "dist");
+    await withA2uiFixture(async ({ srcDir, outDir }) => {
       const nestedAssetDir = path.join(srcDir, "assets", "demo");
       await fs.mkdir(nestedAssetDir, { recursive: true });
       await fs.mkdir(outDir, { recursive: true });
@@ -75,15 +50,13 @@ describe("canvas a2ui copy", () => {
 
       await copyA2uiAssets({ srcDir, outDir });
 
-      await expect(fs.readFile(path.join(outDir, "a2ui.bundle.js"), "utf8")).resolves.toBe(
-        "console.log(1);",
-      );
-      await expect(fs.readFile(path.join(outDir, "a2ui-v0.9.bundle.js"), "utf8")).resolves.toBe(
-        "console.log(2);",
-      );
       await expect(
-        fs.readFile(path.join(outDir, "assets", "demo", "sample.txt"), "utf8"),
-      ).resolves.toBe("nested-asset");
+        Promise.all(
+          ["a2ui.bundle.js", "a2ui-v0.9.bundle.js", "assets/demo/sample.txt"].map((file) =>
+            fs.readFile(path.join(outDir, file), "utf8"),
+          ),
+        ),
+      ).resolves.toEqual(["console.log(1);", "console.log(2);", "nested-asset"]);
       await expect(fs.stat(path.join(outDir, "stale.txt"))).rejects.toMatchObject({
         code: "ENOENT",
       });
@@ -91,8 +64,7 @@ describe("canvas a2ui copy", () => {
   });
 
   it("rejects overlapping source and output directories before cleaning output", async () => {
-    await withA2uiFixture(async (dir) => {
-      const srcDir = path.join(dir, "src");
+    await withA2uiFixture(async ({ srcDir }) => {
       await fs.mkdir(srcDir, { recursive: true });
       await fs.writeFile(path.join(srcDir, "a2ui.bundle.js"), "console.log(1);", "utf8");
       await fs.writeFile(path.join(srcDir, "a2ui-v0.9.bundle.js"), "console.log(2);", "utf8");

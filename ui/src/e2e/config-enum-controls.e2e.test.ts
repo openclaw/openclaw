@@ -1,13 +1,17 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  configSnapshot,
+  objectSchema,
+  pageRunner,
+} from "./config-composer-fixtures.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Settings enum controls" });
+const withPage = pageRunner(suite, createControlUiE2eContextOptions);
 
 function enumMocks() {
   const config = {
@@ -19,49 +23,33 @@ function enumMocks() {
       largeMode: null,
     },
   };
-  const nullableMode = {
+  const nullableMode = (title: string, values: (string | null)[] = ["fixed", "other", null]) => ({
+    title,
     type: ["string", "null"],
-    enum: ["fixed", "other", null],
+    enum: values,
+  });
+  const largeValues = ["fixed", "other", "third", "fourth", "fifth", "sixth", null];
+  const properties = {
+    choices: {
+      type: "array",
+      title: "Unique choices",
+      uniqueItems: true,
+      items: { type: "string", enum: ["alpha", "beta", "gamma"] },
+    },
+    requiredMode: nullableMode("Required mode"),
+    optionalMode: nullableMode("Optional mode"),
+    unionMode: {
+      title: "Union mode",
+      anyOf: [{ const: "fixed" }, { const: "other" }, { type: "null" }],
+    },
+    largeMode: nullableMode("Large mode", largeValues),
   };
   return {
-    "config.get": {
-      appliedConfigHash: "enum-controls",
-      config,
-      configRevisionHash: "enum-controls",
-      hash: "enum-controls",
-      issues: [],
-      raw: JSON.stringify(config),
-      valid: true,
-    },
+    "config.get": configSnapshot(config, "enum-controls", true),
     "config.schema": {
-      schema: {
-        type: "object",
-        properties: {
-          laboratory: {
-            type: "object",
-            required: ["requiredMode"],
-            properties: {
-              choices: {
-                type: "array",
-                title: "Unique choices",
-                uniqueItems: true,
-                items: { type: "string", enum: ["alpha", "beta", "gamma"] },
-              },
-              requiredMode: { ...nullableMode, title: "Required mode" },
-              optionalMode: { ...nullableMode, title: "Optional mode" },
-              unionMode: {
-                title: "Union mode",
-                anyOf: [{ const: "fixed" }, { const: "other" }, { type: "null" }],
-              },
-              largeMode: {
-                ...nullableMode,
-                title: "Large mode",
-                enum: ["fixed", "other", "third", "fourth", "fifth", "sixth", null],
-              },
-            },
-          },
-        },
-      },
+      schema: objectSchema("", {
+        laboratory: objectSchema("", properties, { required: ["requiredMode"] }),
+      }),
       uiHints: {},
       version: "enum-controls",
     },
@@ -70,53 +58,42 @@ function enumMocks() {
 
 suite.define(() => {
   it("restores rejected segmented selections for pointer and keyboard edits", async () => {
-    await suite.withPage(
-      {
-        ...createControlUiE2eContextOptions(),
-        recordVideo: { dir: suite.artifactDir },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, { methodResponses: enumMocks() });
-        await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`);
-        const second = page.locator(".cfg-array wa-radio-group").nth(1);
-        const selected = () =>
-          second
-            .locator("wa-radio")
-            .evaluateAll((radios) =>
-              radios
-                .filter((radio) => (radio as HTMLElement & { checked: boolean }).checked)
-                .map((radio) => radio.textContent?.trim()),
-            );
-        await expect.poll(selected).toEqual(["beta"]);
-        await second.getByRole("radio", { name: "alpha", exact: true }).click();
-        await page.screenshot({ path: path.join(suite.artifactDir, "rejected-pointer.png") });
-        await expect.poll(selected).toEqual(["beta"]);
-        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+    await withPage(async ({ page }) => {
+      const gateway = await installMockGateway(page, { methodResponses: enumMocks() });
+      await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`);
+      const second = page.locator('.cfg-array [role="radiogroup"]').nth(1);
+      const selected = () =>
+        second
+          .getByRole("radio", { checked: true })
+          .evaluateAll((radios) =>
+            radios.map((radio) => radio.closest("label")?.textContent?.trim()),
+          );
+      await expect.poll(selected).toEqual(["beta"]);
+      await second.getByRole("radio", { name: "alpha", exact: true }).click();
+      await expect.poll(selected).toEqual(["beta"]);
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
-        await second.getByRole("radio", { name: "beta", exact: true }).focus();
-        await page.keyboard.press("ArrowLeft");
-        await expect.poll(selected).toEqual(["beta"]);
-        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+      await second.getByRole("radio", { name: "beta", exact: true }).focus();
+      await page.keyboard.press("ArrowLeft");
+      await expect.poll(selected).toEqual(["beta"]);
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
-        await second.getByRole("radio", { name: "gamma", exact: true }).click();
-        const request = await gateway.waitForRequest("config.set");
-        const submitted = JSON.parse((request.params as { raw: string }).raw);
-        expect(submitted.laboratory.choices).toEqual(["alpha", "gamma"]);
-        await expect.poll(selected).toEqual(["gamma"]);
-        await page.screenshot({ path: path.join(suite.artifactDir, "accepted-selection.png") });
-      },
-    );
+      await second.getByRole("radio", { name: "gamma", exact: true }).click();
+      const request = await gateway.waitForRequest("config.set");
+      const submitted = JSON.parse((request.params as { raw: string }).raw);
+      expect(submitted.laboratory.choices).toEqual(["alpha", "gamma"]);
+      await expect.poll(selected).toEqual(["gamma"]);
+    });
   });
 
   it("round-trips explicit null separately from unset through analyzed enum fields", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    await withPage(async ({ page }) => {
       const gateway = await installMockGateway(page, { methodResponses: enumMocks() });
       await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`);
       await page
         .locator(".settings-row__title")
         .getByText("Required mode", { exact: true })
         .waitFor();
-      await page.screenshot({ path: path.join(suite.artifactDir, "nullable-enums.png") });
 
       for (const [name, key] of [
         ["Required mode", "requiredMode"],
@@ -149,17 +126,12 @@ suite.define(() => {
   });
 
   it("names the message-width textbox with its visible setting title", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    await withPage(async ({ page }) => {
       await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       const width = page.locator("[data-settings-chat-message-width]");
       await width.waitFor();
       await width.scrollIntoViewIfNeeded();
-      await writeFile(
-        path.join(suite.artifactDir, "message-width-accessibility.yml"),
-        await width.ariaSnapshot(),
-      );
-      await page.screenshot({ path: path.join(suite.artifactDir, "message-width.png") });
       const namedWidth = page.getByRole("textbox", { name: "Message width", exact: true });
       await expect.poll(() => namedWidth.count()).toBe(1);
       await namedWidth.fill("64rem");

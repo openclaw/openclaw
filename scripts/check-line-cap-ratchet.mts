@@ -7,7 +7,6 @@ import JSON5 from "json5";
 import type { OxlintConfig } from "oxlint";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
 import {
   compareRatchetCounts,
@@ -15,7 +14,6 @@ import {
   loadRatchetSnapshot,
   loadRatchetSources,
   parseRatchetArgs,
-  reportRatchetSuccess,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
@@ -27,7 +25,7 @@ type OxlintDiagnostic = {
   help?: string;
 };
 
-export function compareLineCapViolations(
+function compareLineCapViolations(
   head: ReadonlyMap<string, LineCapViolation>,
   base: ReadonlyMap<string, LineCapViolation>,
   renames: readonly { from: string; to: string }[] = [],
@@ -49,6 +47,30 @@ function gitPaths(root: string, args: string[]) {
     .toString("utf8")
     .split("\0")
     .filter(Boolean);
+}
+
+function resolveOxlintBin() {
+  const manifestPath = fs.realpathSync(fileURLToPath(import.meta.resolve("oxlint/package.json")));
+  const packageRoot = path.dirname(manifestPath);
+  const manifest: { bin?: string | Record<string, string> } = JSON.parse(
+    fs.readFileSync(manifestPath, "utf8"),
+  );
+  const declaredBin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.oxlint;
+  if (typeof declaredBin !== "string" || !declaredBin) {
+    throw new Error("The admitted oxlint package does not declare its CLI bin.");
+  }
+  const bin = fs.realpathSync(path.resolve(packageRoot, declaredBin));
+  const relative = path.relative(packageRoot, bin);
+  if (
+    !relative ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative) ||
+    !fs.statSync(bin).isFile()
+  ) {
+    throw new Error("The oxlint CLI bin must be a file inside its admitted package.");
+  }
+  return bin;
 }
 
 function collectViolations(
@@ -76,8 +98,9 @@ function collectViolations(
     );
   }
   const invocation = createManagedCommandInvocation({
-    bin: resolveRepoToolBinPath("oxlint", { cwd: path.resolve(import.meta.dirname, "..") }),
+    bin: process.execPath,
     args: [
+      resolveOxlintBin(),
       "--config",
       ".oxlintrc.json",
       "--disable-nested-config",
@@ -137,7 +160,7 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       "--name-only",
       "-z",
       "--diff-filter=ACMR",
-      "--find-renames",
+      "--no-renames",
       ...(args.staged ? ["--cached"] : []),
       base,
     ]);
@@ -145,14 +168,6 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       changes.push(...gitPaths(root, ["ls-files", "--others", "--exclude-standard", "-z"]));
     }
     const paths = [...new Set(changes)].filter((file) => /\.(?:ts|tsx|mts|mjs)$/u.test(file));
-    const renames = listRatchetRenames(root, base, args.staged, []);
-    const oldPaths = new Map(renames.map(({ from, to }) => [to, from]));
-    const basePaths = new Set(gitPaths(root, ["ls-tree", "-r", "--name-only", "-z", base]));
-    const baseSources = loadRatchetSources(
-      root,
-      paths.map((file) => oldPaths.get(file) ?? file).filter((file) => basePaths.has(file)),
-      base,
-    );
     const headSources = args.staged
       ? loadRatchetSources(root, paths)
       : new Map(paths.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
@@ -184,11 +199,18 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     fs.mkdirSync(path.join(scratch, ".git"));
     const after = collectViolations(path.join(scratch, "head"), headSources, config);
     // Only over-cap head files need an inherited allowance. A broken base must
-    // not block a valid repair that already satisfies the current cap.
+    // not block a valid repair; partial clones must not fetch unused base blobs.
+    const renames = after.size > 0 ? listRatchetRenames(root, base, args.staged, []) : [];
+    const oldPaths = new Map(renames.map(({ from, to }) => [to, from]));
+    const basePaths = new Set(gitPaths(root, ["ls-tree", "-r", "--name-only", "-z", base]));
     const debtPaths = new Set([...after.keys()].map((file) => oldPaths.get(file) ?? file));
     const before = collectViolations(
       path.join(scratch, "base"),
-      new Map([...baseSources].filter(([file]) => debtPaths.has(file))),
+      loadRatchetSources(
+        root,
+        [...debtPaths].filter((file) => basePaths.has(file)),
+        base,
+      ),
       config,
     );
     const increased = compareLineCapViolations(after, before, renames);
@@ -204,7 +226,7 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       return 1;
     }
     if (increased.length === 0) {
-      reportRatchetSuccess(
+      console.log(
         `Line-cap ratchet OK: ${paths.length} changed source files; no new violations or over-cap growth.`,
       );
     }

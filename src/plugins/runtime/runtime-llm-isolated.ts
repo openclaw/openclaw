@@ -10,6 +10,7 @@ import {
   createLlmCompleteError as completionError,
   createLlmOperatorAuthorizationError,
   isLlmOperatorAuthorizationError,
+  isLlmRuntimeLifecycleFailure,
 } from "./runtime-llm-error.js";
 import type {
   LlmCompleteErrorCode,
@@ -150,50 +151,33 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
     model: params.model,
     reasoning: params.request.reasoning,
   });
-  const controller = new AbortController();
-  let timedOut = false;
-  const abortFromCaller = () => controller.abort(params.request.signal?.reason);
   if (params.request.signal?.aborted) {
     throw completionError("LLM_COMPLETION_ABORTED", "Plugin LLM completion was aborted.");
   }
-  params.request.signal?.addEventListener("abort", abortFromCaller, { once: true });
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new Error(`Isolated completion timed out after ${timeoutMs}ms.`));
-  }, timeoutMs);
-  timer.unref?.();
-  let rejectOnAbort: (() => void) | undefined;
-  const abortPromise = new Promise<never>((_resolve, reject) => {
-    rejectOnAbort = () => {
-      const reason = controller.signal.reason;
-      reject(reason instanceof Error ? reason : new Error("Isolated completion was aborted."));
-    };
-    controller.signal.addEventListener("abort", rejectOnAbort, { once: true });
-  });
+  const timeoutError = new Error(`Isolated completion timed out after ${timeoutMs}ms.`);
   try {
-    const operation = (async () => {
-      const { runIsolatedCompletion } = await import("../../agents/isolated-completion.js");
-      return await runIsolatedCompletion({
-        config: params.cfg,
-        provider: params.provider,
-        model: params.model,
-        authProfileId: params.authProfileId,
-        operatorAuthority: params.operatorAuthority,
-        mapOperatorAuthorizationError: createLlmOperatorAuthorizationError,
-        assertCurrent: params.assertCurrent,
-        agentId: params.agentId,
-        systemPrompt: params.request.systemPrompt ?? "",
-        prompt,
-        timeoutMs,
-        abortSignal: controller.signal,
-        thinkLevel: params.request.reasoning,
-        streamParams: {
-          maxTokens: asFiniteNumber(params.request.maxTokens),
-          temperature: asFiniteNumber(params.request.temperature),
-        },
-      });
-    })();
-    return await Promise.race([operation, abortPromise]);
+    const { runIsolatedCompletion } = await import("../../agents/isolated-completion.js");
+    return await runIsolatedCompletion({
+      purpose: "plugin-completion",
+      config: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      authProfileId: params.authProfileId,
+      operatorAuthority: params.operatorAuthority,
+      mapOperatorAuthorizationError: createLlmOperatorAuthorizationError,
+      assertCurrent: params.assertCurrent,
+      agentId: params.agentId,
+      systemPrompt: params.request.systemPrompt ?? "",
+      prompt,
+      timeoutMs,
+      timeoutError,
+      abortSignal: params.request.signal,
+      thinkLevel: params.request.reasoning,
+      streamParams: {
+        maxTokens: asFiniteNumber(params.request.maxTokens),
+        temperature: asFiniteNumber(params.request.temperature),
+      },
+    });
   } catch (error) {
     if (isLlmOperatorAuthorizationError(error)) {
       throw error;
@@ -204,7 +188,10 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
     } catch (authorizationError) {
       throw createLlmOperatorAuthorizationError(authorizationError);
     }
-    if (timedOut) {
+    if (isLlmRuntimeLifecycleFailure(error)) {
+      throw error;
+    }
+    if (error === timeoutError) {
       throw completionError(
         "LLM_COMPLETION_TIMEOUT",
         `Plugin LLM completion timed out after ${timeoutMs}ms.`,
@@ -224,11 +211,5 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
       );
     }
     throw completionError("LLM_COMPLETION_FAILED", "Plugin LLM completion failed.", error);
-  } finally {
-    clearTimeout(timer);
-    if (rejectOnAbort) {
-      controller.signal.removeEventListener("abort", rejectOnAbort);
-    }
-    params.request.signal?.removeEventListener("abort", abortFromCaller);
   }
 }

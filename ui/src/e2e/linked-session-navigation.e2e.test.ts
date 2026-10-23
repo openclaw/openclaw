@@ -1,7 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -10,6 +8,9 @@ const targetKey = "agent:main:thread:12345678-aaaa-4000-8000-000000000001";
 const targetText = "Selected owner transcript 741";
 const otherText = "Different owner transcript 982";
 const timestamp = Date.parse("2026-09-16T12:00:00.000Z");
+const makeTranscript = (text: string) => ({
+  messages: [{ role: "assistant", content: [{ type: "text", text }], timestamp }],
+});
 const scenarios = [
   { surface: "worktrees", activation: "click", collision: true },
   { surface: "worktrees", activation: "href", collision: true },
@@ -19,8 +20,8 @@ const scenarios = [
 suite.define(() => {
   it.each(scenarios)(
     "preserves selected identity: $surface $activation collision=$collision",
-    async (scenario) => {
-      await suite.withPage(
+    async (scenario) =>
+      suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
         async ({ page }) => {
           const target = {
@@ -41,16 +42,8 @@ suite.define(() => {
             sessions: [target, other],
             sessionKey: "agent:main:main",
             sessionTranscripts: {
-              [target.key]: {
-                messages: [
-                  { role: "assistant", content: [{ type: "text", text: targetText }], timestamp },
-                ],
-              },
-              [other.key]: {
-                messages: [
-                  { role: "assistant", content: [{ type: "text", text: otherText }], timestamp },
-                ],
-              },
+              [target.key]: makeTranscript(targetText),
+              [other.key]: makeTranscript(otherText),
             },
             methodResponses: {
               "sessions.list": {
@@ -88,24 +81,14 @@ suite.define(() => {
             .getByRole("link", { name: "Session", exact: true });
           await link.waitFor({ state: "visible" });
           const primaryKeys = () =>
-            page.evaluate(() => {
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime?: { context: ApplicationContext };
-              };
-              return (
-                app.runtime?.context.sessions.state.result?.sessions.map((row) => row.key) ?? null
-              );
-            });
+            evaluateControlUiContext(
+              page,
+              (context) => context.sessions.state.result?.sessions.map((row) => row.key) ?? null,
+            );
           await expect.poll(primaryKeys).toEqual([]);
-          const primaryBeforeClick = await primaryKeys();
           const href = await link.getAttribute("href");
           expect(href).toBe("/chat/main/12345678aaaa40008000000000000001");
           expect(href).not.toContain("__openclaw");
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "before-click.png"),
-            fullPage: true,
-          });
-          const listRequests = await gateway.getRequests(`${scenario.surface}.list`);
           if (scenario.activation === "href") {
             await page.goto(new URL(href!, page.url()).href);
           } else {
@@ -115,55 +98,22 @@ suite.define(() => {
           const transcript = page.getByText(targetText, { exact: true });
           const settle = () => chooser.or(transcript).first().waitFor({ state: "visible" });
           await settle();
-          const afterClick = {
-            url: page.url(),
+          const observe = async () => ({
             chooser: await chooser.isVisible(),
             targetVisible: await transcript.isVisible(),
             otherVisible: await page.getByText(otherText, { exact: true }).isVisible(),
-            resolveRequests: await gateway.getRequests("sessions.resolve"),
             startupRequests: await gateway.getRequests("chat.startup"),
-          };
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "after-click.png"),
-            fullPage: true,
           });
+          const afterClick = await observe();
           await page.reload();
           await settle();
-          const afterReload = {
-            url: page.url(),
-            chooser: await chooser.isVisible(),
-            targetVisible: await transcript.isVisible(),
-            otherVisible: await page.getByText(otherText, { exact: true }).isVisible(),
-            resolveRequests: await gateway.getRequests("sessions.resolve"),
-            startupRequests: await gateway.getRequests("chat.startup"),
-          };
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "after-reload.png"),
-            fullPage: true,
-          });
-          await writeFile(
-            path.join(suite.artifactDir, "receipt.json"),
-            JSON.stringify(
-              {
-                scenario,
-                primaryBeforeClick,
-                href,
-                targetKey,
-                otherKey: other.key,
-                listRequests,
-                afterClick,
-                afterReload,
-              },
-              null,
-              2,
-            ),
-          );
-          expect(afterClick.chooser).toBe(false);
-          expect(afterClick.targetVisible).toBe(true);
-          expect(afterReload.chooser).toBe(false);
-          expect(afterReload.targetVisible).toBe(true);
+          const afterReload = await observe();
           for (const stage of [afterClick, afterReload]) {
-            expect(stage.otherVisible).toBe(false);
+            expect(stage).toMatchObject({
+              chooser: false,
+              targetVisible: true,
+              otherVisible: false,
+            });
             expect(stage.startupRequests.map((request) => request.params)).toContainEqual(
               expect.objectContaining({ sessionKey: targetKey }),
             );
@@ -177,7 +127,6 @@ suite.define(() => {
             ),
           ).toBe(true);
         },
-      );
-    },
+      ),
   );
 });

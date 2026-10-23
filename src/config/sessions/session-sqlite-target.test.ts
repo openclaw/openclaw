@@ -3,10 +3,25 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  prepareSqliteTargetFromSessionStorePath,
+  resolveSqliteTargetFromSessionStorePath,
+} from "./session-sqlite-target.js";
 
 describe("resolveSqliteTargetFromSessionStorePath", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  it.each(["(multiple)", "  (multiple)  ", "stores/{agentId}/sessions.json", ""])(
+    "rejects non-concrete store selector %j before resolving or opening it",
+    async (storePath) => {
+      expect(() => resolveSqliteTargetFromSessionStorePath(storePath)).toThrow(
+        "Session storage requires a concrete store path",
+      );
+      await expect(prepareSqliteTargetFromSessionStorePath(storePath)).rejects.toThrow(
+        "Session storage requires a concrete store path",
+      );
+    },
+  );
+
   it("assigns a new exact SQLite locator to the configured default without caller capture", () => {
     const databasePath = path.resolve("tmp", "stores", "new-shared.sqlite");
 

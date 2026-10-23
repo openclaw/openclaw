@@ -3,17 +3,14 @@ import {
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
 } from "../../infra/plugin-approvals.js";
-import type {
-  NativeHookRelayPermissionApprovalRequest,
-  NativeHookRelayProvider,
-} from "./native-hook-relay-types.js";
+import type { NativeHookRelayPermissionApprovalRequest } from "./native-hook-relay-types.js";
 import { readOptionalNonEmptyString, truncateRelayText } from "./native-hook-relay-utils.js";
 
 export function formatNativeHookRelayApprovalPresentation(
   request: NativeHookRelayPermissionApprovalRequest,
 ): { title: string; description: string } {
   return formatHarnessApprovalPresentation({
-    title: `${nativeHookRelayProviderDisplayName(request.provider)} permission request`,
+    title: "Codex permission request",
     description: formatPermissionApprovalDescription(request),
   });
 }
@@ -45,28 +42,10 @@ function formatToolInputPreview(toolInput: Record<string, unknown>): string | un
 }
 
 function sanitizeApprovalText(value: string): string {
-  let sanitized = "";
-  for (const char of stripAnsi(value)) {
-    const codePoint = char.codePointAt(0);
-    sanitized += codePoint != null && isUnsafeApprovalCodePoint(codePoint) ? " " : char;
-  }
-  return sanitized.replace(/\s+/g, " ").trim();
-}
-
-function isUnsafeApprovalCodePoint(codePoint: number): boolean {
-  return (
-    (codePoint >= 0 && codePoint <= 8) ||
-    codePoint === 11 ||
-    codePoint === 12 ||
-    (codePoint >= 14 && codePoint <= 31) ||
-    (codePoint >= 127 && codePoint <= 159) ||
-    (codePoint >= 0x202a && codePoint <= 0x202e) ||
-    (codePoint >= 0x2066 && codePoint <= 0x2069)
-  );
-}
-
-function nativeHookRelayProviderDisplayName(provider: NativeHookRelayProvider): string {
-  return provider === "codex" ? "Codex" : provider;
+  return stripAnsi(value)
+    .replace(/[\p{Cc}\u202a-\u202e\u2066-\u2069]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function formatHarnessApprovalPresentation(input: { title: string; description: string }): {

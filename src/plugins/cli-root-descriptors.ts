@@ -93,7 +93,7 @@ export async function getPluginCliCommandDescriptors(
       );
       descriptorGroups.push(
         ...registry.cliRegistrars
-          .filter((entry) => (entry.parentPath ?? []).length === 0)
+          .filter((entry) => entry.parentPath.length === 0)
           .map((entry) => entry.descriptors),
       );
     }

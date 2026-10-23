@@ -1,4 +1,5 @@
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 // Compatibility constants for existing imports. Discord no longer enforces
 // channel-owned listener or inbound run timeouts.
@@ -55,7 +56,6 @@ export async function runDiscordTaskWithTimeout(params: {
   const mergedAbortSignal =
     abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0];
   let timedOut = false;
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const runPromise = params.run(mergedAbortSignal).catch((error: unknown) => {
     if (!timedOut) {
       throw error;
@@ -67,51 +67,23 @@ export async function runDiscordTaskWithTimeout(params: {
     params.onErrorAfterTimeout?.(error);
   });
 
-  try {
-    if (!timeoutMs) {
-      await runPromise;
-      return false;
-    }
-    const timeoutPromise = new Promise<"timeout">((resolve) => {
-      timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
-      timeoutHandle.unref?.();
-    });
-    const result = await Promise.race([
-      runPromise.then(() => "completed" as const),
-      timeoutPromise,
-    ]);
-    if (result === "timeout") {
-      timedOut = true;
-      timeoutAbortController?.abort();
-      await params.onTimeout(timeoutMs);
-      return true;
-    }
+  if (!timeoutMs) {
+    await runPromise;
     return false;
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
   }
-}
-
-export async function raceWithTimeout<T, U>(params: {
-  promise: Promise<T>;
-  timeoutMs: number;
-  onTimeout: () => U;
-}): Promise<T | U> {
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<U>((resolve) => {
-    timeoutTimer = setTimeout(() => resolve(params.onTimeout()), timeoutMs);
-    timeoutTimer.unref?.();
-  });
-  try {
-    return await Promise.race([params.promise, timeoutPromise]);
-  } finally {
-    if (timeoutTimer) {
-      clearTimeout(timeoutTimer);
-    }
+  const result = await raceWithTimeout(
+    runPromise.then(() => "completed" as const),
+    timeoutMs,
+    () => "timeout" as const,
+    { ref: false },
+  );
+  if (result === "timeout") {
+    timedOut = true;
+    timeoutAbortController?.abort();
+    await params.onTimeout(timeoutMs);
+    return true;
   }
+  return false;
 }
 
 export async function withAbortTimeout<T>(params: {
@@ -124,8 +96,9 @@ export async function withAbortTimeout<T>(params: {
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutTimer = setTimeout(() => {
-      controller.abort();
+      // Settle the deadline before synchronous abort listeners can settle the work.
       reject(params.createTimeoutError());
+      controller.abort();
     }, timeoutMs);
     timeoutTimer.unref?.();
   });

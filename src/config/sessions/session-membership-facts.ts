@@ -1,14 +1,15 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import type {
   SessionMembershipFact,
@@ -24,14 +25,28 @@ export function readSessionMembershipFactsInDatabase(
   if (typeof identity !== "string") {
     throw new Error("Durable session membership requires a physical database");
   }
+  return {
+    kind: "session-membership-facts",
+    identity,
+    birthtime,
+    facts: readSessionMembershipRowsInDatabase(database, sessionKeys),
+  };
+}
+
+/** Connection-bound catalog rows; the transport supplies its own store identity. */
+function readSessionMembershipRowsInDatabase(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
+  sessionKeys?: readonly string[],
+): SessionMembershipFact[] {
   if (sessionKeys?.length === 0) {
-    return { kind: "session-membership-facts", identity, birthtime, facts: [] };
+    return [];
   }
-  return withSqlitePostCommitPublications(database.db, () =>
-    runSqliteDeferredTransactionSync(database.db, () => {
+  return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
+    runSqliteReadSnapshotSync(database.db, () => {
       assertCanonicalSqliteSessionKeysCurrent(database);
-      let entries = selectSessionEntryRows(database, "list")
-        .select("updated_at")
+      let entries = getSessionKysely(database.db)
+        .selectFrom("session_nodes")
+        .select(["session_key", "entry_json", "updated_at"])
         .orderBy("session_key");
       let members = getSessionKysely(database.db)
         .selectFrom("session_members")
@@ -96,12 +111,7 @@ export function readSessionMembershipFactsInDatabase(
           current?.[4] ?? null,
         ]);
       }
-      return {
-        kind: "session-membership-facts" as const,
-        identity,
-        birthtime,
-        facts: [...facts.values()],
-      };
+      return [...facts.values()];
     }),
   );
 }

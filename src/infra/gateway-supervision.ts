@@ -54,7 +54,7 @@ export function assertGatewayServiceMutationAllowed(
   }
   if (!isDefaultInstallIdentity(env)) {
     throw new Error(
-      `${NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON}. Rerun with HOME set to the OS account home, without OPENCLAW_HOME, and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing at the canonical paths for that account home and profile to ${action}.`,
+      `${NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON}. Rerun with HOME set to the OS account home, OPENCLAW_HOME either unset or pointing at that same home, and OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing at the canonical paths for that account home and profile to ${action}.`,
     );
   }
 }

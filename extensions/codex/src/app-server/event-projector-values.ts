@@ -1,10 +1,6 @@
 import { Buffer } from "node:buffer";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import {
-  asFiniteNumber,
-  normalizeOptionalString,
-  readStringField,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type CodexThreadItem, type JsonObject, type JsonValue } from "./protocol.js";
 
 const BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX =
@@ -97,23 +93,9 @@ export function codexProviderRefusalDiagnostics(
     : {};
 }
 
-export { normalizeOptionalString as normalizeNonEmptyString };
-
-export function readNonEmptyString(record: JsonObject, key: string): string | undefined {
-  return normalizeOptionalString(record[key]);
-}
-
 export function readNullableString(record: JsonObject, key: string): string | null | undefined {
   const value = record[key];
-  if (value === null) {
-    return null;
-  }
-  return typeof value === "string" ? value : undefined;
-}
-
-export function readNonNegativeInteger(record: JsonObject, key: string): number | undefined {
-  const value = asFiniteNumber(record[key]);
-  return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
+  return value === null || typeof value === "string" ? value : undefined;
 }
 
 export function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
@@ -140,21 +122,17 @@ export function readHookOutputEntries(
   });
 }
 
-export function splitPlanText(text: string): string[] {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim().replace(/^[-*]\s+/, ""))
-    .filter((line) => line.length > 0);
-}
-
-export function extractRawAssistantText(item: JsonObject): string | undefined {
+export function extractRawResponseItemText(
+  item: JsonObject,
+  textType: "input_text" | "output_text" = "output_text",
+): string | undefined {
   const content = Array.isArray(item.content) ? item.content : [];
   const parts = content.flatMap((entry) => {
     if (!isJsonObject(entry)) {
       return [];
     }
     const type = readStringField(entry, "type");
-    if (type !== "output_text" && type !== "text") {
+    if (type !== textType && type !== "text") {
       return [];
     }
     const value = readStringField(entry, "text");

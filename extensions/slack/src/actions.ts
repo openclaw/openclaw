@@ -4,18 +4,22 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 import type { SlackActionClientOpts } from "./action-context.js";
 import { SLACK_PRIVATE_ACTION_DELIVERY_RESULT } from "./action-threading.js";
-import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackLookupClient, createSlackWriteClient, getSlackWriteClient } from "./client.js";
 import {
   openSlackConversationWithClient,
   parseSlackConversationOpenInput,
+  slackTeamIdSchema,
 } from "./conversation-open.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
@@ -33,6 +37,7 @@ import {
 } from "./native-data-blocks.js";
 import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
 import { sendMessageSlack } from "./send.js";
+import { formatSlackTarget } from "./target-parsing.js";
 import { resolveSlackBotToken } from "./token.js";
 import { countSlackTextUtf8Bytes, truncateSlackTextByUtf8Bytes } from "./truncate.js";
 import type { SlackAttachment } from "./types.js";
@@ -52,7 +57,6 @@ export type SlackMessageSummary = {
     count?: number;
     users?: string[];
   }>;
-  /** File attachments on this message. Present when the message has files. */
   files?: Array<{
     id?: string;
     name?: string;
@@ -188,29 +192,15 @@ function normalizeSlackReadTimestamp(
   if (SLACK_TIMESTAMP_RE.test(trimmed)) {
     return trimmed;
   }
-  if (!ISO_8601_TIMESTAMP_SCHEMA.safeParse(trimmed).success) {
-    throw new Error(
-      `Invalid Slack read ${field} timestamp "${trimmed}": expected a Slack timestamp or ISO-8601 date string`,
-    );
-  }
-  const parsed = Date.parse(trimmed);
+  const parsed = ISO_8601_TIMESTAMP_SCHEMA.safeParse(trimmed).success
+    ? Date.parse(trimmed)
+    : Number.NaN;
   if (!Number.isFinite(parsed)) {
     throw new Error(
       `Invalid Slack read ${field} timestamp "${trimmed}": expected a Slack timestamp or ISO-8601 date string`,
     );
   }
   return formatEpochSeconds(parsed);
-}
-
-function hasSlackPlatformError(err: unknown, code: string): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const data = (err as { data?: unknown }).data;
-  if (!data || typeof data !== "object") {
-    return false;
-  }
-  return (data as { error?: unknown }).error === code;
 }
 
 async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
@@ -225,17 +215,18 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
     : normalizeAccountId(opts.accountId);
   assertSlackDetachedTargetAllowed(accountId, opts.teamId);
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
+  const clientTeamId = opts.omitTeamId ? undefined : opts.teamId;
   if (mode === "write") {
     if (opts.assertDirectAdapterHandoff) {
       return createSlackWriteClient(
         token,
-        { teamId: opts.teamId },
+        { teamId: clientTeamId },
         opts.assertDirectAdapterHandoff,
       );
     }
-    return getSlackWriteClient(token, { teamId: opts.teamId });
+    return getSlackWriteClient(token, { teamId: clientTeamId });
   }
-  return createSlackLookupClient(token, { teamId: opts.teamId }, opts.assertDirectAdapterHandoff);
+  return createSlackLookupClient(token, { teamId: clientTeamId }, opts.assertDirectAdapterHandoff);
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -244,6 +235,71 @@ async function resolveBotUserId(client: WebClient) {
     throw new Error("Failed to resolve Slack bot user id");
   }
   return auth.user_id;
+}
+
+export function parseSlackChannelCreateInput(
+  name: unknown,
+  teamId?: string,
+  inviteUserId?: string,
+) {
+  return {
+    name: z
+      .string()
+      .trim()
+      .regex(/^[a-z0-9][a-z0-9_-]{0,79}$/)
+      .parse(name),
+    teamId: slackTeamIdSchema.parse(teamId),
+    inviteUserId:
+      inviteUserId === undefined
+        ? undefined
+        : z
+            .string()
+            .trim()
+            .regex(/^[UW][A-Z0-9]+$/i)
+            .parse(inviteUserId),
+  };
+}
+
+export async function createSlackChannel(name: unknown, opts: SlackActionClientOpts = {}) {
+  const input = parseSlackChannelCreateInput(name, opts.teamId, opts.inviteUserId);
+  const client = await getClient(opts, "write");
+  const result = await client.conversations.create({ name: input.name, team_id: input.teamId });
+  const channelId = result.channel?.id?.trim();
+  if (!channelId || !/^C[A-Z0-9]+$/i.test(channelId)) {
+    throw new Error("Slack conversations.create did not return a valid public channel ID.");
+  }
+  let inviteWarning: string | undefined;
+  if (input.inviteUserId) {
+    try {
+      // conversations.create needs the selected workspace, but Slack does not
+      // accept team_id on conversations.invite. Do not reuse the workspace-
+      // scoped WebClient here: its default teamId is injected into every API
+      // request by the SDK.
+      const inviteClient = await getClient({ ...opts, omitTeamId: true }, "write");
+      await inviteClient.conversations.invite({
+        channel: channelId,
+        users: input.inviteUserId,
+      });
+    } catch (error) {
+      const reason =
+        error instanceof Error && /missing_scope/i.test(error.message)
+          ? "Slack is missing the invitation permission"
+          : "Slack rejected the invitation";
+      inviteWarning = `${reason}; the requesting user can join the returned public channel, or an operator can reauthorize the Slack app and retry.`;
+    }
+  }
+  return {
+    channelId,
+    name: result.channel?.name?.trim() || input.name,
+    target: formatSlackTarget({
+      teamId: input.teamId,
+      kind: "channel",
+      id: channelId,
+      explicitKind: true,
+    }),
+    ...(input.inviteUserId && !inviteWarning ? { invitedUserId: input.inviteUserId } : {}),
+    ...(inviteWarning ? { inviteWarning } : {}),
+  };
 }
 
 function createSlackReactionUpdater(method: "add" | "remove", unchangedError: string) {
@@ -261,7 +317,7 @@ function createSlackReactionUpdater(method: "add" | "remove", unchangedError: st
         name: normalizeSlackEmojiName(emoji),
       });
     } catch (err) {
-      if (!hasSlackPlatformError(err, unchangedError)) {
+      if (asOptionalObjectRecord(asOptionalObjectRecord(err)?.data)?.error !== unchangedError) {
         throw err;
       }
     }
@@ -290,9 +346,6 @@ export async function removeOwnSlackReactions(
       toRemove.add(name);
     }
   }
-  if (toRemove.size === 0) {
-    return [];
-  }
   await Promise.all(
     Array.from(toRemove, (name) => removeSlackReaction(channelId, messageId, name, { client })),
   );
@@ -316,54 +369,35 @@ export async function listSlackReactions(
 export async function sendSlackMessage(
   to: string,
   content: string,
-  opts: Omit<SlackActionClientOpts, "cfg"> & {
-    cfg: OpenClawConfig;
-    mediaUrl?: string;
-    forceDocument?: boolean;
-    mediaAccess?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-    };
-    mediaLocalRoots?: readonly string[];
-    mediaReadFile?: (filePath: string) => Promise<Buffer>;
-    threadTs?: string;
-    replyBroadcast?: boolean;
-    uploadFileName?: string;
-    uploadTitle?: string;
-    blocks?: (Block | KnownBlock)[];
-    authoredTextPlacement?: SlackAuthoredTextPlacement;
-    nativeDataFallbackBaseText?: string;
-    textIsSlackMrkdwn?: boolean;
-    textIsSlackPlainText?: boolean;
-  },
+  opts: Omit<SlackActionClientOpts, "cfg"> &
+    Pick<
+      Parameters<typeof sendMessageSlack>[2],
+      | "cfg"
+      | "mediaUrl"
+      | "forceDocument"
+      | "mediaAccess"
+      | "mediaLocalRoots"
+      | "mediaReadFile"
+      | "threadTs"
+      | "replyBroadcast"
+      | "uploadFileName"
+      | "uploadTitle"
+      | "blocks"
+      | "authoredTextPlacement"
+      | "nativeDataFallbackBaseText"
+      | "textIsSlackMrkdwn"
+      | "textIsSlackPlainText"
+    >,
 ) {
   const onDeliveryResult = Object.getOwnPropertyDescriptor(
     opts,
     SLACK_PRIVATE_ACTION_DELIVERY_RESULT,
   )?.value;
   return await sendMessageSlack(to, content, {
-    accountId: opts.accountId,
-    cfg: opts.cfg,
-    token: opts.token,
-    mediaUrl: opts.mediaUrl,
-    ...(opts.forceDocument ? { forceDocument: true } : {}),
-    mediaAccess: opts.mediaAccess,
-    mediaLocalRoots: opts.mediaLocalRoots,
-    mediaReadFile: opts.mediaReadFile,
-    client: opts.client,
-    assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
-    threadTs: opts.threadTs,
-    replyBroadcast: opts.replyBroadcast,
-    ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
-    ...(opts.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
-    ...(opts.authoredTextPlacement ? { authoredTextPlacement: opts.authoredTextPlacement } : {}),
-    ...(Object.hasOwn(opts, "nativeDataFallbackBaseText")
-      ? { nativeDataFallbackBaseText: opts.nativeDataFallbackBaseText }
-      : {}),
-    ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
-    ...(opts.uploadTitle ? { uploadTitle: opts.uploadTitle } : {}),
-    ...(typeof onDeliveryResult === "function" ? { onDeliveryResult } : {}),
-    blocks: opts.blocks,
+    ...opts,
+    uploadFileName: opts.uploadFileName || undefined,
+    uploadTitle: opts.uploadTitle || undefined,
+    onDeliveryResult: typeof onDeliveryResult === "function" ? onDeliveryResult : undefined,
   });
 }
 
@@ -378,6 +412,13 @@ export async function editSlackMessage(
   const tableMode = resolveMarkdownTableMode({ cfg: opts.cfg, channel: "slack", accountId });
   const text = normalizeSlackOutboundText(content, { tableMode });
   await editSlackRenderedMessage(channelId, messageId, text, opts);
+}
+
+function slackNativeEditLimitError(options?: ErrorOptions): Error {
+  return new Error(
+    `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
+    options,
+  );
 }
 
 // Finalized previews already contain Slack mrkdwn; a second Markdown render changes its meaning.
@@ -395,9 +436,7 @@ export async function editSlackRenderedMessage(
     ? appendSlackNativeDataFallbackText(editText, blocks)
     : editText;
   if (hasNativeData && countSlackTextUtf8Bytes(nativeFallbackText) > SLACK_EDIT_TEXT_MAX_BYTES) {
-    throw new Error(
-      `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
-    );
+    throw slackNativeEditLimitError();
   }
   // buildSlackEditTextPayload owns normalization; do not re-trim an edit that already fits.
   const text =
@@ -418,7 +457,7 @@ export async function editSlackRenderedMessage(
     }
     logVerbose("slack edit: native data block rejected, retrying with text fallback");
     const survivorBlocks = stripSlackNativeDataBlocks(blocks);
-    const survivorText = buildSlackBlocksFallbackText(survivorBlocks) ?? "";
+    const survivorText = buildSlackBlocksFallbackText(survivorBlocks);
     const authoredEditText = content.trim();
     const baseText =
       authoredEditText && !survivorText.includes(authoredEditText) ? authoredEditText : "";
@@ -434,10 +473,7 @@ export async function editSlackRenderedMessage(
     }
     const fallback = fallbackPlan.fallbackMessages[0];
     if (!fallback || countSlackTextUtf8Bytes(fallback.text) > SLACK_EDIT_TEXT_MAX_BYTES) {
-      throw new Error(
-        `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
-        { cause: error },
-      );
+      throw slackNativeEditLimitError({ cause: error });
     }
     const fallbackText = fallback.blocks
       ? escapeSlackMrkdwn(fallback.text)
@@ -446,10 +482,7 @@ export async function editSlackRenderedMessage(
           SLACK_EDIT_TEXT_MAX_BYTES,
         );
     if (countSlackTextUtf8Bytes(fallbackText) > SLACK_EDIT_TEXT_MAX_BYTES) {
-      throw new Error(
-        `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
-        { cause: error },
-      );
+      throw slackNativeEditLimitError({ cause: error });
     }
     await client.chat.update({
       channel: channelId,
@@ -476,15 +509,6 @@ export async function openSlackConversation(userIds: unknown, opts: SlackActionC
   const input = parseSlackConversationOpenInput(userIds, opts.teamId);
   const client = await getClient({ ...opts, teamId: input.teamId }, "write");
   return await openSlackConversationWithClient(client, input);
-}
-
-export async function resolveSlackConversationName(
-  channelId: string,
-  opts: SlackActionClientOpts = {},
-): Promise<string | undefined> {
-  const client = await getClient(opts, "read");
-  const info = await client.conversations.info({ channel: channelId });
-  return info.channel?.name?.trim() || undefined;
 }
 
 export async function readSlackMessages(
@@ -551,23 +575,15 @@ export async function listSlackEmojis(opts: SlackActionClientOpts = {}) {
   return await client.emoji.list();
 }
 
-export async function pinSlackMessage(
-  channelId: string,
-  messageId: string,
-  opts: SlackActionClientOpts = {},
-) {
-  const client = await getClient(opts, "write");
-  await client.pins.add({ channel: channelId, timestamp: messageId });
+function createSlackPinUpdater(method: "add" | "remove") {
+  return async (channelId: string, messageId: string, opts: SlackActionClientOpts = {}) => {
+    const client = await getClient(opts, "write");
+    await client.pins[method]({ channel: channelId, timestamp: messageId });
+  };
 }
 
-export async function unpinSlackMessage(
-  channelId: string,
-  messageId: string,
-  opts: SlackActionClientOpts = {},
-) {
-  const client = await getClient(opts, "write");
-  await client.pins.remove({ channel: channelId, timestamp: messageId });
-}
+export const pinSlackMessage = createSlackPinUpdater("add");
+export const unpinSlackMessage = createSlackPinUpdater("remove");
 
 export async function listSlackPins(
   channelId: string,
@@ -646,7 +662,6 @@ export async function downloadSlackFile(
   const isFileAllowed = (file: SlackFileInfoSummary) =>
     hasSlackScopeProof({ file, channelId: opts.channelId, threadId: opts.threadId });
 
-  // Fetch fresh file metadata (includes a current url_private_download).
   const info = await client.files.info({ file: fileId });
   const file = info.file as SlackFileInfoSummary | undefined;
 

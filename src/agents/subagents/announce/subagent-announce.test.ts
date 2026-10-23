@@ -1,12 +1,11 @@
-// Subagent announce flow tests cover the seam-level orchestration between wait
-// outcomes, requester lookup, delivery, and cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
-import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
+import * as announceDelivery from "./subagent-announce-delivery.js";
 
+type Runtime = typeof import("./subagent-announce.runtime.js");
+type SessionEntry = Awaited<ReturnType<Runtime["readSubagentSessionEntry"]>>;
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
+type DeliveryParams = Parameters<typeof announceDelivery.deliverSubagentAnnouncement>[0];
 type AgentCallResponse = {
   runId?: string;
   status: string;
@@ -14,107 +13,37 @@ type AgentCallResponse = {
   disposition?: "ambiguous";
 };
 
-const agentSpy = vi.fn(async (_req: AgentCallRequest): Promise<AgentCallResponse> => ({
+const agentSpy = vi.fn(async (_params: DeliveryParams): Promise<AgentCallResponse> => ({
   runId: "run-main",
   status: "ok",
 }));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}));
-const resolveAgentIdFromSessionKeyMock = vi.fn<
-  typeof import("./subagent-announce.runtime.js").resolveAgentIdFromSessionKey
->((sessionKey, configuredDefaultAgentId) => {
-  return sessionKey?.match(/^agent:([^:]+)/)?.[1] ?? configuredDefaultAgentId ?? "main";
-});
-const resolveStorePathMock = vi.fn((_store: unknown, _options: unknown) => "/tmp/sessions.json");
-const resolveMainSessionKeyMock = vi.fn((_cfg: unknown) => "agent:main:main");
-const isEmbeddedAgentRunActiveMock = vi.fn((_sessionId: string) => false);
-const queueEmbeddedAgentMessageWithOutcomeMock = vi.fn(
-  (sessionId: string, _text: string, _options?: unknown): EmbeddedAgentQueueMessageOutcome => ({
-    queued: false,
-    sessionId,
-    reason: "not_streaming" as const,
-    gatewayHealth: "live" as const,
-  }),
-);
-const waitForEmbeddedAgentRunEndMock = vi.fn(
-  async (_sessionId: string, _timeoutMs?: number) => true,
-);
-let mockConfig: ReturnType<(typeof import("../../../config/config.js"))["getRuntimeConfig"]> = {
-  session: {
-    mainKey: "main",
-    scope: "per-sender",
-  },
+const mockConfig: ReturnType<Runtime["getRuntimeConfig"]> = {
+  session: { mainKey: "main", scope: "per-sender" },
 };
 
-const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
-  subagentRegistryRuntimeMock: {
-    shouldIgnorePostCompletionAnnounceForSession: vi.fn(() => false),
-    isSubagentSessionRunActive: vi.fn(() => true),
-    countActiveDescendantRuns: vi.fn(() => 0),
-    countPendingDescendantRuns: vi.fn(() => 0),
-    hasDescendantRunAwaitingSettle: vi.fn(() => false),
-    getLatestSubagentRunByChildSessionKey: vi.fn(() => undefined),
-    listSubagentRunsForRequester: vi.fn<() => SubagentRunRecord[]>(() => []),
-    replaceSubagentRunAfterSteer: vi.fn(() => true),
-    resolveRequesterForChildSession: vi.fn(() => null),
-  },
+const subagentRegistryRuntimeMock = vi.hoisted(() => ({
+  shouldIgnorePostCompletionAnnounceForSession: vi.fn(() => false),
+  isSubagentSessionRunActive: vi.fn(() => true),
+  countPendingDescendantRuns: vi.fn(() => 0),
+  getLatestSubagentRunByChildSessionKey: vi.fn(() => undefined),
+  listSubagentRunsForRequester: vi.fn<() => SubagentRunRecord[]>(() => []),
+  replaceSubagentRunAfterSteerCore: vi.fn(() => true),
+  resolveRequesterForChildSession: vi.fn(() => null),
 }));
 
-vi.mock("./subagent-announce.runtime.js", () => ({
-  callSubagentLifecycleGateway: (request: unknown) => callGatewayMock(request),
-  dispatchGatewayMethodInProcess: (
-    method: string,
-    params: Record<string, unknown>,
-    options?: { timeoutMs?: number },
-  ) => callGatewayMock({ method, params, timeoutMs: options?.timeoutMs }),
-  isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
-  getRuntimeConfig: () => mockConfig,
-  loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
-  readSessionMessagesAsync: vi.fn(async () => []),
-  readSubagentSessionEntry: (storePath: string, sessionKey: string) =>
-    (loadSessionStoreMock(storePath) as Record<string, unknown>)[sessionKey],
-  resolveAgentIdFromSessionKey: (sessionKey: string) =>
-    resolveAgentIdFromSessionKeyMock(sessionKey),
-  resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
-  resolveSessionStorePathCore: (store: unknown, options: unknown) =>
-    resolveStorePathMock(store, options),
-  waitForEmbeddedAgentRunEnd: (sessionId: string, timeoutMs?: number) =>
-    waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
+vi.mock("./subagent-announce-delivery.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-announce-delivery.runtime.js")>()),
+  getGlobalHookRunner: () => ({ hasHooks: () => false }),
+  resolveBoundDeliveryDestination: async () => null,
+  resolveConversationIdFromTargets: () => "",
 }));
 
-vi.mock("./subagent-announce-delivery.runtime.js", () =>
-  createSubagentAnnounceDeliveryRuntimeMock({
-    callGateway: (request: unknown) => callGatewayMock(request),
-    getRuntimeConfig: () => mockConfig,
-    loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
-    resolveAgentIdFromSessionKey: (sessionKey: string) =>
-      resolveAgentIdFromSessionKeyMock(sessionKey),
-    resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
-    resolveSessionStorePathCore: (store: unknown, options: unknown) =>
-      resolveStorePathMock(store, options),
-    isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
-    queueEmbeddedAgentMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
-      queueEmbeddedAgentMessageWithOutcomeMock(sessionId, text, options),
-  }),
-);
-
+// mock-isolation: Announce orchestration uses scripted delivery outcomes and requester records instead of the delivery runtime.
 vi.mock("./subagent-announce-delivery.js", () => ({
-  deliverSubagentAnnouncement: async (params: {
-    targetRequesterSessionKey: string;
-    triggerMessage: string;
-    requesterIsSubagent?: boolean;
-    completionDirectOrigin?: {
-      channel?: string;
-      to?: string;
-      accountId?: string;
-      threadId?: string;
-    };
-    directOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
-    requesterSessionOrigin?: { provider?: string; channel?: string };
-    bestEffortDeliver?: boolean;
-    isSourceSessionEffectsAllowed?: () => boolean;
-  }) => {
+  deliverSubagentAnnouncement: async (params: DeliveryParams) => {
     if (params.isSourceSessionEffectsAllowed?.() === false) {
       return {
         delivered: false,
@@ -124,29 +53,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         disposition: "intentional_non_delivery",
       };
     }
-    const effectiveOrigin = params.completionDirectOrigin ?? params.directOrigin;
-
-    const response = (await callGatewayMock({
-      method: "agent",
-      params: {
-        sessionKey: params.targetRequesterSessionKey,
-        message: params.triggerMessage,
-        deliver:
-          !params.requesterIsSubagent &&
-          effectiveOrigin?.channel !== "webchat" &&
-          Boolean(effectiveOrigin?.channel && effectiveOrigin?.to),
-        bestEffortDeliver: params.bestEffortDeliver,
-        ...(params.requesterIsSubagent
-          ? {}
-          : {
-              channel: effectiveOrigin?.channel,
-              to: effectiveOrigin?.to,
-              accountId: effectiveOrigin?.accountId,
-              threadId: effectiveOrigin?.threadId,
-            }),
-      },
-    })) as { status?: string; error?: string; disposition?: "ambiguous" };
-
+    const response = await agentSpy(params);
     if (response.status === "error") {
       return {
         delivered: false,
@@ -158,95 +65,77 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 
     return { delivered: true, path: "direct" };
   },
-  loadRequesterSessionEntry: (sessionKey: string) => {
-    const store = loadSessionStoreMock("/tmp/sessions.json") as Record<string, unknown>;
-    const entry = store?.[sessionKey];
-    return { entry };
-  },
-  loadSessionEntryByKey: (sessionKey: string) => {
-    const store = loadSessionStoreMock("/tmp/sessions.json") as Record<string, unknown>;
-    return store?.[sessionKey] ?? { sessionId: sessionKey };
-  },
-  resolveAnnounceOrigin: (
-    entry:
-      | {
-          lastChannel?: string;
-          lastTo?: string;
-          lastAccountId?: string;
-          lastThreadId?: string;
-          origin?: { provider?: string; channel?: string; accountId?: string };
-        }
-      | undefined,
-    requesterOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string },
-  ) => ({
-    channel:
-      requesterOrigin?.channel ??
-      entry?.lastChannel ??
-      entry?.origin?.provider ??
-      entry?.origin?.channel,
-    to: requesterOrigin?.to ?? entry?.lastTo,
-    accountId: requesterOrigin?.accountId ?? entry?.lastAccountId ?? entry?.origin?.accountId,
-    threadId: requesterOrigin?.threadId ?? entry?.lastThreadId,
+  loadRequesterSessionEntry: (sessionKey: string) => ({
+    entry: readEntry("/tmp/sessions.json", sessionKey),
+    cfg: mockConfig,
+    canonicalKey: sessionKey,
+    agentId: "main",
+    storePath: "/tmp/sessions.json",
   }),
-  resolveSubagentCompletionOrigin: async (params: { requesterOrigin?: unknown }) =>
-    params.requesterOrigin,
-  resolveSubagentAnnounceTimeoutMs: () => 10_000,
-  runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
+  loadSessionEntryByKey: (sessionKey: string) =>
+    readEntry("/tmp/sessions.json", sessionKey) ?? { sessionId: sessionKey },
 }));
 
 vi.mock("../registry/subagent-registry-read.js", () => subagentRegistryRuntimeMock);
-vi.mock("../registry/subagent-registry-runtime.js", () => subagentRegistryRuntimeMock);
-import { defaultRuntime } from "../../../runtime.js";
-import { applySubagentWaitOutcome } from "./subagent-announce-output.js";
+vi.mock("../registry/subagent-registry.js", () => subagentRegistryRuntimeMock);
 import { testing as outputTesting } from "./subagent-announce-output.test-support.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 
-function requireAgentCall() {
-  const call = agentSpy.mock.calls[0]?.[0];
-  if (!call) {
-    throw new Error("expected agent call");
-  }
-  return call;
+function readEntry(storePath: string, sessionKey: string) {
+  return (loadSessionStoreMock(storePath) as Record<string, SessionEntry>)?.[sessionKey];
 }
 
-describe("subagent wait outcome timing", () => {
-  it.each([
-    { wait: { status: "ok" }, expected: { status: "ok" } },
-    { wait: { status: "timeout" }, expected: { status: "timeout" } },
-    {
-      wait: { status: "error", error: "boom" },
-      expected: { status: "error", error: "boom" },
-    },
-  ] as const)("adds timing to $wait.status outcomes", ({ wait, expected }) => {
-    const result = applySubagentWaitOutcome({
-      wait,
-      outcome: undefined,
-      startedAt: 1_000,
-      endedAt: 1_250,
-    });
+const childIdentity = {
+  sessionId: "child-session-id",
+  lifecycleRevision: "child-lifecycle-revision",
+};
 
-    expect(result.outcome).toEqual({
-      ...expected,
-      startedAt: 1_000,
-      endedAt: 1_250,
-      elapsedMs: 250,
-    });
+function expectChildDeleted(
+  emitLifecycleHooks: boolean,
+  key = "agent:main:subagent:test",
+  agentId = "main",
+  identity = childIdentity,
+) {
+  expect(sessionsDeleteSpy).toHaveBeenCalledExactlyOnceWith({
+    method: "sessions.delete",
+    params: {
+      key,
+      agentId,
+      deleteTranscript: true,
+      emitLifecycleHooks,
+      expectedSessionId: identity.sessionId,
+      expectedLifecycleRevision: identity.lifecycleRevision,
+    },
+    timeoutMs: 10_000,
+    prepareDispatchCurrent: expect.any(Function),
+    assertDispatchCurrent: expect.any(Function),
   });
-});
+}
 
 function runAnnounceFlow(overrides: Partial<Parameters<typeof runSubagentAnnounceFlow>[0]>) {
   return runSubagentAnnounceFlow({
     childSessionKey: "agent:main:subagent:test",
     childRunId: "run-test",
     requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
     task: "do thing",
     timeoutMs: 10,
     cleanup: "keep",
-    waitForCompletion: false,
     outcome: { status: "ok" },
     ...overrides,
   });
+}
+
+function terminalResult(text: string) {
+  return { roundOneReply: text, terminalReply: { disposition: "visible" as const, text } };
+}
+
+function retiredResult() {
+  return {
+    childSessionKey: "agent:main:subagent:retired",
+    task: "recover interrupted work",
+    outcome: { status: "error" as const, error: "interrupted by restart" },
+    ...terminalResult("frozen terminal result"),
+  };
 }
 
 describe("subagent announce seam flow", () => {
@@ -255,9 +144,6 @@ describe("subagent announce seam flow", () => {
     sessionsDeleteSpy.mockClear();
     callGatewayMock.mockReset().mockImplementation(async (req: unknown) => {
       const typed = req as AgentCallRequest;
-      if (typed.method === "agent") {
-        return await agentSpy(typed);
-      }
       if (typed.method === "agent.wait") {
         return { status: "ok", startedAt: 10, endedAt: 20 };
       }
@@ -271,141 +157,49 @@ describe("subagent announce seam flow", () => {
       return {};
     });
     loadSessionStoreMock.mockReset().mockImplementation(() => ({}));
-    resolveAgentIdFromSessionKeyMock.mockReset().mockImplementation(() => "main");
-    resolveStorePathMock.mockReset().mockImplementation(() => "/tmp/sessions.json");
-    resolveMainSessionKeyMock.mockReset().mockImplementation(() => "agent:main:main");
-    isEmbeddedAgentRunActiveMock.mockReset().mockReturnValue(false);
-    queueEmbeddedAgentMessageWithOutcomeMock
-      .mockReset()
-      .mockImplementation((sessionId: string) => ({
-        queued: false,
-        sessionId,
-        reason: "not_streaming",
-        gatewayHealth: "live",
-      }));
-    waitForEmbeddedAgentRunEndMock.mockReset().mockResolvedValue(true);
-    mockConfig = {
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-    };
-    subagentRegistryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockReset();
-    subagentRegistryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockReturnValue(false);
-    subagentRegistryRuntimeMock.isSubagentSessionRunActive.mockReset();
-    subagentRegistryRuntimeMock.isSubagentSessionRunActive.mockReturnValue(true);
-    subagentRegistryRuntimeMock.countActiveDescendantRuns.mockReset();
-    subagentRegistryRuntimeMock.countActiveDescendantRuns.mockReturnValue(0);
-    subagentRegistryRuntimeMock.countPendingDescendantRuns.mockReset();
-    subagentRegistryRuntimeMock.countPendingDescendantRuns.mockReturnValue(0);
-    subagentRegistryRuntimeMock.hasDescendantRunAwaitingSettle.mockReset();
-    subagentRegistryRuntimeMock.hasDescendantRunAwaitingSettle.mockReturnValue(false);
-    subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockReset();
-    subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([]);
-    subagentRegistryRuntimeMock.replaceSubagentRunAfterSteer.mockReset();
-    subagentRegistryRuntimeMock.replaceSubagentRunAfterSteer.mockReturnValue(true);
-    subagentRegistryRuntimeMock.resolveRequesterForChildSession.mockReset();
-    subagentRegistryRuntimeMock.resolveRequesterForChildSession.mockReturnValue(null);
     outputTesting.setDepsForTest({
-      callGateway:
-        callGatewayMock as typeof import("./subagent-announce.runtime.js").callSubagentLifecycleGateway,
+      callGateway: callGatewayMock as Runtime["callSubagentLifecycleGateway"],
       getRuntimeConfig: () => mockConfig,
-      readSubagentSessionEntry: (storePath, sessionKey) =>
-        (
-          loadSessionStoreMock(storePath) as Record<
-            string,
-            ReturnType<typeof import("./subagent-announce.runtime.js").readSubagentSessionEntry>
-          >
-        )[sessionKey],
+      readSubagentSessionEntry: readEntry,
       readSessionMessagesAsync: async () => [],
-      resolveAgentIdFromSessionKey: resolveAgentIdFromSessionKeyMock,
-      resolveSessionStorePathCore: resolveStorePathMock,
+      resolveSessionStorePathCore: () => "/tmp/sessions.json",
     });
   });
 
-  afterEach(() => {
-    outputTesting.setDepsForTest();
-  });
+  afterEach(() => outputTesting.setDepsForTest());
 
-  it.each([false, true])(
-    "keeps the parent's authored result for public and private grandchildren: private=%s",
-    async (privateChild) => {
-      const parentKey = "agent:main:subagent:parent";
-      subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
-        {
-          runId: "grandchild-run",
-          childSessionKey: "agent:main:subagent:grandchild",
-          requesterSessionKey: parentKey,
-          requesterDisplayKey: parentKey,
-          task: "grandchild work",
-          cleanup: "keep",
-          createdAt: 1,
-          execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
-          completion: { required: true, resultText: "raw grandchild marker" },
-          delivery: { status: "delivered" },
-          ...(privateChild
-            ? { completionTarget: "parent" as const, completionRequesterSessionId: "parent-id" }
-            : {}),
-        },
-      ]);
-      expect(
-        await runSubagentAnnounceFlow({
-          childSessionKey: parentKey,
-          childRunId: "parent-run",
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: "parent work",
-          timeoutMs: 10,
-          cleanup: "keep",
-          waitForCompletion: false,
-          outcome: { status: "ok" },
-          expectsCompletionMessage: true,
-          terminalReply: { disposition: "visible", text: "parent reviewed and approved" },
-        }),
-      ).toBe("delivered");
-      const message = String(requireAgentCall().params?.message);
-      expect(message).toContain("parent reviewed and approved");
-      expect(message).not.toContain("raw grandchild marker");
+  it.each([
+    { roundOneReply: "  child result  ", spawnMode: undefined },
+    { roundOneReply: "completed", spawnMode: "session" as const },
+  ])(
+    "delivers the result and deletes the encoded child owner: %j",
+    async ({ roundOneReply, spawnMode }) => {
+      loadSessionStoreMock.mockReturnValue({ "agent:main:subagent:test": childIdentity });
+      const didAnnounce = await runAnnounceFlow({
+        startedAt: 10,
+        endedAt: 20,
+        childAgentId: "main",
+        childSessionIdentity: childIdentity,
+        cleanup: "delete",
+        spawnMode,
+        ...(spawnMode === "session"
+          ? { expectsCompletionMessage: true }
+          : terminalResult(roundOneReply.trim())),
+        roundOneReply,
+        fallbackReply: spawnMode === "session" ? undefined : "stale result",
+      });
+      expect(didAnnounce).toBe("delivered");
+      expect(agentSpy).toHaveBeenCalledTimes(1);
+      expect(agentSpy.mock.calls[0]?.[0].triggerMessage).toContain(roundOneReply.trim());
+      expectChildDeleted(spawnMode === "session");
     },
   );
 
-  it("suppresses ANNOUNCE_SKIP delivery while still deleting the child session", async () => {
-    loadSessionStoreMock.mockReturnValue({
-      "agent:main:subagent:test": {
-        sessionId: "child-session-id",
-        lifecycleRevision: "child-lifecycle-revision",
-      },
-    });
-    const didAnnounce = await runAnnounceFlow({
-      startedAt: 10,
-      endedAt: 20,
-      childRunId: "run-direct-skip-whitespace",
-      cleanup: "delete",
-      roundOneReply: "  ANNOUNCE_SKIP  ",
-    });
-
-    expect(didAnnounce).toBe("delivered");
-    expect(agentSpy).not.toHaveBeenCalled();
-    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
-    expect(sessionsDeleteSpy).toHaveBeenCalledWith({
-      method: "sessions.delete",
-      params: {
-        key: "agent:main:subagent:test",
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-        expectedSessionId: "child-session-id",
-        expectedLifecycleRevision: "child-lifecycle-revision",
-      },
-      timeoutMs: 10_000,
-      assertDispatchCurrent: expect.any(Function),
-    });
-  });
-
   it("skips delete cleanup when the lifecycle owner invalidates the attempt", async () => {
     const didAnnounce = await runAnnounceFlow({
-      childRunId: "run-invalidated-delete",
+      childSessionIdentity: childIdentity,
       cleanup: "delete",
-      roundOneReply: "ANNOUNCE_SKIP",
+      roundOneReply: "child result",
       onBeforeDeleteChildSession: () => false,
     });
 
@@ -413,31 +207,63 @@ describe("subagent announce seam flow", () => {
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });
 
-  it("delivers frozen terminal facts while child-session effects stay suppressed", async () => {
-    const didAnnounce = await runAnnounceFlow({
-      childSessionKey: "agent:main:subagent:retired",
-      childRunId: "run-retired-recovery",
-      task: "recover interrupted work",
-      cleanup: "delete",
-      outcome: { status: "error", error: "interrupted by restart" },
-      roundOneReply: "frozen terminal result",
-      suppressChildSessionEffects: true,
-      isChildSessionEffectsAllowed: () => false,
-      isCompletionDeliveryAllowed: () => true,
+  it("carries a raw child's recorded owner from metadata selection into delete cleanup", async () => {
+    const identity = (agentId: string) => ({
+      sessionId: `${agentId}-child`,
+      lifecycleRevision: `${agentId}-revision`,
+      updatedAt: 1,
     });
-
-    expect(didAnnounce).toBe("delivered");
-    expect(agentSpy).toHaveBeenCalledTimes(1);
-    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+    const entries = new Map(["main", "research"].map((agentId) => [agentId, identity(agentId)]));
+    const load = announceDelivery.loadSessionEntryByKey;
+    const read = vi
+      .spyOn(announceDelivery, "loadSessionEntryByKey")
+      .mockImplementation(async (key, agentId) =>
+        key === "global" ? entries.get(agentId ?? "main") : load(key, agentId),
+      );
+    try {
+      expect(
+        await runAnnounceFlow({
+          childSessionKey: "global",
+          childAgentId: "research",
+          childSessionIdentity: identity("research"),
+          cleanup: "delete",
+          ...terminalResult("Research result"),
+        }),
+      ).toBe("delivered");
+      expectChildDeleted(false, "global", "research", identity("research"));
+    } finally {
+      read.mockRestore();
+    }
   });
+
+  it.each(["explicit", "host", "currency"] as const)(
+    "delivers frozen terminal facts while %s suppresses child-session effects",
+    async (reason) => {
+      loadSessionStoreMock.mockReturnValue({
+        "agent:main:subagent:retired": {
+          sessionId: "retired-session",
+          lifecycleRevision: "retired-lifecycle",
+        },
+      });
+      const didAnnounce = await runAnnounceFlow({
+        ...retiredResult(),
+        cleanup: "delete",
+        suppressChildSessionEffects: reason === "explicit",
+        isChildSessionEffectsAllowed: () => reason !== "host",
+        prepareChildSessionEffects: async () => reason !== "currency",
+        isCompletionDeliveryAllowed: () => true,
+      });
+
+      expect(didAnnounce).toBe("delivered");
+      expect(agentSpy).toHaveBeenCalledTimes(1);
+      expect(agentSpy.mock.calls[0]?.[0].triggerMessage).toContain("frozen terminal result");
+      expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+    },
+  );
 
   it("drops requester delivery after the cleanup owner changes", async () => {
     const didAnnounce = await runAnnounceFlow({
-      childSessionKey: "agent:main:subagent:retired",
-      childRunId: "run-retired-owner",
-      task: "recover interrupted work",
-      outcome: { status: "error", error: "interrupted by restart" },
-      roundOneReply: "stale frozen terminal result",
+      ...retiredResult(),
       suppressChildSessionEffects: true,
       isCompletionDeliveryAllowed: () => false,
     });
@@ -446,186 +272,81 @@ describe("subagent announce seam flow", () => {
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
-  it.each(["ok", "error"] as const)(
-    "keeps private retry input stable when late usage arrives after %s",
-    async (status) => {
-      let usage: Record<string, number> = {};
-      loadSessionStoreMock.mockImplementation(() => ({
-        "agent:main:main": { sessionId: "private-parent" },
-        "agent:main:subagent:private": { sessionId: "private-child", ...usage },
-      }));
-      agentSpy.mockResolvedValueOnce({ status }).mockResolvedValueOnce({ status: "ok" });
-      const params = {
-        childSessionKey: "agent:main:subagent:private",
-        childRunId: "private-stable-run",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        completionTarget: "parent" as const,
-        completionRequesterSessionId: "private-parent",
-        task: "private task",
-        timeoutMs: 10,
-        cleanup: "keep" as const,
-        waitForCompletion: false,
-        outcome: { status: "ok" as const },
-        roundOneReply: "private child result",
-        expectsCompletionMessage: true,
-        startedAt: 10,
-        endedAt: 20,
-      };
-      await runSubagentAnnounceFlow(params);
-      usage = { inputTokens: 100, outputTokens: 20 };
-      await runSubagentAnnounceFlow(params);
-      expect(agentSpy).toHaveBeenCalledTimes(2);
-      const first = agentSpy.mock.calls[0]?.[0].params?.message;
-      expect(first).toContain("private child result");
-      expect(first).not.toContain("Stats:");
-      expect(agentSpy.mock.calls[1]?.[0].params?.message).toBe(first);
+  it("keeps private retry input stable when late usage arrives after failure", async () => {
+    let usage: Record<string, number> = {};
+    loadSessionStoreMock.mockImplementation(() => ({
+      "agent:main:main": { sessionId: "private-parent" },
+      "agent:main:subagent:private": { sessionId: "private-child", ...usage },
+    }));
+    agentSpy.mockResolvedValueOnce({ status: "error" }).mockResolvedValueOnce({ status: "ok" });
+    const params: Parameters<typeof runAnnounceFlow>[0] = {
+      childSessionKey: "agent:main:subagent:private",
+      childRunId: "private-stable-run",
+      completionTarget: "parent",
+      completionRequesterSessionId: "private-parent",
+      ...terminalResult("private child result"),
+      expectsCompletionMessage: true,
+      startedAt: 10,
+      endedAt: 20,
+    };
+    await runAnnounceFlow(params);
+    usage = { inputTokens: 100, outputTokens: 20 };
+    await runAnnounceFlow(params);
+    expect(agentSpy).toHaveBeenCalledTimes(2);
+    const first = agentSpy.mock.calls[0]?.[0].triggerMessage;
+    expect(first).toContain("private child result");
+    expect(first).not.toContain("Stats:");
+    expect(agentSpy.mock.calls[1]?.[0].triggerMessage).toBe(first);
+  });
+
+  it.each([
+    { error: "requester lookup unavailable", disposition: "retryable" },
+    {
+      error: "Session transcript keyed user is outside the current turn: old-input",
+      disposition: "permanent_failure",
+    },
+  ] as const)(
+    "reports thrown announce failures to the delivery owner ($disposition)",
+    async ({ error, disposition }) => {
+      vi.spyOn(announceDelivery, "deliverSubagentAnnouncement").mockRejectedValueOnce(
+        new Error(error),
+      );
+      const onDeliveryResult = vi.fn();
+
+      expect(
+        await runAnnounceFlow({
+          roundOneReply: "finished result",
+          expectsCompletionMessage: true,
+          onDeliveryResult,
+        }),
+      ).toBe(disposition);
+      expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith({
+        delivered: false,
+        path: "none",
+        error,
+        disposition,
+      });
     },
   );
 
-  it("warns when ANNOUNCE_SKIP suppresses a cron job completion", async () => {
-    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-
-    const didAnnounce = await runAnnounceFlow({
-      startedAt: 10,
-      endedAt: 20,
-      childSessionKey: "agent:main:subagent:cron-worker",
-      childRunId: "run-cron-announce-skip",
-      requesterSessionKey: "agent:main:cron:daily-report",
-      requesterDisplayKey: "cron:daily-report",
-      task: "cron job",
-      roundOneReply: "ANNOUNCE_SKIP",
-    });
-
-    expect(didAnnounce).toBe("delivered");
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("cron job completion for session=agent:main:cron:daily-report"),
+  it("does not replace a confirmed delivery when its receipt callback throws", async () => {
+    const onDeliveryResult = vi
+      .fn()
+      .mockRejectedValue(new Error("receipt persistence unavailable"));
+    expect(
+      await runAnnounceFlow({
+        roundOneReply: "finished result",
+        expectsCompletionMessage: true,
+        onDeliveryResult,
+      }),
+    ).toBe("delivered");
+    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ delivered: true }),
     );
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("suppressed by ANNOUNCE_SKIP"));
-    logSpy.mockRestore();
-  });
-
-  it("does not warn when fallback reply is delivered for a cron ANNOUNCE_SKIP", async () => {
-    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-
-    const didAnnounce = await runAnnounceFlow({
-      startedAt: 10,
-      endedAt: 20,
-      childSessionKey: "agent:main:subagent:cron-worker",
-      childRunId: "run-cron-announce-skip-fallback",
-      requesterSessionKey: "agent:main:cron:daily-report",
-      requesterDisplayKey: "cron:daily-report",
-      task: "cron job",
-      roundOneReply: "ANNOUNCE_SKIP",
-      fallbackReply: "an actual fallback result",
-    });
-
-    expect(didAnnounce).toBe("delivered");
-    expect(logSpy).not.toHaveBeenCalled();
-    logSpy.mockRestore();
-  });
-
-  it("keeps lifecycle hooks enabled when deleting a completed session-mode child session", async () => {
-    loadSessionStoreMock.mockReturnValue({
-      "agent:main:subagent:test": {
-        sessionId: "child-session-id",
-        lifecycleRevision: "child-lifecycle-revision",
-      },
-    });
-    const didAnnounce = await runAnnounceFlow({
-      startedAt: 10,
-      endedAt: 20,
-      childRunId: "run-session-delete-cleanup",
-      task: "thread-bound cleanup",
-      cleanup: "delete",
-      roundOneReply: "completed",
-      spawnMode: "session",
-      expectsCompletionMessage: true,
-    });
-
-    expect(didAnnounce).toBe("delivered");
-    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
-    expect(sessionsDeleteSpy).toHaveBeenCalledWith({
-      method: "sessions.delete",
-      params: {
-        key: "agent:main:subagent:test",
-        deleteTranscript: true,
-        emitLifecycleHooks: true,
-        expectedSessionId: "child-session-id",
-        expectedLifecycleRevision: "child-lifecycle-revision",
-      },
-      timeoutMs: 10_000,
-      assertDispatchCurrent: expect.any(Function),
-    });
-  });
-
-  it("uses the stored canonical delivery target when mocked completion origins omit to", async () => {
-    loadSessionStoreMock.mockImplementation(() => ({
-      "agent:main:main": {
-        sessionId: "session-tg-group",
-        updatedAt: Date.now(),
-        delivery: normalizeSessionDeliveryState({
-          context: {
-            channel: "telegram",
-            to: "-1001234567890",
-            accountId: "bot:123",
-          },
-        }),
-      },
-    }));
-
-    const didAnnounce = await runAnnounceFlow({
-      startedAt: 10,
-      endedAt: 20,
-      childSessionKey: "agent:main:subagent:tg",
-      childRunId: "run-tg-group-completion",
-      requesterOrigin: { channel: "telegram" },
-      task: "telegram group task",
-      roundOneReply: "task done",
-      expectsCompletionMessage: true,
-    });
-
-    expect(didAnnounce).toBe("delivered");
-    expect(agentSpy).toHaveBeenCalledTimes(1);
-    const agentCall = requireAgentCall();
-    expect(agentCall.params?.deliver).toBe(true);
-    expect(agentCall.params?.channel).toBe("telegram");
-    expect(agentCall.params?.accountId).toBe("bot-123");
-    expect(agentCall.params?.to).toBe("-1001234567890");
-  });
-
-  it("leaves direct completion failure logging to the shared delivery owner", async () => {
-    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    agentSpy.mockResolvedValueOnce({ status: "error", error: "Outbound not configured for slack" });
-
-    const didAnnounce = await runAnnounceFlow({
-      startedAt: 10,
-      endedAt: 20,
-      childSessionKey: "agent:main:subagent:slack",
-      childRunId: "run-direct-failure-log",
-      requesterOrigin: {
-        channel: "slack",
-        to: "C123",
-      },
-      task: "deliver completion",
-      roundOneReply: "done",
-      expectsCompletionMessage: true,
-    });
-
-    expect(didAnnounce).toBe("retryable");
-    expect(logSpy).not.toHaveBeenCalled();
-    logSpy.mockRestore();
   });
 
   it("does not treat ambiguous direct completion failures as announced", async () => {
-    let deliveryResult:
-      | {
-          delivered: boolean;
-          path: string;
-          error?: string;
-          disposition?: string;
-        }
-      | undefined;
+    const onDeliveryResult = vi.fn();
     agentSpy.mockResolvedValueOnce({
       status: "error",
       error: "prompt lock failed after visible send",
@@ -644,13 +365,11 @@ describe("subagent announce seam flow", () => {
       task: "deliver completion",
       roundOneReply: "done",
       expectsCompletionMessage: true,
-      onDeliveryResult: (delivery) => {
-        deliveryResult = delivery;
-      },
+      onDeliveryResult,
     });
 
     expect(didAnnounce).toBe("ambiguous");
-    expect(deliveryResult).toMatchObject({
+    expect(onDeliveryResult.mock.lastCall?.[0]).toMatchObject({
       delivered: false,
       path: "direct",
       error: "prompt lock failed after visible send",

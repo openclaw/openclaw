@@ -5,15 +5,10 @@ import { sanitizeDoctorNote } from "./emit-notes.js";
 // same validation the atomic writer enforces: printing "Doctor changes" and then
 // refusing the write would report repairs that never reached disk. Preview
 // panels print immediately — they promise nothing.
-type DoctorChangesPanelSink = {
-  emit: (changeLines: ReadonlyArray<string>, options?: { sanitize?: boolean }) => void;
-  drain: () => string[];
-};
-
-export function createDoctorChangesPanelSink(shouldRepair: boolean): DoctorChangesPanelSink {
+export function createDoctorChangesPanelSink(shouldRepair: boolean) {
   const pending: string[] = [];
   return {
-    emit: (changeLines, options = {}) => {
+    emit: (changeLines: readonly string[], options: { sanitize?: boolean } = {}) => {
       if (changeLines.length === 0) {
         return;
       }

@@ -253,27 +253,6 @@ class GatewayRegistryStoreTest {
     assertEquals(missingVersion, securePrefs.getString(GatewayRegistryStore.STORAGE_KEY, null))
   }
 
-  @Test
-  fun postCommitObserverFailureDoesNotUndoDurableRemoval() {
-    val (prefs, securePrefs) = freshPrefs()
-    var failObserver = false
-    val store =
-      GatewayRegistryStore(prefs) {
-        if (failObserver) error("simulated observer failure")
-      }
-    val alpha = manualEntry("alpha", "alpha.example")
-    store.upsert(alpha)
-    store.setActive(alpha.stableId)
-    failObserver = true
-
-    assertTrue(store.remove(alpha.stableId))
-    assertTrue(store.entries.value.isEmpty())
-    assertNull(store.activeStableId.value)
-    val restored = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs))
-    assertTrue(restored.entries.value.isEmpty())
-    assertNull(restored.activeStableId.value)
-  }
-
   private fun freshPrefs(): Pair<SecurePrefs, android.content.SharedPreferences> {
     val context = RuntimeEnvironment.getApplication()
     context

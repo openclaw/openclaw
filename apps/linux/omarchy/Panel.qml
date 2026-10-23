@@ -66,6 +66,13 @@ Panel {
     font.pixelSize: Style.font.body
     wrapMode: Text.WordWrap
   }
+  component FullWidthCopy: Copy {
+    width: parent.width
+  }
+  component SessionCopy: FullWidthCopy {
+    maximumLineCount: 1
+    elide: Text.ElideRight
+  }
 
   function agentName(id) {
     var agent = agents.find(function(a) { return a.id === id })
@@ -207,23 +214,19 @@ Panel {
           Copy { text: "OpenClaw"; font.pixelSize: Style.font.title; font.bold: true }
           Button { text: root.hidePreviews ? "Show previews" : "Hide previews"; focusable: true; onClicked: root.hidePreviews = !root.hidePreviews }
         }
-        Copy {
-          width: parent.width
+        FullWidthCopy {
           text: root.connected ? root.agents.length + " agents · " + root.sessions.length + " sessions · " + root.busyCount + " active · " + root.attentionCount + " attention" : root.connectionError
         }
-        Copy {
+        FullWidthCopy {
           visible: !root.connected && root.checkedAt > 0
-          width: parent.width
           text: "Showing cached data from " + root.age(root.checkedAt) + ". Sending is disabled."
           opacity: 0.65
         }
-        Copy {
-          width: parent.width
+        FullWidthCopy {
           text: service && service.desktop ? "Using the desktop app’s selected Gateway" : "Using the local CLI’s Gateway"
           opacity: 0.65
         }
-        Copy {
-          width: parent.width
+        FullWidthCopy {
           visible: root.routeChanged
           text: "The Gateway changed. Your draft is saved. Choose whether to use this Gateway before sending."
         }
@@ -299,35 +302,24 @@ Panel {
               anchors.top: parent.top
               anchors.margins: Style.space(9)
               spacing: Style.space(3)
-              Copy {
-                width: parent.width
+              SessionCopy {
                 text: (card.modelData.unread ? "● " : "") + (root.hidePreviews ? "Session" : card.modelData.title)
                 font.bold: true
-                maximumLineCount: 1
-                elide: Text.ElideRight
               }
-              Copy {
-                width: parent.width
+              SessionCopy {
                 text: root.agentName(card.modelData.agentId) + " · " + (card.modelData.waiting ? "waiting for you" : card.modelData.status) + " · " + root.age(card.modelData.updatedAt)
                 opacity: 0.7
-                maximumLineCount: 1
-                elide: Text.ElideRight
               }
-              Copy {
-                width: parent.width
+              SessionCopy {
                 visible: !root.hidePreviews && text !== ""
                 text: card.modelData.activity || card.modelData.preview
                 maximumLineCount: 2
-                elide: Text.ElideRight
                 opacity: 0.8
               }
-              Copy {
-                width: parent.width
+              SessionCopy {
                 visible: text !== ""
                 text: [card.modelData.model, card.modelData.channel, card.modelData.totalTokens ? Math.round(card.modelData.totalTokens / 1000) + "k tokens" : ""].filter(Boolean).join(" · ")
                 font.pixelSize: Style.font.caption
-                maximumLineCount: 1
-                elide: Text.ElideRight
                 opacity: 0.55
               }
             }
@@ -348,15 +340,14 @@ Panel {
             opacity: 0.6
           }
         }
-        Copy {
+        FullWidthCopy {
           visible: root.hasMore
           text: "Showing recent and active sessions. Open the dashboard for the full history."
-          width: parent.width
           font.pixelSize: Style.font.caption
           opacity: 0.6
         }
         Copy { text: "QUICK PROMPT"; font.pixelSize: Style.font.caption; font.bold: true }
-        Copy { width: parent.width; text: "To: " + root.destination; maximumLineCount: 2; elide: Text.ElideRight }
+        SessionCopy { text: "To: " + root.destination; maximumLineCount: 2 }
         Controls.TextArea {
           id: prompt
           width: parent.width
@@ -376,7 +367,7 @@ Panel {
           Button { text: root.sending ? "Sending…" : "Send · Ctrl+Enter"; enabled: root.canSend && prompt.text.length <= 8000; focusable: true; onClicked: root.sendPrompt() }
           Button { text: "Open session"; enabled: !!root.selectedSession && !root.routeChanged; focusable: true; onClicked: root.openSelected() }
         }
-        Copy { width: parent.width; visible: root.sendNotice !== ""; text: root.sendNotice; opacity: 0.8 }
+        FullWidthCopy { visible: root.sendNotice !== ""; text: root.sendNotice; opacity: 0.8 }
         Button { visible: root.uncertain; text: "I checked the session — allow sending"; focusable: true; onClicked: { root.uncertain = false; root.sendNotice = "" } }
       }
     }

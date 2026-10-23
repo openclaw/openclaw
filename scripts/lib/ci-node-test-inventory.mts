@@ -41,6 +41,7 @@ import {
   bundledPluginDependentUnitTestFiles,
   filterUnitConfigTestFiles,
 } from "../../test/vitest/vitest.unit-paths.mjs";
+import { getCommandFilesByOwner } from "./ci-command-test-plan.mts";
 import { isStripeEligibleTestFile, listTrackedTestFiles } from "./list-test-files.mts";
 
 export const COMPACT_EMBEDDED_BASE_GROUP_NAME = "agentic-agents-embedded-base";
@@ -93,6 +94,14 @@ const CONFIG_FILE_OWNERS = new Map<string, Parameters<typeof listScopedOwnerTest
     (owner) => [owner.config, owner] as const,
   ),
   [
+    "test/vitest/vitest.tui.config.ts",
+    {
+      root: "src/tui",
+      include: ["src/tui/**/*.test.ts"],
+      exclude: databaseWorkerCoreTestFiles,
+    },
+  ],
+  [
     "test/vitest/vitest.gateway-methods.config.ts",
     {
       root: ".",
@@ -143,10 +152,7 @@ const CONFIG_FILE_OWNERS = new Map<string, Parameters<typeof listScopedOwnerTest
 ]);
 const EXACT_CONFIG_FILES = new Map<string, string[]>([
   ["test/vitest/vitest.boundary.config.ts", boundaryTestFiles],
-  [
-    "test/vitest/vitest.tui-pty.config.ts",
-    ["src/tui/tui-pty-harness-assertion-test-support.test.ts", ...tuiPtyTestFiles],
-  ],
+  ["test/vitest/vitest.tui-pty.config.ts", tuiPtyTestFiles],
   ["test/vitest/vitest.gateway-server-isolated.config.ts", gatewayServerIsolatedTestFiles],
   ["test/vitest/vitest.gateway-database-workers.config.ts", gatewayDatabaseWorkerTestFiles],
 ]);
@@ -154,6 +160,9 @@ const configFileCache = new Map<string, string[]>();
 
 /** Disjoint project inventories retain exact ownership within shared process groups. */
 export function listNodeTestConfigFiles(config: string): string[] | undefined {
+  if (config === "test/vitest/vitest.commands.config.ts") {
+    return [...getCommandFilesByOwner().values()].flat().toSorted();
+  }
   const exact = EXACT_CONFIG_FILES.get(config);
   if (exact) {
     return exact;

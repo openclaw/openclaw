@@ -8,7 +8,10 @@ describe("sessions.observer.visibility", () => {
     await sessionObserverHandlers["sessions.observer.visibility"]?.({
       params: { visible: true },
       client: { connId: "conn-1" },
-      context: { sessionObserver: { setConnectionVisibility } },
+      context: {
+        isConnectionActive: () => true,
+        sessionObserver: { setConnectionVisibility },
+      },
       respond,
     } as never);
 

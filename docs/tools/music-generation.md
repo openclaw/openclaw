@@ -24,8 +24,9 @@ ready so it can tell the user and attach the finished audio. The completion
 agent follows the session's visible-reply contract: automatic final reply
 when configured, or `message(action="send")` when the session requires the
 message tool. If the requester session is inactive or its wake fails and
-generated audio is still missing from the reply, OpenClaw sends an
-idempotent direct fallback with just the missing audio.
+generated audio is still missing from the reply, OpenClaw sends a
+direct fallback with just the missing audio. Retries do not post the same audio
+again.
 
 ## Quick start
 
@@ -196,9 +197,11 @@ Session-backed music generation runs as a background task:
   started/task response immediately, and posts the finished track later in
   a follow-up agent message.
 - **Duplicate prevention:** while a task is `queued` or `running`, later
-  `music_generate` calls in the same session return task status instead of
+  `music_generate` calls in the same chat return task status instead of
   starting another generation. Use `action: "status"` to check explicitly.
   A recently completed matching request is also deduplicated for 2 minutes.
+  Direct chats keep separate tasks even when they share the main session
+  transcript; completion returns to the requesting peer.
 - **Status lookup:** use `music_generate` with `action: "status"`.
 - **Completion wake:** OpenClaw injects an internal completion event back
   into the same session so the model can write the user-facing follow-up
@@ -255,6 +258,7 @@ For `music_generate`, OpenClaw tries providers in this order:
 
 If a provider fails, the next candidate is tried automatically. If all
 fail, the error includes details from each attempt.
+Each failed candidate logs its provider, model, and error at `warn`.
 For reference-image requests, candidates that cannot use images or accept
 the supplied reference count are skipped.
 
@@ -337,7 +341,7 @@ Legacy flat fields such as `maxInputImages`, `supportsLyrics`, and
 `supportsFormat` are **not** enough to advertise edit support. Providers
 should declare `generate` and `edit` explicitly so live tests, contract
 tests, and the shared `music_generate` tool can validate mode support
-deterministically.
+from those declarations.
 
 ## Live tests
 

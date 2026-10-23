@@ -1,10 +1,11 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import { t } from "../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
   listSessionPlacementRecoveryStorageKeys,
-  sessionPlacementRecoveryExactStorageKey,
+  sessionPlacementRecoveryExactStorageKeys,
 } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type {
   SessionPlacementRecovery,
@@ -28,6 +29,7 @@ import {
 } from "./stale-chunk-reload.ts";
 
 export type ApplicationPlacementStartupStatus = {
+  readonly startStatus?: import("../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
   readonly sessionKey: string;
   // A restored key holds admission before the lazy runtime validates its target and payload.
   readonly targetKind?: SessionPlacementTarget["kind"];
@@ -69,7 +71,7 @@ type PlacementStartupRecoveryAccess = Pick<
   "readSessionPlacementRecovery" | "pauseSessionPlacementRecovery"
 >;
 
-export type ApplicationPlacementStartupRuntime = {
+export type ApplicationPlacementStartup = {
   get: (sessionKey: string) => ApplicationPlacementStartupStatus | null;
   hasPendingTurn: (sessionKey: string) => boolean;
   resumeRecovery: () => void;
@@ -80,7 +82,7 @@ export type ApplicationPlacementStartupRuntime = {
   dispose: () => void;
 };
 
-export type ApplicationPlacementStartup = ApplicationPlacementStartupRuntime;
+export type ApplicationPlacementStartupRuntime = Omit<ApplicationPlacementStartup, "subscribe">;
 
 // Submitted display survives transport loss; a changed connection owner revokes it.
 export function capturePlacementStartupConnection(
@@ -182,6 +184,7 @@ export function createApplicationPlacementStartup(
     if (disposed) {
       return;
     }
+    // Resume retained starts from connection receipts even while no page is mounted.
     stopGateway ??= gateway.subscribe(() => resumeRecovery());
     if ((pending || retry) && runtimeLoad?.error) {
       runtimeLoad = undefined;
@@ -250,9 +253,11 @@ export function createApplicationPlacementStartup(
           },
           read: (key) =>
             current() &&
-            keys.includes(
-              sessionPlacementRecoveryExactStorageKey(owner.gatewayUrl, owner.recoveryScope, key),
-            )
+            sessionPlacementRecoveryExactStorageKeys(
+              owner.gatewayUrl,
+              owner.recoveryScope,
+              key,
+            ).some((storageKey) => keys.includes(storageKey))
               ? restored
               : undefined,
         };
@@ -272,8 +277,7 @@ export function createApplicationPlacementStartup(
         if (disposed) {
           return;
         }
-        runtime = createApplicationPlacementStartupRuntime(dependencies);
-        runtime.subscribe(publish);
+        runtime = createApplicationPlacementStartupRuntime(dependencies, publish);
         resumeRecovery();
       },
       (error: unknown) => {
@@ -402,10 +406,7 @@ export function createApplicationPlacementStartup(
       runtime?.retry(sessionKey);
     },
     resumeRecovery,
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       stopGateway?.();
       stopReloadGuard();

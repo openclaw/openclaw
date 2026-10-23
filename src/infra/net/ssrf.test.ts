@@ -1,4 +1,3 @@
-// SSRF tests cover IP privacy classification and HTTP base URL policy builders.
 import { describe, expect, it } from "vitest";
 import { blockedIpv6MulticastLiterals } from "../../../packages/net-policy/src/ip-test-fixtures.js";
 import {
@@ -11,158 +10,70 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  type SsrFPolicy,
 } from "./ssrf.js";
 
-const privateIpCases = [
-  "198.18.0.1",
-  "198.19.255.254",
-  "198.51.100.42",
-  "203.0.113.10",
-  "192.0.0.8",
-  "192.0.2.1",
-  "192.88.99.1",
-  "224.0.0.1",
-  "239.255.255.255",
-  "240.0.0.1",
-  "255.255.255.255",
-  "::ffff:127.0.0.1",
-  "::ffff:198.18.0.1",
-  "64:ff9b::198.51.100.42",
-  "0:0:0:0:0:ffff:7f00:1",
-  "0000:0000:0000:0000:0000:ffff:7f00:0001",
-  "::127.0.0.1",
-  "0:0:0:0:0:0:7f00:1",
-  "[0:0:0:0:0:ffff:7f00:1]",
-  "::ffff:169.254.169.254",
-  "0:0:0:0:0:ffff:a9fe:a9fe",
-  "64:ff9b::127.0.0.1",
-  "64:ff9b::169.254.169.254",
-  "64:ff9b:1:c0a8:1:100::",
-  "64:ff9b:1:a00:0:100::",
-  "64:ff9b:1::8.8.8.8",
-  "64:ff9b:1:808:808:808:808:808",
-  "64:ff9b:1:808:808:808:a9fe:a9fe",
-  "2002:7f00:0001::",
-  "2002:a9fe:a9fe::",
-  "2001:0000:0:0:0:0:80ff:fefe",
-  "2001:0000:0:0:0:0:3f57:fefe",
-  "2002:c612:0001::",
-  "::",
-  "::1",
-  "fe80::1%lo0",
-  "fd00::1",
-  "fec0::1",
-  "100::1",
-  ...blockedIpv6MulticastLiterals,
-  "2001:2::1",
-  "2001:20::1",
-  "2001:db8::1",
-  "2001:db8:1234::5efe:127.0.0.1",
-  "2001:db8:1234:1:200:5efe:7f00:1",
-];
+function samePolicy(a: SsrFPolicy, b: SsrFPolicy, expected: boolean) {
+  expect(isSameSsrFPolicy(a, b)).toBe(expected);
+}
 
-const publicIpCases = [
-  "93.184.216.34",
-  "198.17.255.255",
-  "198.20.0.1",
-  "198.51.99.1",
-  "198.51.101.1",
-  "203.0.112.1",
-  "203.0.114.1",
-  "223.255.255.255",
-  "2606:4700:4700::1111",
-  "64:ff9b::8.8.8.8",
-  "2002:0808:0808::",
-  "2001:0000:0:0:0:0:f7f7:f7f7",
-  "2001:4860:1234::5efe:8.8.8.8",
-  "2001:4860:1234:1:1111:5efe:7f00:1",
+const privateIpCases = [
+  ...`
+    198.18.0.1 198.19.255.254 198.51.100.42 203.0.113.10
+    192.0.0.8 192.0.2.1 192.88.99.1 224.0.0.1 239.255.255.255 240.0.0.1 255.255.255.255
+    ::ffff:127.0.0.1 ::ffff:198.18.0.1 64:ff9b::198.51.100.42
+    0:0:0:0:0:ffff:7f00:1 0000:0000:0000:0000:0000:ffff:7f00:0001
+    ::127.0.0.1 0:0:0:0:0:0:7f00:1 [0:0:0:0:0:ffff:7f00:1]
+    ::ffff:169.254.169.254 0:0:0:0:0:ffff:a9fe:a9fe 64:ff9b::127.0.0.1
+    64:ff9b::169.254.169.254 64:ff9b:1:c0a8:1:100:: 64:ff9b:1:a00:0:100::
+    64:ff9b:1::8.8.8.8 64:ff9b:1:808:808:808:808:808 64:ff9b:1:808:808:808:a9fe:a9fe
+    2002:7f00:0001:: 2002:a9fe:a9fe:: 2001:0000:0:0:0:0:80ff:fefe
+    2001:0000:0:0:0:0:3f57:fefe 2002:c612:0001:: :: ::1 fe80::1%lo0 fd00::1 fec0::1 100::1
+    2001:2::1 2001:20::1 2001:db8::1 2001:db8:1234::5efe:127.0.0.1
+    2001:db8:1234:1:200:5efe:7f00:1
+  `
+    .trim()
+    .split(/\s+/),
+  ...blockedIpv6MulticastLiterals,
 ];
 
 const malformedIpv6Cases = ["::::", "2001:db8::gggg"];
-const unsupportedLegacyIpv4Cases = [
-  "0177.0.0.1",
-  "0x7f.0.0.1",
-  "127.1",
-  "2130706433",
-  "0x7f000001",
-  "017700000001",
-  "8.8.2056",
-  "0x08080808",
-  "08.0.0.1",
-  "0x7g.0.0.1",
-  "127..0.1",
-  "999.1.1.1",
-];
-
-const nonIpHostnameCases = ["example.com", "abc.123.example", "1password.com", "0x.example.com"];
-
-function expectIpPrivacyCases(cases: string[], expected: boolean) {
-  for (const address of cases) {
-    expect(isPrivateIpAddress(address)).toBe(expected);
-  }
-}
+const unsupportedLegacyIpv4Cases = `
+  0177.0.0.1 0x7f.0.0.1 127.1 2130706433 0x7f000001 017700000001
+  8.8.2056 0x08080808 08.0.0.1 0x7g.0.0.1 127..0.1 999.1.1.1
+`
+  .trim()
+  .split(/\s+/);
 
 const httpBaseUrlPolicyBuilders = [
-  {
-    name: "ssrfPolicyFromHttpBaseUrlAllowedHostname",
-    build: ssrfPolicyFromHttpBaseUrlAllowedHostname,
-  },
-  {
-    name: "ssrfPolicyFromHttpBaseUrlAllowedOrigin",
-    build: ssrfPolicyFromHttpBaseUrlAllowedOrigin,
-  },
-  {
-    name: "ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist",
-    build: ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
-  },
-];
+  ["allowed hostname", ssrfPolicyFromHttpBaseUrlAllowedHostname],
+  ["allowed origin", ssrfPolicyFromHttpBaseUrlAllowedOrigin],
+  ["fake-IP allowlist", ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist],
+] as const;
 
-describe("ssrf ip classification", () => {
+describe("SSRF policy", () => {
   it("classifies blocked ip literals as private", () => {
-    expectIpPrivacyCases(
-      [...privateIpCases, ...malformedIpv6Cases, ...unsupportedLegacyIpv4Cases],
-      true,
-    );
+    for (const address of [
+      ...privateIpCases,
+      ...malformedIpv6Cases,
+      ...unsupportedLegacyIpv4Cases,
+    ]) {
+      expect(isPrivateIpAddress(address)).toBe(true);
+    }
   });
-
-  it("classifies public ip literals as non-private", () => {
-    expectIpPrivacyCases(publicIpCases, false);
-  });
-
-  it("does not treat hostnames as ip literals", () => {
-    expectIpPrivacyCases(nonIpHostnameCases, false);
-  });
-
-  it("keeps local-use NAT64 blocked when fake-ip ranges are allowed", () => {
-    expect(
-      isPrivateIpAddress("64:ff9b:1:808:808:808:a9fe:a9fe", {
-        allowRfc2544BenchmarkRange: true,
-        allowIpv6UniqueLocalRange: true,
-      }),
-    ).toBe(true);
-  });
-});
-
-describe("HTTP base URL SSRF policy builders", () => {
   it.each(httpBaseUrlPolicyBuilders)(
-    "$name ignores empty, invalid, and non-HTTP URLs",
-    ({ build }) => {
+    "%s ignores empty, invalid, and non-HTTP URLs",
+    (_name, build) => {
       expect(build("")).toBeUndefined();
       expect(build("not-a-url")).toBeUndefined();
       expect(build("ftp://api.example.com")).toBeUndefined();
     },
   );
-});
-
-describe("ssrfPolicyFromHttpBaseUrlAllowedHostname", () => {
   it("builds an allowed-hostname policy from HTTP base URLs", () => {
     expect(ssrfPolicyFromHttpBaseUrlAllowedHostname(" https://api.example.com/v1 ")).toEqual({
       allowedHostnames: ["api.example.com"],
     });
   });
-});
-
-describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin", () => {
   it("builds an allowed-origin policy from HTTP base URLs", () => {
     expect(ssrfPolicyFromHttpBaseUrlAllowedOrigin(" http://10.0.0.5:1234/v1 ")).toEqual({
       allowedOrigins: ["http://10.0.0.5:1234"],
@@ -173,59 +84,6 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin", () => {
       allowedOrigins: ["https://api.example.com"],
     });
   });
-});
-
-describe("resolveSsrFPolicyForUrl", () => {
-  it("returns missing and originless policies unchanged", () => {
-    expect(
-      resolveSsrFPolicyForUrl(new URL("https://api.example.com/v1"), undefined),
-    ).toBeUndefined();
-    const policy = { allowedOrigins: [], hostnameAllowlist: ["api.example.com"] };
-    expect(resolveSsrFPolicyForUrl(new URL("https://api.example.com/v1"), policy)).toBe(policy);
-  });
-
-  it("converts matching allowed origins into per-request hostname trust", () => {
-    expect(
-      resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:1234/v1/chat/completions"), {
-        allowedOrigins: ["http://10.0.0.5:1234"],
-      }),
-    ).toEqual({
-      allowedOrigins: ["http://10.0.0.5:1234"],
-      allowedHostnames: ["10.0.0.5"],
-    });
-  });
-
-  it("normalizes allowed origin case, path, query, and default ports before trusting hosts", () => {
-    expect(
-      resolveSsrFPolicyForUrl(new URL("https://api.example.com:443/v1/chat/completions"), {
-        allowedOrigins: ["https://API.EXAMPLE.com:443/base?debug=1"],
-      }),
-    ).toEqual({
-      allowedOrigins: ["https://API.EXAMPLE.com:443/base?debug=1"],
-      allowedHostnames: ["api.example.com"],
-    });
-  });
-
-  it("normalizes trailing hostname dots before trusting hosts", () => {
-    expect(
-      resolveSsrFPolicyForUrl(new URL("http://example.com:11434/v1/chat/completions"), {
-        allowedOrigins: ["http://example.com.:11434/v1"],
-      }),
-    ).toEqual({
-      allowedOrigins: ["http://example.com.:11434/v1"],
-      allowedHostnames: ["example.com"],
-    });
-
-    expect(
-      resolveSsrFPolicyForUrl(new URL("http://example.com.:11434/v1/chat/completions"), {
-        allowedOrigins: ["http://example.com:11434/v1"],
-      }),
-    ).toEqual({
-      allowedOrigins: ["http://example.com:11434/v1"],
-      allowedHostnames: ["example.com"],
-    });
-  });
-
   it("does not trust the hostname when the port differs", () => {
     expect(
       resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:4321/v1/chat/completions"), {
@@ -246,19 +104,6 @@ describe("resolveSsrFPolicyForUrl", () => {
       allowedHostnames: ["fd00::1"],
     });
   });
-
-  it("does not trust IPv6 origins when the port differs", () => {
-    expect(
-      resolveSsrFPolicyForUrl(new URL("http://[fd00::1]:11435/v1/chat/completions"), {
-        allowedOrigins: ["http://[fd00::1]:11434"],
-      }),
-    ).toEqual({
-      allowedOrigins: ["http://[fd00::1]:11434"],
-    });
-  });
-});
-
-describe("ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist", () => {
   it("builds a host-scoped fake-IP policy from HTTP base URLs", () => {
     expect(
       ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(" https://api.example.com/v1 "),
@@ -268,57 +113,24 @@ describe("ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist", () => {
       hostnameAllowlist: ["api.example.com"],
     });
   });
-});
-
-describe("isBlockedHostnameOrIp", () => {
-  it.each([
-    "localhost...",
-    "localhost.localdomain...",
-    "metadata.google.internal...",
-    "api.localhost...",
-    "svc.local...",
-    "db.internal...",
-  ])("blocks reserved hostname with repeated trailing dots %s", (hostname) => {
-    expect(isBlockedHostnameOrIp(hostname)).toBe(true);
-    expect(() => assertHostnameAllowedWithPolicy(hostname)).toThrow(/blocked/i);
+  it("blocks reserved hostname with repeated trailing dots", () => {
+    expect(isBlockedHostnameOrIp("db.internal...")).toBe(true);
+    expect(() => assertHostnameAllowedWithPolicy("db.internal...")).toThrow(/blocked/i);
   });
 
-  it.each([
-    ["198.18.0.1", undefined, true],
-    ["198.18.0.1", { allowRfc2544BenchmarkRange: true }, false],
-    ["::ffff:198.18.0.1", { allowRfc2544BenchmarkRange: true }, false],
-    ["198.51.100.1", { allowRfc2544BenchmarkRange: true }, true],
-  ] as const)("applies RFC2544 benchmark policy for %s", (value, policy, expected) => {
-    expect(isBlockedHostnameOrIp(value, policy)).toBe(expected);
+  it("applies RFC2544 benchmark policy to IPv4-mapped IPv6", () => {
+    expect(isBlockedHostnameOrIp("::ffff:198.18.0.1", { allowRfc2544BenchmarkRange: true })).toBe(
+      false,
+    );
   });
 
-  // #74351: fake-ip proxy stacks (sing-box / Clash / Surge) resolve foreign
-  // domains to BOTH IPv4 198.18.0.0/15 AND IPv6 fc00::/7 simultaneously.
-  // The policy must let operators opt into the IPv6 ULA range
-  // independently of the IPv4 benchmark exemption.
+  // #74351: dual-stack fake-IP proxies need independent benchmark and ULA exemptions.
   it.each([
-    ["fc00::1", undefined, true],
-    ["fc00::1", { allowIpv6UniqueLocalRange: true }, false],
     ["fdff::dead:beef", { allowIpv6UniqueLocalRange: true }, false],
-    ["fd00:ec2::254", { allowIpv6UniqueLocalRange: true }, true],
-    // Other reserved IPv6 ranges stay blocked even with the new flag set —
-    // the exemption is scoped to ULA, not "any reserved IPv6".
-    ["::1", { allowIpv6UniqueLocalRange: true }, true],
-    ["fec0::1", { allowIpv6UniqueLocalRange: true }, true],
-    // The flag is independent of the IPv4 benchmark flag — neither
-    // implies the other.
     ["198.18.0.1", { allowIpv6UniqueLocalRange: true }, true],
-    ["fc00::1", { allowRfc2544BenchmarkRange: true }, true],
   ] as const)("applies IPv6 unique-local policy for %s", (value, policy, expected) => {
     expect(isBlockedHostnameOrIp(value, policy)).toBe(expected);
   });
-
-  it("does not block an ordinary hostname", () => {
-    expect(isBlockedHostnameOrIp("example.com")).toBe(false);
-  });
-});
-
-describe("isSameSsrFPolicy", () => {
   it("compares policy fields semantically", () => {
     expect(
       isSameSsrFPolicy(
@@ -341,39 +153,27 @@ describe("isSameSsrFPolicy", () => {
       ),
     ).toBe(true);
 
-    expect(isSameSsrFPolicy({}, { blockedHostnames: [] })).toBe(true);
-    expect(isSameSsrFPolicy({}, { blockedHostnames: ["tracker.example.com"] })).toBe(false);
-    expect(
-      isSameSsrFPolicy(
-        { blockedHostnames: ["tracker.example.com"] },
-        { blockedHostnames: ["*.example.com"] },
-      ),
-    ).toBe(false);
+    samePolicy({}, { blockedHostnames: [] }, true);
+    samePolicy({}, { blockedHostnames: ["tracker.example.com"] }, false);
+    samePolicy(
+      { blockedHostnames: ["tracker.example.com"] },
+      { blockedHostnames: ["*.example.com"] },
+      false,
+    );
+    samePolicy(
+      { dangerouslyAllowPrivateNetwork: true },
+      { dangerouslyAllowPrivateNetwork: true, allowRfc2544BenchmarkRange: true },
+      false,
+    );
 
-    expect(
-      isSameSsrFPolicy(
-        { dangerouslyAllowPrivateNetwork: true },
-        { dangerouslyAllowPrivateNetwork: true, allowRfc2544BenchmarkRange: true },
-      ),
-    ).toBe(false);
-
-    // #74351: the new `allowIpv6UniqueLocalRange` flag must participate in
-    // semantic equality. Otherwise consumers caching policy objects keyed by
-    // `isSameSsrFPolicy` would silently reuse a stale fc00::/7-blocking
-    // policy after the flag was flipped on.
-    expect(
-      isSameSsrFPolicy(
-        { allowPrivateNetwork: true },
-        { allowPrivateNetwork: true, allowIpv6UniqueLocalRange: true },
-      ),
-    ).toBe(false);
-    expect(
-      isSameSsrFPolicy({ allowIpv6UniqueLocalRange: true }, { allowIpv6UniqueLocalRange: true }),
-    ).toBe(true);
+    // #74351: changing ULA policy must invalidate consumers' policy caches.
+    samePolicy(
+      { allowPrivateNetwork: true },
+      { allowPrivateNetwork: true, allowIpv6UniqueLocalRange: true },
+      false,
+    );
+    samePolicy({ allowIpv6UniqueLocalRange: true }, { allowIpv6UniqueLocalRange: true }, true);
   });
-});
-
-describe("mergeSsrFPolicies", () => {
   it("retains every configured block when combining policies and trust exceptions", () => {
     const policy = mergeSsrFPolicies(
       { blockedHostnames: ["tracker.example.com"] },

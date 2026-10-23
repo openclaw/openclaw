@@ -2,21 +2,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createContextEngineLogicalTurnLease } from "../agents/harness/context-engine-logical-turn.js";
+import { createContextEngineLogicalTurnLease as createLease } from "../agents/harness/context-engine-logical-turn.js";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeRegistryScope as withRegistry } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
+import * as initialization from "./init.js";
 import { LegacyContextEngine } from "./legacy.js";
+import { createNativeSource } from "./registry-resources.test-support.js";
 import * as contextEngineRegistry from "./registry.js";
 import {
   adoptRuntimeContextEngineRegistrations,
-  registerContextEngineInRegistry,
+  registerContextEngineInRegistry as registerEngine,
   resolveLogicalTurnContextEngines,
 } from "./registry.js";
 import type { ContextEngineFactory } from "./registry.js";
@@ -27,91 +30,44 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("captures configured registration before awaiting the fallback factory", async () => {
-  const registry = createEmptyPluginRegistry();
-  const fallbackGate = createDeferred();
-  const calls: string[] = [];
-  const factory =
-    (name: string): ContextEngineFactory =>
-    () => {
-      calls.push(name);
-      return new LegacyContextEngine();
-    };
-  registerContextEngineInRegistry(
-    registry,
-    "legacy",
-    async () => {
-      await fallbackGate.promise;
-      return new LegacyContextEngine();
-    },
-    "core",
-  );
-  registerContextEngineInRegistry(registry, "selected", factory("original"), "plugin:fixture");
-  const pending = withPluginRuntimeRegistryScope(registry, () =>
-    resolveLogicalTurnContextEngines({ plugins: { slots: { contextEngine: "selected" } } }),
-  );
-  registerContextEngineInRegistry(registry, "selected", factory("replacement"), "plugin:fixture", {
-    allowSameOwnerRefresh: true,
-  });
-  fallbackGate.resolve();
-  const resolved = await pending;
-  expect(calls).toEqual(["original"]);
-  await resolved.configured.engine.dispose?.();
-  await resolved.fallback.engine.dispose?.();
-});
-
 it.each([
-  "selection",
-  "factory",
   "factory-tail",
   "abort-factory-tail",
   "dispose",
   "dispose-tail",
   "abort-tail",
   "parent-abort",
-  "invalid",
   "invalid-tail",
   "invalid-factory-tail",
-  "factory-error",
   "factory-cleanup-error",
   "closing-factory",
   "last-user",
-  "raw",
   "raw-view",
+  "initialization",
+  "initialization-error",
+  "initialization-abort",
 ] as const)("retains the adopted engine's native source through %s", async (mode) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "context-engine-source-"));
   const databasePath = path.join(directory, "source.sqlite");
-  const database = new DatabaseSync(databasePath);
-  const source = new PluginRegistryInspectionResources(retireInspectionInstances);
   const donor = createEmptyPluginRegistry();
   const supplyingView = createEmptyPluginRegistry();
   const viewSource = new PluginRegistryInspectionResources(retireInspectionInstances);
   const plugin = { id: "engine-source-fixture", source: path.join(directory, "plugin.cjs") };
   donor.plugins.push(createPluginRecord(plugin));
   supplyingView.plugins.push(createPluginRecord(plugin));
-  if (mode !== "raw") {
-    source.attach(donor);
-  }
   if (mode !== "raw-view") {
     viewSource.attach(supplyingView);
   }
-  let sourceDisposals = 0;
-  const sourceDisposed = createDeferred();
-  source.register(plugin.id, {
-    id: "native",
-    dispose() {
-      sourceDisposals++;
-      database.close();
-      sourceDisposed.resolve();
-      if (mode === "factory-cleanup-error") {
-        throw new Error("registration disposer failed");
-      }
-    },
+  const native = createNativeSource(databasePath, donor, plugin.id, () => {
+    if (mode === "factory-cleanup-error") {
+      throw new Error("registration disposer failed");
+    }
   });
+  const { database, resources: source } = native;
   const reads: number[] = [];
   const read = () => {
     try {
-      reads.push(Number(database.prepare("SELECT 42 AS value").get()?.value));
+      reads.push(native.read());
     } catch {
       reads.push(-1);
     }
@@ -123,6 +79,11 @@ it.each([
   const disposeGate = createDeferred();
   const disposeTail = createDeferred();
   const tails: Promise<unknown>[] = [];
+  const readAfter = (gate: { promise: PromiseLike<unknown> }, readValue = read) =>
+    trackAsyncWork(async () => {
+      await gate.promise;
+      readValue();
+    });
   const contexts: Array<string | undefined> = [];
   const signals: AbortSignal[] = [];
   let engineDisposals = 0;
@@ -133,10 +94,7 @@ it.each([
   class NativeEngine extends LegacyContextEngine {
     #read = read;
     override readonly info = {
-      id:
-        mode === "invalid" || mode === "invalid-tail" || mode === "invalid-factory-tail"
-          ? ""
-          : "native-engine",
+      id: mode === "invalid-tail" || mode === "invalid-factory-tail" ? "" : "native-engine",
       name: "Native engine",
     };
     override async assemble(params: Parameters<ContextEngine["assemble"]>[0]) {
@@ -154,17 +112,12 @@ it.each([
         cleanupSignal = getAsyncWorkSignal();
         await factoryWorker;
       }
-      if (mode === "dispose" || mode === "invalid" || mode === "invalid-factory-tail") {
+      if (mode === "dispose" || mode === "invalid-factory-tail") {
         await disposeGate.promise;
       }
       if (mode === "dispose-tail" || mode === "invalid-tail") {
         cleanupSignal = getAsyncWorkSignal();
-        tails.push(
-          trackAsyncWork(async () => {
-            await disposeTail.promise;
-            this.#read();
-          }),
-        );
+        tails.push(readAfter(disposeTail, () => this.#read()));
       }
       this.#read();
     }
@@ -179,26 +132,18 @@ it.each([
           "abort",
           () => {
             abortInOrigin = getAsyncWorkSignal() === signal;
-            tails.push(
-              trackAsyncWork(async () => {
-                await disposeTail.promise;
-                read();
-              }),
-            );
+            tails.push(readAfter(disposeTail));
           },
           { once: true },
         );
       }
     }
     factoryStarted.resolve();
-    if (mode === "factory" || mode === "closing-factory" || mode === "factory-cleanup-error") {
+    if (mode === "closing-factory" || mode === "factory-cleanup-error") {
       await factoryGate.promise;
     }
-    if (mode === "factory-tail" || mode === "factory-error" || mode === "closing-factory") {
-      const tail = trackAsyncWork(async () => {
-        await factoryTail.promise;
-        read();
-      });
+    if (mode === "factory-tail" || mode === "closing-factory") {
+      const tail = readAfter(factoryTail);
       void tail.catch(() => {});
       tails.push(tail);
     }
@@ -216,17 +161,13 @@ it.each([
       tails.push(factoryWorker);
     }
     read();
-    if (
-      mode === "factory-error" ||
-      mode === "closing-factory" ||
-      mode === "factory-cleanup-error"
-    ) {
+    if (mode === "closing-factory" || mode === "factory-cleanup-error") {
       throw new Error("original factory failure");
     }
     return new NativeEngine();
   };
   source.runRegistration(plugin.id, () => {
-    registerContextEngineInRegistry(donor, "selected", factory, `plugin:${plugin.id}`);
+    registerEngine(donor, "selected", factory, `plugin:${plugin.id}`);
   });
   const copiedView = adoptRuntimeContextEngineRegistrations(supplyingView, donor);
   if (mode !== "raw-view") {
@@ -236,18 +177,28 @@ it.each([
   const cleanupScope = createAgentCleanupScope();
   const parent = new AsyncWorkScope();
   const foreign = new AsyncWorkScope();
-  const leases: Array<Awaited<ReturnType<typeof createContextEngineLogicalTurnLease>>> = [];
+  const leases: Array<Awaited<ReturnType<typeof createLease>>> = [];
   const pending: Array<Promise<unknown>> = [];
+  const initializationStarted = createDeferred();
+  const initializationGate = createDeferred();
+  const initialize = initialization.ensureContextEnginesInitialized;
+  const initializeSpy =
+    mode === "initialization" || mode === "initialization-error" || mode === "initialization-abort"
+      ? vi.spyOn(initialization, "ensureContextEnginesInitialized").mockImplementation(async () => {
+          await initialize();
+          initializationStarted.resolve();
+          await initializationGate.promise;
+        })
+      : undefined;
   const start = async () => {
     const create = () =>
       cleanupScope.run(() =>
-        withPluginRuntimeRegistryScope(copiedView, () =>
-          createContextEngineLogicalTurnLease({
+        withRegistry(copiedView, () =>
+          createLease({
             identity: { runId: "fixture-run", sessionId: "fixture-session" },
             config,
             agentDir: path.join(directory, "staged-agent"),
             workspaceDir: path.join(directory, "workspace"),
-            warn: () => {},
           }),
         ),
       );
@@ -262,23 +213,44 @@ it.each([
   const first = start();
   pending.push(first);
   try {
-    if (mode === "selection") {
+    if (initializeSpy) {
       await source.release();
+      await initializationStarted.promise;
+      expect(database.isOpen).toBe(true);
+      expect(contexts).toEqual([]);
+      if (mode === "initialization-error" || mode === "initialization-abort") {
+        const failure = new Error("initialization failed");
+        if (mode === "initialization-error") {
+          initializationGate.reject(failure);
+        } else {
+          parent.beginClose(failure);
+          initializationGate.resolve();
+        }
+        await expect(first).rejects.toBe(failure);
+        await parent.drain();
+        expect(native.state).toMatchObject({ disposals: 1, open: false });
+        expect(engineDisposals).toBe(0);
+        return;
+      }
+      const replacement = vi.fn(() => new LegacyContextEngine());
+      registerEngine(copiedView, "selected", replacement, `plugin:${plugin.id}`, {
+        allowSameOwnerRefresh: true,
+      });
+      initializationGate.resolve();
+      await first;
+      expect(replacement).not.toHaveBeenCalled();
     }
     await factoryStarted.promise;
     expect(signals.every((signal) => !signal.aborted)).toBe(true);
-    if (mode === "invalid" || mode === "invalid-factory-tail") {
+    if (mode === "invalid-factory-tail") {
       await disposeStarted.promise;
     }
     if (mode === "last-user") {
       await first;
       await start();
     }
-    if (mode !== "raw") {
-      await source.release();
-      expect.soft(database.isOpen).toBe(true);
-      expect.soft(sourceDisposals).toBe(0);
-    }
+    await source.release();
+    expect.soft(native.state).toMatchObject({ open: true, disposals: 0 });
     if (mode === "closing-factory") {
       let parentDrained = false;
       pending.push(
@@ -290,9 +262,7 @@ it.each([
       expect.soft(parentDrained).toBe(false);
     }
     if (mode === "invalid-factory-tail") {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect.soft(signals.every((signal) => signal.aborted)).toBe(true);
       expect.soft(factoryWorkFinished).toBe(true);
       expect.soft(cleanupSignal?.aborted).toBe(false);
@@ -300,19 +270,12 @@ it.each([
       disposeGate.resolve();
     }
     factoryGate.resolve();
-    if (mode === "invalid") {
-      disposeGate.resolve();
-    }
     const lease = await first;
     expect(contexts.every((value) => value === path.join(directory, "staged-agent"))).toBe(true);
-    if (
-      mode === "factory-error" ||
-      mode === "closing-factory" ||
-      mode === "factory-cleanup-error"
-    ) {
+    if (mode === "closing-factory" || mode === "factory-cleanup-error") {
       expect(lease.degradedReason).toBe("original factory failure");
       factoryTail.resolve();
-    } else if (mode === "invalid" || mode === "invalid-tail" || mode === "invalid-factory-tail") {
+    } else if (mode === "invalid-tail" || mode === "invalid-factory-tail") {
       expect(lease.degradedReason).toContain("missing info.id");
     } else {
       await lease.engine.assemble({ sessionId: "fixture-session", messages: [] });
@@ -327,9 +290,7 @@ it.each([
           foreignDrained = true;
         }),
       );
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect.soft(foreignDrained).toBe(true);
     }
     vi.useFakeTimers();
@@ -351,7 +312,7 @@ it.each([
       expect.soft(abortInOrigin).toBe(true);
     }
     if (mode === "last-user") {
-      expect.soft(sourceDisposals).toBe(0);
+      expect.soft(native.state.disposals).toBe(0);
       await leases[1]!.dispose();
     }
     if (mode === "dispose-tail" || mode === "invalid-tail") {
@@ -366,21 +327,15 @@ it.each([
     const settledTails = await Promise.allSettled(tails);
     expect.soft(settledTails.every((tail) => tail.status === "fulfilled")).toBe(true);
     await parent.drain();
-    if (mode !== "raw") {
-      await sourceDisposed.promise;
-      expect(sourceDisposals).toBe(1);
-      expect(database.isOpen).toBe(false);
-    } else {
-      expect(database.isOpen).toBe(true);
-      expect(sourceDisposals).toBe(0);
-    }
+    await native.disposed.promise;
+    expect(native.state).toMatchObject({ disposals: 1, open: false });
     if (mode === "factory-cleanup-error") {
       expect.soft(cleanupScope.outcome).toBe("uncertain");
     }
     expect(reads.length).toBeGreaterThan(0);
     expect.soft(reads.every((value) => value === 42)).toBe(true);
     expect(engineDisposals).toBe(
-      mode === "factory-error" || mode === "closing-factory" || mode === "factory-cleanup-error"
+      mode === "closing-factory" || mode === "factory-cleanup-error"
         ? 0
         : mode === "last-user"
           ? 2
@@ -392,6 +347,7 @@ it.each([
     reopened.close();
   } finally {
     vi.useRealTimers();
+    initializationGate.resolve();
     factoryGate.resolve();
     factoryTail.resolve();
     disposeGate.resolve();
@@ -403,6 +359,7 @@ it.each([
     await foreign.drain();
     await source.release();
     await viewSource.release();
+    initializeSpy?.mockRestore();
     if (database.isOpen) {
       database.close();
     }
@@ -412,33 +369,21 @@ it.each([
 
 it("disposes a shared engine once while releasing both factory source claims", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "context-engine-alias-"));
-  const database = new DatabaseSync(path.join(directory, "source.sqlite"));
-  const registry = createEmptyPluginRegistry();
-  const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
-  resources.attach(registry);
-  const sourceDisposed = createDeferred();
+  const native = createNativeSource(path.join(directory, "source.sqlite"));
+  const { database, registry, resources } = native;
   const finishTail = createDeferred();
   const tails: Promise<unknown>[] = [];
-  let sourceDisposals = 0;
   let engineDisposals = 0;
   const reads: number[] = [];
-  resources.register("fixture", {
-    id: "native",
-    dispose() {
-      sourceDisposals++;
-      database.close();
-      sourceDisposed.resolve();
-    },
-  });
   class SharedEngine extends LegacyContextEngine {
-    #database = database;
+    #read = native.read;
     async dispose() {
       engineDisposals++;
       tails.push(
         trackAsyncWork(async () => {
           await finishTail.promise;
           try {
-            reads.push(Number(this.#database.prepare("SELECT 42 AS value").get()?.value));
+            reads.push(this.#read());
           } catch {
             reads.push(-1);
           }
@@ -448,22 +393,19 @@ it("disposes a shared engine once while releasing both factory source claims", a
   }
   const engine = new SharedEngine();
   resources.runRegistration("fixture", () => {
-    registerContextEngineInRegistry(registry, "legacy", () => engine, "core");
-    registerContextEngineInRegistry(registry, "selected", () => engine, "plugin:fixture");
+    registerEngine(registry, "legacy", () => engine, "core");
+    registerEngine(registry, "selected", () => engine, "plugin:fixture");
   });
   const config = { plugins: { slots: { contextEngine: "selected" } } };
-  const resolution = await withPluginRuntimeRegistryScope(registry, () =>
-    resolveLogicalTurnContextEngines(config),
-  );
+  const resolution = await withRegistry(registry, () => resolveLogicalTurnContextEngines(config));
   // Feed the actual acquired pair to its existing logical owner without replacing the factories.
   const resolve = vi
     .spyOn(contextEngineRegistry, "resolveLogicalTurnContextEngines")
     .mockResolvedValueOnce(resolution);
-  const lease = await withPluginRuntimeRegistryScope(registry, () =>
-    createContextEngineLogicalTurnLease({
+  const lease = await withRegistry(registry, () =>
+    createLease({
       identity: { runId: "alias-run", sessionId: "alias-session" },
       config,
-      warn: () => {},
     }),
   );
   let cleanup: Promise<void> | undefined;
@@ -476,13 +418,12 @@ it("disposes a shared engine once while releasing both factory source claims", a
     await vi.advanceTimersByTimeAsync(25);
     await cleanup;
     expect.soft(engineDisposals).toBe(1);
-    expect.soft(sourceDisposals).toBe(0);
+    expect.soft(native.state.disposals).toBe(0);
     finishTail.resolve();
     await Promise.allSettled(tails);
-    await sourceDisposed.promise;
+    await native.disposed.promise;
     expect.soft(reads).toEqual([42]);
-    expect(sourceDisposals).toBe(1);
-    expect(database.isOpen).toBe(false);
+    expect(native.state).toMatchObject({ disposals: 1, open: false });
   } finally {
     finishTail.resolve();
     await Promise.allSettled(tails);

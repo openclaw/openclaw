@@ -38,8 +38,8 @@ export function mergeTelegramAccountConfig(
 export function resolveTelegramLegacyWebhookListener(
   configured: TelegramAccountConfig["legacyWebhook"],
 ): { port: number; host: string } | undefined {
-  if (configured === false) {
+  if (!configured) {
     return undefined;
   }
-  return { port: configured?.port ?? 8787, host: configured?.host ?? "127.0.0.1" };
+  return { port: configured.port, host: configured.host ?? "127.0.0.1" };
 }

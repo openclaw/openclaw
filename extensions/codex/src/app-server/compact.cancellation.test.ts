@@ -1,9 +1,13 @@
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   consumeCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
@@ -12,40 +16,30 @@ import {
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
 import {
   compactCodexSessionWithTestHost as maybeCompactCodexAppServerSessionImpl,
+  compactionItemEvent,
+  compactionParams as createCompactionParams,
   createFakeCodexCompactionClient,
   maybeCompactCodexAppServerSession,
   resetCodexAppServerClientFactoryForTest,
+  recoveredCompactionBinding,
   writeCompactionTestBinding,
   writeSupervisedTestBinding,
 } from "./compact.test-support.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+import type { CodexServerNotification } from "./protocol.js";
 import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
-  createCodexTestBindingStore,
+  createCodexTestContextEngineBinding as contextEngineBinding,
   readCodexAppServerBinding,
   resetCodexTestBindingStore,
 } from "./session-binding.test-helpers.js";
 import { createClientHarness } from "./test-support.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-compact-");
 let tempDir: string;
-
-function contextEngineBinding() {
-  return {
-    schemaVersion: 1 as const,
-    engineId: "lossless-claw",
-    policyFingerprint: "policy-1",
-    projection: {
-      schemaVersion: 1 as const,
-      mode: "thread_bootstrap" as const,
-      epoch: "epoch-1",
-      fingerprint: "fingerprint-1",
-    },
-  };
-}
 
 async function createRetainedHarness(onRequest: (request: { id: number; method: string }) => void) {
   const harness = createClientHarness({
@@ -66,13 +60,17 @@ async function createRetainedHarness(onRequest: (request: { id: number; method: 
 }
 
 function compactionParams(sessionFile: string, abortSignal?: AbortSignal) {
+  return createCompactionParams(tempDir, sessionFile, { abortSignal });
+}
+
+function turnEvent(
+  threadId: string,
+  id: string,
+  status: "inProgress" | "completed" | "interrupted",
+): CodexServerNotification {
   return {
-    sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
-    sessionFile,
-    workspaceDir: tempDir,
-    trigger: "manual" as const,
-    abortSignal,
+    method: status === "inProgress" ? "turn/started" : "turn/completed",
+    params: { threadId, turn: { id, status, ...(status === "inProgress" ? {} : { items: [] }) } },
   };
 }
 
@@ -84,60 +82,31 @@ function settleCompactionHarnessAfterAssertions(harness: ReturnType<typeof creat
       harness.send({ id: request.id, result: {} });
     }
   }
-  harness.send({
-    method: "turn/started",
-    params: {
-      threadId: "thread-1",
-      turn: { id: "cleanup-turn", status: "inProgress" },
-    },
-  });
-  harness.send({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-1",
-      turn: { id: "cleanup-turn", status: "interrupted", items: [] },
-    },
-  });
+  harness.send(turnEvent("thread-1", "cleanup-turn", "inProgress"));
+  harness.send(turnEvent("thread-1", "cleanup-turn", "interrupted"));
 }
 
 describe("maybeCompactCodexAppServerSession", () => {
   beforeEach(() => {
     resetCodexTestBindingStore();
-    tempDir = tempDirs.make("openclaw-codex-compact-");
+    tempDir = tempDirs.make();
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(() => {
     resetCodexAppServerClientFactoryForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   it.each(["generation", "deadline", "abort"] as const)(
     "settles a compaction retry rejected before write (%s)",
     async (rejection) => {
-      const current = {
-        kind: "session" as const,
-        agentId: "main",
-        sessionKey: "agent:main:recovered-retry",
-        sessionId: "after-compaction",
-      };
-      const previous = { ...current, sessionId: "before-compaction" };
+      const { current, scope, bindingStore, binding } = await recoveredCompactionBinding(
+        tempDir,
+        "agent:main:recovered-retry",
+        rejection === "abort" ? { contextEngine: contextEngineBinding() } : {},
+      );
       const next = { ...current, sessionId: "next-compaction" };
-      const scope = {
-        agentId: current.agentId,
-        sessionKey: current.sessionKey,
-        storePath: path.join(tempDir, "admitted", "sessions.json"),
-      };
-      await upsertSessionEntry({
-        ...scope,
-        entry: { sessionId: previous.sessionId, updatedAt: 1 },
-      });
-      await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
-      const bindingStore = createCodexTestBindingStore();
-      const binding = {
-        threadId: "thread-1",
-        cwd: tempDir,
-        ...(rejection === "abort" ? { contextEngine: contextEngineBinding() } : {}),
-      };
-      await bindingStore.mutate(previous, { kind: "set", binding });
       const abortController = new AbortController();
       const compactWritten = createDeferred<number>();
       const harness = await createRetainedHarness((request) => {
@@ -199,20 +168,24 @@ describe("maybeCompactCodexAppServerSession", () => {
         queued = withCodexAppServerThreadMutation(binding.threadId, nextMutation);
         await vi.advanceTimersByTimeAsync(1_000);
 
+        expect(await retirementOutcome.promise).toBe("settled");
         expect(harness.writes.map((line) => JSON.parse(line).method)).toEqual([
           "thread/compact/start",
+          ...(rejection === "generation" ? ["thread/unsubscribe"] : []),
         ]);
-        expect(await retirementOutcome.promise).toBe("settled");
         await expect(pending).resolves.toMatchObject({
           ok: false,
           compacted: false,
-          reason: expect.stringContaining(
+          reason:
             rejection === "generation"
-              ? "Codex session generation is no longer current"
-              : rejection === "deadline"
-                ? "thread/compact/start timed out"
-                : "thread/compact/start aborted",
-          ),
+              ? expect.stringMatching(
+                  /Codex session (generation is no longer current|execution policy changed)/,
+                )
+              : expect.stringContaining(
+                  rejection === "deadline"
+                    ? "thread/compact/start timed out"
+                    : "thread/compact/start aborted",
+                ),
         });
         expect(closeAndWait).not.toHaveBeenCalled();
         expect(bindingStore.read(current)).toEqual(binding);
@@ -224,8 +197,13 @@ describe("maybeCompactCodexAppServerSession", () => {
           identity: rejection === "generation" ? next : current,
           storePath: scope.storePath,
         });
+        using _ = { [Symbol.dispose]: () => recovered.release() };
         expect(recovered.binding).toEqual(binding);
-        if (rejection === "abort") {
+        if (rejection === "generation") {
+          await expect(
+            consumeCodexAppServerLiveThread(harness.client, binding.threadId),
+          ).resolves.toBeUndefined();
+        } else if (rejection === "abort") {
           await expect(
             consumeCodexAppServerLiveThread(harness.client, binding.threadId),
           ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
@@ -284,20 +262,8 @@ describe("maybeCompactCodexAppServerSession", () => {
         connectionScope: "supervision",
       });
     } finally {
-      fake.emit({
-        method: "turn/started",
-        params: {
-          threadId: "thread-stuck-supervision",
-          turn: { id: "supervised-terminal", status: "inProgress" },
-        },
-      });
-      fake.emit({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-stuck-supervision",
-          turn: { id: "supervised-terminal", status: "interrupted", items: [] },
-        },
-      });
+      fake.emit(turnEvent("thread-stuck-supervision", "supervised-terminal", "inProgress"));
+      fake.emit(turnEvent("thread-stuck-supervision", "supervised-terminal", "interrupted"));
       await pendingResult.finally(() => fake.client.close());
     }
     await expect(pendingResult).resolves.toMatchObject({ ok: false, compacted: false });
@@ -382,28 +348,15 @@ describe("maybeCompactCodexAppServerSession", () => {
     );
     try {
       const requestId = await compactWritten.promise;
-      harness.send({
-        method: "turn/started",
-        params: {
-          threadId: "thread-1",
-          turn: { id: "completed-turn", status: "inProgress" },
-        },
-      });
+      harness.send(turnEvent("thread-1", "completed-turn", "inProgress"));
       const unrelatedCapture = codexNativeSubagentMonitorRuntime.captureModelSource({
         client: harness.client,
         threadId: "thread-1",
         turnId: "unrelated-turn",
         signal: abortController.signal,
       });
-      for (const method of ["item/started", "item/completed"]) {
-        harness.send({
-          method,
-          params: {
-            threadId: "thread-1",
-            turnId: "completed-turn",
-            item: { id: "completed-item", type: "contextCompaction" },
-          },
-        });
+      for (const method of ["item/started", "item/completed"] as const) {
+        harness.send(compactionItemEvent(method, "completed-turn", "completed-item"));
         if (method === "item/started") {
           const capture = await codexNativeSubagentMonitorRuntime.captureModelSource({
             client: harness.client,
@@ -420,13 +373,7 @@ describe("maybeCompactCodexAppServerSession", () => {
           }
         }
       }
-      harness.send({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turn: { id: "completed-turn", status: "completed", items: [] },
-        },
-      });
+      harness.send(turnEvent("thread-1", "completed-turn", "completed"));
       abortController.abort();
       harness.send({ id: requestId, result: {} });
 

@@ -8,12 +8,8 @@ export function sanitizeTranscriptSourceLocator(
     return source;
   }
   const { meetingUrl: _meetingUrl, ...rest } = source;
-  try {
-    const url = new URL(source.meetingUrl);
-    return { ...rest, meetingUrl: `${url.origin}${url.pathname}` };
-  } catch {
-    return rest;
-  }
+  const url = URL.parse(source.meetingUrl);
+  return url ? { ...rest, meetingUrl: `${url.origin}${url.pathname}` } : rest;
 }
 
 export function readTranscriptStringParam(

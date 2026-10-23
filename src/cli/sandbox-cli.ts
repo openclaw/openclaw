@@ -1,4 +1,3 @@
-// Commander registration for sandbox container list, recreate, and explain commands.
 import type { Command } from "commander";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { sandboxExplainCommand } from "../commands/sandbox-explain.js";
@@ -103,6 +102,24 @@ export function registerSandboxCli(program: Command) {
         sandboxRecreateCommand(opts, defaultRuntime),
       );
     });
+
+  sandbox
+    .command("recover")
+    .description("Preserve a selected oversized guest artifact outside workspace synchronization")
+    .requiredOption("--session <key>", "Exact managed workspace session key")
+    .requiredOption("--path <relative>", "Selected oversized path relative to the guest workspace")
+    .option("--recovery-id <uuid>", "Reuse the recorded ID to inspect a previous attempt")
+    .option("--json", "Output result as JSON", false)
+    .action(
+      async (
+        opts: Parameters<typeof import("../commands/sandbox-recover.js").sandboxRecoverCommand>[0],
+      ) => {
+        const { sandboxRecoverCommand } = await import("../commands/sandbox-recover.js");
+        await runCommandWithRuntime(defaultRuntime, () =>
+          sandboxRecoverCommand(opts, defaultRuntime),
+        );
+      },
+    );
 
   sandbox
     .command("explain")

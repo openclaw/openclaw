@@ -16,6 +16,8 @@ How forum topics map to sessions, agents, and ACP bindings.
   <Accordion title="Forum topics and thread behavior">
     Forum supergroups: topic session keys append `:topic:<threadId>`; replies and typing target the topic thread; topic config path is `channels.telegram.groups.<chatId>.topics.<threadId>`.
 
+    Topic IDs must be positive integers. OpenClaw rejects topic `0` in delivery targets and explicit thread options before making Telegram requests.
+
     General topic (`threadId=1`) is a special case: message sends omit `message_thread_id` (Telegram rejects `sendMessage(...thread_id=1)` with "thread not found"), but typing actions still include `message_thread_id` (empirically required for the typing indicator to appear).
 
     Topic entries inherit group settings unless overridden (`requireMention`, `requireMentionInBotThreads`, `allowFrom`, `skills`, `systemPrompt`, `enabled`, `groupPolicy`). `agentId` is topic-only and does not inherit from group defaults. `topics."*"` sets defaults for every topic in that group; exact topic IDs still win over `"*"`.

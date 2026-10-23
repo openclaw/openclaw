@@ -8,18 +8,8 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { parseVaultSecretId } from "../vault-secret-id.js";
 
 const VAULT_PROVIDER_ALIAS = "vault";
-type PluginSecretRefSetupCli = ReturnType<typeof createPluginSecretRefSetupCli>;
 
-function normalizeVaultSecretId(label: string, value: string): string {
-  try {
-    parseVaultSecretId(value);
-    return value;
-  } catch {
-    throw new Error(`Invalid ${label} Vault secret id: ${value}`);
-  }
-}
-
-const vaultSecretRefSetupCli: PluginSecretRefSetupCli = createPluginSecretRefSetupCli({
+const vaultSecretRefSetupCli = createPluginSecretRefSetupCli({
   productName: "Vault",
   secretIdLabel: "Vault secret id",
   secretIdPlaceholder: "vault-secret-id",
@@ -28,7 +18,10 @@ const vaultSecretRefSetupCli: PluginSecretRefSetupCli = createPluginSecretRefSet
     pluginId: "vault",
     integrationId: "vault",
   },
-  normalizeSecretId: normalizeVaultSecretId,
+  normalizeSecretId: (_label, value) => {
+    parseVaultSecretId(value);
+    return value;
+  },
   defaultPlanPath: () =>
     path.join(resolvePreferredOpenClawTmpDir(), `openclaw-vault-secrets-${process.pid}.json`),
 });
@@ -49,24 +42,13 @@ function writeLine(message = ""): void {
   process.stdout.write(`${message}\n`);
 }
 
-function writeJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
-function resolverScriptPathCandidates(baseUrl: string): [string, string] {
-  return [
-    fileURLToPath(new URL("../vault-secret-ref-resolver.js", baseUrl)),
-    fileURLToPath(new URL("./extensions/vault/vault-secret-ref-resolver.js", baseUrl)),
-  ];
-}
-
-async function resolveResolverScriptPath(
-  baseUrl = import.meta.url,
-  exists: (filePath: string) => Promise<boolean> = pathExists,
-): Promise<string> {
-  const candidates = resolverScriptPathCandidates(baseUrl);
+async function resolveResolverScriptPath(): Promise<string> {
+  const candidates = [
+    fileURLToPath(new URL("../vault-secret-ref-resolver.js", import.meta.url)),
+    fileURLToPath(new URL("./extensions/vault/vault-secret-ref-resolver.js", import.meta.url)),
+  ] as const;
   for (const candidate of candidates) {
-    if (await exists(candidate)) {
+    if (await pathExists(candidate)) {
       return candidate;
     }
   }
@@ -96,7 +78,7 @@ async function runStatus(config: OpenClawConfig, options: StatusOptions): Promis
     hasVaultToken: Boolean(normalizeOptionalString(process.env.VAULT_TOKEN)),
   };
   if (options.json) {
-    writeJson(result);
+    writeLine(JSON.stringify(result, null, 2));
     return;
   }
   writeLine(`Vault provider: ${provider.configured ? "configured" : "not configured"}`);

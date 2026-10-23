@@ -19,10 +19,12 @@ import {
   loadReleaseChangelog,
   writeReleaseChangelog,
 } from "../../../../scripts/lib/release-changelog.mjs";
+import { parseReleaseVersion } from "../../../../scripts/lib/release-version.mjs";
 import {
   extractChangelogReleaseSections,
   formatContributionRecordProvenance,
   formatShippedBaselineExclusions,
+  loadReleaseNotesForTag,
   parseContributionRecordProvenance,
   parseShippedBaselineExclusions,
   releaseNotesVersionForTag,
@@ -87,10 +89,11 @@ function fail(message) {
 function printUsage() {
   console.log(`Usage:
   node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \\
-    --base <tag-or-sha> --target <tag-or-sha> --version <version> [options]
+    [--base <tag-or-sha|npm-beta>] --target <tag-or-sha> --version <version> [options]
 
 Required:
-  --base <ref>          Release range start.
+  --base <ref>          Release range start; beta versions default to npm-beta.
+                       Capture npm beta before publication; reuse the resolved tag on retries.
   --target <ref>        Release range end.
   --version <version>   Release changelog version heading to verify.
 
@@ -102,10 +105,14 @@ Options:
   --refresh-github-snapshot
                         Ignore an existing exact-range snapshot and rebuild it.
   --main-ref <ref>      Canonical mainline used to replace backport PRs.
+  --release-branch <ref>
+                        Ref whose history must contain the generation target.
   --seed-ref <ref>      Use an existing release section as editorial input.
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
   --release-provenance <sha -> #PR[, #PR]>
                         Supply an exact provenance marker; repeatable.
+  --regular-stable-version <version>
+                        Regular stable version linked by extended-stable release notes.
   --write-ledger        Write the verified split release entry and contribution record.
   --release-tag <tag>   GitHub release tag to compare; repeatable with --check-github.
   --check-github        Require each supplied GitHub release body to match.
@@ -123,7 +130,9 @@ export function parseArgs(argv) {
     manifestPath: undefined,
     githubSnapshotPath: undefined,
     mainRef: undefined,
+    releaseBranch: /** @type {string | undefined} */ (undefined),
     noGithubSnapshot: false,
+    regularStableVersion: undefined,
     refreshGithubSnapshot: false,
     seedRef: /** @type {string | undefined} */ (undefined),
     shippedRefs: [],
@@ -146,7 +155,9 @@ export function parseArgs(argv) {
     ["--shipped-ref", "shippedRefs"],
     ["--github-snapshot", "githubSnapshotPath"],
     ["--main-ref", "mainRef"],
+    ["--release-branch", "releaseBranch"],
     ["--manifest", "manifestPath"],
+    ["--regular-stable-version", "regularStableVersion"],
     ["--seed-ref", "seedRef"],
   ]);
 
@@ -175,6 +186,9 @@ export function parseArgs(argv) {
   }
 
   if (!options.help) {
+    if (!options.base && parseReleaseVersion(options.version ?? "")?.channel === "beta") {
+      options.base = "npm-beta";
+    }
     for (const name of ["base", "target", "version"]) {
       if (!options[name]) {
         fail(`--${name} is required`);
@@ -811,9 +825,9 @@ function shippedBaselineFor(ref) {
   git(["rev-parse", `${tagRef}^{commit}`]);
   const rootDir = process.cwd();
   const changelog = loadChangelogCollection({ rootDir, ref: tagRef, recordsOnly: true });
-  const source = loadReleaseChangelog({ rootDir, ref: tagRef, version });
+  const source = loadReleaseNotesForTag({ rootDir, ref: tagRef, tag: ref, version });
   completeContributionRecord(
-    sectionFor(source.record ?? source.section, version),
+    sectionFor(source.record ?? source.section, source.version),
     `shipped baseline ${ref}`,
   );
   return {
@@ -1893,10 +1907,17 @@ export function validateReleaseProvenanceOverrides(
   nodes,
   mainCommit,
   isMainAncestor = gitIsAncestor,
+  resolveNodes = (numbers) => resolveReferences(numbers).nodes,
 ) {
+  // Shipped-ref subtraction removes already-released PRs from the release
+  // inventory, but markers naming them still need the same main validation.
+  const missing = [...new Set([...provenanceOverrides.values()].flat())].filter(
+    (number) => !nodes.has(number),
+  );
+  const markerNodes = missing.length > 0 ? resolveNodes(missing) : new Map();
   for (const [commit, pullRequests] of provenanceOverrides) {
     for (const number of pullRequests) {
-      const node = nodes.get(number);
+      const node = nodes.get(number) ?? markerNodes.get(number);
       // Markers may name current-main forward-ports, but never release-only or unmerged PRs.
       if (
         node?.__typename !== "PullRequest" ||
@@ -2359,9 +2380,10 @@ export function countTopLevelSectionBullets(sectionSource, heading) {
 
 export function highlightCountError(sectionSource) {
   const count = countTopLevelSectionBullets(sectionSource, "Highlights");
-  return count >= 5 && count <= 8
+  const minimum = /^## [^\n]+-beta\.[1-9][0-9]*\r?(?:\n|$)/u.test(sectionSource) ? 0 : 5;
+  return count >= minimum && count <= 8
     ? undefined
-    : `### Highlights must contain 5-8 top-level bullets; found ${count}`;
+    : `### Highlights must contain ${minimum}-8 top-level bullets; found ${count}`;
 }
 
 export function ledgerChecks(section, pullRequests, nodes, directCommits, shippedBaselines = []) {
@@ -2570,7 +2592,13 @@ function manifestFor(options, source, ledger, directCommitRecords) {
   };
 }
 
-function releaseChecks(changelog, version, releaseTags, contributionRecordPath) {
+function releaseChecks(
+  changelog,
+  version,
+  releaseTags,
+  contributionRecordPath,
+  regularStableVersion,
+) {
   const checks = [];
   for (const tag of releaseTags) {
     const release = githubApi([`repos/${repo}/releases/tags/${encodeURIComponent(tag)}`]);
@@ -2580,6 +2608,7 @@ function releaseChecks(changelog, version, releaseTags, contributionRecordPath) 
       version,
       tag,
       repository: repo,
+      regularStableVersion,
       contributionRecordPath,
     });
     checks.push({
@@ -2607,14 +2636,84 @@ function writeFileAtomic(filePath, contents) {
   }
 }
 
+function loadOrInitializeReleaseChangelog(rootDir, version, writeLedger) {
+  const existing = findReleaseChangelog({ rootDir, version });
+  if (existing || !writeLedger) {
+    return existing ?? loadReleaseChangelog({ rootDir, version });
+  }
+  writeReleaseChangelog({
+    rootDir,
+    version,
+    section: `## ${version}\n\n### Highlights\n\n### Changes\n\n### Fixes\n`,
+  });
+  return loadReleaseChangelog({ rootDir, version });
+}
+
 function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     printUsage();
     return;
   }
+  if (options.base === "npm-beta") {
+    const candidate = parseReleaseVersion(options.version);
+    if (candidate?.channel !== "beta") {
+      fail("--base npm-beta requires an exact beta changelog version");
+    }
+    const previous = JSON.parse(
+      run("npm", [
+        "view",
+        "openclaw@beta",
+        "version",
+        "--json",
+        "--registry=https://registry.npmjs.org",
+      ]),
+    );
+    const baseline = typeof previous === "string" ? parseReleaseVersion(previous) : null;
+    if (!baseline || baseline.channel === "alpha" || baseline.patch >= 33) {
+      fail("npm beta did not resolve to a supported regular release version");
+    }
+    const compareBase =
+      candidate.year - baseline.year ||
+      candidate.month - baseline.month ||
+      candidate.patch - baseline.patch;
+    if (
+      compareBase < 0 ||
+      (compareBase === 0 &&
+        (baseline.channel !== "beta" || baseline.betaNumber >= candidate.betaNumber))
+    ) {
+      fail(
+        "npm beta already points to this candidate or a newer version; reuse the previously captured --base tag for verification or recovery",
+      );
+    }
+    // Resolve once before discovery. The manifest and contribution provenance
+    // retain this tag; publication/verification never consult a moving selector.
+    options.base = `v${baseline.version}`;
+  }
+  if (
+    parseReleaseVersion(options.version)?.channel === "beta" &&
+    /^v[0-9]/u.test(options.base) &&
+    !gitIsAncestor(options.base, options.target)
+  ) {
+    // Stable closeout may forward-port a release without retaining tag ancestry.
+    // Keep the reachable range strict and subtract the shipped record through
+    // its existing owner rather than documenting already-shipped PRs again.
+    if (!options.shippedRefs.includes(options.base)) {
+      options.shippedRefs.push(options.base);
+    }
+    options.base = git(["merge-base", options.base, options.target]);
+  }
   const rootDir = process.cwd();
-  const releaseSource = loadReleaseChangelog({ rootDir, version: options.version });
+  if (options.releaseBranch && !gitIsAncestor(options.target, options.releaseBranch)) {
+    fail(
+      `release notes target ${options.target} is not reachable from canonical release branch ${options.releaseBranch}; generate notes from that branch's frozen tip`,
+    );
+  }
+  const releaseSource = loadOrInitializeReleaseChangelog(
+    rootDir,
+    options.version,
+    options.writeLedger,
+  );
   if (releaseSource.format !== "initial") {
     fail("docs-mirrored release notes must be verified by the docs-publication workflow");
   }
@@ -2892,6 +2991,7 @@ function main() {
         options.version,
         options.releaseTags,
         releaseSource.recordPath ?? undefined,
+        options.regularStableVersion,
       )
     : [];
   for (const check of github) {
@@ -2939,6 +3039,11 @@ function main() {
     process.stdout.write(
       `${options.version}: ${ledger.provenance.uniquePullRequests} unique PRs (${ledger.provenance.inRangePullRequests} in-range + ${ledger.provenance.retainedSeedOnlyPullRequests} retained seed-only), ${ledger.issues.length} issues, ${errors.length === 0 ? "verified" : `${errors.length} errors`}${snapshotSummary}\n`,
     );
+    if (errors.length > 0) {
+      process.stdout.write(
+        `${errors.map((error) => `- ${error.replaceAll("\n", "\n  ")}`).join("\n")}\n`,
+      );
+    }
   }
   if (errors.length > 0) {
     process.exitCode = 1;

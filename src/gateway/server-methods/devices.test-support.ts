@@ -1,79 +1,43 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
-  type DiagnosticSecurityEvent,
+  type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import { runNodeWakeAttempt, runNodeWakeNudgeAttempt } from "../node-wake-state.js";
 import { resetNodeWakeStateForTest } from "../node-wake-state.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const {
-  approveDevicePairingMock,
-  getPairedDeviceMock,
-  getPendingDevicePairingMock,
-  listDevicePairingMock,
-  removePairedDeviceMock,
-  rejectDevicePairingMock,
-  revokeDeviceTokenMock,
-  rotateDeviceTokenMock,
-  updatePairedDeviceMetadataMock,
-} = vi.hoisted(() => ({
-  approveDevicePairingMock: vi.fn(),
-  getPairedDeviceMock: vi.fn(),
-  getPendingDevicePairingMock: vi.fn(),
-  listDevicePairingMock: vi.fn(),
-  removePairedDeviceMock: vi.fn(),
-  rejectDevicePairingMock: vi.fn(),
-  revokeDeviceTokenMock: vi.fn(),
-  rotateDeviceTokenMock: vi.fn(),
-  updatePairedDeviceMetadataMock: vi.fn(),
+const mocks = vi.hoisted(() => ({
+  pairing: {
+    getPairedDevice: vi.fn(),
+    getPendingDevicePairing: vi.fn(),
+    listDevicePairing: vi.fn(),
+    removePairedDevice: vi.fn(),
+    rejectDevicePairing: vi.fn(),
+    updatePairedDeviceMetadata: vi.fn(),
+  },
+  approval: { approveDevicePairing: vi.fn() },
+  tokens: { revokeDeviceToken: vi.fn(), rotateDeviceToken: vi.fn() },
+}));
+export { mocks };
+vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
+  ...mocks.pairing,
 }));
 
-export {
-  approveDevicePairingMock,
-  getPairedDeviceMock,
-  getPendingDevicePairingMock,
-  listDevicePairingMock,
-  removePairedDeviceMock,
-  rejectDevicePairingMock,
-  revokeDeviceTokenMock,
-  rotateDeviceTokenMock,
-  updatePairedDeviceMetadataMock,
-};
+vi.mock("../../infra/device-pairing-approval.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing-approval.js")>()),
+  ...mocks.approval,
+}));
 
-vi.mock("../../infra/device-pairing.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/device-pairing.js")>(
-    "../../infra/device-pairing.js",
-  );
-  return {
-    ...actual,
-    getPairedDevice: getPairedDeviceMock,
-    getPendingDevicePairing: getPendingDevicePairingMock,
-    listDevicePairing: listDevicePairingMock,
-    removePairedDevice: removePairedDeviceMock,
-    rejectDevicePairing: rejectDevicePairingMock,
-    updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
-  };
-});
+vi.mock("../../infra/device-pairing-tokens.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing-tokens.js")>()),
+  ...mocks.tokens,
+}));
 
-vi.mock("../../infra/device-pairing-approval.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/device-pairing-approval.js")>(
-    "../../infra/device-pairing-approval.js",
-  );
-  return { ...actual, approveDevicePairing: approveDevicePairingMock };
-});
-
-vi.mock("../../infra/device-pairing-tokens.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/device-pairing-tokens.js")>(
-    "../../infra/device-pairing-tokens.js",
-  );
-  return {
-    ...actual,
-    revokeDeviceToken: revokeDeviceTokenMock,
-    rotateDeviceToken: rotateDeviceTokenMock,
-  };
-});
+const { deviceHandlers } = await import("./devices.js");
 
 export function createClient(
   scopes: string[],
@@ -94,12 +58,12 @@ export function createClient(
 export function createOptions(
   method: string,
   params: Record<string, unknown>,
-  overrides?: Partial<GatewayRequestHandlerOptions>,
+  client: GatewayRequestHandlerOptions["client"] = null,
 ): GatewayRequestHandlerOptions {
   return {
     req: { type: "req", id: "req-1", method, params },
     params,
-    client: null,
+    client,
     isWebchatConnect: () => false,
     respond: vi.fn(),
     context: {
@@ -116,29 +80,30 @@ export function createOptions(
         updateSurface: vi.fn(),
       },
     },
-    ...overrides,
   } as unknown as GatewayRequestHandlerOptions;
 }
 
-export function mockPairedOperatorDevice(): void {
-  getPairedDeviceMock.mockResolvedValue({
-    deviceId: "device-1",
-    role: "operator",
-    roles: ["operator"],
-    scopes: ["operator.pairing"],
-    tokens: {
-      operator: {
-        token: "old-token",
-        role: "operator",
-        scopes: ["operator.pairing"],
-        createdAtMs: 123,
-      },
-    },
-  });
+export function createDeviceClient(scopes = ["operator.pairing"], deviceId = "device-1") {
+  return createClient(scopes, deviceId, { isDeviceTokenAuth: true });
+}
+
+export function expectDeviceSuccess(opts: GatewayRequestHandlerOptions, payload: unknown) {
+  expect(opts.respond).toHaveBeenCalledWith(true, payload, undefined);
+}
+
+export async function invokeDevice(opts: GatewayRequestHandlerOptions) {
+  await expectDefined(deviceHandlers[opts.req.method], opts.req.method)(opts);
+}
+
+export function expectPrivate(events: unknown, secrets: string[]) {
+  const text = JSON.stringify(events);
+  for (const secret of secrets) {
+    expect(text).not.toContain(secret);
+  }
 }
 
 export function mockRotateOperatorTokenSuccess(): void {
-  rotateDeviceTokenMock.mockResolvedValue({
+  mocks.tokens.rotateDeviceToken.mockResolvedValue({
     ok: true,
     entry: {
       token: "new-token",
@@ -150,29 +115,27 @@ export function mockRotateOperatorTokenSuccess(): void {
   });
 }
 
-export function expectRespondedErrorMessage(
-  opts: GatewayRequestHandlerOptions,
-  message: string,
-): void {
-  const respond = opts.respond as ReturnType<typeof vi.fn>;
-  expect(respond).toHaveBeenCalledTimes(1);
-  const call = respond.mock.calls[0] as unknown as [boolean, unknown, { message?: string }];
-  expect(call[0]).toBe(false);
-  expect(call[1]).toBeUndefined();
-  expect(call[2]?.message).toBe(message);
+export function expectDeviceError(opts: GatewayRequestHandlerOptions, message: string): void {
+  expect(opts.respond).toHaveBeenCalledExactlyOnceWith(
+    false,
+    undefined,
+    expect.objectContaining({ message }),
+  );
 }
 
-export function captureSecurityEvents(): {
-  events: DiagnosticSecurityEvent[];
-  stop: () => void;
-} {
-  const events: DiagnosticSecurityEvent[] = [];
+export async function captureSecurityEvents(run: () => Promise<unknown>) {
+  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
   const stop = onInternalDiagnosticEvent((event, metadata) => {
     if (metadata.trusted && event.type === "security.event") {
       events.push(event);
     }
   });
-  return { events, stop };
+  try {
+    await run();
+    return events;
+  } finally {
+    stop();
+  }
 }
 
 export async function seedNodeWakeState(nodeId: string): Promise<void> {

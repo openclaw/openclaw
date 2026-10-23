@@ -2,17 +2,8 @@ import type { NodeWorkerSupervisorIdentity } from "../worker/node-supervisor-pro
 import type { NodeWorkerLaunchReceipt, NodeWorkerLaunchRow } from "./node-worker-launch-receipt.js";
 import type { inspectNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 
-export type NodeWorkerLaunchClaim = Pick<
-  NodeWorkerLaunchReceipt,
-  | "environmentId"
-  | "gatewayNamespace"
-  | "launchId"
-  | "ownerEpoch"
-  | "placementGeneration"
-  | "planHash"
-  | "runId"
-  | "sessionId"
->;
+export type NodeWorkerLaunchClaim = NodeWorkerSupervisorIdentity &
+  Pick<NodeWorkerLaunchReceipt, "gatewayNamespace">;
 
 export type NodeWorkerLaunchClaimResult =
   | {
@@ -44,18 +35,3 @@ export type NodeWorkerLaunchObservedSupervisorState = ReturnType<
 export type NodeWorkerJournalAuthority = {
   assertCurrent(): void;
 };
-
-export function nodeWorkerTurnMatchesIdentity(
-  receipt: NodeWorkerSupervisorIdentity,
-  expected: NodeWorkerSupervisorIdentity,
-): boolean {
-  return (
-    receipt.launchId === expected.launchId &&
-    receipt.planHash === expected.planHash &&
-    receipt.environmentId === expected.environmentId &&
-    receipt.sessionId === expected.sessionId &&
-    receipt.ownerEpoch === expected.ownerEpoch &&
-    receipt.placementGeneration === expected.placementGeneration &&
-    receipt.runId === expected.runId
-  );
-}

@@ -1,10 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { hasOAuthIdentity } from "./auth-profiles/oauth-shared.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type { SelectedModelCredential } from "./model-auth-selected-credential.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
@@ -87,6 +89,42 @@ export function hasSamePreparedModelCatalogAuth(
   );
 }
 
+export type ModelServiceTierObservation = {
+  modelId: string;
+  runtimeId: string;
+  api: string;
+  baseUrl: string;
+  requestedTier: string;
+  responseTier?: string;
+};
+
+/** Selected-account inventory belongs to the prepared generation, not an RPC projector. */
+export type PreparedAccountCatalogAccess = {
+  reconcileAuth: (
+    authStore: AuthProfileStore,
+    includesProvider: (provider: string) => boolean,
+    profileIds?: readonly string[],
+  ) => void;
+  readServiceTierObservations: (params: {
+    identityKey: string;
+    modelId: string;
+    runtimeId: string;
+    api: string;
+    baseUrl: string;
+  }) => Pick<ModelServiceTierObservation, "requestedTier" | "responseTier">[];
+  prepareServiceTierObserver: (params: {
+    selectedCredential: SelectedModelCredential;
+    credential?: AuthProfileCredential;
+  }) => (observation: ModelServiceTierObservation) => boolean;
+  acquire: (params: {
+    profileId: string;
+    credential: AuthProfileCredential;
+    allowDiscovery: boolean;
+    refresh?: boolean;
+    load: () => Promise<readonly ProviderCatalogOutcome[]>;
+  }) => Promise<{ outcomes: readonly ProviderCatalogOutcome[]; isCurrent: () => boolean }>;
+};
+
 /** Private auth facts owned by an immutable prepared model generation. */
 type RuntimeAuthBinding = {
   store?: AuthProfileStore;
@@ -118,6 +156,14 @@ export function getPreparedModelRuntimeAuthLabels(snapshot: object): ModelCatalo
     throw new Error("Prepared model runtime omitted auth display labels");
   }
   return labels;
+}
+
+// Auth bindings can outlive publication; do not retain the catalog access scope.
+export function createPreparedModelCatalogUsageReader(
+  isCurrent: () => boolean,
+  readUsage: (store: AuthProfileStore) => AuthProfileStore,
+) {
+  return (store: AuthProfileStore) => (isCurrent() ? readUsage(store) : store);
 }
 
 export function setPreparedModelFullCatalogAuth(

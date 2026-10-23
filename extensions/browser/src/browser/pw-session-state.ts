@@ -3,7 +3,7 @@ import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-run
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ConsoleMessage, Dialog, Frame, Page, Request, Response } from "playwright-core";
-import { saveBrowserDownload, type BrowserDownloadCaptureOptions } from "./pw-download-capture.js";
+import { saveBrowserDownload } from "./pw-download-capture.js";
 import {
   MAX_CONSOLE_MESSAGES,
   MAX_NETWORK_REQUESTS,
@@ -13,7 +13,6 @@ import {
   type BrowserObservedDialogRecord,
   type BrowserObservedState,
   type BrowserConsoleMessage,
-  type DownloadPayload,
   type PageState,
   type RoleRefs,
   type RoleRefsCacheEntry,
@@ -33,7 +32,6 @@ import {
 // for the same CDP target across requests.
 const roleRefsByTarget = new Map<string, RoleRefsCacheEntry>();
 const MAX_ROLE_REFS_CACHE = 50;
-let roleRefsCacheGeneration = 0;
 const MAX_OBSERVED_PAGE_TEXT_CHARS = 2_048;
 
 function truncateObservedPageText(value: string): string {
@@ -49,33 +47,19 @@ export function targetKey(cdpUrl: string, targetId: string) {
 }
 
 export function bindRoleRefsTarget(page: Page, cdpUrl: string, targetId?: string | null): void {
-  const normalizedTargetId = normalizeOptionalString(targetId ?? undefined);
+  const normalizedTargetId = normalizeOptionalString(targetId);
   if (!normalizedTargetId) {
     return;
   }
   const state = ensurePageState(page);
   const key = targetKey(cdpUrl, normalizedTargetId);
-  const invalidBeforeGeneration = state.roleRefsInvalidBeforeGeneration;
-  const ariaInvalidBeforeGeneration = state.roleRefsAriaInvalidBeforeGeneration;
-  const cached = roleRefsByTarget.get(key);
-  if (
-    cached &&
-    ((invalidBeforeGeneration !== undefined && cached.generation <= invalidBeforeGeneration) ||
-      (ariaInvalidBeforeGeneration !== undefined &&
-        cached.mode === "aria" &&
-        cached.generation <= ariaInvalidBeforeGeneration))
-  ) {
+  if (state.roleRefsInvalidated) {
     roleRefsByTarget.delete(key);
   }
-  state.roleRefsInvalidBeforeGeneration = undefined;
-  state.roleRefsAriaInvalidBeforeGeneration = undefined;
+  state.roleRefsInvalidated = false;
   state.roleRefsTargetKey = key;
-  if (!state.roleRefs) {
-    state.roleRefsTargetGeneration = roleRefsByTarget.get(key)?.generation;
-  }
 }
 
-/** Store role refs on the page and target cache. */
 export function storeRoleRefsForTarget(opts: {
   page: Page;
   cdpUrl: string;
@@ -90,13 +74,11 @@ export function storeRoleRefsForTarget(opts: {
   }
   const state = ensurePageState(opts.page);
   state.roleRefs = opts.refs;
-  state.roleRefsFrameSelector = opts.frameSelector;
   state.roleRefsFrame = opts.frame;
   state.roleRefsMode = opts.mode;
   const targetId = normalizeOptionalString(opts.targetId);
   if (!targetId) {
     state.roleRefsTargetKey = undefined;
-    state.roleRefsTargetGeneration = undefined;
     return;
   }
   bindRoleRefsTarget(opts.page, opts.cdpUrl, targetId);
@@ -105,30 +87,21 @@ export function storeRoleRefsForTarget(opts: {
   // Frame-scoped refs remain local and require a fresh snapshot after reconnect.
   if (opts.frameSelector) {
     roleRefsByTarget.delete(key);
-    state.roleRefsTargetGeneration = undefined;
     return;
   }
-  const generation = ++roleRefsCacheGeneration;
-  roleRefsByTarget.set(key, { refs: opts.refs, mode: opts.mode, generation });
+  roleRefsByTarget.set(key, { refs: opts.refs, mode: opts.mode });
   pruneMapToMaxSize(roleRefsByTarget, MAX_ROLE_REFS_CACHE);
-  state.roleRefsTargetGeneration = generation;
 }
 
 function clearRoleRefs(state: PageState): void {
   if (state.roleRefsTargetKey) {
-    const cached = roleRefsByTarget.get(state.roleRefsTargetKey);
-    // A delayed event from an obsolete Page must not erase refs that a newer
-    // wrapper stored for the same target after this Page's generation.
-    if (cached?.generation === state.roleRefsTargetGeneration) {
-      roleRefsByTarget.delete(state.roleRefsTargetKey);
-    }
+    // A delayed event from an older wrapper may evict newer refs; a snapshot repairs it.
+    roleRefsByTarget.delete(state.roleRefsTargetKey);
   }
   state.roleRefs = undefined;
   state.roleRefsMode = undefined;
-  state.roleRefsFrameSelector = undefined;
   state.roleRefsFrame = undefined;
   state.roleRefsTargetKey = undefined;
-  state.roleRefsTargetGeneration = undefined;
 }
 
 function currentTargetRoleRefsMode(
@@ -137,11 +110,9 @@ function currentTargetRoleRefsMode(
   if (!state.roleRefsTargetKey) {
     return undefined;
   }
-  const cached = roleRefsByTarget.get(state.roleRefsTargetKey);
-  return cached && cached.generation === state.roleRefsTargetGeneration ? cached.mode : undefined;
+  return roleRefsByTarget.get(state.roleRefsTargetKey)?.mode;
 }
 
-/** Restore cached role refs onto a newly resolved page. */
 export function restoreRoleRefsForTarget(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -161,13 +132,10 @@ export function restoreRoleRefsForTarget(opts: {
   if (state.roleRefs) {
     return;
   }
-  state.roleRefsTargetKey = cacheKey;
-  state.roleRefsTargetGeneration = cached.generation;
   state.roleRefs = cached.refs;
   state.roleRefsMode = cached.mode;
 }
 
-/** Ensure and attach state listeners for a Playwright page. */
 export function ensurePageState(page: Page): PageState {
   const existing = pageStates.get(page);
   if (existing) {
@@ -228,12 +196,8 @@ export function ensurePageState(page: Page): PageState {
     pruneMapToMaxSize(state.requests, MAX_NETWORK_REQUESTS);
   });
   page.on("response", (resp: Response) => {
-    const req = resp.request();
-    const id = state.requestIds.get(req);
-    if (!id) {
-      return;
-    }
-    const rec = state.requests.get(id);
+    const id = state.requestIds.get(resp.request());
+    const rec = id ? state.requests.get(id) : undefined;
     if (!rec) {
       return;
     }
@@ -242,10 +206,7 @@ export function ensurePageState(page: Page): PageState {
   });
   page.on("requestfailed", (req: Request) => {
     const id = state.requestIds.get(req);
-    if (!id) {
-      return;
-    }
-    const rec = state.requests.get(id);
+    const rec = id ? state.requests.get(id) : undefined;
     if (!rec) {
       return;
     }
@@ -256,23 +217,12 @@ export function ensurePageState(page: Page): PageState {
   page.on("dialog", (dialog: Dialog) => {
     observeDialog(state, dialog);
   });
-  page.on("download", (download: DownloadPayload) => {
+  page.on("download", (download) => {
     if (state.downloadWaiterDepth > 0) {
       return;
     }
     const actionCapture = state.actionDownloadCapture;
-    const beforeSave = actionCapture?.beforeSave;
-    const captureOptions: BrowserDownloadCaptureOptions | undefined =
-      actionCapture && beforeSave
-        ? {
-            beforeSave: (candidate) => {
-              const validation = Promise.resolve().then(() => beforeSave(candidate));
-              actionCapture.validations.push(validation);
-              return validation;
-            },
-          }
-        : undefined;
-    const managedSave = saveBrowserDownload(download, captureOptions);
+    const managedSave = saveBrowserDownload(download, actionCapture);
     managedSave.catch(() => {});
     download.path = async () => (await managedSave).path;
     if (actionCapture) {
@@ -286,13 +236,7 @@ export function ensurePageState(page: Page): PageState {
   const invalidateFrameRefs = (frame: Frame, navigated: boolean) => {
     const isMainFrame = frame === page.mainFrame();
     if (!state.roleRefsTargetKey) {
-      // Discovery can bind a replacement Page after a navigation. Keep its
-      // generation boundary so an older Page cannot invalidate newer refs.
-      if (isMainFrame) {
-        state.roleRefsInvalidBeforeGeneration = roleRefsCacheGeneration;
-      } else {
-        state.roleRefsAriaInvalidBeforeGeneration = roleRefsCacheGeneration;
-      }
+      state.roleRefsInvalidated = true;
     }
     const pageWideAriaRefs =
       state.roleRefsMode === "aria" || currentTargetRoleRefsMode(state) === "aria";
@@ -320,7 +264,6 @@ export function ensurePageState(page: Page): PageState {
   return state;
 }
 
-/** Read observed dialog state from a Playwright page. */
 export function getObservedBrowserStateForPage(page: Page): BrowserObservedState {
   const state = ensurePageState(page);
   return serializeObservedBrowserState(state);
@@ -347,7 +290,6 @@ export async function respondToObservedDialogOnPage(opts: {
   });
 }
 
-/** Mark pending observed dialogs as handled by a remote/browser-side hook. */
 export function markObservedDialogsHandledRemotelyForPage(
   page: Page,
   dialogs: readonly BrowserObservedDialogRecord[],
@@ -364,7 +306,6 @@ export function markObservedDialogsHandledRemotelyForPage(
   return serializeObservedBrowserState(state);
 }
 
-/** Arm a one-shot automatic dialog response for a page. */
 export function armObservedDialogResponseOnPage(opts: {
   page: Page;
   accept: boolean;
@@ -384,14 +325,11 @@ export function armObservedDialogResponseOnPage(opts: {
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
   };
   response.timer = setTimeout(() => {
-    if (state.armedDialogResponse === response) {
-      state.armedDialogResponse = undefined;
-    }
+    state.armedDialogResponse = undefined;
   }, timeoutMs);
   state.armedDialogResponse = response;
 }
 
-/** Create an abort signal that fires while a dialog blocks the page. */
 export function createObservedDialogAbortSignalForPage(opts: {
   page: Page;
   parentSignal?: AbortSignal;
@@ -403,30 +341,17 @@ export function createObservedDialogAbortSignalForPage(opts: {
       controller.abort(new BrowserObservedDialogBlockedError(serializeObservedBrowserState(state)));
     }
   };
-  const abortForParent = () => {
-    if (!controller.signal.aborted) {
-      controller.abort(opts.parentSignal?.reason ?? new Error("aborted"));
-    }
-  };
-
   if (state.pendingDialogs.length > 0) {
     abortForCurrentDialog();
   } else {
     state.dialogAbortControllers.add(controller);
   }
-  if (opts.parentSignal) {
-    if (opts.parentSignal.aborted) {
-      abortForParent();
-    } else {
-      opts.parentSignal.addEventListener("abort", abortForParent, { once: true });
-    }
-  }
-
   return {
-    signal: controller.signal,
+    signal: opts.parentSignal
+      ? AbortSignal.any([controller.signal, opts.parentSignal])
+      : controller.signal,
     cleanup: () => {
       state.dialogAbortControllers.delete(controller);
-      opts.parentSignal?.removeEventListener("abort", abortForParent);
     },
   };
 }

@@ -1,4 +1,5 @@
 import { expect, test, vi } from "vitest";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
 import {
   createOperatorIdentityFixture,
   expectArrayIncludes,
@@ -13,7 +14,6 @@ import {
   restoreGatewayToken,
   rpcReq,
   TEST_OPERATOR_CLIENT,
-  waitForWsClose,
 } from "./server.auth.test-helpers.js";
 
 export function registerControlUiBootstrapLifecycleSuite(): void {
@@ -275,12 +275,13 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
           scopes: [],
           client: nodeClient,
           deviceIdentityPath: identityPath,
-          timeoutMs: 500,
         }),
-      ).rejects.toThrow();
-      // The full agentic shard can saturate the event loop enough that the
-      // server-side close after a pre-hello failure arrives later than 1s.
-      await expect(waitForWsClose(wsFail, 5_000)).resolves.toBe(true);
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "Error: boom" },
+      });
+      expect(wsFail.readyState).toBe(WebSocket.OPEN);
+      wsFail.close();
 
       const wsRetry = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       const retry = await connectReq(wsRetry, {

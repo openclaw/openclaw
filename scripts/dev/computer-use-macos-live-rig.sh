@@ -46,6 +46,19 @@ validate_provider() {
   esac
 }
 
+validate_preparation() {
+  local profile="$1" port="$2" scratch="$3"
+  [[ "$profile" =~ ^[A-Za-z0-9][A-Za-z0-9_-]+$ ]] ||
+    fail "profile must contain only letters, digits, underscores, and dashes"
+  case "$profile" in
+    default | main | local) fail "choose a fresh, explicitly isolated profile" ;;
+  esac
+  [[ "$port" =~ ^[0-9]+$ ]] || fail "port must be numeric"
+  ((port >= 1024 && port <= 65535)) || fail "port must be between 1024 and 65535"
+  ((port != 18789)) || fail "port 18789 belongs to the operator gateway"
+  [[ "$scratch" = /* ]] || fail "scratch path must be absolute"
+}
+
 require_unoccupied_port() {
   local port="$1"
   if ! node - "$port" >/dev/null 2>&1 <<'NODE'; then
@@ -199,15 +212,7 @@ prepare() {
   local scratch="$4"
   local provider="${5:-peekaboo}"
 
-  [[ "$profile" =~ ^[A-Za-z0-9][A-Za-z0-9_-]+$ ]] ||
-    fail "profile must contain only letters, digits, underscores, and dashes"
-  case "$profile" in
-    default | main | local) fail "choose a fresh, explicitly isolated profile" ;;
-  esac
-  [[ "$port" =~ ^[0-9]+$ ]] || fail "port must be numeric"
-  ((port >= 1024 && port <= 65535)) || fail "port must be between 1024 and 65535"
-  ((port != 18789)) || fail "port 18789 belongs to the operator gateway"
-  [[ "$scratch" = /* ]] || fail "scratch path must be absolute"
+  validate_preparation "$profile" "$port" "$scratch"
   validate_provider "$provider"
   require_unoccupied_port "$port"
 
@@ -271,15 +276,7 @@ prepare_linux() {
   local scratch="$3"
 
   require_linux_x11
-  [[ "$profile" =~ ^[A-Za-z0-9][A-Za-z0-9_-]+$ ]] ||
-    fail "profile must contain only letters, digits, underscores, and dashes"
-  case "$profile" in
-    default | main | local) fail "choose a fresh, explicitly isolated profile" ;;
-  esac
-  [[ "$port" =~ ^[0-9]+$ ]] || fail "port must be numeric"
-  ((port >= 1024 && port <= 65535)) || fail "port must be between 1024 and 65535"
-  ((port != 18789)) || fail "port 18789 belongs to the operator gateway"
-  [[ "$scratch" = /* ]] || fail "scratch path must be absolute"
+  validate_preparation "$profile" "$port" "$scratch"
   require_unoccupied_port "$port"
 
   git -C "$repo_root" diff --quiet -- src packages extensions scripts ||

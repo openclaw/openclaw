@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { createPluginValueInstances } from "./plugin-instance-owned-values.js";
@@ -8,29 +9,48 @@ import type {
   PluginInstanceConsumer,
   PluginInstanceDisposalResult,
   PluginInstanceExecution,
+  PluginRetentionSnapshot,
+  PluginRetentionReason,
+  PluginRetentionOwner,
+  PluginWorkRelease,
 } from "./plugin-instance.types.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
 export interface PluginInstanceHandle extends PluginInvocationInstance, PluginInstanceExecution {
   readonly disposing: boolean;
-  readonly hasActiveCall: boolean;
   readonly acceptingCalls: boolean;
+  readonly replacementPending: boolean;
   readonly hasRetainedConsumers: boolean;
   readonly owner?: PluginInstanceOwner;
   toolRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
   adopt<T>(value: T): T;
-  retainWork(): () => void;
+  admitFactory(
+    factory: (...args: never[]) => unknown,
+    resultCallbacks?: "tool" | readonly PropertyKey[],
+  ): void;
+  retainWork(reason?: PluginRetentionReason): PluginWorkRelease;
+  retentionSnapshot(options?: { limit?: number; includeOwners?: boolean }): PluginRetentionSnapshot;
   readonly retainedWorkCount: number;
-  waitForRetainedWork(signal: AbortSignal, includeConsumers?: boolean): Promise<void>;
+  readonly ordinaryCallCount: number;
+  waitForRetainedWork(
+    signal: AbortSignal,
+    options?: { includeConsumers?: boolean; includeCalls?: boolean },
+  ): Promise<void>;
+  waitForIdle(signal: AbortSignal): Promise<void>;
   reserveReplacement(): () => void;
   retainConsumer(
     invoke?: <T>(run: () => T) => T,
     registry?: PluginRegistry,
     kind?: "work" | "custody",
+    diagnostics?: { reason?: PluginRetentionReason; owner?: PluginRetentionOwner },
   ): PluginInstanceConsumer;
-  runInRegistry<T>(registry: PluginRegistry, run: () => T, options?: { joinDisposal?: boolean }): T;
+  runInRegistry<T>(
+    registry: PluginRegistry | undefined,
+    run: () => T,
+    options?: { joinDisposal?: boolean },
+  ): T;
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T;
   drain(options?: {
     includeConsumers?: boolean;
@@ -45,15 +65,18 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
+  readonly holdsPendingReplacement?: boolean;
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
 };
 
 export type PluginInstanceOwner = {
   record: PluginRecord;
-  registry: PluginRegistry;
-  revoked: boolean;
   instance?: PluginInstanceHandle;
-};
+  incarnationId?: string;
+} & (
+  | { revoked: false; registry: PluginRegistry }
+  | { revoked: true; registry: PluginRegistry | undefined }
+);
 // SDK source transforms and native core chunks must observe the same exact owner.
 export const pluginInstanceState = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginInstanceState"),
@@ -67,6 +90,15 @@ export const pluginInvocationContext = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginInvocationContext"),
   () => new AsyncLocalStorage<PluginInvocationContext>(),
 );
+
+/** Compatibility query for callers holding a published plugin invocation context. */
+export function currentPluginWorkHoldsPendingReplacement(): boolean {
+  const call = pluginInstanceInvocation.getStore();
+  return (
+    (call?.instance.holdsPendingReplacement(call.token) ?? false) ||
+    pluginInvocationContext.getStore()?.holdsPendingReplacement === true
+  );
+}
 
 export function resolvePluginInstanceOwner(record: PluginRecord, registry: PluginRegistry) {
   let owner = pluginInstanceState.records.get(record);
@@ -133,6 +165,30 @@ export function getPluginInstanceRuntimeSlot(
 
 export function getPluginInstance(record: PluginRecord): PluginInstanceHandle | undefined {
   return pluginInstanceState.records.get(record)?.instance;
+}
+
+/**
+ * Code identity of a live instance: the digest of its captured plugin generation source. Core
+ * bundled plugins load host-owned modules and have none.
+ */
+export function getPluginInstanceSourceDigest(record: PluginRecord): string | undefined {
+  return getPluginInstanceIncarnation(record)
+    ? pluginInstanceState.records.get(record)?.instance?.sourceDigest
+    : undefined;
+}
+
+/** Process-local exact-instance identity, preserved by adoption, never reconstructed on reload. */
+export function getPluginInstanceIncarnation(record: PluginRecord): string | undefined {
+  const owner = pluginInstanceState.records.get(record);
+  if (
+    !owner?.instance ||
+    owner.revoked ||
+    !owner.instance.acceptingCalls ||
+    owner.instance.lifecycle.signal.aborted
+  ) {
+    return undefined;
+  }
+  return (owner.incarnationId ??= randomUUID());
 }
 
 /** Exact owner of a callable public view; never inferred from a plugin id or path. */

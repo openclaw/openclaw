@@ -34,6 +34,7 @@ const jobSchema = z.object({
   started_at: z.string().nullable(),
   completed_at: z.string().nullable(),
   labels: z.array(z.string()),
+  steps: z.array(z.object({ name: z.string() })),
 });
 const groupSchema = z.object({
   shard_name: z.string().min(1),
@@ -60,24 +61,36 @@ function timingKey(log: string): string {
     .parse(decodeNodeTestGroups([...descriptors][0]!));
   const group = groups[0]!;
   const observedKey = group.timing_key ?? group.shard_name;
+  const policy =
+    /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_CI_TEST_RUNTIME_POLICY: (bun-all|dual-all)\s*$/mu.exec(
+      stripVTControlCharacters(log),
+    )?.[1];
+  const prefix = policy ? `${policy}:` : "";
+  const spans = ["", "bun:", "bun-native:", "node-subset:"]
+    .map((runtime) => runtime + observedKey)
+    .filter((key) => log.includes(`[shard:${key}] begin`));
   if (
-    !log.includes(`[shard:${observedKey}] begin`) ||
-    !log.includes(`[shard:${observedKey}] end (exit 0)`)
+    spans.length === 0 ||
+    (policy === "dual-all" && !spans.includes(observedKey)) ||
+    spans.some((key) => !log.includes(`[shard:${key}] end (exit 0)`))
   ) {
     throw new Error("Hosted timing job lacks a successful matching shard span");
   }
   if (group.timing_key?.startsWith("release-full-")) {
-    return group.timing_key;
+    return prefix + group.timing_key;
   }
   const parentShardName = `release-full-${group.shard_name}`;
-  return isRuntimePlacementIncludePatterns(group.includePatterns)
-    ? createCompactSplitTimingGeneration({
-        configs: group.configs,
-        env: group.env,
-        parentShardName,
-        stripes: [group.includePatterns],
-      }).timingKeys[0]!
-    : parentShardName;
+  return (
+    prefix +
+    (isRuntimePlacementIncludePatterns(group.includePatterns)
+      ? createCompactSplitTimingGeneration({
+          configs: group.configs,
+          env: group.env,
+          parentShardName,
+          stripes: [group.includePatterns],
+        }).timingKeys[0]!
+      : parentShardName)
+  );
 }
 
 function main() {
@@ -156,8 +169,9 @@ function main() {
         if (
           job.status !== "completed" ||
           job.conclusion !== "success" ||
-          !job.name.startsWith("checks-node-") ||
+          !job.steps.some((step) => step.name === "Run Node test shard") ||
           job.name.startsWith("checks-node-compact-") ||
+          job.name.startsWith("checks-node-release-packed-") ||
           !job.labels.includes("ubuntu-24.04") ||
           job.labels.some(
             (label) =>
@@ -173,7 +187,8 @@ function main() {
         if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || end > Date.now()) {
           throw new Error(`Invalid wall clock for CI timing job ${job.id}`);
         }
-        const key = timingKey(api(`actions/jobs/${job.id}/logs`));
+        const log = api(`actions/jobs/${job.id}/logs`);
+        const key = timingKey(log);
         measurements.set(
           key,
           Math.max(measurements.get(key) ?? 0, Math.ceil((end - start) / 1000)),

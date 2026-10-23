@@ -5,9 +5,12 @@ import { createChangedCheckPlan } from "../../scripts/check-changed.mts";
 describe("generated extension asset lint planning", () => {
   it("still lints extension tests alongside a generated browser asset", () => {
     const generatedAsset = "extensions/canvas/src/host/a2ui/a2ui.bundle.js";
-    const extensionTest = "extensions/canvas/scripts/bundle-a2ui.test.ts";
+    const extensionTest = "extensions/canvas/src/host/a2ui.test.ts";
     const result = detectChangedLanes([generatedAsset, extensionTest]);
-    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+    const plan = createChangedCheckPlan(result, {
+      lintOnly: true,
+      env: { PATH: "/usr/bin" },
+    });
 
     expect(result.lanes.extensionTests).toBe(true);
     expect(plan.commands).toContainEqual(

@@ -3,6 +3,23 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
 
+type Projection = Parameters<typeof projectMainSessionRecoveryLifecycle>[0];
+const current = "generation-current";
+function project(
+  entry: Projection["entry"],
+  lifecycleGeneration = current,
+  data: Projection["event"]["data"] = { phase: "end" },
+  snapshotPatch: Projection["snapshotPatch"] = { status: "done", abortedLastRun: false },
+  runId = "recovery",
+) {
+  return projectMainSessionRecoveryLifecycle({
+    currentLifecycleGeneration: current,
+    entry,
+    event: { runId, lifecycleGeneration, data },
+    snapshotPatch,
+  });
+}
+
 function recoveryEntry(params?: {
   hasCurrentOwner?: boolean;
   ownsDelivery?: boolean;
@@ -10,7 +27,6 @@ function recoveryEntry(params?: {
   return {
     sessionId: "session-1",
     updatedAt: 100,
-    status: "running",
     abortedLastRun: false,
     ...(params?.ownsDelivery ? { restartRecoveryDeliveryRunId: "recovery" } : {}),
     restartRecoveryRuns: [
@@ -34,11 +50,34 @@ function recoveryEntry(params?: {
 }
 
 describe("main-session recovery run ownership", () => {
+  it.each([
+    { lifecycleGeneration: "generation-current", abortedLastRun: false, action: "apply" },
+    { lifecycleGeneration: "generation-current", abortedLastRun: true, action: "suppress" },
+    { lifecycleGeneration: "generation-old", abortedLastRun: false, action: "suppress" },
+  ] as const)(
+    "fences a prearmed start ($lifecycleGeneration, interrupted=$abortedLastRun)",
+    ({ lifecycleGeneration, abortedLastRun, action }) => {
+      const patch = { status: undefined, abortedLastRun: false, startedAt: 200 };
+      expect(
+        project(
+          {
+            abortedLastRun,
+            restartRecoveryRuns: [{ runId: "admitted", lifecycleGeneration }],
+          },
+          lifecycleGeneration,
+          { phase: "start" },
+          patch,
+          "admitted",
+        ),
+      ).toEqual(action === "apply" ? { action, patch } : { action });
+    },
+  );
+
   it("transfers process-owned recovery leases to a restart marker", () => {
     const entry: SessionEntry = {
       sessionId: "session-1",
       updatedAt: 100,
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       restartRecoveryRuns: [{ runId: "drain-run", lifecycleGeneration: "generation-current" }],
       mainRestartRecovery: {
@@ -70,33 +109,14 @@ describe("main-session recovery run ownership", () => {
       revision: 5,
       chargedAttempts: 2,
     });
-    expect(
-      projectMainSessionRecoveryLifecycle({
-        currentLifecycleGeneration: "generation-current",
-        entry,
-        event: {
-          runId: "drain-run",
-          lifecycleGeneration: "generation-current",
-          data: { phase: "end" },
-        },
-        snapshotPatch: { status: "done", abortedLastRun: false },
-      }),
-    ).toEqual({ action: "apply", patch: { restartRecoveryRuns: undefined } });
+    expect(project(entry, current, { phase: "end" }, undefined, "drain-run")).toEqual({
+      action: "apply",
+      patch: { restartRecoveryRuns: undefined },
+    });
   });
 
   it("settles a resumed run once when older generations retain the same run id", () => {
-    expect(
-      projectMainSessionRecoveryLifecycle({
-        currentLifecycleGeneration: "generation-current",
-        entry: recoveryEntry(),
-        event: {
-          runId: "recovery",
-          lifecycleGeneration: "generation-current",
-          data: { phase: "end" },
-        },
-        snapshotPatch: { status: "done", abortedLastRun: false },
-      }),
-    ).toEqual({
+    expect(project(recoveryEntry())).toEqual({
       action: "apply",
       patch: {
         status: "done",
@@ -111,18 +131,7 @@ describe("main-session recovery run ownership", () => {
     { name: "admitted delivery owner", params: { ownsDelivery: true } },
     { name: "foreground owner", params: { hasCurrentOwner: true, ownsDelivery: true } },
   ])("does not let an older same-id terminal settle or tombstone its $name", ({ params }) => {
-    expect(
-      projectMainSessionRecoveryLifecycle({
-        currentLifecycleGeneration: "generation-current",
-        entry: recoveryEntry(params),
-        event: {
-          runId: "recovery",
-          lifecycleGeneration: "generation-old",
-          data: { phase: "end" },
-        },
-        snapshotPatch: { status: "done", abortedLastRun: false },
-      }),
-    ).toEqual({
+    expect(project(recoveryEntry(params), "generation-old")).toEqual({
       action: "apply",
       patch: {
         restartRecoveryRuns: [{ runId: "recovery", lifecycleGeneration: "generation-current" }],
@@ -134,17 +143,6 @@ describe("main-session recovery run ownership", () => {
     const entry = recoveryEntry({ ownsDelivery: true });
     entry.restartRecoveryRuns = [{ runId: "recovery", lifecycleGeneration: "generation-current" }];
 
-    expect(
-      projectMainSessionRecoveryLifecycle({
-        currentLifecycleGeneration: "generation-current",
-        entry,
-        event: {
-          runId: "recovery",
-          lifecycleGeneration: "generation-old",
-          data: { phase: "end" },
-        },
-        snapshotPatch: { status: "done", abortedLastRun: false },
-      }),
-    ).toEqual({ action: "suppress" });
+    expect(project(entry, "generation-old")).toEqual({ action: "suppress" });
   });
 });

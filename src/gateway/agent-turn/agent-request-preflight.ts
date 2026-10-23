@@ -2,9 +2,10 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_MODES } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../agents/agent-scope.js";
 import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
 import {
   findAuthorizedSwarmCollectorRequest,
@@ -15,7 +16,7 @@ import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js
 import { validateStructuredOutputSchema } from "../../agents/subagents/swarm/swarm-output-schema.js";
 import { getSwarmRunExecutionLane } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -25,49 +26,32 @@ import {
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
-  resolveExpectedExistingSessionConstraint,
-  type ExpectedExistingSessionConstraint,
-} from "../server-methods/agent-expected-session.js";
+  createAgentDatabaseAdmissionErrorShape,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
+import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { resolveExpectedExistingSessionConstraint } from "../server-methods/agent-expected-session.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
+import { withGatewaySessionStoreTarget } from "../session-utils-store-lookup.js";
 import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
-import { clientHasAdminScope } from "./agent-handler-helpers.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
-export type AgentRequestPreflight = {
-  request: AgentRunRequest;
-  cfg: ReturnType<AgentTurnContext["getRuntimeConfig"]>;
-  runId: string;
-  allowModelOverride: boolean;
-  canUseInternalRuntimeHandoff: boolean;
-  canUseCronRunContinuation: boolean;
-  expectedSession?: ExpectedExistingSessionConstraint;
-  expectedExistingSessionId?: string;
-  providerOverride?: string;
-  modelOverride?: string;
-  execApprovalFollowupApprovalId?: string;
-  normalizedSpawned: ReturnType<typeof normalizeSpawnedRunMetadata>;
-  inputProvenance: ReturnType<typeof normalizeInputProvenance>;
-  isRestartRecoveryResumeRun: boolean;
-  preserveUserFacingSessionModelState: boolean;
-  sessionEffects?: "visible" | "internal";
-  suppressVisibleSessionEffects: boolean;
-  requestedPromptPersistenceSuppression: boolean;
-  isOneShotModelRun: boolean;
-  isRawModelRun: boolean;
-  agentDedupeKeys: string[];
-  swarmExecutionLane?: CommandLaneConfiguration;
-};
+export type AgentRequestPreflight = NonNullable<
+  Awaited<ReturnType<typeof prepareAgentRequestPreflight>>
+>;
 
-export function prepareAgentRequestPreflight(params: {
+export async function prepareAgentRequestPreflight(params: {
   request: AgentRunRequest;
   context: AgentTurnContext;
   client: AgentTurnPrincipal | null;
   io: AgentTurnIo;
-}): AgentRequestPreflight | undefined {
+}) {
   const { request } = params;
   const rejectInvalidRequest = (message: string): undefined => {
     params.io.emitAcceptance([false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message)]);
@@ -80,6 +64,15 @@ export function prepareAgentRequestPreflight(params: {
   const parsedRequestSessionKey = requestSessionKey
     ? parseAgentSessionKey(requestSessionKey)
     : undefined;
+  const preparingAgentId =
+    parsedRequestSessionKey?.agentId ??
+    normalizeOptionalString(request.agentId) ??
+    tryResolveSessionCompatibilityOwnerAgentId(cfg, requestSessionKey);
+  if (preparingAgentId) {
+    await waitForAgentDatabaseWriteAdmission(preparingAgentId, {
+      owner: params.context.resolveGatewayContext?.()?.agentDatabaseStartup,
+    });
+  }
   const bareSessionAgent =
     requestSessionKey && !parsedRequestSessionKey
       ? resolveRequestedSessionAgentId(cfg, requestSessionKey, request.agentId)
@@ -95,29 +88,25 @@ export function prepareAgentRequestPreflight(params: {
     tryResolveLegacyCompatibilityAgentId(cfg);
   const refusal = selectedAgentId ? readAgentDatabaseAdmissionRefusal(selectedAgentId) : undefined;
   if (refusal) {
-    params.io.emitAcceptance([
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, `${refusal.reason}\n${refusal.repairHint}`, {
-        details: refusal,
-      }),
-    ]);
+    params.io.emitAcceptance([false, undefined, createAgentDatabaseAdmissionErrorShape(refusal)]);
     return undefined;
   }
-  const collectorSession = findSwarmCollectorSession(requestSessionKey);
+  const collectorSession = findSwarmCollectorSession(requestSessionKey, selectedAgentId);
   let swarmExecutionLane: CommandLaneConfiguration | undefined;
   // Collector children always use subagent session keys, so ordinary traffic
   // must never pay the persisted-store read. The store fallback only covers a
   // freshly restarted gateway whose in-memory registry has not reloaded yet.
   const persistedCollectorSession =
     !collectorSession && requestSessionKey && isSubagentSessionKey(requestSessionKey)
-      ? loadSessionEntry({
-          ...(selectedAgentId ? { agentId: selectedAgentId } : {}),
-          storePath: resolveSessionStorePathCore(cfg.session?.store, {
-            agentId: selectedAgentId,
-          }),
-          sessionKey: requestSessionKey,
-        })?.swarmCollector === true
+      ? (
+          await readSessionEntryReadOnlyInWorker({
+            ...(selectedAgentId ? { agentId: selectedAgentId } : {}),
+            storePath: resolveSessionStorePathCore(cfg.session?.store, {
+              agentId: selectedAgentId,
+            }),
+            sessionKey: requestSessionKey,
+          })
+        )?.swarmCollector === true
       : false;
   if (
     collectorSession ||
@@ -135,6 +124,7 @@ export function prepareAgentRequestPreflight(params: {
     }
     const registeredCollector = findAuthorizedSwarmCollectorRequest({
       childSessionKey: request.sessionKey,
+      childAgentId: selectedAgentId,
       idempotencyKey: request.idempotencyKey,
       outputSchema: request.swarmOutputSchema,
     });
@@ -177,7 +167,7 @@ export function prepareAgentRequestPreflight(params: {
     return rejectInvalidRequest("cwd is reserved for plugin-owned subagent runs");
   }
   const allowModelOverride =
-    clientHasAdminScope(params.client) || params.client?.internal?.allowModelOverride === true;
+    hasGatewayAdminScope(params.client) || params.client?.internal?.allowModelOverride === true;
   const canUseCronRunContinuation = params.client?.internal?.cronRunContinuation === true;
   const expectedSessionResult = resolveExpectedExistingSessionConstraint({
     canUseInternalRuntimeHandoff,
@@ -220,20 +210,23 @@ export function prepareAgentRequestPreflight(params: {
   if (isProgressCardRefreshInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
     return rejectInvalidRequest("Progress refresh input is reserved for progressCard.refresh.");
   }
+  // Plugin tools read the starting run named on exec completion wakes; only the host stamps it.
+  if (
+    inputProvenance?.kind === "internal_system" &&
+    inputProvenance.sourceTool === "exec" &&
+    !canUseInternalRuntimeHandoff
+  ) {
+    return rejectInvalidRequest("Exec completion input is reserved for background exec owners.");
+  }
   if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
     const sourceSessionKey = inputProvenance.sourceSessionKey;
     const sourceAgentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
     const sourceTarget =
       sourceSessionKey && sourceAgentId
-        ? resolveGatewaySessionStoreTargetWithStore({
-            cfg,
-            key: sourceSessionKey,
-            agentId: sourceAgentId,
-            readOnly: true,
-            exactRead: true,
-            clone: false,
-            projection: "full",
-          })
+        ? await withGatewaySessionStoreTarget(
+            { cfg, key: sourceSessionKey, agentId: sourceAgentId, projection: "full" },
+            (target) => target,
+          )
         : undefined;
     const sourceEntry = sourceTarget ? sourceTarget.store[sourceTarget.canonicalKey] : undefined;
     let sourceIsSubagent = Boolean(
@@ -245,15 +238,20 @@ export function prepareAgentRequestPreflight(params: {
       sourceEntry &&
       (sourceEntry.parentSessionKey || sourceEntry.spawnedBy)
     ) {
+      const [sourceAcp] = await readAcpSessionMetaForEntries({
+        entries: [
+          {
+            sessionKey: sourceTarget.canonicalKey,
+            agentId: sourceTarget.agentId,
+            entry: sourceEntry,
+          },
+        ],
+        cfg,
+      });
       sourceIsSubagent = isSubagentSessionFromEntry(
         sourceTarget.canonicalKey,
         sourceEntry,
-        readAcpSessionMetaForEntry({
-          sessionKey: sourceTarget.canonicalKey,
-          agentId: sourceTarget.agentId,
-          cfg,
-          entry: sourceEntry,
-        }),
+        sourceAcp,
       );
     }
     if (sourceIsSubagent) {
@@ -273,10 +271,16 @@ export function prepareAgentRequestPreflight(params: {
       "internal execution identity recovery fields are reserved for main-session restart recovery.",
     );
   }
-  if (request.forceCodeModeTools === true && !isRestartRecoveryResumeRun) {
-    return rejectInvalidRequest(
-      "forceCodeModeTools is reserved for main-session restart recovery.",
-    );
+  // Child recovery shares the restricted tool policy, but not main-session cycle ownership.
+  const canUseRestartRecoveryToolPolicy =
+    isRestartRecoveryResumeRun ||
+    (canUseInternalRuntimeHandoff &&
+      inputProvenance?.kind === "internal_system" &&
+      inputProvenance.sourceTool === "subagent_restart_recovery" &&
+      requestSessionKey !== undefined &&
+      inputProvenance.sourceSessionKey === requestSessionKey);
+  if (request.forceCodeModeTools === true && !canUseRestartRecoveryToolPolicy) {
+    return rejectInvalidRequest("forceCodeModeTools is reserved for native restart recovery.");
   }
   const sessionEffects =
     isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
@@ -284,8 +288,12 @@ export function prepareAgentRequestPreflight(params: {
     idempotencyKey: runId,
     execApprovalFollowupApprovalId,
   });
+  // The public legacy wire tag retains noninteractive bootstrap behavior.
+  const bootstrapContextRunKind: BootstrapContextRunKind | undefined =
+    request.bootstrapContextRunKind === "heartbeat" ? "cron" : request.bootstrapContextRunKind;
   return {
     request,
+    bootstrapContextRunKind,
     cfg,
     runId,
     allowModelOverride,

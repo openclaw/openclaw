@@ -9,7 +9,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -17,6 +23,7 @@ const runner = join(process.cwd(), "scripts/pr-lib/process-group-runner.mjs");
 const lockScript = join(process.cwd(), "scripts/pr-lib/operation-lock.sh");
 const lockRef = "refs/openclaw/pr-operation-locks/42";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
+let receipts: FixtureReceiptChannel;
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -69,154 +76,165 @@ function createMaintenanceFixture(command: string, exitCode: number) {
   git(["config", "gc.autoPackLimit", "1"]);
 
   const ready = join(root, "maintenance-ready.json");
-  const release = join(root, "release-maintenance");
   const completed = join(root, "maintenance-completed");
   const hook = join(root, "recent-objects.mjs");
   writeFileSync(
     hook,
-    [
-      'import { execFileSync } from "node:child_process";',
-      'import { existsSync, fstatSync, renameSync, writeFileSync } from "node:fs";',
-      `const ready = ${JSON.stringify(ready)};`,
-      `const release = ${JSON.stringify(release)};`,
-      "if (!existsSync(ready)) {",
-      '  const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());',
-      "  const notifierOpen = fstatSync(3).isSocket() || fstatSync(3).isFIFO();",
-      '  writeFileSync(ready + ".pending", JSON.stringify({ pgid, notifierOpen }));',
-      '  renameSync(ready + ".pending", ready);',
-      "  const deadline = Date.now() + 10_000;",
-      "  while (!existsSync(release)) {",
-      '    if (Date.now() >= deadline) throw new Error("maintenance gate was not released");',
-      "    await new Promise(resolve => setTimeout(resolve, 10));",
-      "  }",
-      `  writeFileSync(${JSON.stringify(completed)}, "complete\\n");`,
-      "}",
-    ].join("\n"),
+    fixtureReceiptClientSource(receipts.endpoint) +
+      `
+import { execFileSync } from "node:child_process";
+import { existsSync, fstatSync, renameSync, writeFileSync } from "node:fs";
+const ready = ${JSON.stringify(ready)};
+if (!existsSync(ready)) {
+  const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
+  const notifierOpen = fstatSync(3).isSocket() || fstatSync(3).isFIFO();
+  writeFileSync(ready + ".pending", JSON.stringify({ pgid, notifierOpen }));
+  renameSync(ready + ".pending", ready);
+  sendReceipt(ready, "ready");
+  await awaitRelease(ready, "release");
+  writeFileSync(${JSON.stringify(completed)}, "complete\\n");
+}`,
   );
   git(["config", "gc.recentObjectsHook", `${shellQuote(process.execPath)} ${shellQuote(hook)}`]);
 
   const script = join(root, "operation.sh");
   writeFileSync(
     script,
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      `source ${shellQuote(lockScript)}`,
-      `repo_root() { printf '%s\\n' ${shellQuote(repo)}; }`,
-      "acquire_pr_operation_lock 42",
-      "begin_pr_operation_validation_phase",
-      "mark_pr_operation_side_effects_started",
-      'test "$(git config --get test.fromCount)" = "preserved count value"',
-      'test "$(git config --get test.fromParameters)" = "value with spaces=kept"',
-      command,
-      `exit ${exitCode}`,
-    ].join("\n"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+source ${shellQuote(lockScript)}
+repo_root() { printf '%s\\n' ${shellQuote(repo)}; }
+acquire_pr_operation_lock 42
+begin_pr_operation_validation_phase
+mark_pr_operation_side_effects_started
+test "$(git config --get test.fromCount)" = "preserved count value"
+test "$(git config --get test.fromParameters)" = "value with spaces=kept"
+${command}
+exit ${exitCode}`,
   );
   chmodSync(script, 0o755);
-  return { repo, env, git, script, ready, release, completed };
+  return { repo, env, git, script, ready, completed };
 }
 
 describePosix("scripts/pr Git maintenance ownership", () => {
-  it.each(["git fetch origin main", "git gc --auto"])(
-    "suppresses automatic maintenance during %s",
-    (command) => {
-      const fixture = createMaintenanceFixture(command, 0);
-      const config = readFileSync(join(fixture.repo, ".git/config"), "utf8");
-      writeFileSync(fixture.release, "release\n");
-      const result = spawnSync(process.execPath, [runner, fixture.repo, fixture.script], {
-        cwd: fixture.repo,
-        env: fixture.env,
-        encoding: "utf8",
-        timeout: 10_000,
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(existsSync(fixture.ready)).toBe(false);
-      expect(existsSync(fixture.completed)).toBe(false);
-      expect(
-        spawnSync("git", ["show-ref", "--verify", "--quiet", lockRef], {
-          cwd: fixture.repo,
-          env: fixture.env,
-        }).status,
-      ).toBe(1);
-      expect(readFileSync(join(fixture.repo, ".git/config"), "utf8")).toBe(config);
-      expect(fixture.git(["config", "--bool", "maintenance.auto"])).toBe("true");
-      expect(fixture.git(["config", "--int", "gc.auto"])).toBe("1");
-    },
-  );
-
-  it.each([
-    { command: "git gc", exitCode: 0 },
-    { command: "git gc", exitCode: 7 },
-  ])(
-    "joins $command before operation completion (exit $exitCode)",
-    async ({ command, exitCode }) => {
-      const fixture = createMaintenanceFixture(command, exitCode);
-      const child = spawn(process.execPath, [runner, fixture.repo, fixture.script], {
-        cwd: fixture.repo,
-        env: fixture.env,
-        stdio: ["ignore", "pipe", "pipe"],
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts.close();
+  });
+  it.for(["git fetch origin main", "git gc --auto", 0, 7])(
+    "owns Git maintenance through %s",
+    async (variant, { signal }) => {
+      const automatic = typeof variant === "string";
+      const exitCode = automatic ? 0 : variant;
+      const f = createMaintenanceFixture(automatic ? variant : "git gc", exitCode);
+      const config = readFileSync(join(f.repo, ".git/config"), "utf8");
+      if (automatic) {
+        receipts.release(f.ready, "release");
+      }
+      const child = spawn(process.execPath, [runner, f.repo, f.script], {
+        cwd: f.repo,
+        env: f.env,
+        stdio: ["ignore", automatic ? "ignore" : "pipe", "pipe"],
       });
       let stderr = "";
-      child.stdout.resume();
+      child.stdout?.resume();
+      if (!child.stderr) {
+        throw new Error("expected piped maintenance stderr");
+      }
       child.stderr.setEncoding("utf8");
       child.stderr.on("data", (chunk: string) => {
         stderr += chunk;
       });
-      const closed = new Promise<number | null>((resolve) => {
+      const closed = new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
         child.once("close", resolve);
       });
-      let ownerOid = "";
       try {
-        await vi.waitFor(() => expect(existsSync(fixture.ready), stderr).toBe(true), {
-          timeout: 5000,
-        });
-        ownerOid = fixture.git(["rev-parse", lockRef]);
-        const owner = fixture.git(["cat-file", "blob", ownerOid]);
-        const pgid = Number(/^pgid=(\d+)$/m.exec(owner)?.[1]);
-        const hookState = JSON.parse(readFileSync(fixture.ready, "utf8")) as {
-          pgid: number;
-          notifierOpen: boolean;
-        };
-        expect(hookState.notifierOpen).toBe(true);
-        expect(hookState.pgid).toBe(pgid);
-        expect(child.exitCode).toBeNull();
-        expect(existsSync(fixture.completed)).toBe(false);
-        // A second operation cannot acquire the exact PR while maintenance is held.
-        const probe = spawn(
-          "bash",
-          [
-            "-c",
-            `source ${shellQuote(lockScript)}; repo_root() { printf '%s\\n' ${shellQuote(fixture.repo)}; }; try_acquire_pr_operation_lock 42`,
-          ],
-          { cwd: fixture.repo, env: fixture.env, detached: true, stdio: "ignore" },
-        );
-        const probeCode = await new Promise<number | null>((resolve) => {
-          probe.once("close", resolve);
-        });
-        expect(probeCode).toBe(1);
-        expect(fixture.git(["rev-parse", lockRef])).toBe(ownerOid);
+        if (automatic) {
+          expect(await withinTest(closed, signal), stderr).toBe(0);
+        } else {
+          await withinTest(
+            Promise.race([
+              receipts.waitFor(f.ready, "ready"),
+              closed.then(() => {
+                // The hook writes before its receipt; separate pipes may reorder.
+                expect(existsSync(f.ready), stderr).toBe(true);
+              }),
+            ]),
+            signal,
+          );
+          const ownerOid = f.git(["rev-parse", lockRef]);
+          const owner = f.git(["cat-file", "blob", ownerOid]);
+          const pgid = Number(/^pgid=(\d+)$/m.exec(owner)?.[1]);
+          expect(JSON.parse(readFileSync(f.ready, "utf8"))).toMatchObject({
+            notifierOpen: true,
+            pgid,
+          });
+          expect(child.exitCode).toBeNull();
+          expect(existsSync(f.completed)).toBe(false);
+          const probe = spawn(
+            "bash",
+            [
+              "-c",
+              `source ${shellQuote(lockScript)}; repo_root() { printf '%s\\n' ${shellQuote(f.repo)}; }; try_acquire_pr_operation_lock 42`,
+            ],
+            { cwd: f.repo, env: f.env, detached: true, stdio: "ignore" },
+          );
+          const probeClosed = new Promise<number | null>((resolve, reject) => {
+            probe.once("error", reject);
+            probe.once("close", resolve);
+          });
+          try {
+            expect(await withinTest(probeClosed, signal)).toBe(1);
+          } finally {
+            if (probe.exitCode === null && probe.signalCode === null) {
+              probe.kill("SIGKILL");
+            }
+            await probeClosed;
+          }
+          expect(f.git(["rev-parse", lockRef])).toBe(ownerOid);
+        }
       } finally {
-        // The gate belongs to this fixture. Let Git finish and join it; no PID-based cleanup.
-        writeFileSync(fixture.release, "release\n");
+        if (automatic && child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+        // Only this fixture releases the hook; always join Git before cleanup.
+        if (!automatic) {
+          receipts.release(f.ready, "release");
+        }
         await closed;
       }
       expect(child.exitCode, stderr).toBe(exitCode);
-      expect(existsSync(fixture.completed)).toBe(true);
-      expect(stderr).not.toContain("drain deadline");
-      expect(stderr).not.toContain("process group remained active");
-      if (exitCode === 0) {
-        expect(
-          spawnSync("git", ["show-ref", "--verify", "--quiet", lockRef], {
-            cwd: fixture.repo,
-            env: fixture.env,
-          }).status,
-        ).toBe(1);
+      expect(existsSync(f.completed)).toBe(!automatic);
+      expect(
+        spawnSync("git", ["show-ref", "--verify", "--quiet", lockRef], {
+          cwd: f.repo,
+          env: f.env,
+        }).status,
+      ).toBe(1);
+      if (automatic) {
+        expect(existsSync(f.ready)).toBe(false);
+        expect(readFileSync(join(f.repo, ".git/config"), "utf8")).toBe(config);
+        expect([
+          f.git(["config", "--bool", "maintenance.auto"]),
+          f.git(["config", "--int", "gc.auto"]),
+        ]).toEqual(["true", "1"]);
       } else {
-        expect(fixture.git(["rev-parse", lockRef])).toBe(ownerOid);
-        expect(stderr).toContain(`reason: child exited with code ${exitCode}`);
+        expect(stderr).not.toContain("drain deadline");
+        expect(stderr).not.toContain("process group remained active");
+        if (exitCode !== 0) {
+          expect(stderr).toContain(
+            `Released the operation lock for PR #42 after exit code ${exitCode}`,
+          );
+        }
+        expect(
+          ["maintenance.autoDetach", "gc.autoDetach"].map((key) =>
+            f.git(["config", "--bool", key]),
+          ),
+        ).toEqual(["true", "true"]);
       }
-      expect(fixture.git(["config", "--bool", "maintenance.autoDetach"])).toBe("true");
-      expect(fixture.git(["config", "--bool", "gc.autoDetach"])).toBe("true");
     },
   );
 });

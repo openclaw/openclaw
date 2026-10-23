@@ -37,7 +37,7 @@ export async function detectSignalTransport(params: {
   const probeNative = params.probeNative ?? probes?.nativeCheck;
   const probeContainer = params.probeContainer ?? probes?.containerCheck;
   if (!probeNative || !probeContainer) {
-    throw new Error("Signal transport probes are unavailable");
+    throw new Error("Signal transport checks are unavailable");
   }
   const [native, container] = await Promise.all([
     probeNative(url, timeoutMs).catch(() => ({ ok: false })),

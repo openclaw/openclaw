@@ -1,7 +1,5 @@
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import * as sqliteQueries from "../../infra/kysely-sync.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -10,6 +8,7 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { withoutPayloadReads } from "./session-accessor.observation.test-support.js";
 import {
   readRecentSessionTranscriptActiveEvents,
   waitForSessionTranscriptProjection,
@@ -17,95 +16,95 @@ import {
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { useTempSessionsFixture } from "./test-helpers.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
 
 const transactionInjection = vi.hoisted(() => ({ run: null as (() => void) | null }));
 
-vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof agentDatabase>();
+vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
+  const withDelivery = (
+    owner: ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution>,
+  ): typeof owner => {
+    return {
+      ...owner,
+      get fileIdentity() {
+        return owner.fileIdentity;
+      },
+      runExisting: (source, operation, options) =>
+        owner.runExisting(
+          source,
+          (worker) =>
+            operation({
+              execute: (command, commandOptions) => {
+                if (
+                  command.type === "session.lifecycle.reset" ||
+                  command.type === "session.lifecycle.project"
+                ) {
+                  // The snapshot is prepared, but the worker has not begun its transaction.
+                  const inject = transactionInjection.run;
+                  transactionInjection.run = null;
+                  inject?.();
+                }
+                return worker.execute(command, commandOptions);
+              },
+            }),
+          options,
+        ),
+    };
+  };
   return {
     ...actual,
-    runOpenClawAgentWriteTransaction: <T>(
-      run: Parameters<typeof actual.runOpenClawAgentWriteTransaction<T>>[0],
-      options: Parameters<typeof actual.runOpenClawAgentWriteTransaction<T>>[1],
-    ) => {
-      const inject = transactionInjection.run;
-      transactionInjection.run = null;
-      inject?.();
-      return actual.runOpenClawAgentWriteTransaction(run, options);
-    },
+    captureOpenClawAgentDatabaseExecution: (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
+    ) => withDelivery(actual.captureOpenClawAgentDatabaseExecution(...args)),
+    captureOpenClawAgentDatabasePreparationExecution: (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabasePreparationExecution>
+    ) => withDelivery(actual.captureOpenClawAgentDatabasePreparationExecution(...args)),
   };
 });
 
-describe("reset boundary concurrency", () => {
-  const tempDirs: string[] = [];
-  let tempDir: string;
-  let storePath: string;
+const fixture = useTempSessionsFixture("openclaw-reset-boundary-race-");
+let storePath: string;
 
-  beforeEach(() => {
-    tempDir = makeTempDir(tempDirs, "openclaw-reset-boundary-race-");
-    storePath = path.join(tempDir, "sessions.json");
-  });
+beforeEach(() => {
+  storePath = fixture.storePath();
+});
 
-  afterEach(() => {
-    transactionInjection.run = null;
-    agentDatabase.closeOpenClawAgentDatabasesForTest();
-    cleanupTempDirs(tempDirs);
-  });
+afterEach(() => {
+  transactionInjection.run = null;
+});
 
-  it("does not commit a reset after its caller closes during entry preparation", async () => {
-    const sessionKey = "agent:main:closing-reset";
-    const scope = { sessionKey, storePath };
-    await upsertSessionEntryCore(scope, { sessionId: "current-reset", updatedAt: 10 });
-    let current = true;
-    const commitGuard = () => {
-      if (!current) {
-        throw new Error("reset caller closed");
-      }
-    };
-    await expect(
-      resetSessionEntryLifecycle({
-        storePath,
-        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-        commitGuard,
-        buildNextEntry: () => {
-          commitGuard();
-          queueMicrotask(() => {
-            current = false;
-          });
-          return { sessionId: "stale-reset", updatedAt: 20 };
-        },
-      }),
-    ).rejects.toThrow("reset caller closed");
-    expect(loadSessionEntry(scope)?.sessionId).toBe("current-reset");
-  });
+it("does not commit a reset after its caller closes during entry preparation", async () => {
+  const sessionKey = "agent:main:closing-reset";
+  const scope = { sessionKey, storePath };
+  await upsertSessionEntryCore(scope, { sessionId: "current-reset", updatedAt: 10 });
+  let current = true;
+  const commitGuard = () => {
+    if (!current) {
+      throw new Error("reset caller closed");
+    }
+  };
+  await expect(
+    resetSessionEntryLifecycle({
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      commitGuard,
+      buildNextEntry: () => {
+        commitGuard();
+        queueMicrotask(() => {
+          current = false;
+        });
+        return { sessionId: "stale-reset", updatedAt: 20 };
+      },
+    }),
+  ).rejects.toThrow("reset caller closed");
+  expect(loadSessionEntry(scope)?.sessionId).toBe("current-reset");
+});
 
-  it.each([
-    {
-      name: "single reset",
-      reset: async (scope: { sessionId: string; sessionKey: string; storePath: string }) =>
-        resetSessionEntryLifecycle({
-          buildNextEntry: () => ({ sessionId: "next-single", updatedAt: 20 }),
-          resetBoundary: { context: "preserve-tail", reason: "reset", cwd: "/tmp/workspace" },
-          storePath: scope.storePath,
-          target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-        }),
-    },
-    {
-      name: "bulk lifecycle reset",
-      reset: async (scope: { sessionId: string; sessionKey: string; storePath: string }) =>
-        applySessionEntryLifecycleMutation({
-          skipMaintenance: true,
-          storePath: scope.storePath,
-          upserts: [
-            {
-              entry: { sessionId: "next-bulk", updatedAt: 20 },
-              resetBoundary: { context: "preserve-tail", reason: "reset", cwd: "/tmp/workspace" },
-              sessionKey: scope.sessionKey,
-            },
-          ],
-        }),
-    },
-  ])("parents the $name boundary without hydrating prior message bodies", async ({ reset }) => {
+it.each(["single reset", "bulk lifecycle reset"])(
+  "parents the %s boundary without hydrating caller message bodies",
+  async (kind) => {
     const scope = {
       sessionId: "current-session",
       sessionKey: "agent:main:reset-race",
@@ -118,6 +117,12 @@ describe("reset boundary concurrency", () => {
       message: { role: "user", content: body },
       parentId: null,
     });
+    const entry = { sessionId: "next-session", updatedAt: 20 };
+    const resetBoundary = {
+      context: "preserve-tail",
+      reason: "reset",
+      cwd: "/tmp/workspace",
+    } as const;
     transactionInjection.run = () => {
       appendTranscriptMessageSync(scope, {
         eventId: "concurrent",
@@ -126,29 +131,22 @@ describe("reset boundary concurrency", () => {
       });
     };
 
-    const iterate = sqliteQueries.iterateSqliteQuerySync;
-    let hydratedBodyRows = 0;
-    const reads = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync").mockImplementation(function* <
-      Row,
-    >(...args: Parameters<typeof sqliteQueries.iterateSqliteQuerySync<Row>>) {
-      for (const row of iterate<Row>(...args)) {
-        if (
-          row !== null &&
-          typeof row === "object" &&
-          "event_json" in row &&
-          typeof row.event_json === "string" &&
-          row.event_json.includes(body)
-        ) {
-          hydratedBodyRows += 1;
-        }
-        yield row;
+    await withoutPayloadReads("event_json", body, async () => {
+      if (kind === "single reset") {
+        await resetSessionEntryLifecycle({
+          buildNextEntry: () => entry,
+          resetBoundary,
+          storePath,
+          target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+        });
+      } else {
+        await applySessionEntryLifecycleMutation({
+          skipMaintenance: true,
+          storePath,
+          upserts: [{ entry, resetBoundary, sessionKey: scope.sessionKey }],
+        });
       }
     });
-    try {
-      await reset(scope);
-    } finally {
-      reads.mockRestore();
-    }
 
     const raw = await loadTranscriptEvents(scope);
     expect(raw).toContainEqual(
@@ -157,90 +155,71 @@ describe("reset boundary concurrency", () => {
         message: expect.objectContaining({ role: "user", content: body }),
       }),
     );
-    expect(hydratedBodyRows).toBe(0);
-    const boundary = raw.find(
-      (event) =>
-        event !== null &&
-        typeof event === "object" &&
-        !Array.isArray(event) &&
-        (event as { type?: unknown }).type === "reset",
-    );
+    const boundary = raw.find((event) => isRecord(event) && event.type === "reset");
     expect(boundary).toMatchObject({ parentId: "concurrent" });
-    await waitForSessionTranscriptProjection(scope);
-    expect(
-      readRecentSessionTranscriptActiveEvents(scope, 10).map(
-        (event) => (event as { id?: unknown }).id,
-      ),
-    ).toContain("concurrent");
+    const expectConcurrent = async () => {
+      await waitForSessionTranscriptProjection(scope);
+      expect(
+        readRecentSessionTranscriptActiveEvents(scope, 10).map(
+          (event) => (event as { id?: unknown }).id,
+        ),
+      ).toContain("concurrent");
+    };
+    await expectConcurrent();
 
+    await agentDatabase.closeOpenClawAgentDatabasesAsync();
     agentDatabase.closeOpenClawAgentDatabasesForTest();
-    await waitForSessionTranscriptProjection(scope);
-    expect(
-      readRecentSessionTranscriptActiveEvents(scope, 10).map(
-        (event) => (event as { id?: unknown }).id,
-      ),
-    ).toContain("concurrent");
+    await expectConcurrent();
+  },
+);
+
+it("preserves navigation nulls and raw parser semantics in reset reads", async () => {
+  const sessionId = "reset-projection";
+  await upsertSessionEntryCore(
+    { sessionKey: "agent:main:reset-projection", storePath },
+    { sessionId, updatedAt: 10 },
+  );
+  const database = agentDatabase.openOpenClawAgentDatabase({
+    agentId: "main",
+    path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
   });
+  const navigationEvents = [
+    { type: "message", id: "user", timestamp: 1, message: { role: "user", content: "body" } },
+    { type: "leaf", id: "empty", parentId: null, targetId: null },
+    {
+      type: "leaf",
+      id: "selected",
+      parentId: "empty",
+      targetId: "user",
+      appendParentId: null,
+      appendMode: "side",
+    },
+    { type: "reset", id: "reset", parentId: "user", firstKeptEntryId: "user" },
+  ] as const;
+  const events = [
+    ...navigationEvents,
+    null,
+    "opaque",
+    ["opaque"],
+    JSON.parse(`{"type":"opaque","body":${"[".repeat(1_001)}0${"]".repeat(1_001)}}`) as unknown,
+  ];
+  const insert = createTranscriptEventInserter(database.db, sessionId);
+  events.forEach((event, seq) => insert({ seq, eventJson: JSON.stringify(event), createdAt: seq }));
 
-  it("preserves navigation nulls and raw parser semantics in reset reads", async () => {
-    const sessionId = "reset-projection";
-    await upsertSessionEntryCore(
-      { sessionKey: "agent:main:reset-projection", storePath },
-      { sessionId, updatedAt: 10 },
-    );
-    const database = agentDatabase.openOpenClawAgentDatabase({
-      agentId: "main",
-      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
-    });
-    const navigationEvents = [
-      { type: "message", id: "user", timestamp: 1, message: { role: "user", content: "body" } },
-      { type: "leaf", id: "empty", parentId: null, targetId: null },
-      {
-        type: "leaf",
-        id: "selected",
-        parentId: "empty",
-        targetId: "user",
-        appendParentId: null,
-        appendMode: "side",
-      },
-      { type: "reset", id: "reset", parentId: "user", firstKeptEntryId: "user" },
-    ] as const;
-    const events = [
-      ...navigationEvents,
-      null,
-      "opaque",
-      ["opaque"],
-      JSON.parse(`{"type":"opaque","body":${"[".repeat(1_001)}0${"]".repeat(1_001)}}`) as unknown,
-    ];
-    const insert = database.db.prepare(
-      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
-    );
-    events.forEach((event, seq) => insert.run(sessionId, seq, JSON.stringify(event), seq));
-
-    const projected = loadTranscriptEventsFromDatabase(database, sessionId, {
-      projection: "reset-boundary",
-    });
-    expect(projected[0]).toEqual({
-      type: "message",
-      id: "user",
-      timestamp: 1,
-      message: { role: "user" },
-    });
-    expect(projected[1]).toMatchObject(navigationEvents[1]);
-    expect(projected[1]).not.toHaveProperty("appendParentId");
-    expect(projected[2]).toMatchObject(navigationEvents[2]);
-    expect(projected[3]).toMatchObject(navigationEvents[3]);
-    expect(projected.slice(4)).toEqual(events.slice(4));
-    expect(loadTranscriptEventsFromDatabase(database, sessionId)).toEqual(events);
-    expect(loadTranscriptEventsFromDatabase(database, sessionId, { beforeEventSeq: 2 })).toEqual(
-      events.slice(0, 2),
-    );
-
-    insert.run(sessionId, events.length, "{", events.length);
-    for (const projection of [undefined, "reset-boundary"] as const) {
-      expect(() => loadTranscriptEventsFromDatabase(database, sessionId, { projection })).toThrow(
-        SyntaxError,
-      );
-    }
+  const read = (options?: Parameters<typeof loadTranscriptEventsFromDatabase>[2]) =>
+    loadTranscriptEventsFromDatabase(database, sessionId, options);
+  const projected = read({
+    projection: "reset-boundary",
   });
+  expect(projected[0]).toEqual({ ...navigationEvents[0], message: { role: "user" } });
+  expect(projected.slice(1, 4)).toMatchObject(navigationEvents.slice(1));
+  expect(projected[1]).not.toHaveProperty("appendParentId");
+  expect(projected.slice(4)).toEqual(events.slice(4));
+  expect(read()).toEqual(events);
+  expect(read({ beforeEventSeq: 2 })).toEqual(events.slice(0, 2));
+
+  insert({ seq: events.length, eventJson: "{", createdAt: events.length });
+  for (const projection of [undefined, "reset-boundary"] as const) {
+    expect(() => read({ projection })).toThrow(SyntaxError);
+  }
 });

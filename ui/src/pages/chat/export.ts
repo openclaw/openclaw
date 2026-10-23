@@ -1,11 +1,9 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { t } from "../../i18n/index.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import {
-  normalizeRoleForGrouping,
-  resolveMessageRole,
-  resolveMessageSenderLabel,
-} from "../../lib/chat/message-normalizer.ts";
+import { normalizeRoleForGrouping, resolveMessageRole } from "../../lib/chat/message-normalizer.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
+import { resolveMessageSenderLabel } from "../../lib/chat/sender-label.ts";
 import { downloadTextFile } from "../../lib/download.ts";
 
 export type ChatExportResult = "downloaded" | "empty";
@@ -31,7 +29,7 @@ export function buildChatMarkdown(messages: unknown[], assistantName: string): s
     const role = normalizeRoleForGrouping(resolveMessageRole(msg));
     const speaker =
       role === "user"
-        ? (resolveMessageSenderLabel(msg) ?? "You")
+        ? (resolveMessageSenderLabel(msg) ?? t("chat.messages.unattributedSender"))
         : role === "assistant"
           ? (resolveMessageSenderLabel(msg) ?? assistantName)
           : "Tool";

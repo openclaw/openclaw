@@ -3,12 +3,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { fromMarkdown, type Extension, type Handle } from "mdast-util-from-markdown";
 import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmTable } from "micromark-extension-gfm-table";
+import { hasUnresolvedImageCode } from "./image-code-retention.js";
 
 export type ReasoningTagTextDelta =
   | { kind: "text"; text: string }
   | { kind: "thinking"; text: string };
 
-const REASONING_TAG_NAMES = [
+export const REASONING_TAG_NAMES = [
   "think",
   "thinking",
   "thought",
@@ -189,6 +190,7 @@ export function findNextLineEnding(text: string, start: number): number {
 type PositionedNode = {
   type?: string;
   value?: string;
+  identifier?: string;
   position?: {
     start?: { offset?: number; line?: number };
     end?: { offset?: number; line?: number };
@@ -356,6 +358,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       textSpans: [],
       retainStart: 0,
       completedParagraphs: [],
+      definitions: [],
       ...(paragraphs ? { paragraphs } : {}),
     };
   }
@@ -380,7 +383,9 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
   const completedParagraphs: MarkdownCompletedParagraph[] = [];
   const regions: MarkdownCodeRegion[] = [];
   const textSpans: Array<[number, number]> = [];
+  const definitions: Array<{ identifier: string; start: number; end: number }> = [];
   const blocks = tree.children ?? [];
+  let retainStart = blocks.at(-1)?.position?.start?.offset ?? text.length;
   for (let index = 0; index < blocks.length; index += 1) {
     const block = expectDefined(blocks[index], "Markdown block");
     const next = blocks[index + 1]?.position?.start;
@@ -414,13 +419,28 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       completedParagraphs.push(paragraph);
     }
     const pending: PositionedNode[] = [block];
+    const regionStart = regions.length;
+    let hasReferenceCandidate = false;
+    let hasInlineCode = false;
     while (pending.length > 0) {
       const node = expectDefined(pending.pop(), "Markdown ownership node");
-      if (paragraph && node.type === "text" && node.value?.includes("[")) {
-        paragraph.hasReferenceCandidate = true;
+      if (node.type === "text" && node.value?.includes("[")) {
+        hasReferenceCandidate = true;
+        if (paragraph) {
+          paragraph.hasReferenceCandidate = true;
+        }
       }
+      hasInlineCode ||= node.type === "inlineCode";
       const start = node.position?.start?.offset;
       const end = node.position?.end?.offset;
+      if (
+        node.type === "definition" &&
+        node.identifier !== undefined &&
+        start !== undefined &&
+        end !== undefined
+      ) {
+        definitions.push({ identifier: node.identifier, start, end });
+      }
       if (
         options?.includeText &&
         node.type === "text" &&
@@ -462,14 +482,37 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
         pending.push(child);
       }
     }
+    // A later image reference definition can turn inline code into unprotected alt text.
+    if (
+      hasReferenceCandidate &&
+      hasInlineCode &&
+      blockStart !== undefined &&
+      blockEnd !== undefined &&
+      hasUnresolvedImageCode(text, blockStart, blockEnd, regions, regionStart)
+    ) {
+      retainStart = Math.min(retainStart, blockStart);
+    }
+  }
+  if (definitions.length) {
+    // An unfinished next-line title can temporarily parse as several other blocks.
+    let lastBlank = -1;
+    for (const blank of text.matchAll(/(?:\r\n|\n|\r(?!\n))[ \t]*(?:\r\n|\n|\r(?!\n))/g)) {
+      lastBlank = blank.index;
+    }
+    for (const definition of definitions) {
+      if (definition.end > lastBlank) {
+        retainStart = Math.min(retainStart, definition.start);
+      }
+    }
   }
   regions.sort((left, right) => left.start - right.start);
   return {
     regions,
     codeSpans: regions.map(({ start, end }): [number, number] => [start, end]),
     textSpans,
-    retainStart: tree.children?.at(-1)?.position?.start?.offset ?? text.length,
+    retainStart,
     completedParagraphs,
+    definitions,
     ...(paragraphs ? { paragraphs } : {}),
   };
 }
@@ -527,6 +570,7 @@ export type ReductionState = {
 
 type ReductionOptions = {
   final: boolean;
+  recoverUnclosed?: boolean;
   mode: RecoveryMode;
   scope: "all" | "leading";
   start?: number;
@@ -569,15 +613,9 @@ export function reduceReasoningText(
   const scan = scanReasoningTags(text.slice(start), options.final);
   const tags: ReasoningTagMatch[] = [];
   for (const scannedTag of scan.tags) {
-    const tag = {
-      index: scannedTag.index + start,
-      isClose: scannedTag.isClose,
-      isSelfClosing: scannedTag.isSelfClosing,
-      isPrivate: scannedTag.isPrivate,
-      text: scannedTag.text,
-    };
-    if (!isInsideCode(tag.index, codeSpans)) {
-      tags.push(tag);
+    const index = scannedTag.index + start;
+    if (!isInsideCode(index, codeSpans)) {
+      tags.push({ ...scannedTag, index });
     }
   }
   const mustParseRemainder: boolean[] = [];
@@ -591,11 +629,7 @@ export function reduceReasoningText(
   }
   let cursor = start;
 
-  for (let tagIndex = 0; tagIndex < tags.length; tagIndex += 1) {
-    const tag = tags[tagIndex];
-    if (!tag) {
-      continue;
-    }
+  for (const [tagIndex, tag] of tags.entries()) {
     const beforeTag = text.slice(cursor, tag.index);
     append(beforeTag);
     const tagEnd = tag.index + tag.text.length;
@@ -673,7 +707,7 @@ export function reduceReasoningText(
         options.mode === "static-preserve" ||
         (options.mode === "static-strict" && !pending.visibleBefore && !pending.protectedClose) ||
         (options.mode === "visible" && !pending.protectedClose);
-      if (recoverAsText) {
+      if (recoverAsText && options.recoverUnclosed !== false) {
         const value =
           options.mode === "visible" && pending.visibleBefore
             ? pending.openTag + pending.content

@@ -1,4 +1,3 @@
-// Doctor legacy config issue finder that combines core, channel, and plugin rules.
 import { collectChannelLegacyConfigRules } from "../../../channels/plugins/legacy-config.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { LegacyConfigRule } from "../../../config/legacy.shared.js";
@@ -36,15 +35,10 @@ export function findDoctorLegacyConfigIssues(
   sourceRaw?: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigIssue[] {
-  return findLegacyConfigIssues(
-    raw,
-    sourceRaw,
-    [
-      ...collectChannelLegacyConfigRules(raw, touchedPaths),
-      ...collectPluginLegacyConfigRules(raw, touchedPaths),
-    ],
-    touchedPaths,
-  );
+  return findLegacyConfigIssues(raw, sourceRaw, [
+    ...collectChannelLegacyConfigRules(raw, touchedPaths),
+    ...collectPluginLegacyConfigRules(raw, touchedPaths),
+  ]);
 }
 
 export function addDoctorLegacyIssues(

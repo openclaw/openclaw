@@ -36,6 +36,17 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "canvas-custom-root-documents-to-core",
     label: "Canvas documents in a custom host root",
+    collectBackupResources(params) {
+      const legacyDir = resolveLegacyCanvasDocumentsDir(params);
+      if (!legacyDir || listLegacyCanvasDocumentIds(legacyDir).length === 0) {
+        return [];
+      }
+      // Both sides are mutated: publishing copies into core and removes the originals.
+      return [
+        { path: legacyDir, kind: "directory" },
+        { path: path.resolve(params.stateDir, "canvas", "documents"), kind: "directory" },
+      ];
+    },
     async detectLegacyState(params) {
       const legacyDir = resolveLegacyCanvasDocumentsDir(params);
       if (!legacyDir) {

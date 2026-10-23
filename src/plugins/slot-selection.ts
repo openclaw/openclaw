@@ -11,7 +11,7 @@ export async function applySlotSelectionForPlugin(
   pluginId: string,
   preparedMetadata?: PluginMetadataSnapshot,
   beforeRuntimeInspection?: () => void,
-): Promise<{ config: OpenClawConfig; warnings: string[] }> {
+): Promise<OpenClawConfig> {
   // Selection inspects the install candidate, never the running Gateway's inventory.
   const metadataSnapshot =
     preparedMetadata ??
@@ -22,7 +22,7 @@ export async function applySlotSelectionForPlugin(
     });
   const plugin = metadataSnapshot.plugins.find((entry) => entry.id === pluginId);
   if (!plugin) {
-    return { config, warnings: [] };
+    return config;
   }
   if (!plugin.kind && !isBundledManifestOwner(plugin)) {
     // Bundled manifests own slot declarations. Only legacy external plugins need
@@ -39,20 +39,18 @@ export async function applySlotSelectionForPlugin(
       },
       (runtimeReport) => {
         const runtimePlugin = runtimeReport.plugins.find((entry) => entry.id === plugin.id);
-        const result = applyExclusiveSlotSelection({
+        return applyExclusiveSlotSelection({
           config,
           selectedId: plugin.id,
           selectedKind: runtimePlugin?.kind ?? plugin.kind,
         });
-        return { config: result.config, warnings: result.warnings };
       },
     );
   }
 
-  const result = applyExclusiveSlotSelection({
+  return applyExclusiveSlotSelection({
     config,
     selectedId: plugin.id,
     selectedKind: plugin.kind,
   });
-  return { config: result.config, warnings: result.warnings };
 }

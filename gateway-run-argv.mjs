@@ -33,8 +33,10 @@ export const GATEWAY_RUN_BOOLEAN_FLAGS = new Set([
 export function isForegroundGatewayRunArgv(argv) {
   const positionals = getCommandPositionalsWithRootOptions(argv, {
     commandPath: ["gateway"],
-    booleanFlags: [...GATEWAY_RUN_BOOLEAN_FLAGS],
-    valueFlags: [...GATEWAY_RUN_VALUE_FLAGS],
+    // Service supervision still owns a long-lived Gateway. Keep these flags out
+    // of the fast-path option sets: supervisor commands need full CLI parsing.
+    booleanFlags: [...GATEWAY_RUN_BOOLEAN_FLAGS, "--task-supervisor"],
+    valueFlags: [...GATEWAY_RUN_VALUE_FLAGS, "--task-supervisor-child"],
     mode: "command-path",
   });
   if (!positionals) {

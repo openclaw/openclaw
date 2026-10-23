@@ -2,9 +2,13 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  floorPositiveFiniteNumber,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { SignalRpcOptions } from "./client-types.js";
+import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
 import { isSignalQuoteMetadataRejection } from "./quote-rejection.js";
 import { assertSignalSocketEndpoint } from "./socket-path.js";
 
@@ -128,18 +132,16 @@ export async function signalUnixRpcRequest<T>(
   params: Record<string, unknown> | undefined,
   options: SignalRpcOptions,
 ): Promise<T> {
+  const effect = captureEffectAuthority();
   const connection = await openSocket(options);
   const id = randomUUID();
-  const maxBytes =
-    typeof options.maxResponseBytes === "number" &&
-    Number.isFinite(options.maxResponseBytes) &&
-    options.maxResponseBytes >= 1
-      ? Math.floor(options.maxResponseBytes)
-      : MAX_FRAME_BYTES;
+  const maxBytes = floorPositiveFiniteNumber(options.maxResponseBytes) || MAX_FRAME_BYTES;
   try {
     const frame = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
-    options.assertDirectAdapterHandoff?.();
-    connection.socket.write(frame);
+    await effect.initiate(() => {
+      options.assertDirectAdapterHandoff?.();
+      connection.socket.write(frame);
+    });
     for await (const message of messages(connection.socket, maxBytes)) {
       if (message.id === id) {
         // SAFETY: The generic caller owns the method's result type after JSON-RPC envelope validation.
@@ -157,7 +159,7 @@ export async function streamSignalUnixEvents(params: {
   account?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
-  onEvent: (event: { event?: string; data?: string; id?: string }) => unknown;
+  onEvent: (event: SignalSseEvent) => unknown;
   onStreamOpen?: () => void;
 }): Promise<void> {
   // The monitor uses zero for unlimited stream idle time, not a 1 ms handshake.
@@ -167,7 +169,6 @@ export async function streamSignalUnixEvents(params: {
     params.abortSignal,
   );
   const id = randomUUID();
-  let subscribed = false;
   let subscription: number | undefined;
   try {
     connection.socket.write(
@@ -188,7 +189,6 @@ export async function streamSignalUnixEvents(params: {
           throw new Error("Signal UNIX RPC returned invalid receive subscription");
         }
         subscription = value;
-        subscribed = true;
         connection.ready();
         params.onStreamOpen?.();
         continue;
@@ -211,7 +211,7 @@ export async function streamSignalUnixEvents(params: {
       }
       await params.onEvent({ event: "receive", data: JSON.stringify(payload) });
     }
-    if (!subscribed) {
+    if (subscription === undefined) {
       throw new Error("Signal UNIX RPC closed before receive subscription");
     }
   } finally {

@@ -8,6 +8,7 @@ import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
+import { doctorMaintenanceTestEnv } from "./doctor-maintenance.admission.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
 
@@ -19,7 +20,8 @@ const native = vi.hoisted(() => ({
   open: vi.fn<typeof import("../daemon/systemd-peer-native.js").openSystemdBroker>(),
 }));
 // The manager identity fixture runs Doctor outside its synthetic Gateway's service.
-vi.mock("../daemon/service-process-membership.js", () => ({
+vi.mock("../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: () => "outside",
 }));
 vi.mock("../gateway/call.js", async (original) => {
@@ -50,21 +52,28 @@ vi.mock("../infra/tmp-openclaw-dir.js", () => ({
 vi.mock("../cli/daemon-cli/restart-health.js", async (original) => ({
   ...(await original<typeof import("../cli/daemon-cli/restart-health.js")>()),
   inspectGatewayRestart: vi.fn(async () => ({ healthy: true })),
-  waitForGatewayHealthyRestart: vi.fn(async () => ({ healthy: true })),
+  waitForGatewayHealthyRestart: vi.fn(async () => ({ outcome: "ready", healthy: true })),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const unitName = "openclaw-gateway.service";
 const unitFile = `/etc/systemd/system/${unitName}`;
 const unitObject = "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice";
-type Scenario =
-  | "unchanged"
-  | "account-refused"
-  | "account-reassigned-at-activation"
-  | "manager-replaced"
-  | "broker-replaced"
-  | "capture-unavailable"
-  | "inspection-failed";
+const refusalCases = [
+  ["account-refused", "systemd-account-refused"],
+  ["account-reassigned-at-activation", "systemd-account-refused"],
+  ["manager-replaced", "systemd-manager-changed"],
+  ["broker-replaced", "systemd-manager-changed"],
+] as const;
+type Scenario = (typeof refusalCases)[number][0] | "capture-unavailable" | "inspection-failed";
+type Property = { type: string; data: unknown };
+function properties(groups: Record<string, Record<string, unknown>>): Record<string, Property> {
+  return Object.fromEntries(
+    Object.entries(groups).flatMap(([type, values]) =>
+      Object.entries(values).map(([name, data]) => [name, { type, data }]),
+    ),
+  );
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -115,23 +124,19 @@ async function repair(scenario: Scenario) {
   let busId = "0123456789abcdef0123456789abcdef";
   const effects: string[] = [];
   const logs: string[] = [];
-  const reply = (args: string[]): Array<{ type: string; data: unknown }> => {
+  const reply = (args: string[]): Property[] => {
     const method = args[4];
     if (args[0] === "call") {
       if (!method) {
         throw new Error("Missing native method in fixture query");
       }
-      if (method === "GetId") {
-        return [{ type: "s", data: [busId] }];
-      }
-      if (method === "GetNameOwner") {
-        return [{ type: "s", data: [managerOwner] }];
-      }
-      if (method === "GetConnectionUnixUser") {
-        return [{ type: "u", data: [0] }];
-      }
-      if (method === "GetUnit" || method === "LoadUnit") {
-        return [{ type: "o", data: [unitObject] }];
+      const reads = properties({
+        s: { GetId: [busId], GetNameOwner: [managerOwner] },
+        u: { GetConnectionUnixUser: [0] },
+        o: { GetUnit: [unitObject], LoadUnit: [unitObject] },
+      });
+      if (reads[method]) {
+        return [reads[method]];
       }
       if (["ResetFailedUnit", "StartUnit", "RestartUnit"].includes(method)) {
         expect(args[1]).toBe(":1.42");
@@ -151,38 +156,35 @@ async function repair(scenario: Scenario) {
         "--port",
         String(port),
       ];
-      const properties: Record<string, { type: string; data: unknown }> = {
-        Id: { type: "s", data: unitName },
-        FragmentPath: { type: "s", data: unitFile },
-        DropInPaths: { type: "as", data: [] },
-        NeedDaemonReload: { type: "b", data: false },
-        LoadState: { type: "s", data: "loaded" },
-        ActiveState: { type: "s", data: running ? "active" : "inactive" },
-        SubState: { type: "s", data: running ? "running" : "dead" },
-        StartLimitBurst: { type: "u", data: 5 },
-        ActiveEnterTimestampMonotonic: { type: "t", data: 100 },
-        InactiveEnterTimestampMonotonic: { type: "t", data: 200 },
-        Result: { type: "s", data: "success" },
-        NRestarts: { type: "u", data: 0 },
-        MainPID: { type: "u", data: running ? pid : 0 },
-        ExecMainStatus: { type: "i", data: 0 },
-        ExecMainCode: { type: "i", data: 1 },
-        KillMode: { type: "s", data: "control-group" },
-        TasksCurrent: { type: "t", data: running ? 1 : 0 },
-        MemoryCurrent: { type: "t", data: 0 },
-        ControlGroup: { type: "s", data: "/system.slice/openclaw-gateway.service" },
-        ExecStart: {
-          type: "a(sasbttttuii)",
-          data: [[command[0], command, false, 0, 0, 0, 0, 0, 0, 0]],
+      const values = properties({
+        s: {
+          Id: unitName,
+          FragmentPath: unitFile,
+          LoadState: "loaded",
+          ActiveState: running ? "active" : "inactive",
+          SubState: running ? "running" : "dead",
+          UnitFileState: "enabled",
+          Result: "success",
+          KillMode: "control-group",
+          ControlGroup: "/system.slice/openclaw-gateway.service",
+          WorkingDirectory: "",
+          User: serviceUser,
         },
-        WorkingDirectory: { type: "s", data: "" },
-        Environment: { type: "as", data: [`HOME=${home}`] },
-        EnvironmentFiles: { type: "a(sb)", data: [] },
-        UnsetEnvironment: { type: "as", data: [] },
-        User: { type: "s", data: serviceUser },
-      };
+        as: { DropInPaths: [], Environment: [`HOME=${home}`], UnsetEnvironment: [] },
+        b: { NeedDaemonReload: false, RefuseManualStart: false, CanStart: true },
+        u: { StartLimitBurst: 5, NRestarts: 0, MainPID: running ? pid : 0 },
+        t: {
+          ActiveEnterTimestampMonotonic: 100,
+          InactiveEnterTimestampMonotonic: 200,
+          TasksCurrent: running ? 1 : 0,
+          MemoryCurrent: 0,
+        },
+        i: { ExecMainStatus: 0, ExecMainCode: 1 },
+        "a(sasbttttuii)": { ExecStart: [[command[0], command, false, 0, 0, 0, 0, 0, 0, 0]] },
+        "a(sb)": { EnvironmentFiles: [] },
+      });
       return args.slice(4).map((name) => {
-        const property = properties[name];
+        const property = values[name];
         if (!property) {
           throw new Error(`Unexpected native property: ${name}`);
         }
@@ -211,14 +213,11 @@ async function repair(scenario: Scenario) {
     if (!action) {
       throw new Error("Missing systemctl action in fixture query");
     }
-    if (action === "stop") {
-      effects.push("stop");
-      stopped = true;
-      running = false;
-    } else if (action !== "is-enabled") {
+    if (action !== "is-enabled") {
       // A missing pinned identity must fail visibly if it reaches unbound activation.
       effects.push(action);
-      running = true;
+      stopped ||= action === "stop";
+      running = action !== "stop";
     }
     return { code: 0, termination: "exit", stdout: "enabled", stderr: "" };
   });
@@ -242,20 +241,10 @@ async function repair(scenario: Scenario) {
   });
   return await withEnvAsync(
     {
+      ...doctorMaintenanceTestEnv,
       HOME: home,
       USERPROFILE: home,
-      OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-      OPENCLAW_CONFIG_PATH: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_SUPERVISOR_MODE: undefined,
-      OPENCLAW_SERVICE_REPAIR_POLICY: undefined,
-      OPENCLAW_SERVICE_MARKER: undefined,
-      OPENCLAW_SERVICE_KIND: undefined,
-      OPENCLAW_SYSTEMD_UNIT: undefined,
-      OPENCLAW_UPDATE_RUN_ID: undefined,
-      OPENCLAW_UPDATE_IN_PROGRESS: undefined,
-      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
       DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/synthetic-doctor-native/bus",
     },
     async () => {
@@ -288,53 +277,42 @@ async function repair(scenario: Scenario) {
   );
 }
 
-it.each([
-  { scenario: "account-refused", reason: "systemd-account-refused" },
-  { scenario: "account-reassigned-at-activation", reason: "systemd-account-refused" },
-  { scenario: "manager-replaced", reason: "systemd-manager-changed" },
-  { scenario: "broker-replaced", reason: "systemd-manager-changed" },
-] as const)(
-  "Doctor preserves native $scenario after stopping its Gateway",
-  async ({ scenario, reason }) => {
+it.each(refusalCases)(
+  "Doctor preserves native %s after stopping its Gateway",
+  async (scenario, reason) => {
     const result = await repair(scenario);
-    expect(result.effects).toEqual(["stop"]);
-    expect(result.running).toBe(false);
-    expect(result.error).toMatchObject({
-      message: expect.stringContaining(
-        reason === "systemd-account-refused"
-          ? "runs as another account"
-          : "manager identity changed",
-      ),
-      failureFacts: expect.arrayContaining([expect.objectContaining({ code: reason })]),
+    expect(result).toMatchObject({
+      effects: ["stop"],
+      running: false,
+      error: {
+        message: expect.stringContaining(
+          reason === "systemd-account-refused"
+            ? "runs as another account"
+            : "manager identity changed",
+        ),
+        failureFacts: expect.arrayContaining([expect.objectContaining({ code: reason })]),
+      },
     });
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
     expect(result.logs.join("\n")).not.toContain("restoration inspection was inconclusive");
   },
 );
 
-it.each([
-  { scenario: "unchanged", action: "RestartUnit" },
-  { scenario: "inspection-failed", action: "StartUnit" },
-] as const)(
-  "Doctor restores and verifies native ownership after $scenario",
-  async ({ scenario, action }) => {
-    const result = await repair(scenario);
-    expect(result.error).toBeUndefined();
-    expect(result.effects).toEqual(["stop", "ResetFailedUnit", action]);
-    expect(result.running).toBe(true);
-    expect(waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
-    expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
-    if (scenario === "inspection-failed") {
-      expect(result.logs.join("\n")).toContain("restoration inspection was inconclusive");
-    }
-  },
-);
+it("Doctor restores and verifies native ownership after inspection fails", async () => {
+  const result = await repair("inspection-failed");
+  expect(result).toMatchObject({
+    error: undefined,
+    effects: ["stop", "ResetFailedUnit", "StartUnit"],
+    running: true,
+  });
+  expect(waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
+  expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
+  expect(result.logs.join("\n")).toContain("restoration inspection was inconclusive");
+});
 
 it("leaves the Gateway running and warns when restoration identity cannot be captured", async () => {
   const result = await repair("capture-unavailable");
-  expect(result.error).toBeUndefined();
-  expect(result.effects).toEqual([]);
-  expect(result.running).toBe(true);
+  expect(result).toMatchObject({ error: undefined, effects: [], running: true });
   expect(result.logs.join("\n")).toContain("managed service was not stopped");
   expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
 });

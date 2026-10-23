@@ -37,10 +37,8 @@ export function resolveHttpMcpServerLaunchConfig(
     return { ok: false, reason: "its url is missing" };
   }
   const url = raw.url.trim();
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     return {
       ok: false,
       reason: `its url is not a valid URL: ${redactSensitiveUrlLikeString(url)}`,

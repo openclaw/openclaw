@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 371771,
-  "reason": "Approved by @steipete for PR #158567 on 2026-09-27: measured startup bundle 371,771 B after main reconciliation and canonical boot-module regeneration, +1,015 B (0.27%) over the previous baseline. Paired baseline and cap retain the 512 B growth and 64 B build-variance allowances, yielding a 372,347 B enforcement limit.",
-  "updatedAt": "2026-09-27"
+  "startupJsGzipBytes": 315881,
+  "reason": "Creation transfer split preserves the stricter 315881 B startup baseline; matched 35637f41 builds measure 316324 to 316294 B startup, 1347441 B Chat and 822816 B New Session.",
+  "updatedAt": "2026-10-23"
 }

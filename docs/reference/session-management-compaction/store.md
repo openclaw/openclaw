@@ -57,6 +57,10 @@ Gateway history readers avoid materializing the whole transcript unless the surf
 
 Disk-backed history pages run their SQLite reads and display preparation in a dedicated session-transcript worker. Equivalent requests can share a queued read until worker execution starts; completed pages are not cached. The Gateway applies current profile display and rechecks session identity and access before publishing. Cold restoration and projection rebuilds remain with the existing Gateway storage owner. Incognito history stays in the Gateway process, and bound external CLI imports retain their local import owner. The HTTP history endpoint still returns the complete history when no limit is supplied.
 
+The [proposed transcript working-set design](/reference/session-management-compaction/resident-history)
+describes the remaining migration of live `SessionManager` history readers and
+the consumer contracts required before enforcing resident budgets after writes.
+
 ## On-disk locations
 
 Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):

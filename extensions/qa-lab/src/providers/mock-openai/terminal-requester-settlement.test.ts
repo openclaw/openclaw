@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createTerminalRequesterSettleGate } from "./terminal-requester-settlement.js";
 
 const requester = {
@@ -17,107 +17,80 @@ const settledSession = {
   abortedLastRun: false,
 };
 
-let gate: ReturnType<typeof createTerminalRequesterSettleGate>;
-beforeEach(() => {
-  gate = createTerminalRequesterSettleGate();
-});
+let gate = createTerminalRequesterSettleGate();
+const wait = (target = requester) => gate.waitUntilSettled(target.caseName, target.childSessionKey);
+const outcome = (target = requester) => wait(target).catch((error: unknown) => error);
 afterEach(() => {
   gate.stop();
+  gate = createTerminalRequesterSettleGate();
   vi.useRealTimers();
 });
 
-describe("terminal requester settlement", () => {
-  it.each([
-    {
-      name: "retained owner after lifecycle end",
-      session: { ...settledSession, hasActiveRun: true },
-    },
-    { name: "unknown liveness", session: { ...settledSession, hasActiveRun: undefined } },
-    { name: "another agent", session: { ...settledSession, agentId: "other" } },
-    { name: "another key", session: { ...settledSession, key: "agent:qa:other" } },
-    { name: "aborted owner", session: { ...settledSession, abortedLastRun: true } },
-    { name: "failed run", session: { ...settledSession, status: "error" } },
-  ])("holds the child after HTTP completion for $name", async ({ session }) => {
-    let released = false;
-    const child = gate.waitUntilSettled(requester.caseName, requester.childSessionKey).then(() => {
-      released = true;
-    });
-    void child.catch(() => {});
-    let listedSession = session;
-    const call = vi.fn(async (_method: string, params: unknown) => {
-      // Published 2026.9.4 rejects this newer sessions.list filter.
-      if (params && typeof params === "object" && "excludeSubagents" in params) {
-        throw new Error('invalid sessions.list params: unexpected property "excludeSubagents"');
-      }
-      return { sessions: [listedSession] };
-    });
-    gate.onResponseSent(requester);
-    await gate.settle({ call });
-    expect(released).toBe(false);
-    listedSession = settledSession;
-    await gate.settle({ call });
-    await child;
-    expect(released).toBe(true);
-    expect(call).toHaveBeenCalledWith(
+it.each([
+  { name: "retained owner after lifecycle end", hasActiveRun: true },
+  { name: "unknown liveness", hasActiveRun: undefined },
+  { name: "another agent", agentId: "other" },
+  { name: "another key", key: "agent:qa:other" },
+  { name: "aborted owner", abortedLastRun: true },
+  { name: "failed run", status: "error" },
+])("requires settlement: $name", async ({ name: _name, ...overrides }) => {
+  const released = vi.fn();
+  const child = wait().then(released);
+  void child.catch(() => {});
+  let listedSession = { ...settledSession, ...overrides };
+  const call = vi.fn(async (method: string, params: unknown, options: unknown) => {
+    // Published 2026.9.4 rejects newer filters such as excludeSubagents.
+    expect([method, params, options]).toEqual([
       "sessions.list",
       { agentId: requester.agentId, search: requester.sessionKey, limit: 100 },
       { timeoutMs: 10_000 },
-    );
+    ]);
+    return { sessions: [listedSession] };
   });
+  gate.onResponseSent(requester);
+  await gate.settle({ call });
+  expect(released).not.toHaveBeenCalled();
+  listedSession = settledSession;
+  await gate.settle({ call });
+  await child;
+});
 
-  it("accepts inactive requester rows from Gateways that omit lifecycle status", async () => {
-    gate.onResponseSent(requester);
+it("releases only the child correlated with the settled parent", async () => {
+  const other = {
+    ...requester,
+    sessionId: "other-parent",
+    childSessionKey: "agent:qa:subagent:other",
+  };
+  gate.onResponseSent(requester);
+  gate.onResponseSent(other);
+  const closed = outcome(other);
+  const shared = outcome(other);
+  await gate.settle({ call: async () => ({ sessions: [settledSession] }) });
+  await expect(wait()).resolves.toBeUndefined();
+  gate.stop();
+  expect(await closed).toMatchObject({ message: expect.stringContaining("fixture stopped") });
+  expect(await shared).toBe(await closed);
+});
+
+it.each([false, true])("waits for settlement or timeout (settle=%s)", async (settle) => {
+  vi.useFakeTimers();
+  gate.onResponseSent(requester);
+  const result = outcome();
+  const completed = vi.fn();
+  void result.then(completed);
+  await vi.advanceTimersByTimeAsync(31_000);
+  expect(completed).not.toHaveBeenCalled();
+  if (settle) {
+    // Older Gateways omit lifecycle status; inactive ownership still settles.
     await gate.settle({
       call: async () => ({ sessions: [{ ...settledSession, status: undefined }] }),
     });
-    await expect(
-      gate.waitUntilSettled(requester.caseName, requester.childSessionKey),
-    ).resolves.toBeUndefined();
-  });
-
-  it("releases only the child correlated with the settled parent", async () => {
-    const other = {
-      ...requester,
-      sessionId: "other-parent",
-      childSessionKey: "agent:qa:subagent:other",
-    };
-    gate.onResponseSent(requester);
-    gate.onResponseSent(other);
-    const closed = gate.waitUntilSettled(other.caseName, other.childSessionKey).then(
-      () => "released",
-      (error: unknown) => error,
-    );
-    await gate.settle({ call: async () => ({ sessions: [settledSession] }) });
-    await expect(
-      gate.waitUntilSettled(requester.caseName, requester.childSessionKey),
-    ).resolves.toBeUndefined();
-    gate.stop();
-    expect(await closed).toMatchObject({ message: expect.stringContaining("fixture stopped") });
-  });
-
-  it("keeps the child held until authoritative requester settlement", async () => {
-    vi.useFakeTimers();
-    gate.onResponseSent(requester);
-    const outcome = gate.waitUntilSettled(requester.caseName, requester.childSessionKey).then(
-      () => "released",
-      (error: unknown) => error,
-    );
-    let completed = false;
-    void outcome.then(() => {
-      completed = true;
+    await expect(result).resolves.toBeUndefined();
+  } else {
+    await vi.advanceTimersByTimeAsync(89_000);
+    expect(await result).toBeInstanceOf(Error);
+    expect(await result).toMatchObject({
+      message: expect.stringContaining("terminal requester did not settle"),
     });
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(completed).toBe(false);
-    await gate.settle({ call: async () => ({ sessions: [settledSession] }) });
-    await expect(outcome).resolves.toBe("released");
-  });
-
-  it("fails a terminal requester waiter that never settles", async () => {
-    vi.useFakeTimers();
-    gate.onResponseSent(requester);
-    const child = gate.waitUntilSettled(requester.caseName, requester.childSessionKey);
-    const timedOut = expect(child).rejects.toThrow("terminal requester did not settle");
-    await vi.advanceTimersByTimeAsync(120_000);
-    await timedOut;
-  });
+  }
 });

@@ -1,7 +1,6 @@
 import AVFoundation
 import CoreGraphics
 import Foundation
-import OpenClawIPC
 import OpenClawKit
 import OSLog
 
@@ -16,7 +15,6 @@ actor CameraCaptureService {
     enum CameraError: LocalizedError {
         case cameraUnavailable
         case microphoneUnavailable
-        case permissionDenied(kind: String)
         case captureFailed(String)
         case exportFailed(String)
 
@@ -26,11 +24,7 @@ actor CameraCaptureService {
                 "Camera unavailable"
             case .microphoneUnavailable:
                 "Microphone unavailable"
-            case let .permissionDenied(kind):
-                "\(kind) permission denied"
-            case let .captureFailed(msg):
-                msg
-            case let .exportFailed(msg):
+            case let .captureFailed(msg), let .exportFailed(msg):
                 msg
             }
         }
@@ -49,16 +43,13 @@ actor CameraCaptureService {
     }
 
     func snap(
-        facing: CameraFacing?,
+        facing: OpenClawCameraFacing,
         maxWidth: Int?,
         quality: Double?,
         deviceId: String?,
         delayMs: Int) async throws -> (data: Data, size: CGSize)
     {
-        let facing = facing ?? .front
-        let normalized = Self.normalizeSnap(maxWidth: maxWidth, quality: quality)
-        let maxWidth = normalized.maxWidth
-        let quality = normalized.quality
+        let (maxWidth, quality) = Self.normalizeSnap(maxWidth: maxWidth, quality: quality)
         let delayMs = max(0, delayMs)
         let deviceId = deviceId?.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -67,9 +58,7 @@ actor CameraCaptureService {
         let prepared = try CameraCapturePipelineSupport.preparePhotoSession(
             preferFrontCamera: facing == .front,
             deviceId: deviceId,
-            pickCamera: { preferFrontCamera, deviceId in
-                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
-            },
+            pickCamera: Self.pickCamera,
             mapSetupError: { setupError in
                 CameraError.captureFailed(setupError.localizedDescription)
             })
@@ -124,14 +113,12 @@ actor CameraCaptureService {
     }
 
     func clip(
-        facing: CameraFacing?,
+        facing: OpenClawCameraFacing,
         durationMs: Int?,
         includeAudio: Bool,
-        deviceId: String?,
-        outPath: String?) async throws -> (path: String, durationMs: Int, hasAudio: Bool)
+        deviceId: String?) async throws -> (path: String, durationMs: Int, hasAudio: Bool)
     {
-        let facing = facing ?? .front
-        let durationMs = Self.clampDurationMs(durationMs)
+        let durationMs = CaptureRateLimits.clampDurationMs(durationMs, defaultMs: 3000)
         let deviceId = deviceId?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         try await self.ensureAccess(for: .video)
@@ -143,13 +130,8 @@ actor CameraCaptureService {
             .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mov")
         defer { try? FileManager().removeItem(at: tmpMovURL) }
 
-        let outputURL: URL = {
-            if let outPath, !outPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return URL(fileURLWithPath: outPath)
-            }
-            return FileManager().temporaryDirectory
-                .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mp4")
-        }()
+        let outputURL = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mp4")
         let logger = self.logger
         let recordedURL = try await CameraCapturePipelineSupport.withWarmMovieSession(
             options: CameraMovieSessionOptions(
@@ -157,10 +139,13 @@ actor CameraCaptureService {
                 deviceId: deviceId,
                 includeAudio: includeAudio,
                 durationMs: durationMs),
-            pickCamera: { preferFrontCamera, deviceId in
-                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+            pickCamera: Self.pickCamera,
+            mapSetupError: { setupError in
+                CameraCapturePipelineSupport.mapMovieSetupError(
+                    setupError,
+                    microphoneUnavailableError: CameraError.microphoneUnavailable,
+                    captureFailed: CameraError.captureFailed)
             },
-            mapSetupError: Self.mapMovieSetupError,
             operation: { output in
                 // Replace the export destination only after camera setup succeeds.
                 try? FileManager().removeItem(at: outputURL)
@@ -178,20 +163,20 @@ actor CameraCaptureService {
     }
 
     private func ensureAccess(for mediaType: AVMediaType) async throws {
-        if await !(CameraAuthorization.isAuthorized(for: mediaType)) {
-            throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
+        if let error = await PermissionManager.missingPermissions([mediaType == .video ? .camera : .microphone]) {
+            throw error
         }
     }
 
     private nonisolated static func pickCamera(
-        facing: CameraFacing,
+        preferFrontCamera: Bool,
         deviceId: String?) throws -> AVCaptureDevice
     {
         try CameraCapturePipelineSupport.selectCamera(
             deviceId: deviceId,
             matching: CameraDeviceResolver.camera,
             fallback: {
-                let position: AVCaptureDevice.Position = facing == .front ? .front : .back
+                let position: AVCaptureDevice.Position = preferFrontCamera ? .front : .back
                 // Many macOS cameras report `unspecified` position; fall back only without an explicit device.
                 return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) ??
                     AVCaptureDevice.default(for: .video)
@@ -200,29 +185,12 @@ actor CameraCaptureService {
             deviceNotFoundError: { CameraPTZError.deviceNotFound($0) })
     }
 
-    private nonisolated static func clampQuality(_ quality: Double?) -> Double {
-        let q = quality ?? 0.9
-        return min(1.0, max(0.05, q))
-    }
-
     nonisolated static func normalizeSnap(maxWidth: Int?, quality: Double?) -> (maxWidth: Int, quality: Double) {
         // Default to a reasonable max width to keep downstream payload sizes manageable.
         // If you need full-res, explicitly request a larger maxWidth.
         let maxWidth = maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? 1600
-        let quality = Self.clampQuality(quality)
+        let quality = min(1.0, max(0.05, quality ?? 0.9))
         return (maxWidth: maxWidth, quality: quality)
-    }
-
-    private nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
-        let v = ms ?? 3000
-        return min(60000, max(250, v))
-    }
-
-    private nonisolated static func mapMovieSetupError(_ setupError: CameraSessionConfigurationError) -> CameraError {
-        CameraCapturePipelineSupport.mapMovieSetupError(
-            setupError,
-            microphoneUnavailableError: .microphoneUnavailable,
-            captureFailed: { .captureFailed($0) })
     }
 
     private nonisolated static func exportToMP4(inputURL: URL, outputURL: URL) async throws {

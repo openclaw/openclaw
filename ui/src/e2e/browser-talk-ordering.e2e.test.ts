@@ -1,46 +1,27 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  createTalkRegressionSuite,
+  installTalkGateway,
+} from "./browser-talk-regression.test-support.ts";
 import {
   dispatchOpenAiTalkEvent,
   installOpenAiTalkFixture,
-  videoTalkCatalog,
+  waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-
-const suite = createControlUiE2eSuite({
-  name: "Control UI browser Talk transcript ordering",
-  browserLaunchOptions: {
-    args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
-  },
-});
+const suite = createTalkRegressionSuite("Control UI browser Talk transcript ordering");
 
 suite.define(() => {
   it("renders and saves overlapping replies beside their delayed user transcripts", async () => {
-    const artifactDir = createControlUiE2eArtifactDir("transcript-ordering");
     await suite.withPage(
       {
         permissions: ["microphone"],
         viewport: { width: 1366, height: 900 },
-        recordVideo: { dir: artifactDir, size: { width: 1366, height: 900 } },
       },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "talk.catalog": videoTalkCatalog("openai"),
-            "talk.client.create": {
-              provider: "openai",
-              transport: "webrtc",
-              voiceSessionId: "voice-ordering-e2e",
-              clientSecret: "test-client-secret",
-            },
-          },
-        });
+        const gateway = await installTalkGateway(page, "voice-ordering-e2e");
         await installOpenAiTalkFixture(page);
         await page.goto(`${suite.server.baseUrl}chat`);
+        await waitForTalkReady(page);
         await page.getByRole("button", { name: "Start voice input" }).click();
         await gateway.waitForRequest("talk.client.create");
         await expect
@@ -92,10 +73,6 @@ suite.define(() => {
           delta: "Lantern.",
         });
         await expect.poll(() => rows.allTextContents()).toEqual(["Lantern."]);
-        await writeFile(
-          path.join(artifactDir, "unresolved-order.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [rows.first()]),
-        );
         await final("answer-2", "assistant", "Lantern.");
         await emit({
           type: "input_audio_buffer.committed",
@@ -110,10 +87,6 @@ suite.define(() => {
           delta: "Glacier.",
         });
         await expect.poll(() => rows.allTextContents()).toEqual(["Glacier.", "Lantern."]);
-        await writeFile(
-          path.join(artifactDir, "streaming.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [rows.first()]),
-        );
         await item("question-2", "user", "answer-1");
         await final("question-2", "user", "Please say lantern.");
         await final("answer-1", "assistant", "Glacier.");
@@ -125,22 +98,15 @@ suite.define(() => {
               .getRequests("talk.client.transcript")
               .then((requests) => requests.map(({ params }) => params)),
           )
-          .toEqual([
-            expect.objectContaining({ role: "user", text: "Please say glacier." }),
-            expect.objectContaining({ role: "assistant", text: "Glacier." }),
-            expect.objectContaining({ role: "user", text: "Please say lantern." }),
-            expect.objectContaining({ role: "assistant", text: "Lantern." }),
+          .toMatchObject([
+            { role: "user", text: "Please say glacier." },
+            { role: "assistant", text: "Glacier." },
+            { role: "user", text: "Please say lantern." },
+            { role: "assistant", text: "Lantern." },
           ]);
-        try {
-          await expect
-            .poll(() => rows.allTextContents())
-            .toEqual(["Please say glacier.", "Glacier.", "Please say lantern.", "Lantern."]);
-        } finally {
-          await writeFile(
-            path.join(artifactDir, "final-order.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [rows.first()]),
-          );
-        }
+        await expect
+          .poll(() => rows.allTextContents())
+          .toEqual(["Please say glacier.", "Glacier.", "Please say lantern.", "Lantern."]);
         await page.getByRole("button", { name: "Stop voice input" }).click();
         await gateway.waitForRequest("talk.client.close");
         expect(await gateway.getRequests("talk.client.close")).toHaveLength(1);

@@ -1,25 +1,24 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
+  chatMessage,
   installMockGateway,
+  newChatPage,
   requireRecord,
   requireString,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 const suite = createChatFlowE2eSuite();
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR;
-type MotionArrival = { text: string; opacity: string; transform: string };
-type SendMotionFrame = { top: number; y: number | null; opacity: string | null; same: boolean };
-type SendMotionProbe = { frames: SendMotionFrame[]; jumps: number[]; stop: () => void };
+type SendMotionFrame = { y: number | null; opacity: string | null; same: boolean };
+type SendMotionScroll = { behavior?: ScrollBehavior; jump: number; remaining: number };
+type SendMotionProbe = { frames: SendMotionFrame[]; scrolls: SendMotionScroll[]; stop: () => void };
 
 async function observeSendMotion(page: Page, prompt: string) {
   await page.evaluate((text) => {
     const thread = document.querySelector<HTMLElement>(".chat-thread")!;
     const scrollTo = thread.scrollTo.bind(thread);
-    const probe: SendMotionProbe = { frames: [], jumps: [], stop: () => {} };
+    const probe: SendMotionProbe = { frames: [], scrolls: [], stop: () => {} };
     window.openclawSendMotion = probe;
     let firstBubble: HTMLElement | undefined;
     let frame = 0;
@@ -27,12 +26,17 @@ async function observeSendMotion(page: Page, prompt: string) {
     // exposes a competing instant command even if it happens between paints.
     thread.scrollTo = function (options?: ScrollToOptions | number, y?: number) {
       const before = this.scrollTop;
+      const remaining = this.scrollHeight - before - this.clientHeight;
       if (typeof options === "number") {
         scrollTo(options, y ?? 0);
       } else {
         scrollTo(options);
       }
-      probe.jumps.push(this.scrollTop - before);
+      probe.scrolls.push({
+        behavior: typeof options === "number" ? undefined : options?.behavior,
+        jump: this.scrollTop - before,
+        remaining,
+      });
     };
     const sample = () => {
       const bubble = [...thread.querySelectorAll<HTMLElement>(".chat-bubble")].find(
@@ -40,7 +44,6 @@ async function observeSendMotion(page: Page, prompt: string) {
       );
       firstBubble ??= bubble;
       probe.frames.push({
-        top: thread.scrollTop,
         y: bubble?.getBoundingClientRect().top ?? null,
         opacity: bubble ? getComputedStyle(bubble).opacity : null,
         same: bubble === firstBubble,
@@ -56,10 +59,15 @@ async function observeSendMotion(page: Page, prompt: string) {
 }
 
 async function finishSendMotion(page: Page, reducedMotion: string) {
-  const { frames, jumps } = await page.evaluate(() => {
+  const { frames, scrolls, endDistance } = await page.evaluate(() => {
     const probe = window.openclawSendMotion!;
     probe.stop();
-    return { frames: probe.frames, jumps: probe.jumps };
+    const thread = document.querySelector<HTMLElement>(".chat-thread")!;
+    return {
+      frames: probe.frames,
+      scrolls: probe.scrolls,
+      endDistance: thread.scrollHeight - thread.scrollTop - thread.clientHeight,
+    };
   });
   const visible = frames.slice(frames.findIndex((frame) => frame.y !== null));
   expect(visible.length).toBeGreaterThan(0);
@@ -67,66 +75,49 @@ async function finishSendMotion(page: Page, reducedMotion: string) {
     true,
   );
   if (reducedMotion !== "reduce") {
-    expect(
-      jumps.every((delta) => Math.abs(delta) <= 1),
-      JSON.stringify(jumps),
-    ).toBe(true);
-    expect(
-      visible.every((frame, index) => {
+    expect({
+      noInstantJump: scrolls.every((scroll) => Math.abs(scroll.jump) <= 1),
+      monotonic: visible.every((frame, index) => {
         const previous = visible[index - 1];
         return !previous || (frame.y !== null && previous.y !== null && frame.y <= previous.y + 1);
       }),
-      JSON.stringify(visible),
-    ).toBe(true);
-    expect(new Set(visible.map((frame) => frame.top)).size).toBeGreaterThan(2);
+      // Check commands rather than frame counts: a loaded browser may skip intermediate frames.
+      smoothFromDistance: scrolls.some(
+        (scroll) => scroll.behavior === "smooth" && scroll.remaining > 8,
+      ),
+    }).toEqual({ noInstantJump: true, monotonic: true, smoothFromDistance: true });
+    expect(endDistance).toBeLessThanOrEqual(8);
   }
 }
 
 declare global {
   interface Window {
-    openclawMotionArrivals?: MotionArrival[];
+    openclawMotionArrivals?: number;
     openclawSendMotion?: SendMotionProbe;
   }
 }
 
 suite.define(() => {
-  it.each([
-    {
-      name: "desktop",
-      width: 1280,
-      height: 900,
-      lines: 1,
-      reducedMotion: "no-preference" as const,
-    },
-    {
-      name: "multiline",
-      width: 1280,
-      height: 900,
-      lines: 8,
-      reducedMotion: "no-preference" as const,
-    },
-    { name: "mobile", width: 390, height: 844, lines: 8, reducedMotion: "no-preference" as const },
-    {
-      name: "reduced-motion",
-      width: 1280,
-      height: 900,
-      lines: 8,
-      reducedMotion: "reduce" as const,
-    },
+  it.each<{
+    name: string;
+    lines?: number;
+    width?: number;
+    height?: number;
+    reducedMotion?: "reduce" | "no-preference";
+  }>([
+    { name: "desktop", lines: 1 },
+    { name: "multiline" },
+    { name: "mobile", width: 390, height: 844 },
+    { name: "reduced-motion", reducedMotion: "reduce" as const },
   ])(
     "animates new prompts without hiding streamed replies on $name",
-    async ({ name, width, height, lines, reducedMotion }) => {
-      const viewport = { width, height };
-      const dir = createControlUiE2eArtifactDir(`chat-motion-${name}`, artifactDir);
-      const context = await suite.newBrowserContext({
-        viewport,
+    async ({ width = 1280, height = 900, lines = 8, reducedMotion = "no-preference" }) => {
+      const page = await newChatPage(suite, {
+        viewport: { width, height },
         reducedMotion,
-        ...(dir ? { recordVideo: { dir, size: viewport } } : {}),
       });
-      const page = await context.newPage();
       await page.addInitScript(() => {
-        const arrivals: MotionArrival[] = [];
-        window.openclawMotionArrivals = arrivals;
+        window.openclawMotionArrivals = 0;
         document.addEventListener("animationstart", (event) => {
           if (
             event.animationName !== "chat-message-enter" ||
@@ -134,90 +125,63 @@ suite.define(() => {
           ) {
             return;
           }
-          const style = getComputedStyle(event.target);
-          arrivals.push({
-            text: event.target.dataset.messageText ?? "",
-            opacity: style.opacity,
-            transform: style.transform,
-          });
+          window.openclawMotionArrivals!++;
         });
       });
       const gateway = await installMockGateway(page, {
-        historyMessages: Array.from({ length: 40 }, (_, index) => ({
-          role: index % 2 ? "assistant" : "user",
-          content: [
+        historyMessages: Array.from({ length: 40 }, (_, index) =>
+          chatMessage(
+            index % 2 ? "assistant" : "user",
+            `Existing message ${index}\nA retained conversation with enough detail to scroll.`,
             {
-              type: "text",
-              text:
-                "Existing message " +
-                index +
-                "\nA retained conversation with enough detail to scroll.",
+              timestamp: Date.now() - (40 - index) * 60_000,
+              __openclaw: { id: "old-" + index, seq: index + 1 },
             },
-          ],
-          timestamp: Date.now() - (40 - index) * 60_000,
-          __openclaw: { id: "old-" + index, seq: index + 1 },
-        })),
+          ),
+        ),
       });
-      try {
-        await page.goto(suite.server.baseUrl + "chat");
-        await page.getByText("Existing message 39", { exact: false }).waitFor();
-        await waitForChatScrollIdle(page);
-        expect(await page.evaluate(() => window.openclawMotionArrivals)).toHaveLength(0);
-        if (dir) {
-          await page.screenshot({ path: path.join(dir, "01-history.png") });
+      await page.goto(suite.server.baseUrl + "chat");
+      await page.getByText("Existing message 39", { exact: false }).waitFor();
+      await waitForChatScrollIdle(page);
+      expect(await page.evaluate(() => window.openclawMotionArrivals)).toBe(0);
+      const prompt =
+        "Make this feel fast and smooth" + "\nKeep every detail steady.".repeat(lines - 1);
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await waitForChatScrollIdle(page);
+      await gateway.deferNext("chat.send");
+      await observeSendMotion(page, prompt);
+      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      const request = await gateway.waitForRequest("chat.send");
+      const runId = requireString(requireRecord(request.params).idempotencyKey, "run id");
+      await gateway.resolveDeferred("chat.send");
+      const sendBubble = page
+        .locator(".chat-bubble")
+        .filter({ hasText: "Make this feel fast and smooth" });
+      await expect.poll(() => sendBubble.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+      await waitForChatScrollIdle(page);
+      await finishSendMotion(page, reducedMotion);
+      let text = "A responsive reply, without a jump.";
+      const emit = async () =>
+        gateway.emitGatewayEvent("chat", {
+          sessionKey: "main",
+          runId,
+          state: "delta",
+          message: chatMessage("assistant", text, { timestamp: Date.now() }),
+        });
+      for (let index = 0; index < 4; index++) {
+        if (index > 0) {
+          text += " More streaming text.";
         }
-        const prompt =
-          "Make this feel fast and smooth" + "\nKeep every detail steady.".repeat(lines - 1);
-        await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-        await waitForChatScrollIdle(page);
-        await gateway.deferNext("chat.send");
-        await observeSendMotion(page, prompt);
-        await page.getByRole("button", { name: "Send message", exact: true }).click();
-        const request = await gateway.waitForRequest("chat.send");
-        const runId = requireString(requireRecord(request.params).idempotencyKey, "run id");
-        const expected = reducedMotion === "reduce" ? 0 : 1;
-        await gateway.resolveDeferred("chat.send");
-        const sendBubble = page
-          .locator(".chat-bubble")
-          .filter({ hasText: "Make this feel fast and smooth" });
-        await expect
-          .poll(() => sendBubble.evaluate((el) => getComputedStyle(el).opacity))
-          .toBe("1");
-        await waitForChatScrollIdle(page);
-        await finishSendMotion(page, reducedMotion);
-        if (dir) {
-          await page.screenshot({ path: path.join(dir, "02-prompt.png") });
-        }
-        let text = "A responsive reply, without a jump.";
-        const emit = async () =>
-          gateway.emitGatewayEvent("chat", {
-            sessionKey: "main",
-            runId,
-            state: "delta",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text }],
-              timestamp: Date.now(),
-            },
-          });
         await emit();
         await page.locator(".chat-bubble").getByText(text, { exact: true }).waitFor();
-        for (let index = 0; index < 3; index++) {
-          text += " More streaming text.";
-          await emit();
-          await page.locator(".chat-bubble").getByText(text, { exact: true }).waitFor();
-        }
-        await waitForChatScrollIdle(page);
-        if (dir) {
-          await page.screenshot({ path: path.join(dir, "03-reply.png") });
-        }
-        expect(await page.evaluate(() => window.openclawMotionArrivals)).toHaveLength(expected);
-        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
-          true,
-        );
-      } finally {
-        await suite.closeBrowserContext(context);
       }
+      await waitForChatScrollIdle(page);
+      expect(await page.evaluate(() => window.openclawMotionArrivals)).toBe(
+        reducedMotion === "reduce" ? 0 : 1,
+      );
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
     },
   );
 });

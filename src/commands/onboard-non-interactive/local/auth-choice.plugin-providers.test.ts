@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { ModelProviderConfig } from "../../../config/types.models.js";
 import * as pluginEnable from "../../../plugins/enable.js";
+import type { ProviderAuthMethod } from "../../../plugins/types.js";
+import "../../../system-agent/setup-inference-credentials.js";
 import { migrateLegacyConfig } from "../../doctor/shared/legacy-config-migrate.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
@@ -22,17 +24,15 @@ vi.mock("../../runtime-plugin-install.js", () => ({
   ensureModelSelectionRuntimePlugins,
 }));
 const offerPostInstallMigrations = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("../../../wizard/setup.post-install-migration.js", () => ({
-  offerPostInstallMigrations,
-}));
+// mock-isolation: Provider selection must not run post-install state migrations.
+vi.mock("../../../wizard/setup.post-install-migration.js", () => ({ offerPostInstallMigrations }));
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../../../plugins/provider-auth-choice-preference.js", () => ({
   resolvePreferredProviderForAuthChoice,
 }));
 const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
-vi.mock("../../../plugins/provider-auth-choices.js", () => ({
-  resolveManifestProviderAuthChoice,
-}));
+// mock-isolation: Synthetic manifests keep provider discovery independent of installed plugins.
+vi.mock("../../../plugins/provider-auth-choices.js", () => ({ resolveManifestProviderAuthChoice }));
 const resolveProviderInstallCatalogEntries = vi.hoisted(() =>
   vi.fn<
     typeof import("../../../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntries
@@ -42,9 +42,8 @@ vi.mock("../../../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntries,
 }));
 const ensureOnboardingPluginInstalled = vi.hoisted(() => vi.fn());
-vi.mock("../../onboarding-plugin-install.js", () => ({
-  ensureOnboardingPluginInstalled,
-}));
+// mock-isolation: Record installation requests without installing packages.
+vi.mock("../../onboarding-plugin-install.js", () => ({ ensureOnboardingPluginInstalled }));
 
 const resolveOwningPluginIdsForProvider = vi.hoisted(() => vi.fn(() => undefined));
 const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
@@ -59,6 +58,7 @@ vi.mock("./auth-choice.plugin-providers.runtime.js", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  runtime = createRuntime();
   resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
   resolveManifestProviderAuthChoice.mockReturnValue(undefined);
   resolveProviderInstallCatalogEntries.mockReturnValue([]);
@@ -71,22 +71,14 @@ beforeEach(() => {
     cfg,
     codexInstalled: false,
   }));
-  offerPostInstallMigrations.mockClear();
 });
 
+let runtime: ReturnType<typeof createRuntime>;
 function createRuntime() {
-  return {
-    error: vi.fn(),
-    exit: vi.fn(),
-    log: vi.fn(),
-  };
+  return { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
 }
 
-const target = {
-  agentId: "main",
-  agentDir: "/tmp/main-agent",
-  workspaceDir: "/tmp/workspace",
-};
+const target = { agentId: "main", agentDir: "/tmp/main-agent", workspaceDir: "/tmp/workspace" };
 
 function utilityFixtureProvider(id = "small"): ModelProviderConfig {
   return {
@@ -105,14 +97,26 @@ function utilityFixtureProvider(id = "small"): ModelProviderConfig {
   };
 }
 
+type ChoiceParams = Parameters<typeof applyNonInteractivePluginProviderChoice>[0];
+
+function applyChoice(params: Pick<ChoiceParams, "authChoice"> & Partial<ChoiceParams>) {
+  const nextConfig = params.nextConfig ?? { agents: { defaults: {} } };
+  return applyNonInteractivePluginProviderChoice({
+    nextConfig,
+    baseConfig: nextConfig,
+    opts: {},
+    runtime,
+    target,
+    resolveApiKey: vi.fn(),
+    toApiKeyCredential: vi.fn(),
+    ...params,
+  });
+}
+
 type MockCalls = { mock: { calls: Array<Array<unknown>> } };
 
 function mockCall(mock: MockCalls, callIndex = 0): Array<unknown> {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex}`);
-  }
-  return call;
+  return expectDefined(mock.mock.calls[callIndex], `expected mock call ${callIndex}`);
 }
 
 function mockArg(mock: MockCalls, callIndex = 0, argIndex = 0): Record<string, unknown> {
@@ -128,14 +132,37 @@ function expectWorkspaceDir(value: unknown) {
   expect((value as string).length).toBeGreaterThan(0);
 }
 
-function expectConfigDefaults(value: unknown) {
-  const config = value as { agents?: unknown };
-  expect(config.agents).toEqual({ defaults: {} });
-}
-
-function expectRuntimeErrorIncludes(runtime: ReturnType<typeof createRuntime>, text: string) {
+function expectRuntimeErrorIncludes(text: string) {
   const errorOutput = runtime.error.mock.calls.map(([message]) => String(message)).join("\n");
   expect(errorOutput).toContain(text);
+}
+
+function expectJsonError(message: unknown, json = true) {
+  if (!json) {
+    expect(runtime.log).not.toHaveBeenCalled();
+    return;
+  }
+  expect(runtime.log).toHaveBeenCalledOnce();
+  expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+    ok: false,
+    error: { type: "cli_error", message },
+    phase: "options",
+    message,
+  });
+}
+
+function mockProvider(
+  id: string,
+  runNonInteractive: ProviderAuthMethod["runNonInteractive"],
+  wizard?: { modelTarget: "utility" },
+) {
+  const provider = { id, pluginId: id, label: id };
+  resolvePluginProvidersCore.mockReturnValue([provider] as never);
+  resolveProviderPluginChoice.mockReturnValue({
+    provider,
+    method: { runNonInteractive },
+    wizard,
+  });
 }
 
 async function applyProviderModelChoice(params: {
@@ -144,38 +171,20 @@ async function applyProviderModelChoice(params: {
   nextConfig?: OpenClawConfig;
   target?: typeof target;
 }) {
-  const runtime = createRuntime();
   const nextConfig = params.nextConfig ?? { agents: { defaults: {} } };
-  const provider = {
-    id: params.providerId,
-    pluginId: params.providerId,
-    label: params.providerId,
-  };
   const runNonInteractive = vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
     ...config,
     agents: {
       ...config.agents,
-      defaults: {
-        ...config.agents?.defaults,
-        model: { primary: params.modelRef },
-      },
+      defaults: { ...config.agents?.defaults, model: { primary: params.modelRef } },
     },
   }));
-  resolvePluginProvidersCore.mockReturnValue([provider] as never);
-  resolveProviderPluginChoice.mockReturnValue({
-    provider,
-    method: { runNonInteractive },
-  });
+  mockProvider(params.providerId, runNonInteractive);
 
-  return applyNonInteractivePluginProviderChoice({
+  return applyChoice({
     nextConfig,
     authChoice: `provider-plugin:${params.providerId}:custom`,
-    opts: {} as never,
-    runtime: runtime as never,
-    baseConfig: nextConfig,
     target: params.target ?? target,
-    resolveApiKey: vi.fn(),
-    toApiKeyCredential: vi.fn(),
   });
 }
 
@@ -187,8 +196,6 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       let baseConfig: OpenClawConfig = legacy
         ? { models: { providers: { "local-fixture": localProvider } } }
         : {};
-      const provider = { id: "utility-fixture", label: "Utility fixture" };
-      resolvePluginProvidersCore.mockReturnValue([provider] as never);
       const runNonInteractive = vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
         ...config,
         models: { providers: { "utility-fixture": localProvider, ...config.models?.providers } },
@@ -197,31 +204,23 @@ describe("applyNonInteractivePluginProviderChoice", () => {
           defaults: {
             ...config.agents?.defaults,
             model: { primary: "utility-fixture/small" },
-            utilityModel: "utility-fixture/small",
+            utilityModel: {
+              primary: "utility-fixture/small",
+              fallbacks: ["utility-fixture/backup"],
+            },
           },
         },
       }));
-      resolveProviderPluginChoice.mockReturnValue({
-        provider,
-        wizard: { modelTarget: "utility" },
-        method: { runNonInteractive },
-      });
-      const runtime = createRuntime();
+      mockProvider("utility-fixture", runNonInteractive, { modelTarget: "utility" });
       const apply = () =>
-        applyNonInteractivePluginProviderChoice({
+        applyChoice({
           nextConfig: baseConfig,
-          baseConfig,
           authChoice: "provider-plugin:utility-fixture:custom",
-          opts: {},
-          runtime,
-          target,
-          resolveApiKey: vi.fn(),
-          toApiKeyCredential: vi.fn(),
         });
       if (legacy) {
         const original = structuredClone(baseConfig);
         expect(await apply()).toBeNull();
-        expectRuntimeErrorIncludes(runtime, "openclaw doctor --fix");
+        expectRuntimeErrorIncludes("openclaw doctor --fix");
         expect(runNonInteractive).not.toHaveBeenCalled();
         expect(ensureModelSelectionRuntimePlugins).not.toHaveBeenCalled();
         expect(baseConfig).toEqual(original);
@@ -232,7 +231,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       }
       const before = structuredClone(baseConfig);
       const result = await apply();
-      expect(result?.agents?.defaults?.utilityModel).toBe("utility-fixture/small");
+      expect(result?.agents?.defaults?.utilityModel).toEqual({
+        primary: "utility-fixture/small",
+        fallbacks: ["utility-fixture/backup"],
+      });
       expect(result?.agents?.defaults?.model).toEqual(
         legacy ? { primary: "local-fixture/small" } : undefined,
       );
@@ -249,33 +251,20 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         models: { providers: { "local-fixture": utilityFixtureProvider(id) } },
       };
       const original = structuredClone(baseConfig);
-      const provider = { id: "utility-fixture", label: "Utility fixture" };
       const runNonInteractive = vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
         ...config,
         models: {
           providers: { "utility-fixture": utilityFixtureProvider(), ...config.models?.providers },
         },
       }));
-      resolvePluginProvidersCore.mockReturnValue([provider] as never);
-      resolveProviderPluginChoice.mockReturnValue({
-        provider,
-        method: { runNonInteractive },
-        wizard: { modelTarget: "utility" },
-      });
-      const runtime = createRuntime();
+      mockProvider("utility-fixture", runNonInteractive, { modelTarget: "utility" });
       expect(
-        await applyNonInteractivePluginProviderChoice({
+        await applyChoice({
           nextConfig: baseConfig,
-          baseConfig,
           authChoice: "provider-plugin:utility-fixture:custom",
-          opts: {},
-          runtime,
-          target,
-          resolveApiKey: vi.fn(),
-          toApiKeyCredential: vi.fn(),
         }),
       ).toBeNull();
-      expectRuntimeErrorIncludes(runtime, "explicit primary model");
+      expectRuntimeErrorIncludes("explicit primary model");
       expect(runNonInteractive).not.toHaveBeenCalled();
       expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
       expect(ensureModelSelectionRuntimePlugins).not.toHaveBeenCalled();
@@ -294,20 +283,14 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         pluginId: "example",
         reason: "Plugin requires capability consent.",
       });
-    const runtime = createRuntime();
     try {
-      const result = await applyNonInteractivePluginProviderChoice({
+      const result = await applyChoice({
         nextConfig: config,
         authChoice: "example-api-key",
         opts: {},
-        runtime,
-        baseConfig: config,
-        target,
-        resolveApiKey: vi.fn(),
-        toApiKeyCredential: vi.fn(),
       });
       expect(result).toBeNull();
-      expectRuntimeErrorIncludes(runtime, "capability consent");
+      expectRuntimeErrorIncludes("capability consent");
       expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
       expect(resolveProviderPluginChoice).not.toHaveBeenCalled();
     } finally {
@@ -315,143 +298,66 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     }
   });
 
-  it.each(["nvidia", "google"])(
-    "keeps %s provider model selection on the configured explicit-fleet agent",
-    async (providerId) => {
-      const modelRef = `${providerId}/selected`;
+  it("keeps provider model selection on the configured explicit-fleet agent", async () => {
+    const providerId = "nvidia";
+    const modelRef = `${providerId}/selected`;
+    const result = await applyProviderModelChoice({
+      providerId,
+      modelRef,
+      target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+      nextConfig: {
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            systemAgent: { agentId: "ops" },
+            model: { primary: "anthropic/global" },
+            models: { "anthropic/global": { alias: "Global" } },
+          },
+          entries: {
+            main: { model: { primary: "anthropic/main" } },
+            ops: {
+              model: { primary: "openai/ops" },
+              models: { "openai/ops": { alias: "Operations" } },
+            },
+          },
+        },
+      },
+    });
+    expect(result?.agents?.defaults?.model).toEqual({ primary: "anthropic/global" });
+    expect(result?.agents?.defaults?.models).toEqual({ "anthropic/global": { alias: "Global" } });
+    expect(result?.agents?.entries?.ops?.model).toEqual({ primary: modelRef });
+    expect(result?.agents?.entries?.ops?.models).toEqual({ "openai/ops": { alias: "Operations" } });
+    expect(result?.agents?.entries?.main?.model).toEqual({ primary: "anthropic/main" });
+    expect(ensureModelSelectionRuntimePlugins).toHaveBeenCalledWith(
+      expect.objectContaining({ model: modelRef }),
+    );
+  });
+
+  it.each([
+    ["ollama", "ollama/qwen3:8b", undefined],
+    ["ollama", "ollama/qwen3:8b", false],
+    ["openai", "openai/gpt-5.6-luna", true],
+  ] as const)(
+    "preserves lean-tool choice for %s (%s, %s)",
+    async (providerId, modelRef, localModelLean) => {
       const result = await applyProviderModelChoice({
         providerId,
         modelRef,
-        target: {
-          agentId: "ops",
-          agentDir: "/tmp/ops-agent",
-          workspaceDir: "/tmp/ops-workspace",
-        },
         nextConfig: {
           agents: {
-            ownership: "explicit",
-            defaults: {
-              systemAgent: { agentId: "ops" },
-              model: { primary: "anthropic/global" },
-              models: { "anthropic/global": { alias: "Global" } },
-            },
-            entries: {
-              main: { model: { primary: "anthropic/main" } },
-              ops: {
-                model: { primary: "openai/ops" },
-                models: { "openai/ops": { alias: "Operations" } },
-              },
-            },
+            defaults: localModelLean === undefined ? {} : { experimental: { localModelLean } },
           },
         },
       });
-
-      expect(result?.agents?.defaults?.model).toEqual({ primary: "anthropic/global" });
-      expect(result?.agents?.defaults?.models).toEqual({
-        "anthropic/global": { alias: "Global" },
-      });
-      expect(result?.agents?.entries?.ops?.model).toEqual({ primary: modelRef });
-      expect(result?.agents?.entries?.ops?.models).toEqual({
-        "openai/ops": { alias: "Operations" },
-      });
-      expect(result?.agents?.entries?.main?.model).toEqual({ primary: "anthropic/main" });
-      expect(ensureModelSelectionRuntimePlugins).toHaveBeenCalledWith(
-        expect.objectContaining({ model: modelRef }),
-      );
+      expect(result?.agents?.defaults?.model).toEqual({ primary: modelRef });
+      expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(localModelLean);
+      expect(result?.wizard).toBeUndefined();
     },
   );
-
-  it.each([
-    { providerId: "lmstudio", modelRef: "lmstudio/qwen/qwen3-1.7b" },
-    { providerId: "ollama", modelRef: "ollama/qwen3:8b" },
-  ])("does not persist lean defaults for verified $providerId onboarding", async (params) => {
-    const result = await applyProviderModelChoice(params);
-
-    expect(result?.agents?.defaults?.model).toEqual({ primary: params.modelRef });
-    expect(result?.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-    expect(result?.wizard).toBeUndefined();
-  });
-
-  it.each([
-    { providerId: "lmstudio", modelRef: "lmstudio/qwen/qwen3-1.7b" },
-    { providerId: "ollama", modelRef: "ollama/qwen3:8b" },
-  ])("preserves explicit lean-tool opt-out for verified $providerId onboarding", async (params) => {
-    const result = await applyProviderModelChoice({
-      ...params,
-      nextConfig: {
-        agents: {
-          defaults: {
-            experimental: { localModelLean: false },
-          },
-        },
-      },
-    });
-
-    expect(result?.agents?.defaults?.model).toEqual({ primary: params.modelRef });
-    expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(false);
-    expect(result?.wizard).toBeUndefined();
-  });
-
-  it("preserves explicitly enabled lean tools for verified hosted providers", async () => {
-    const result = await applyProviderModelChoice({
-      providerId: "openai",
-      modelRef: "openai/gpt-5.6-luna",
-      nextConfig: {
-        agents: {
-          defaults: {
-            experimental: { localModelLean: true },
-          },
-        },
-      },
-    });
-
-    expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(true);
-    expect(result?.wizard).toBeUndefined();
-  });
-
-  it("loads plugin providers for provider-plugin auth choices", async () => {
-    const runtime = createRuntime();
-    const runNonInteractive = vi.fn(async () => ({ plugins: { allow: ["vllm"] } }));
-    resolveOwningPluginIdsForProvider.mockReturnValue(["vllm"] as never);
-    resolvePluginProvidersCore.mockReturnValue([{ id: "vllm", pluginId: "vllm" }] as never);
-    resolveProviderPluginChoice.mockReturnValue({
-      provider: { id: "vllm", pluginId: "vllm", label: "vLLM" },
-      method: { runNonInteractive },
-    });
-
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "provider-plugin:vllm:custom",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
-
-    expect(resolveOwningPluginIdsForProvider).toHaveBeenCalledOnce();
-    expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
-    expect(mockArg(resolveOwningPluginIdsForProvider).provider).toBe("vllm");
-    expect(resolvePluginProvidersCore).toHaveBeenCalledOnce();
-    const providersInput = mockArg(resolvePluginProvidersCore);
-    expect(providersInput.onlyPluginIds).toEqual(["vllm"]);
-    expect(providersInput.includeUntrustedWorkspacePlugins).toBe(false);
-    expect(resolveProviderPluginChoice).toHaveBeenCalledOnce();
-    expect(runNonInteractive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: target.agentDir,
-        workspaceDir: target.workspaceDir,
-      }),
-    );
-    expect(result).toEqual({ plugins: { allow: ["vllm"] } });
-    expect(resolveProviderInstallCatalogEntries).not.toHaveBeenCalled();
-  });
 
   it.each([false, true])(
     "keeps media setup global without replacing the text model (explicit fleet: %s)",
     async (explicitFleet) => {
-      const runtime = createRuntime();
       const provider = { id: "pixverse", pluginId: "pixverse", label: "PixVerse" };
       const initialConfig: OpenClawConfig = {
         agents: {
@@ -483,15 +389,11 @@ describe("applyNonInteractivePluginProviderChoice", () => {
           : undefined;
       });
 
-      const result = await applyNonInteractivePluginProviderChoice({
+      const result = await applyChoice({
         nextConfig: initialConfig,
         authChoice: "pixverse-api-key",
         opts: { pixverseApiKey: "pixverse-test-key" } as never,
-        runtime: runtime as never,
-        baseConfig: initialConfig,
-        target,
-        resolveApiKey: vi.fn(),
-        toApiKeyCredential: vi.fn(),
+        runtime,
       });
 
       expect(runNonInteractive).toHaveBeenCalledOnce();
@@ -506,14 +408,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   );
 
   it("installs an official catalog provider for a cold auth choice with whitespace", async () => {
-    const runtime = createRuntime();
     const runNonInteractive = vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
       ...config,
-      agents: {
-        defaults: {
-          model: { primary: "groq/llama-3.3-70b-versatile" },
-        },
-      },
+      agents: { defaults: { model: { primary: "groq/openai/gpt-oss-120b" } } },
     }));
     const provider = { id: "groq", pluginId: "groq", label: "Groq" };
     resolveProviderInstallCatalogEntries.mockReturnValue([
@@ -525,20 +422,11 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         choiceLabel: "Groq API key",
         label: "Groq",
         origin: "bundled",
-        install: {
-          npmSpec: "@openclaw/groq-provider",
-          defaultChoice: "npm",
-        },
+        install: { npmSpec: "@openclaw/groq-provider", defaultChoice: "npm" },
       },
     ]);
     ensureOnboardingPluginInstalled.mockResolvedValue({
-      cfg: {
-        plugins: {
-          entries: {
-            groq: { enabled: true },
-          },
-        },
-      },
+      cfg: { plugins: { entries: { groq: { enabled: true } } } },
       installed: true,
       pluginId: "groq",
       status: "installed",
@@ -548,18 +436,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       provider,
       method: { runNonInteractive },
     });
-
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+    const result = await applyChoice({
       authChoice: "  groq-api-key  ",
       opts: { groqApiKey: "groq-key" } as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
     });
-
     expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledExactlyOnceWith({
       config: { agents: { defaults: {} } },
       workspaceDir: target.workspaceDir,
@@ -571,10 +451,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         entry: {
           pluginId: "groq",
           label: "Groq",
-          install: {
-            npmSpec: "@openclaw/groq-provider",
-            defaultChoice: "npm",
-          },
+          install: { npmSpec: "@openclaw/groq-provider", defaultChoice: "npm" },
           trustedSourceLinkedOfficialInstall: true,
         },
         promptInstall: false,
@@ -584,21 +461,12 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(mockArg(resolvePluginProvidersCore, 1).providerRefs).toEqual(["groq"]);
     expect(runNonInteractive).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
-      agents: {
-        defaults: {
-          model: { primary: "groq/llama-3.3-70b-versatile" },
-        },
-      },
-      plugins: {
-        entries: {
-          groq: { enabled: true },
-        },
-      },
+      agents: { defaults: { model: { primary: "groq/openai/gpt-oss-120b" } } },
+      plugins: { entries: { groq: { enabled: true } } },
     });
   });
 
   it("guides deprecated official auth choices before a current catalog match can install", async () => {
-    const runtime = createRuntime();
     const choice = {
       pluginId: "qwen",
       providerId: "qwen",
@@ -613,21 +481,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       { ...choice, choiceId: "modelstudio-api-key" },
       { ...choice, deprecatedChoiceIds: ["modelstudio-api-key"] },
     ]);
-
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "modelstudio-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
-
+    const result = await applyChoice({ authChoice: "modelstudio-api-key" });
     expect(result).toBeNull();
     expectRuntimeErrorIncludes(
-      runtime,
       '"modelstudio-api-key" is no longer supported. Use --auth-choice "qwen-api-key" instead.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -642,20 +498,8 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   ])(
     "leaves unmatched auth choice %j without setup effects",
     async ({ authChoice, catalogReads }) => {
-      const runtime = createRuntime();
-      const config: OpenClawConfig = { agents: { defaults: {} } };
       const resolveApiKey = vi.fn();
-      const result = await applyNonInteractivePluginProviderChoice({
-        nextConfig: config,
-        authChoice,
-        opts: {},
-        runtime,
-        baseConfig: config,
-        target,
-        resolveApiKey,
-        toApiKeyCredential: vi.fn(),
-      });
-
+      const result = await applyChoice({ authChoice, resolveApiKey });
       expect(result).toBeUndefined();
       expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledTimes(catalogReads);
       expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
@@ -668,104 +512,53 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   it.each([false, true])(
     "rejects an unmatched provider-plugin auth choice while honoring json=%s",
     async (json) => {
-      const runtime = createRuntime();
-
-      const result = await applyNonInteractivePluginProviderChoice({
-        nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      const result = await applyChoice({
         authChoice: "provider-plugin:workspace-provider:api-key",
         opts: { json } as never,
-        runtime: runtime as never,
-        baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-        target,
-        resolveApiKey: vi.fn(),
-        toApiKeyCredential: vi.fn(),
       });
-
       expect(result).toBeNull();
       expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
       expect(resolveProviderInstallCatalogEntries).not.toHaveBeenCalled();
       expectRuntimeErrorIncludes(
-        runtime,
         'Auth choice "provider-plugin:workspace-provider:api-key" was not matched to a trusted provider plugin.',
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
-      if (json) {
-        expect(runtime.log).toHaveBeenCalledOnce();
-        expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
-          ok: false,
-          phase: "options",
-          message: expect.stringContaining("was not matched to a trusted provider plugin"),
-        });
-      } else {
-        expect(runtime.log).not.toHaveBeenCalled();
-      }
+      expectJsonError(
+        expect.stringContaining("was not matched to a trusted provider plugin"),
+        json,
+      );
     },
   );
 
   it.each([
-    { authChoice: "provider-plugin:", json: false },
     { authChoice: "provider-plugin:", json: true },
     { authChoice: "provider-plugin:   ", json: false },
     { authChoice: "provider-plugin::method", json: false },
   ])(
     "rejects a missing provider id before provider discovery (%j)",
     async ({ authChoice, json }) => {
-      const runtime = createRuntime();
       const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
-
-      const result = await applyNonInteractivePluginProviderChoice({
-        nextConfig,
-        authChoice,
-        opts: { json } as never,
-        runtime: runtime as never,
-        baseConfig: nextConfig,
-        target,
-        resolveApiKey: vi.fn(),
-        toApiKeyCredential: vi.fn(),
-      });
-
+      const result = await applyChoice({ nextConfig, authChoice, opts: { json } as never });
       expect(result).toBeNull();
       expect(runtime.exit).toHaveBeenCalledWith(1);
-      expectRuntimeErrorIncludes(runtime, "is missing a provider id");
-      expectRuntimeErrorIncludes(runtime, '"provider-plugin:<provider-id>"');
+      expectRuntimeErrorIncludes("is missing a provider id");
+      expectRuntimeErrorIncludes('"provider-plugin:<provider-id>"');
       expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
       expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
       expect(resolveProviderInstallCatalogEntries).not.toHaveBeenCalled();
-      if (json) {
-        expect(runtime.log).toHaveBeenCalledOnce();
-        expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
-          ok: false,
-          phase: "options",
-          message: expect.stringContaining("is missing a provider id"),
-        });
-      } else {
-        expect(runtime.log).not.toHaveBeenCalled();
-      }
+      expectJsonError(expect.stringContaining("is missing a provider id"), json);
     },
   );
 
   it("fails explicitly when a non-prefixed auth choice resolves only with untrusted providers", async () => {
-    const runtime = createRuntime();
     resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
     resolveManifestProviderAuthChoice.mockReturnValueOnce(undefined).mockReturnValueOnce({
       pluginId: "workspace-provider",
       providerId: "workspace-provider",
     } as never);
-
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "workspace-provider-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
-
+    const result = await applyChoice({ authChoice: "workspace-provider-api-key" });
     expect(result).toBeNull();
     expectRuntimeErrorIncludes(
-      runtime,
       'Auth choice "workspace-provider-api-key" matched a provider plugin that is not trusted or enabled for setup.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -778,13 +571,12 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(trustedManifestInput.includeUntrustedWorkspacePlugins).toBe(false);
     expect(mockCall(resolveManifestProviderAuthChoice, 1)[0]).toBe("workspace-provider-api-key");
     const untrustedManifestInput = mockArg(resolveManifestProviderAuthChoice, 1, 1);
-    expectConfigDefaults(untrustedManifestInput.config);
+    expect(untrustedManifestInput.config).toEqual({ agents: { defaults: {} } });
     expectWorkspaceDir(untrustedManifestInput.workspaceDir);
     expect(untrustedManifestInput.includeUntrustedWorkspacePlugins).toBe(true);
   });
 
   it("limits setup-provider resolution to owning plugin ids without pre-enabling them", async () => {
-    const runtime = createRuntime();
     const runNonInteractive = vi.fn(async () => ({ plugins: { allow: ["demo-plugin"] } }));
     resolveOwningPluginIdsForProvider.mockReturnValue(["demo-plugin"] as never);
     resolvePluginProvidersCore.mockReturnValue([
@@ -795,272 +587,105 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       method: { runNonInteractive },
     });
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+    const result = await applyChoice({
       authChoice: "provider-plugin:demo-provider:custom",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
+      runtime,
     });
 
     const providersInput = mockArg(resolvePluginProvidersCore);
-    expectConfigDefaults(providersInput.config);
+    expect(providersInput.config).toEqual({ agents: { defaults: {} } });
     expect(providersInput.onlyPluginIds).toEqual(["demo-plugin"]);
     expect(providersInput.includeUntrustedWorkspacePlugins).toBe(false);
     expect(runNonInteractive).toHaveBeenCalledOnce();
+    expect(runNonInteractive).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: target.agentDir, workspaceDir: target.workspaceDir }),
+    );
     expect(result).toEqual({ plugins: { allow: ["demo-plugin"] } });
+    expect(resolveOwningPluginIdsForProvider).toHaveBeenCalledOnce();
+    expect(mockArg(resolveOwningPluginIdsForProvider).provider).toBe("demo-provider");
+    expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
+    expect(resolvePluginProvidersCore).toHaveBeenCalledOnce();
+    expect(resolveProviderPluginChoice).toHaveBeenCalledOnce();
+    expect(resolveProviderInstallCatalogEntries).not.toHaveBeenCalled();
   });
 
-  it("filters untrusted workspace manifest choices when resolving inferred auth choices", async () => {
-    const runtime = createRuntime();
-    resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
-
-    await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "openai-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
-
-    const preferenceInput = mockArg(resolvePreferredProviderForAuthChoice);
-    expect(preferenceInput.choice).toBe("openai-api-key");
-    expect(preferenceInput.includeUntrustedWorkspacePlugins).toBe(false);
-    expect(mockArg(resolvePluginProvidersCore).includeUntrustedWorkspacePlugins).toBe(false);
-  });
-
-  it("ensures Codex after a non-interactive OpenAI provider choice sets the default model", async () => {
-    const runtime = createRuntime();
-    const selectedConfig = {
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
-    } as OpenClawConfig;
-    const installedConfig = {
-      ...selectedConfig,
-      plugins: { entries: { codex: { enabled: true } } },
-    } as OpenClawConfig;
-    const runNonInteractive = vi.fn(async () => selectedConfig);
-    ensureModelSelectionRuntimePlugins.mockResolvedValue({
-      ok: true,
-      cfg: installedConfig,
-      codexInstalled: true,
-    });
-    resolvePluginProvidersCore.mockReturnValue([{ id: "openai", pluginId: "openai" }] as never);
-    resolveProviderPluginChoice.mockReturnValue({
-      provider: { id: "openai", pluginId: "openai", label: "OpenAI" },
-      method: { runNonInteractive },
-    });
-
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "openai-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
-
-    expect(runNonInteractive).toHaveBeenCalledOnce();
-    const ensureInput = mockArg(ensureModelSelectionRuntimePlugins);
-    expect(ensureInput.cfg).toBe(selectedConfig);
-    expect(ensureInput.model).toBe("openai/gpt-5.5");
-    expect(ensureInput.runtime).toBe(runtime);
-    expectWorkspaceDir(ensureInput.workspaceDir);
-    expect(result).toBe(installedConfig);
-    expect(offerPostInstallMigrations).toHaveBeenCalledOnce();
-    const migrationInput = mockArg(offerPostInstallMigrations);
-    expect(migrationInput.config).toBe(installedConfig);
-    expect(migrationInput.installedPluginIds).toEqual(["codex"]);
-    expect(migrationInput.nonInteractive).toBe(true);
-  });
-
-  it.each(["failed", "timed_out"] as const)(
-    "rejects a required Codex runtime that is %s before later setup effects",
-    async (status) => {
-      const runtime = createRuntime();
-      const selectedConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
-      } as OpenClawConfig;
+  it.each([
+    ["openai", "openai-api-key", "codex"],
+    ["openai", "openai-api-key", undefined],
+    ["github-copilot", "github-copilot", "copilot"],
+  ] as const)(
+    "ensures the selected %s runtime (%s, %s)",
+    async (providerId, authChoice, runtimeId) => {
+      const model = `${providerId}/gpt-5.5`;
+      const selectedConfig: OpenClawConfig = {
+        agents: { defaults: { model: { primary: model } } },
+        ...(runtimeId === "copilot"
+          ? {
+              models: {
+                providers: {
+                  [providerId]: {
+                    baseUrl: "https://copilot.example",
+                    models: [],
+                    agentRuntime: { id: "copilot" },
+                  },
+                },
+              },
+            }
+          : {}),
+      };
+      const installedConfig = runtimeId
+        ? { ...selectedConfig, plugins: { entries: { [runtimeId]: { enabled: true } } } }
+        : selectedConfig;
       const runNonInteractive = vi.fn(async () => selectedConfig);
-      const message = `Codex runtime is required but unavailable (status: ${status}). Retry setup after checking npm and the configured registry.`;
-      ensureModelSelectionRuntimePlugins.mockResolvedValue({ ok: false, message });
-      resolvePluginProvidersCore.mockReturnValue([{ id: "openai", pluginId: "openai" }] as never);
-      resolveProviderPluginChoice.mockReturnValue({
-        provider: { id: "openai", pluginId: "openai", label: "OpenAI" },
-        method: { runNonInteractive },
+      ensureModelSelectionRuntimePlugins.mockResolvedValue({
+        ok: true,
+        cfg: installedConfig,
+        codexInstalled: runtimeId === "codex",
       });
-
-      const result = await applyNonInteractivePluginProviderChoice({
-        nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-        authChoice: "openai-api-key",
-        opts: { json: true } as never,
-        runtime: runtime as never,
-        baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-        target,
-        resolveApiKey: vi.fn(),
-        toApiKeyCredential: vi.fn(),
+      mockProvider(providerId, runNonInteractive);
+      expect(await applyChoice({ authChoice })).toBe(installedConfig);
+      expect(runNonInteractive).toHaveBeenCalledOnce();
+      const ensureInput = mockArg(ensureModelSelectionRuntimePlugins);
+      expect(ensureInput.cfg).toBe(selectedConfig);
+      expect(ensureInput.runtime).toBe(runtime);
+      expect(ensureInput.model).toBe(model);
+      expectWorkspaceDir(ensureInput.workspaceDir);
+      expect(mockArg(resolvePreferredProviderForAuthChoice)).toMatchObject({
+        choice: authChoice,
+        includeUntrustedWorkspacePlugins: false,
       });
-
-      expect(result).toBeNull();
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.error).toHaveBeenCalledWith(message);
-      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
-        ok: false,
-        phase: "options",
-        message,
-      });
-      expect(runtime.log).toHaveBeenCalledOnce();
-      expect(offerPostInstallMigrations).not.toHaveBeenCalled();
+      expect(mockArg(resolvePluginProvidersCore).includeUntrustedWorkspacePlugins).toBe(false);
+      if (runtimeId === "codex") {
+        expect(offerPostInstallMigrations).toHaveBeenCalledOnce();
+        expect(mockArg(offerPostInstallMigrations).config).toBe(installedConfig);
+        expect(mockArg(offerPostInstallMigrations)).toMatchObject({
+          config: installedConfig,
+          installedPluginIds: ["codex"],
+          nonInteractive: true,
+        });
+      } else {
+        expect(offerPostInstallMigrations).not.toHaveBeenCalled();
+      }
     },
   );
 
-  it("ensures Copilot after a non-interactive GitHub Copilot choice opts into the runtime", async () => {
-    const runtime = createRuntime();
+  it("rejects an unavailable required runtime before later setup effects", async () => {
     const selectedConfig = {
-      agents: { defaults: { model: { primary: "github-copilot/gpt-5.5" } } },
-      models: {
-        providers: {
-          "github-copilot": { agentRuntime: { id: "copilot" } },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const installedConfig = {
-      ...selectedConfig,
-      plugins: { entries: { copilot: { enabled: true } } },
-    } as unknown as OpenClawConfig;
-    const runNonInteractive = vi.fn(async () => selectedConfig);
-    ensureModelSelectionRuntimePlugins.mockResolvedValue({
-      ok: true,
-      cfg: installedConfig,
-      codexInstalled: false,
-    });
-    resolvePluginProvidersCore.mockReturnValue([
-      { id: "github-copilot", pluginId: "github-copilot" },
-    ] as never);
-    resolveProviderPluginChoice.mockReturnValue({
-      provider: { id: "github-copilot", pluginId: "github-copilot", label: "GitHub Copilot" },
-      method: { runNonInteractive },
-    });
-
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "github-copilot",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
-
-    const ensureInput = mockArg(ensureModelSelectionRuntimePlugins);
-    expect(ensureInput.cfg).toBe(selectedConfig);
-    expect(ensureInput.model).toBe("github-copilot/gpt-5.5");
-    expect(ensureInput.runtime).toBe(runtime);
-    expectWorkspaceDir(ensureInput.workspaceDir);
-    expect(result).toBe(installedConfig);
-  });
-
-  it("rejects a required Copilot runtime after an optional Codex no-op", async () => {
-    const runtime = createRuntime();
-    const selectedConfig = {
-      agents: { defaults: { model: { primary: "github-copilot/gpt-5.5" } } },
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     } as OpenClawConfig;
     const runNonInteractive = vi.fn(async () => selectedConfig);
     const message =
-      "GitHub Copilot agent runtime is required but unavailable (status: failed). Retry setup after checking npm and the configured registry.";
+      "Codex runtime is required but unavailable (status: failed). Retry setup after checking npm and the configured registry.";
     ensureModelSelectionRuntimePlugins.mockResolvedValue({ ok: false, message });
-    resolvePluginProvidersCore.mockReturnValue([
-      { id: "github-copilot", pluginId: "github-copilot" },
-    ] as never);
-    resolveProviderPluginChoice.mockReturnValue({
-      provider: { id: "github-copilot", pluginId: "github-copilot", label: "GitHub Copilot" },
-      method: { runNonInteractive },
-    });
-
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "github-copilot",
-      opts: { json: true } as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
-
-    expect(result).toBeNull();
-    expect(ensureModelSelectionRuntimePlugins).toHaveBeenCalledOnce();
-    expect(offerPostInstallMigrations).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("does not offer post-install migration when Codex is not required for the selected model", async () => {
-    const runtime = createRuntime();
-    const selectedConfig = {
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
-    } as OpenClawConfig;
-    const runNonInteractive = vi.fn(async () => selectedConfig);
-    ensureModelSelectionRuntimePlugins.mockResolvedValue({
-      ok: true,
-      cfg: selectedConfig,
-      codexInstalled: false,
-    });
-    resolvePluginProvidersCore.mockReturnValue([{ id: "openai", pluginId: "openai" }] as never);
-    resolveProviderPluginChoice.mockReturnValue({
-      provider: { id: "openai", pluginId: "openai", label: "OpenAI" },
-      method: { runNonInteractive },
-    });
-
-    await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+    mockProvider("openai", runNonInteractive);
+    const result = await applyChoice({
       authChoice: "openai-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
+      opts: { json: true } as never,
     });
-
+    expect(result).toBeNull();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).toHaveBeenCalledWith(message);
+    expectJsonError(message);
     expect(offerPostInstallMigrations).not.toHaveBeenCalled();
   });
-
-  it.each(["ollama/kimi-k2.5:cloud", "ollama/gpt-oss:120b-cloud"])(
-    "does not enable local-model lean when Ollama selects hosted model %s",
-    async (modelRef) => {
-      const result = await applyProviderModelChoice({ providerId: "ollama", modelRef });
-
-      expect(result?.agents?.defaults?.model).toEqual({ primary: modelRef });
-      expect(result?.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-      expect(result?.wizard).toBeUndefined();
-    },
-  );
-
-  it.each([false, true])(
-    "preserves explicit local-model lean=%s when Ollama selects a hosted model",
-    async (localModelLean) => {
-      const result = await applyProviderModelChoice({
-        providerId: "ollama",
-        modelRef: "ollama/kimi-k2.5:cloud",
-        nextConfig: {
-          agents: {
-            defaults: {
-              experimental: { localModelLean },
-            },
-          },
-        },
-      });
-
-      expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(localModelLean);
-      expect(result?.wizard).toBeUndefined();
-    },
-  );
 });

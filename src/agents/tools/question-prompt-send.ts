@@ -4,7 +4,6 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
-  type DurableMessageBatchSendResult,
 } from "../../channels/message/runtime.js";
 import { resolveControlUiSessionLinkBase } from "../../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -29,6 +28,9 @@ export type QuestionPromptDelivery = {
   send: QuestionPromptSend;
   messageChannel?: string;
 };
+
+/** Host-generated capability guidance that is safe to return to the model. */
+export class QuestionPromptUnavailableError extends Error {}
 
 /** Builds a portable prompt sender for Gateway-scoped / loopback tool construction. */
 export function createChannelQuestionPromptDelivery(params: {
@@ -59,25 +61,21 @@ export function createChannelQuestionPromptDelivery(params: {
         deliveryRetryOwner: "caller",
         signal: options?.signal,
       });
-      settleChannelQuestionPromptSend(send);
+      // Fail closed when the durable batch did not reach the chat. ask_user then
+      // cancels instead of waiting on Control UI after a suppressed or failed send.
+      if (durableMessageBatchMayHaveReachedRecipient(send)) {
+        return;
+      }
+      if (send.status === "failed") {
+        throw send.error;
+      }
+      throw new Error(
+        send.status === "suppressed"
+          ? `question prompt delivery was suppressed: ${send.reason}`
+          : "question prompt delivery did not reach the conversation",
+      );
     },
   };
-}
-
-function settleChannelQuestionPromptSend(send: DurableMessageBatchSendResult): void {
-  // Fail closed when the durable batch did not reach the chat. ask_user then
-  // cancels instead of waiting on Control UI after a suppressed or failed send.
-  if (durableMessageBatchMayHaveReachedRecipient(send)) {
-    return;
-  }
-  if (send.status === "failed") {
-    throw send.error;
-  }
-  throw new Error(
-    send.status === "suppressed"
-      ? `question prompt delivery was suppressed: ${send.reason}`
-      : "question prompt delivery did not reach the conversation",
-  );
 }
 
 /**
@@ -112,7 +110,7 @@ export async function sendQuestionToolPrompt(params: {
     await send({ text, channelData: { askUser: { questionId } } });
     if (!controlUiBase) {
       // A visible blocker is not a delivered entry form; cancel the pending wait.
-      throw new Error(text);
+      throw new QuestionPromptUnavailableError(text);
     }
     return;
   }

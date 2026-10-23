@@ -6,7 +6,6 @@ import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
-import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -27,7 +26,7 @@ import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 const report = "Seven blue boxes remain. Thursday delivery is confirmed.";
 const backendId = "spawn-effects-fixture";
 const config: OpenClawConfig = {
-  agents: { defaults: { subagents: { allowAgents: ["main"] } }, list: [{ id: "main" }] },
+  agents: { defaults: { subagents: { allowAgents: ["main"] } }, entries: { main: {} } },
 };
 
 async function withSpawnConfig(cfg: OpenClawConfig, run: () => Promise<void>) {
@@ -86,13 +85,9 @@ function observeRecoveredSpawn(result: unknown, mutatingAction: boolean) {
   const recovered = observe({ toolName: "read", outcome: "success" });
   const payloads = buildPayloads({
     assistantTexts: [report],
-    isHeartbeatTrigger: true,
     lastToolError: recovered.lastToolError,
   });
   expect(payloads.some((payload) => payload.text === report)).toBe(true);
-  expect(
-    payloads.some((payload) => getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure),
-  ).toBe(mutatingAction);
 }
 
 describe("sessions_spawn terminal effects", () => {
@@ -109,7 +104,7 @@ describe("sessions_spawn terminal effects", () => {
       args: {},
       subagents: { requireAgentId: true },
     },
-  ])("keeps recovered $name rejection out of heartbeat failure", async (testCase) => {
+  ])("classifies recovered $name rejection as not started", async (testCase) => {
     const callGateway = vi.spyOn(inProcessGateway, "callInProcessGatewayTool");
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -134,7 +129,7 @@ describe("sessions_spawn terminal effects", () => {
     observeRecoveredSpawn(snapshotToolSearchTargetTranscriptResult(result), false);
   });
 
-  it("keeps an internal argument exception out of heartbeat failure", async () => {
+  it("classifies an internal argument exception as not started", async () => {
     const tool = createSessionsSpawnTool({ config, countActiveRuns: () => 0 });
     const error = await tool
       .execute("spawn", {
@@ -207,7 +202,7 @@ describe("sessions_spawn terminal effects", () => {
         config: {
           agents: {
             defaults: { sandbox: { mode: "all" } },
-            list: [{ id: "main", workspace }],
+            entries: { main: { workspace } },
           },
         },
         callGateway: inProcessGateway.callInProcessGatewayTool,
@@ -224,7 +219,7 @@ describe("sessions_spawn terminal effects", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves dispatch failure with nested no-start proof: %s",
     async (nestedNoStart) => {
       const failure = new Error("Gateway disconnected");

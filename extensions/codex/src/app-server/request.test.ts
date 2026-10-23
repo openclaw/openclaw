@@ -1,33 +1,39 @@
-// Codex tests cover request plugin behavior.
 import path from "node:path";
 import { isNativeError } from "node:util/types";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
+import {
   clearSessionStoreCacheForTest,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { codexControlRequest } from "../command-rpc.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
 import { createClientHarness } from "./test-support.js";
-
-const sharedClientMocks = vi.hoisted(() => ({
-  CodexAppServerStartSelectionChangedError: class extends Error {
-    readonly code = "CODEX_APP_SERVER_START_SELECTION_CHANGED";
-  },
-  createIsolatedCodexAppServerClient: vi.fn(),
-  getSharedCodexAppServerClient: vi.fn(),
-  isCodexAppServerStartSelectionChangedError: (error: unknown) =>
-    error instanceof Error &&
-    "code" in error &&
-    error.code === "CODEX_APP_SERVER_START_SELECTION_CHANGED",
-  releaseLeasedSharedCodexAppServerClient: vi.fn(),
-  retireSharedCodexAppServerClientIfCurrent: vi.fn(),
+const shared = vi.hoisted(() => ({
+  isolated: vi.fn(),
+  acquire: vi.fn(),
+  release: vi.fn(),
+  retire: vi.fn(),
 }));
 
+// mock-isolation: Quota notifications belong to live leases; this suite exercises isolated fallback.
+vi.mock("./shared-client-usage.js", () => ({
+  readSharedCodexAppServerUsage: vi.fn(async () => undefined),
+}));
+
+// mock-isolation: Requests use fixture-owned clients, never process-global shared leases.
 vi.mock("./shared-client.js", () => ({
-  ...sharedClientMocks,
-  getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
+  createIsolatedCodexAppServerClient: shared.isolated,
+  getSharedCodexAppServerClient: shared.acquire,
+  getLeasedSharedCodexAppServerClient: shared.acquire,
+  releaseLeasedSharedCodexAppServerClient: shared.release,
+  retireSharedCodexAppServerClientIfCurrent: shared.retire,
 }));
 
 const {
@@ -39,292 +45,180 @@ const {
 } = await import("./request.js");
 const { listAllCodexAppServerModels } = await import("./models.js");
 
+const listRequest = (options: Partial<Parameters<typeof requestCodexAppServerJson>[0]> = {}) =>
+  requestCodexAppServerJson({ method: "thread/list", requestParams: {}, ...options });
+
 const expectDeadlineOptions = () =>
   expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.anything() });
+const sandboxPolicy = {
+  config: { agents: { defaults: { sandbox: { mode: "all" as const } } } },
+  sessionKey: "sandboxed-session",
+};
+const nodePolicy = {
+  config: { tools: { exec: { host: "node" as const, node: "worker-1" } } },
+  sessionKey: "node-session",
+};
+const sandboxEnvironment = {
+  cwd: "/workspace",
+  environments: [{ environmentId: "openclaw-sandbox-abc123", cwd: "/workspace" }],
+};
+const mockRequest = (response: unknown = { ok: true }) => {
+  const request = vi.fn(async () => response);
+  shared.acquire.mockResolvedValue({ request });
+  return request;
+};
+function deferAcquisition<T>(once = true) {
+  const entered = createDeferred<void>();
+  const acquisition = createDeferred<T>();
+  shared.acquire[once ? "mockImplementationOnce" : "mockImplementation"](() => {
+    entered.resolve();
+    return acquisition.promise;
+  });
+  return { entered, acquisition };
+}
 
 describe("requestCodexAppServerJson sandbox guard", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-preflight-");
   beforeEach(() => {
-    sharedClientMocks.createIsolatedCodexAppServerClient.mockReset();
-    sharedClientMocks.getSharedCodexAppServerClient.mockReset();
-    sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
-    sharedClientMocks.retireSharedCodexAppServerClientIfCurrent.mockReset();
+    setRuntimeConfigSnapshot({});
+    for (const mock of Object.values(shared)) {
+      mock.mockReset();
+    }
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
-  it("fails closed before raw app-server bypass methods in sandboxed sessions", async () => {
-    await expect(
-      requestCodexAppServerJson({
-        method: "command/exec",
-        requestParams: { command: ["sh", "-lc", "id"] },
-        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
-        sessionKey: "sandboxed-session",
-      }),
-    ).rejects.toThrow(
-      "Codex-native app-server method `command/exec` is unavailable because OpenClaw sandboxing is active for this session.",
-    );
-
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("fails closed before raw app-server bypass methods when exec host=node is active", async () => {
-    for (const method of ["command/exec", "process/spawn"]) {
-      await expect(
-        requestCodexAppServerJson({
-          method,
-          requestParams: { command: ["sh", "-lc", "id"] },
-          config: { tools: { exec: { host: "node", node: "worker-1" } } },
-          sessionKey: "node-session",
-        }),
-      ).rejects.toThrow(
-        `Codex-native app-server method \`${method}\` is unavailable because OpenClaw exec host=node is active for this session.`,
-      );
-    }
-
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("allows metadata methods in sandboxed sessions", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-
-    await expect(
-      requestCodexAppServerJson({
+  it("rejects a native write when the selected session changes during async admission", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const sessionKey = "agent:main:async-native-admission";
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: { sessionId: "first-session", updatedAt: 1 },
+    });
+    const selected = await captureSessionEntryCurrentCheckAsync({
+      agentId: "main",
+      storePath,
+      sessionKey,
+    });
+    const entered = createDeferred<void>();
+    const resume = createDeferred<void>();
+    const harness = createClientHarness();
+    try {
+      const request = requestCodexAppServerClientJson({
+        client: harness.client,
         method: "thread/list",
-        requestParams: { limit: 10 },
-        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
-        sessionKey: "sandboxed-session",
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(request).toHaveBeenCalledWith("thread/list", { limit: 10 }, expectDeadlineOptions());
+        requestParams: {},
+        assertCurrentAsync: async () => {
+          entered.resolve();
+          await resume.promise;
+          await selected.assertCurrent();
+        },
+      });
+      const rejected = expect(request).rejects.toThrow();
+      await entered.promise;
+      await upsertSessionEntry({
+        agentId: "main",
+        storePath,
+        sessionKey,
+        entry: { sessionId: "replacement-session", updatedAt: 2 },
+      });
+      resume.resolve();
+      await rejected;
+      expect(harness.writes).toEqual([]);
+    } finally {
+      resume.resolve();
+      harness.client.close();
+    }
   });
 
   it.each([
-    {
-      method: "app/installed" as const,
-      requestParams: { threadId: "thread-1", forceRefresh: false },
-      response: { apps: [] },
-    },
-    {
-      method: "app/read" as const,
-      requestParams: { appIds: ["calendar-app"], includeTools: false },
-      response: { apps: [] },
-    },
-    {
-      method: "plugin/installed" as const,
-      requestParams: { cwds: [] },
-      response: { marketplaces: [], marketplaceLoadErrors: [] },
-    },
-    {
-      method: "experimentalFeature/list" as const,
-      requestParams: {},
-      response: { data: [], nextCursor: null },
-    },
-    {
-      method: "config/batchWrite" as const,
-      requestParams: {
+    ["sandbox", "command/exec"],
+    ["node", "command/exec"],
+    ["node", "process/spawn"],
+    ["sandbox", "app/activate"],
+    ["node", "app/activate"],
+    ["sessionless", "command/exec"],
+    ["sessionless", "config/mcpServer/reload"],
+    ["nodeSandbox", "thread/start"],
+  ] as const)("fails closed before acquisition: %s %s", async (scope, method) => {
+    const policies = {
+      sandbox: sandboxPolicy,
+      node: nodePolicy,
+      sessionless: { config: nodePolicy.config },
+      nodeSandbox: { ...nodePolicy, config: { ...sandboxPolicy.config, ...nodePolicy.config } },
+    };
+    const requestParams =
+      method === "thread/start"
+        ? sandboxEnvironment
+        : method === "app/activate" || method === "config/mcpServer/reload"
+          ? {}
+          : { command: ["sh", "-lc", "id"] };
+    const reason = scope === "sandbox" ? "OpenClaw sandboxing" : "OpenClaw exec host=node";
+    await expect(
+      requestCodexAppServerJson({ method, requestParams, ...policies[scope] }),
+    ).rejects.toThrow(
+      `Codex-native app-server method \`${method}\` is unavailable because ${reason} is active for this session.`,
+    );
+    expect(shared.acquire).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["thread/list", { limit: 10 }, true],
+    ["app/installed", { threadId: "thread-1", forceRefresh: false }, true],
+    ["app/read", { appIds: ["calendar-app"], includeTools: false }, true],
+    ["plugin/installed", { cwds: [] }, true],
+    ["experimentalFeature/list", {}, true],
+    [
+      "config/batchWrite",
+      {
         edits: [
           {
             keyPath: 'apps."calendar".tools."create".approval_mode',
             value: null,
-            mergeStrategy: "replace" as const,
+            mergeStrategy: "replace",
           },
         ],
       },
-      response: {
-        status: "ok",
-        version: "1",
-        filePath: "/codex/config.toml",
-        overriddenMetadata: null,
+      true,
+    ],
+    ["thread/name/set", { threadId: "thread-1", name: "Shared thread" }, false],
+    ["thread/archive", { threadId: "thread-1" }, false],
+    ["thread/unarchive", { threadId: "thread-1" }, false],
+    [
+      "config/value/write",
+      {
+        keyPath: 'apps."google-calendar-app".tools',
+        value: null,
+        mergeStrategy: "replace",
       },
-    },
-  ])(
-    "allows the $method control-plane request under sandbox and node execution policies",
-    async ({ method, requestParams, response }) => {
-      const request = vi.fn(async () => response);
-      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-
-      for (const policy of [
-        {
-          config: { agents: { defaults: { sandbox: { mode: "all" as const } } } },
-          sessionKey: "sandboxed-session",
-        },
-        {
-          config: { tools: { exec: { host: "node" as const, node: "worker-1" } } },
-          sessionKey: "node-session",
-        },
-      ]) {
-        await expect(
-          requestCodexAppServerJson({
-            method,
-            requestParams,
-            ...policy,
-          }),
-        ).resolves.toEqual(response);
-      }
-
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(request).toHaveBeenNthCalledWith(1, method, requestParams, expectDeadlineOptions());
-      expect(request).toHaveBeenNthCalledWith(2, method, requestParams, expectDeadlineOptions());
-    },
-  );
-
-  it.each([
-    {
-      description: "sandboxed",
-      config: { agents: { defaults: { sandbox: { mode: "all" as const } } } },
-      sessionKey: "sandboxed-session",
-      reason: "OpenClaw sandboxing is active for this session",
-    },
-    {
-      description: "node-hosted",
-      config: { tools: { exec: { host: "node" as const, node: "worker-1" } } },
-      sessionKey: "node-session",
-      reason: "OpenClaw exec host=node is active for this session",
-    },
-  ])(
-    "fails closed for unlisted app methods in $description sessions",
-    async ({ config, sessionKey, reason }) => {
+      false,
+    ],
+    ["config/read", { includeLayers: false }, false],
+    ["thread/start", sandboxEnvironment, false],
+  ] as const)("allows %s under its execution policies", async (method, requestParams, alsoNode) => {
+    const response = { ok: true };
+    const request = mockRequest(response);
+    const policies = alsoNode ? [sandboxPolicy, nodePolicy] : [sandboxPolicy];
+    for (const policy of policies) {
       await expect(
-        requestCodexAppServerJson({
-          method: "app/activate",
-          requestParams: {},
-          config,
-          sessionKey,
-        }),
-      ).rejects.toThrow(
-        `Codex-native app-server method \`app/activate\` is unavailable because ${reason}.`,
-      );
-
-      expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-    },
-  );
-
-  it("allows current native thread management methods in sandboxed sessions", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-
-    for (const method of ["thread/name/set", "thread/archive", "thread/unarchive"] as const) {
-      await expect(
-        requestCodexAppServerJson({
-          method,
-          requestParams:
-            method === "thread/name/set"
-              ? { threadId: "thread-1", name: "Shared thread" }
-              : { threadId: "thread-1" },
-          config: { agents: { defaults: { sandbox: { mode: "all" } } } },
-          sessionKey: "sandboxed-session",
-        }),
-      ).resolves.toEqual({ ok: true });
+        requestCodexAppServerJson({ method, requestParams, ...policy }),
+      ).resolves.toEqual(response);
     }
-
-    expect(request).toHaveBeenCalledTimes(3);
-  });
-
-  it("fails closed for config-level exec host=node even without a session key", async () => {
-    await expect(
-      requestCodexAppServerJson({
-        method: "command/exec",
-        requestParams: { command: ["sh", "-lc", "id"] },
-        config: { tools: { exec: { host: "node", node: "worker-1" } } },
-      }),
-    ).rejects.toThrow(
-      "Codex-native app-server method `command/exec` is unavailable because OpenClaw exec host=node is active for this session.",
-    );
-
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("fails closed for MCP reload when config-level exec host=node is active", async () => {
-    await expect(
-      requestCodexAppServerJson({
-        method: "config/mcpServer/reload",
-        requestParams: {},
-        config: { tools: { exec: { host: "node", node: "worker-1" } } },
-      }),
-    ).rejects.toThrow(
-      "Codex-native app-server method `config/mcpServer/reload` is unavailable because OpenClaw exec host=node is active for this session.",
-    );
-
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("allows metadata methods when exec host=node is active", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-
-    await expect(
-      requestCodexAppServerJson({
-        method: "thread/list",
-        requestParams: { limit: 10 },
-        config: { tools: { exec: { host: "node", node: "worker-1" } } },
-        sessionKey: "node-session",
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(request).toHaveBeenCalledWith("thread/list", { limit: 10 }, expectDeadlineOptions());
-  });
-
-  it("allows config value writes in sandboxed sessions", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-    const params = {
-      keyPath: 'apps."google-calendar-app".tools',
-      value: null,
-      mergeStrategy: "replace",
-    };
-
-    await expect(
-      requestCodexAppServerJson({
-        method: "config/value/write",
-        requestParams: params,
-        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
-        sessionKey: "sandboxed-session",
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(request).toHaveBeenCalledWith("config/value/write", params, expectDeadlineOptions());
-  });
-
-  it("allows config reads in sandboxed sessions", async () => {
-    const request = vi.fn(async () => ({ config: { apps: { apps: {} } } }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-    const params = { includeLayers: false };
-
-    await expect(
-      requestCodexAppServerJson({
-        method: "config/read",
-        requestParams: params,
-        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
-        sessionKey: "sandboxed-session",
-      }),
-    ).resolves.toEqual({ config: { apps: { apps: {} } } });
-
-    expect(request).toHaveBeenCalledWith("config/read", params, expectDeadlineOptions());
-  });
-
-  it("allows sandbox-pinned thread starts in sandboxed sessions", async () => {
-    const request = vi.fn(async () => ({ thread: { id: "thread-1" }, model: "gpt-5.5" }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-    const params = {
-      cwd: "/workspace",
-      environments: [{ environmentId: "openclaw-sandbox-abc123", cwd: "/workspace" }],
-    };
-
-    await expect(
-      requestCodexAppServerJson({
-        method: "thread/start",
-        requestParams: params,
-        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
-        sessionKey: "sandboxed-session",
-      }),
-    ).resolves.toEqual({ thread: { id: "thread-1" }, model: "gpt-5.5" });
-
-    expect(request).toHaveBeenCalledWith("thread/start", params, expectDeadlineOptions());
+    expect(request).toHaveBeenCalledTimes(policies.length);
+    for (let index = 0; index < policies.length; index++) {
+      expect(request).toHaveBeenNthCalledWith(
+        index + 1,
+        method,
+        requestParams,
+        expectDeadlineOptions(),
+      );
+    }
   });
 
   it.each([
@@ -342,14 +236,10 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     async ({ error, category }) => {
       const request = vi.fn().mockRejectedValue(error);
       const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-      await expect(
-        requestCodexAppServerJson({
-          method: "thread/list",
-          requestParams: { limit: 1 },
-          controlObservation,
-        }),
-      ).rejects.toBe(error);
+      shared.acquire.mockResolvedValue({ request });
+      await expect(listRequest({ requestParams: { limit: 1 }, controlObservation })).rejects.toBe(
+        error,
+      );
       expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
         phase: "client-request",
         category,
@@ -360,10 +250,8 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         expectDeadlineOptions(),
       );
       expect(request.mock.calls[0]?.[2]).not.toHaveProperty("controlObservation");
-      expect(sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0]).not.toHaveProperty(
-        "controlObservation",
-      );
-      expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
+      expect(shared.acquire.mock.calls[0]?.[0]).not.toHaveProperty("controlObservation");
+      expect(shared.release).toHaveBeenCalledOnce();
       expect(JSON.stringify(controlObservation.failed.mock.calls)).not.toContain("private-");
     },
   );
@@ -387,7 +275,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       const request = vi.spyOn(harness.client, "request");
       const attemptWaiterFinished = vi.fn();
       const controlObservation = { phase: vi.fn(), failed: vi.fn(), attemptWaiterFinished };
-      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(harness.client);
+      shared.acquire.mockResolvedValue(harness.client);
       try {
         const params = { method, requestParams: {}, controlObservation };
         const result =
@@ -405,9 +293,9 @@ describe("requestCodexAppServerJson sandbox guard", () => {
           expect(attemptWaiterFinished).not.toHaveBeenCalled();
         }
         if (owner === "owned") {
-          expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+          expect(shared.acquire).not.toHaveBeenCalled();
         } else {
-          const acquisition = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+          const acquisition = shared.acquire.mock.calls[0]?.[0];
           expect(acquisition).not.toHaveProperty("controlObservation");
           expect(acquisition).not.toHaveProperty("attemptWaiterFinished");
         }
@@ -421,42 +309,14 @@ describe("requestCodexAppServerJson sandbox guard", () => {
   it("reports an acquisition rejection without inventing a client request or lease", async () => {
     const error = new Error("private-acquire-error");
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-    sharedClientMocks.getSharedCodexAppServerClient.mockRejectedValue(error);
-    await expect(
-      requestCodexAppServerJson({ method: "thread/list", requestParams: {}, controlObservation }),
-    ).rejects.toBe(error);
+    shared.acquire.mockRejectedValue(error);
+    await expect(listRequest({ controlObservation })).rejects.toBe(error);
     expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
       phase: "acquire-client",
       category: "other",
     });
     expect(controlObservation.phase).not.toHaveBeenCalledWith("client-request");
-    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("preserves the prepare phase for a scoped rejection before API entry", async () => {
-    const cause = new Error("private-authority-error");
-    const request = vi.fn();
-    const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-    await expect(
-      requestCodexAppServerJson({
-        method: "thread/list",
-        requestParams: {},
-        controlObservation,
-        assertCurrent: () => {
-          throw cause;
-        },
-      }),
-    ).rejects.toMatchObject({
-      name: "CodexAppServerScopedRequestRejectedError",
-      cause,
-      stack: expect.stringContaining("\n    at "),
-    });
-    expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
-      phase: "prepare",
-      category: "scoped-rejection",
-    });
-    expect(request).not.toHaveBeenCalled();
+    expect(shared.release).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -465,7 +325,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       const requestError = new Error("private-request-error");
       const cleanupError = new Error("private-cleanup-error");
       const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-      sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue({
+      shared.isolated.mockResolvedValue({
         request: vi.fn().mockRejectedValue(requestError),
         closeAndWait: vi.fn(async () => {
           if (cleanupFails) {
@@ -473,14 +333,9 @@ describe("requestCodexAppServerJson sandbox guard", () => {
           }
         }),
       });
-      await expect(
-        requestCodexAppServerJson({
-          method: "thread/list",
-          requestParams: {},
-          isolated: true,
-          controlObservation,
-        }),
-      ).rejects.toBe(cleanupFails ? cleanupError : requestError);
+      await expect(listRequest({ isolated: true, controlObservation })).rejects.toBe(
+        cleanupFails ? cleanupError : requestError,
+      );
       expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
         phase: cleanupFails ? "release-client" : "client-request",
         category: "other",
@@ -493,20 +348,14 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const elapsedClock = vi.spyOn(performance, "now").mockReturnValue(0);
     const requestError = new Error("private-request-error");
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-    sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue({
+    shared.isolated.mockResolvedValue({
       request: vi.fn().mockRejectedValue(requestError),
       closeAndWait: vi.fn(async () => {
         elapsedClock.mockReturnValue(51);
       }),
     });
     await expect(
-      requestCodexAppServerJson({
-        method: "thread/list",
-        requestParams: {},
-        timeoutMs: 50,
-        isolated: true,
-        controlObservation,
-      }),
+      listRequest({ timeoutMs: 50, isolated: true, controlObservation }),
     ).rejects.toMatchObject({
       message: "codex app-server thread/list timed out",
       cause: requestError,
@@ -520,32 +369,30 @@ describe("requestCodexAppServerJson sandbox guard", () => {
   it("does not claim API entry when argument evaluation expires the budget before the later deadline decision", async () => {
     vi.useFakeTimers();
     const elapsedClock = vi.spyOn(performance, "now").mockReturnValue(0);
-    let consumeBudget = false;
     const request = vi.fn();
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    shared.acquire.mockResolvedValue({ request });
     await expect(
       withCodexAppServerJsonClient(
         {
           timeoutMs: 50,
           controlObservation,
-          assertCurrent: () => {
-            if (consumeBudget) {
-              elapsedClock.mockReturnValue(51);
-            }
-          },
         },
         async (send) => {
-          consumeBudget = true;
-          return await send({ method: "thread/list", requestParams: {} });
+          return await send({
+            method: "thread/list",
+            get requestParams() {
+              elapsedClock.mockReturnValue(51);
+              return {};
+            },
+          });
         },
       ),
     ).rejects.toThrow("codex app-server request timed out");
     expect(request).not.toHaveBeenCalled();
     expect(controlObservation.phase).not.toHaveBeenCalledWith("client-request");
-    // Cleanup finishes before the outer deadline decision; this is not the rejection's origin.
     expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
-      phase: "release-client",
+      phase: "prepare",
       category: "deadline-observed",
     });
   });
@@ -560,12 +407,8 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       },
     );
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-    sharedClientMocks.getSharedCodexAppServerClient.mockRejectedValue(original);
-    const result = await requestCodexAppServerJson({
-      method: "thread/list",
-      requestParams: {},
-      controlObservation,
-    }).then(
+    shared.acquire.mockRejectedValue(original);
+    const result = await listRequest({ controlObservation }).then(
       () => undefined,
       (error: unknown) => error,
     );
@@ -584,56 +427,16 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         throw new Error("observer");
       },
     };
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-    await expect(
-      requestCodexAppServerJson({ method: "thread/list", requestParams: {}, controlObservation }),
-    ).resolves.toEqual({ data: [] });
-    await expect(
-      requestCodexAppServerJson({ method: "thread/list", requestParams: {}, controlObservation }),
-    ).rejects.toBe(error);
-    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries a config-loading request with a fresh shared client", async () => {
-    const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-    const firstRequest = vi.fn(async () => {
-      throw new sharedClientMocks.CodexAppServerStartSelectionChangedError();
-    });
-    const secondRequest = vi.fn(async () => ({ thread: { id: "thread-2" } }));
-    const firstClient = { request: firstRequest };
-    const secondClient = { request: secondRequest };
-    sharedClientMocks.getSharedCodexAppServerClient
-      .mockResolvedValueOnce(firstClient)
-      .mockResolvedValueOnce(secondClient);
-    const params = { cwd: "/workspace" };
-
-    await expect(
-      requestCodexAppServerJson({
-        method: "thread/start",
-        requestParams: params,
-        controlObservation,
-      }),
-    ).resolves.toEqual({ thread: { id: "thread-2" } });
-    expect(controlObservation.failed).not.toHaveBeenCalled();
-
-    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledWith(
-      firstClient,
-    );
-    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(
-      firstClient,
-    );
-    expect(secondRequest).toHaveBeenCalledWith("thread/start", params, expectDeadlineOptions());
+    shared.acquire.mockResolvedValue({ request });
+    await expect(listRequest({ controlObservation })).resolves.toEqual({ data: [] });
+    await expect(listRequest({ controlObservation })).rejects.toBe(error);
+    expect(shared.release).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a scoped request live when wall time jumps during acquisition", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const request = vi.fn(async () => ({ ok: true }));
-    const entered = createDeferred<void>();
-    const acquisition = createDeferred<{ request: typeof request }>();
-    sharedClientMocks.getSharedCodexAppServerClient.mockImplementation(() => {
-      entered.resolve();
-      return acquisition.promise;
-    });
+    const { entered, acquisition } = deferAcquisition<{ request: typeof request }>(false);
     const result = requestCodexAppServerJson({ method: "model/list", timeoutMs: 1_000 });
     const accepted = expect(result).resolves.toEqual({ ok: true });
     try {
@@ -646,40 +449,39 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         undefined,
         expectDeadlineOptions(),
       );
-      expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
+      expect(shared.release).toHaveBeenCalledOnce();
     } finally {
       acquisition.resolve({ request });
     }
   });
 
-  it("abandons a pending acquisition without issuing a request after the deadline", async () => {
+  it("abandons a pending acquisition without issuing a request after the startup deadline", async () => {
     vi.useFakeTimers();
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
     const request = vi.fn(async () => ({ ok: true }));
     type TestClient = { request: typeof request };
     const client: TestClient = { request };
-    const acquisition = createDeferred<TestClient>();
-    const acquisitionStarted = createDeferred<void>();
-    sharedClientMocks.getSharedCodexAppServerClient.mockImplementationOnce(() => {
-      acquisitionStarted.resolve();
-      return acquisition.promise;
-    });
+    const { acquisition, entered: acquisitionStarted } = deferAcquisition<TestClient>();
 
-    const result = requestCodexAppServerJson({
-      method: "thread/list",
+    const result = listRequest({
       requestParams: { limit: 10 },
       timeoutMs: 50,
+      pluginConfig: { appServer: { requestTimeoutMs: 10 } },
       controlObservation,
     });
-    const rejection = expect(result).rejects.toThrow("codex app-server thread/list timed out");
+    const rejection = expect(result).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+      userMessage:
+        "Codex app-server startup exceeded its wait budget. Retry this request; if it persists, check the Gateway logs.",
+    });
     await acquisitionStarted.promise;
-    const acquireOptions = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0] as
+    const acquireOptions = shared.acquire.mock.calls[0]?.[0] as
       | { abandonSignal?: AbortSignal; timeoutMs?: number }
       | undefined;
 
     expect(acquireOptions?.timeoutMs).toBeGreaterThan(0);
-    expect(acquireOptions?.timeoutMs).toBeLessThanOrEqual(50);
-    await vi.advanceTimersByTimeAsync(50);
+    expect(acquireOptions?.timeoutMs).toBeLessThanOrEqual(100);
+    await vi.advanceTimersByTimeAsync(150);
     await rejection;
     expect(acquireOptions?.abandonSignal?.aborted).toBe(true);
     expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
@@ -693,163 +495,130 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("does not let an expired attempt abort its replacement", async () => {
-    const firstClient = {
-      request: vi.fn(async () => {
-        throw new sharedClientMocks.CodexAppServerStartSelectionChangedError();
-      }),
-    };
-    const secondClient = { request: vi.fn(async () => ({ ok: true })) };
-    sharedClientMocks.getSharedCodexAppServerClient
-      .mockResolvedValueOnce(firstClient)
-      .mockResolvedValueOnce(secondClient);
-    let abortPrevious: ((reason: Error) => void) | undefined;
-
-    const result = await withCodexAppServerJsonClient({}, async (request, _client, scope) => {
-      abortPrevious?.(new Error("old account changed"));
-      abortPrevious = scope.abort;
-      return await request({ method: "account/read" });
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(secondClient.request).toHaveBeenCalledOnce();
-    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
-  });
-
-  it("shares one deadline across a selection retry and suppresses a late request", async () => {
-    vi.useFakeTimers();
-    const firstRequest = vi.fn(
-      (
-        _method: string,
-        _params: unknown,
-        _options?: { signal?: AbortSignal; timeoutMs?: number },
-      ) =>
-        new Promise<never>((_resolve, reject) => {
-          setTimeout(
-            () => reject(new sharedClientMocks.CodexAppServerStartSelectionChangedError()),
-            40,
-          );
-        }),
-    );
-    const secondRequest = vi.fn(async () => ({ thread: { id: "thread-2" } }));
-    const firstClient = { request: firstRequest };
-    const secondClient = { request: secondRequest };
-    let resolveRetryAcquire: ((client: typeof secondClient) => void) | undefined;
-    sharedClientMocks.getSharedCodexAppServerClient
-      .mockResolvedValueOnce(firstClient)
-      .mockImplementationOnce(
-        () =>
-          new Promise<typeof secondClient>((resolve) => {
-            resolveRetryAcquire = resolve;
-          }),
+  it.each([
+    { requestTimeoutMs: 10, acquisitionDelayMs: 101, expired: true },
+    { requestTimeoutMs: 120_000, acquisitionDelayMs: 700_000, expired: false },
+  ])(
+    "honors the configured $requestTimeoutMs ms startup budget through control requests",
+    async ({ requestTimeoutMs, acquisitionDelayMs, expired }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const harness = createClientHarness();
+      const { entered, acquisition } = deferAcquisition<typeof harness.client>();
+      const pending = codexControlRequest(
+        { appServer: { requestTimeoutMs, transport: "unix", url: "unix://" } },
+        "thread/list",
+        { limit: 10 },
+        {
+          timeoutMs: 50,
+          startOptions: {
+            transport: "unix",
+            homeScope: "user",
+            command: "codex",
+            args: [],
+            headers: {},
+            url: "unix://",
+          },
+        },
+      ).then(
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error }),
       );
-
-    const params = { cwd: "/workspace" };
-    const result = requestCodexAppServerJson({
-      method: "thread/start",
-      requestParams: params,
-      timeoutMs: 50,
-    });
-    const rejection = expect(result).rejects.toThrow("codex app-server thread/start timed out");
-
-    await vi.advanceTimersByTimeAsync(40);
-    expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
-    const firstAcquireOptions = sharedClientMocks.getSharedCodexAppServerClient.mock
-      .calls[0]?.[0] as { abandonSignal?: AbortSignal; timeoutMs?: number } | undefined;
-    const retryAcquireOptions = sharedClientMocks.getSharedCodexAppServerClient.mock
-      .calls[1]?.[0] as { abandonSignal?: AbortSignal; timeoutMs?: number } | undefined;
-    const firstRequestOptions = firstRequest.mock.calls[0]?.[2] as
-      | { signal?: AbortSignal; timeoutMs?: number }
-      | undefined;
-    expect(firstAcquireOptions?.timeoutMs).toBeGreaterThan(0);
-    expect(firstAcquireOptions?.timeoutMs).toBeLessThanOrEqual(50);
-    expect(firstRequestOptions?.signal).toBe(firstAcquireOptions?.abandonSignal);
-    expect(firstRequestOptions?.timeoutMs).toBeGreaterThan(0);
-    expect(firstRequestOptions?.timeoutMs).toBeLessThanOrEqual(50);
-    expect(retryAcquireOptions?.timeoutMs).toBeGreaterThan(0);
-    expect(retryAcquireOptions?.timeoutMs).toBeLessThanOrEqual(10);
-    expect(retryAcquireOptions?.abandonSignal).toBe(firstAcquireOptions?.abandonSignal);
-
-    await vi.advanceTimersByTimeAsync(10);
-    await rejection;
-    expect(firstAcquireOptions?.abandonSignal?.aborted).toBe(true);
-
-    resolveRetryAcquire?.(secondClient);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(secondRequest).not.toHaveBeenCalled();
-  });
+      try {
+        await Promise.race([entered.promise, pending]);
+        expect(shared.acquire).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(acquisitionDelayMs);
+        acquisition.resolve(harness.client);
+        await vi.advanceTimersByTimeAsync(0);
+        if (expired) {
+          expect(harness.writes).toEqual([]);
+          expect((await pending).error).toMatchObject({ name: "AgentHarnessPreflightError" });
+        } else {
+          expect(harness.writes).toHaveLength(1);
+          const request = JSON.parse(harness.writes[0]!);
+          expect(request.method).toBe("thread/list");
+          harness.send({ id: request.id, result: { data: [] } });
+          expect(await pending).toEqual({ value: { data: [] }, error: undefined });
+        }
+        expect(shared.release).toHaveBeenCalledOnce();
+      } finally {
+        acquisition.resolve(harness.client);
+        harness.client.close();
+        await pending;
+      }
+    },
+  );
 
   it("does not resume or publish a control attachment after its passive preflight times out", async () => {
-    const { codexControlRequest } = await import("../command-rpc.js");
-    await withTempDir("openclaw-codex-preflight-", async (root) => {
-      const authority = {
-        config: {},
-        agentId: "main",
-        sessionKey: "agent:main:preflight",
-        sessionId: "preflight-session",
-        storePath: path.join(root, "sessions.json"),
-      };
-      await upsertSessionEntry({
-        ...authority,
-        entry: { sessionId: authority.sessionId, updatedAt: Date.now() },
-      });
-      vi.useFakeTimers();
-      let releasePreflight!: () => void;
-      const preflight = new Promise<void>((resolve) => {
-        releasePreflight = resolve;
-      });
-      const request = vi.fn(async (_method: string) => ({ thread: { id: "thread-1" } }));
-      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-      const onResponse = vi.fn();
-
-      try {
-        const result = codexControlRequest(
-          {},
-          "thread/resume",
-          { threadId: "thread-1" },
-          {
-            ...authority,
-            authProfileId: null,
-            timeoutMs: 50,
-            beforeRequest: async (send) => {
-              await send({
-                method: "thread/read",
-                requestParams: { threadId: "thread-1", includeTurns: false },
-              });
-              await preflight;
-            },
-            onResponse,
-          },
-        );
-        const settled = result.then(
-          (value) => ({ status: "fulfilled", value }),
-          (error: unknown) => ({ status: "rejected", error }),
-        );
-        await vi.advanceTimersByTimeAsync(50);
-        expect(await settled).toMatchObject({
-          status: "rejected",
-          error: expect.objectContaining({ message: expect.stringContaining("timed out") }),
-        });
-        releasePreflight();
-        await vi.advanceTimersByTimeAsync(0);
-
-        expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
-        expect(onResponse).not.toHaveBeenCalled();
-        expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
-        expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
-      } finally {
-        releasePreflight();
-        await vi.advanceTimersByTimeAsync(0);
-        vi.useRealTimers();
-        clearSessionStoreCacheForTest();
-      }
+    const root = sessionDirs.make();
+    const authority = {
+      config: {},
+      agentId: "main",
+      sessionKey: "agent:main:preflight",
+      sessionId: "preflight-session",
+      storePath: path.join(root, "sessions.json"),
+    };
+    await upsertSessionEntry({
+      ...authority,
+      entry: { sessionId: authority.sessionId, updatedAt: Date.now() },
     });
+    vi.useFakeTimers();
+    let releasePreflight!: () => void;
+    const preflight = new Promise<void>((resolve) => {
+      releasePreflight = resolve;
+    });
+    const request = vi.fn(async (_method: string) => ({ thread: { id: "thread-1" } }));
+    shared.acquire.mockResolvedValue({ request });
+    const onResponse = vi.fn();
+
+    try {
+      const entered = createDeferred<void>();
+      const result = codexControlRequest(
+        {},
+        "thread/resume",
+        { threadId: "thread-1" },
+        {
+          ...authority,
+          authProfileId: null,
+          timeoutMs: 50,
+          beforeRequest: async (send) => {
+            await send({
+              method: "thread/read",
+              requestParams: { threadId: "thread-1", includeTurns: false },
+            });
+            entered.resolve();
+            await preflight;
+          },
+          onResponse,
+        },
+      );
+      const settled = result.then(
+        (value) => ({ status: "fulfilled", value }),
+        (error: unknown) => ({ status: "rejected", error }),
+      );
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(50);
+      expect(await settled).toMatchObject({
+        status: "rejected",
+        error: expect.objectContaining({ message: expect.stringContaining("timed out") }),
+      });
+      releasePreflight();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
+      expect(onResponse).not.toHaveBeenCalled();
+      expect(shared.release).toHaveBeenCalledOnce();
+      expect(shared.retire).not.toHaveBeenCalled();
+    } finally {
+      releasePreflight();
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+      clearSessionStoreCacheForTest();
+    }
   });
 
   it("revokes scoped requests and mutation authority when their client lease ends", async () => {
     const request = vi.fn(async () => ({ ok: true }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    shared.acquire.mockResolvedValue({ request });
     const retained = await withCodexAppServerJsonClient({}, async (send, _client, scope) => {
       await send({ method: "thread/read", requestParams: { threadId: "thread-1" } });
       return { send, assertCurrent: scope.assertCurrent };
@@ -870,16 +639,14 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const reasons: unknown[] = [];
     const listenerErrors: Error[] = [];
     const listenerStackLimits: number[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockImplementation(
-      async ({ abandonSignal }: { abandonSignal: AbortSignal }) => {
-        abandonSignal.addEventListener("abort", () => {
-          reasons.push(abandonSignal.reason);
-          listenerStackLimits.push(Error.stackTraceLimit);
-          listenerErrors.push(new Error("abort listener diagnostic"));
-        });
-        return { request: async () => ({ data: [] }) };
-      },
-    );
+    shared.acquire.mockImplementation(async ({ abandonSignal }: { abandonSignal: AbortSignal }) => {
+      abandonSignal.addEventListener("abort", () => {
+        reasons.push(abandonSignal.reason);
+        listenerStackLimits.push(Error.stackTraceLimit);
+        listenerErrors.push(new Error("abort listener diagnostic"));
+      });
+      return { request: async () => ({ data: [] }) };
+    });
 
     try {
       Error.stackTraceLimit = 10;
@@ -895,8 +662,15 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         expect(isNativeError(reason)).toBe(true);
         expect(reason).toMatchObject({
           message: "codex app-server model/list timed out",
-          stack: "CodexAppServerScopedRequestRejectedError: codex app-server model/list timed out",
         });
+        if (process.versions.bun) {
+          expect(reason).not.toHaveProperty("stack");
+        } else {
+          expect(reason).toHaveProperty(
+            "stack",
+            "CodexAppServerScopedRequestRejectedError: codex app-server model/list timed out",
+          );
+        }
       }
       expect(listenerStackLimits).toEqual([10, 10]);
       for (const error of listenerErrors) {
@@ -912,9 +686,11 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     vi.useFakeTimers();
     const page = createDeferred<{ data: never[]; nextCursor: string }>();
     const request = vi.fn(() => page.promise);
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-    const result = withCodexAppServerJsonClient({ timeoutMs: 50 }, async (scopedRequest) =>
-      listAllCodexAppServerModels({ request: scopedRequest }),
+    shared.acquire.mockResolvedValue({ request });
+    const controlObservation = { phase: vi.fn(), failed: vi.fn() };
+    const result = withCodexAppServerJsonClient(
+      { timeoutMs: 50, controlObservation },
+      async (scopedRequest) => listAllCodexAppServerModels({ request: scopedRequest }),
     );
     const rejection = expect(result).rejects.toThrow("codex app-server request timed out");
     await vi.advanceTimersByTimeAsync(50);
@@ -922,30 +698,11 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     page.resolve({ data: [], nextCursor: "next-page" });
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledOnce();
-    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
-  });
-
-  it("blocks thread starts with sandbox environments when exec host=node is active", async () => {
-    const params = {
-      cwd: "/workspace",
-      environments: [{ environmentId: "openclaw-sandbox-abc123", cwd: "/workspace" }],
-    };
-
-    await expect(
-      requestCodexAppServerJson({
-        method: "thread/start",
-        requestParams: params,
-        config: {
-          agents: { defaults: { sandbox: { mode: "all" } } },
-          tools: { exec: { host: "node", node: "worker-1" } },
-        },
-        sessionKey: "node-session",
-      }),
-    ).rejects.toThrow(
-      "Codex-native app-server method `thread/start` is unavailable because OpenClaw exec host=node is active for this session.",
-    );
-
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+    expect(shared.release).toHaveBeenCalledOnce();
+    expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
+      phase: "client-request",
+      category: "deadline-observed",
+    });
   });
 
   it("shares one guarded isolated client across installed-plugin and account reads", async () => {
@@ -955,7 +712,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       method === "plugin/installed" ? installed : account,
     );
     const closeAndWait = vi.fn(async () => undefined);
-    sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue({
+    shared.isolated.mockResolvedValue({
       request,
       closeAndWait,
     });
@@ -983,8 +740,8 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       ),
     ).resolves.toEqual({ installed, account });
 
-    expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledTimes(1);
-    expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledWith(
+    expect(shared.isolated).toHaveBeenCalledTimes(1);
+    expect(shared.isolated).toHaveBeenCalledWith(
       expect.objectContaining({ startOptions, authProfileId: null }),
     );
     expect(request).toHaveBeenNthCalledWith(
@@ -1020,7 +777,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         };
       });
       const closeAndWait = vi.fn(async () => undefined);
-      sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue({
+      shared.isolated.mockResolvedValue({
         request,
         closeAndWait,
       });
@@ -1034,7 +791,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         rateLimits: { rateLimitsByLimitId: { codex: { limitId: "codex" } } },
         accountEmail: "codex-account@example.com",
       });
-      expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledWith(
+      expect(shared.isolated).toHaveBeenCalledWith(
         expect.objectContaining({
           authProfileId: "openai:test",
           timeoutMs: expect.any(Number),
@@ -1056,7 +813,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const assertCurrent = () => {
       throw new Error("Account removed");
     };
-    sharedClientMocks.createIsolatedCodexAppServerClient.mockImplementation(async (options) => {
+    shared.isolated.mockImplementation(async (options) => {
       options.assertCurrent?.();
       login();
       throw new Error("unguarded login");

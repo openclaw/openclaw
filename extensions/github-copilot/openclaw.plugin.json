@@ -37,6 +37,21 @@
             "compat": { "codeMode": "capable" }
           },
           {
+            "id": "claude-opus-5.5",
+            "name": "Claude Opus 5.5",
+            "api": "anthropic-messages",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 128000,
+            "cost": { "input": 4, "output": 20, "cacheRead": 0.2, "cacheWrite": 5 },
+            "compat": {
+              "codeMode": "capable",
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"]
+            }
+          },
+          {
             "id": "claude-opus-5",
             "name": "Claude Opus 5",
             "api": "anthropic-messages",
@@ -50,6 +65,17 @@
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"]
             }
+          },
+          {
+            "id": "claude-sonnet-5.5",
+            "name": "Claude Sonnet 5.5",
+            "api": "anthropic-messages",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 128000,
+            "cost": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
+            "compat": { "codeMode": "capable" }
           },
           {
             "id": "claude-sonnet-5",

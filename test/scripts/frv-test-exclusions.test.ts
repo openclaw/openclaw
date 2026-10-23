@@ -11,17 +11,12 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 describe("frozen-target test exclusions", () => {
-  it("accepts exact paths in their declared lane", () => {
-    expect(parseTestExclusions("[]", "plugins")).toEqual([]);
-    expect(parseTestExclusions('["src/plugins/nested/retry.test.ts"]', "plugins")).toEqual([
-      "src/plugins/nested/retry.test.ts",
-    ]);
-    expect(
-      parseTestExclusions(
-        '["extensions/example/retry.test.ts","extensions/example/view.test.tsx"]',
-        "extensions",
-      ),
-    ).toEqual(["extensions/example/retry.test.ts", "extensions/example/view.test.tsx"]);
+  it.each([
+    ["plugins", []],
+    ["plugins", ["src/plugins/nested/retry.test.ts"]],
+    ["extensions", ["extensions/example/retry.test.ts", "extensions/example/view.test.tsx"]],
+  ] satisfies Array<[string, string[]]>)("accepts exact paths in %s: %j", (scope, paths) => {
+    expect(parseTestExclusions(JSON.stringify(paths), scope)).toEqual(paths);
   });
 
   it.each([
@@ -41,84 +36,6 @@ describe("frozen-target test exclusions", () => {
 
   it("excludes exact files from native inline projects and restores candidate configs", async () => {
     const root = tempDirs.make("frv-test-exclusions-");
-    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
-    fs.symlinkSync(
-      fs.realpathSync(path.join(repoRoot, "node_modules")),
-      path.join(root, "node_modules"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    const pluginConfig = "test/vitest/vitest.plugins.config.ts";
-    const extensionConfig = "test/vitest/vitest.extensions.config.ts";
-    const target = "src/plugins/first/retry.test.ts";
-    const sibling = "src/plugins/second/retry.test.ts";
-    const native = "src/plugins/native-loader.test.ts";
-    const outsideSelection = "src/plugins/not-selected.test.ts";
-    const extension = "extensions/example/retry.test.ts";
-    const extensionOutsideSelection = "extensions/unselected/retry.test.ts";
-    for (const file of [
-      target,
-      sibling,
-      native,
-      outsideSelection,
-      extension,
-      extensionOutsideSelection,
-    ]) {
-      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-      fs.writeFileSync(path.join(root, file), "export {};\n");
-    }
-    fs.mkdirSync(path.join(root, "test/vitest"), { recursive: true });
-    const pluginDir = path.join(root, "src/plugins");
-    const common = {
-      root,
-      dir: pluginDir,
-      include: ["**/*.test.ts"],
-      exclude: ["not-selected.test.ts"],
-    };
-    fs.writeFileSync(
-      path.join(root, pluginConfig),
-      `// Preserve candidate bytes, including CRLF.\r\nexport const nativeFiles = [${JSON.stringify(native)}];\r\nexport default ${JSON.stringify(
-        {
-          test: {
-            ...common,
-            projects: [
-              {
-                extends: false,
-                test: {
-                  ...common,
-                  name: "plugins",
-                  exclude: [...common.exclude, "native-loader.test.ts"],
-                },
-              },
-              {
-                extends: false,
-                test: {
-                  ...common,
-                  name: "plugins-native-loader",
-                  include: ["native-loader.test.ts"],
-                },
-              },
-            ],
-          },
-        },
-      )};\r\n`,
-    );
-    fs.writeFileSync(
-      path.join(root, extensionConfig),
-      `import fs from "node:fs";
-const config = ${JSON.stringify({
-        test: {
-          root,
-          dir: path.join(root, "extensions"),
-          include: ["**/*.test.ts"],
-          exclude: [],
-        },
-      })};
-if (process.env.OPENCLAW_VITEST_INCLUDE_FILE) {
-  config.test.include = JSON.parse(fs.readFileSync(process.env.OPENCLAW_VITEST_INCLUDE_FILE, "utf8"))
-    .map(pattern => pattern.slice("extensions/".length));
-}
-export default config;\n`,
-    );
     const probe = path.join(root, "probe.mjs");
     fs.writeFileSync(
       probe,
@@ -131,11 +48,36 @@ import { pathToFileURL } from "node:url";
 import { validateTestExclusions } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/frv-test-exclusions.mjs")).href)};
 
 const root = ${JSON.stringify(root)};
-const configs = ${JSON.stringify([pluginConfig, extensionConfig])};
-const excluded = ${JSON.stringify([target, native, extension])};
-const sibling = ${JSON.stringify(sibling)};
-const extensionOutsideSelection = ${JSON.stringify(extensionOutsideSelection)};
-const original = ${JSON.stringify([pluginConfig, extensionConfig].map((config) => fs.readFileSync(path.join(root, config), "base64")))}.map(bytes => Buffer.from(bytes, "base64"));
+const mode = process.argv[2];
+const configs = ["test/vitest/vitest.plugins.config.ts", "test/vitest/vitest.extensions.config.ts"];
+const excluded = ["src/plugins/first/retry.test.ts", "src/plugins/native-loader.test.ts", "extensions/example/retry.test.ts"];
+const sibling = "src/plugins/second/retry.test.ts";
+const outsideSelection = "src/plugins/not-selected.test.ts";
+const extensionOutsideSelection = "extensions/unselected/retry.test.ts";
+const common = { root, dir: path.join(root, "src/plugins"), include: ["**/*.test.ts"], exclude: ["not-selected.test.ts"] };
+const project = (name, filters) => ({ extends: false, test: { ...common, name, ...filters } });
+const plugins = { test: { ...common, projects: [
+  project("plugins", { exclude: [...common.exclude, "native-loader.test.ts"] }),
+  project("plugins-native-loader", { include: ["native-loader.test.ts"] }),
+] } };
+const extensions = { test: { root, dir: path.join(root, "extensions"), include: ["**/*.test.ts"], exclude: [] } };
+const original = [
+  '// Preserve candidate bytes, including CRLF.\\r\\nexport const nativeFiles = ' + JSON.stringify([excluded[1]]) + ';\\r\\nexport default ' + JSON.stringify(plugins) + ';\\r\\n',
+  'import fs from "node:fs";\\nconst config = ' + JSON.stringify(extensions) + ';\\n' +
+    'if (process.env.OPENCLAW_VITEST_INCLUDE_FILE) {\\n' +
+    '  config.test.include = JSON.parse(fs.readFileSync(process.env.OPENCLAW_VITEST_INCLUDE_FILE, "utf8"))\\n' +
+    '    .map(pattern => pattern.slice("extensions/".length));\\n}\\nexport default config;\\n',
+].map(source => Buffer.from(source));
+if (!mode) {
+  const write = (file, content) => {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), content);
+  };
+  write("package.json", '{"type":"module"}\\n');
+  fs.symlinkSync(${JSON.stringify(fs.realpathSync(path.join(repoRoot, "node_modules")))}, path.join(root, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+  for (const file of [...excluded, sibling, outsideSelection, extensionOutsideSelection]) write(file, "export {};\\n");
+  configs.forEach((config, index) => write(config, original[index]));
+}
 const candidateRequire = createRequire(path.join(root, "package.json"));
 const { createVitest } = await import(pathToFileURL(candidateRequire.resolve("vitest/node")).href);
 
@@ -158,7 +100,6 @@ function assertRestored() {
 }
 
 const pluginBaseline = [...excluded.slice(0, 2), sibling].sort();
-const mode = process.argv[2];
 if (mode) {
   if (mode === "unaffected") {
     assertRestored();
@@ -188,31 +129,30 @@ await validateTestExclusions({ paths: excluded, configs, cwd: root });
 const selectedExtension = [{ config: configs[1], includePatterns: [excluded[2]] }];
 const inheritedIncludeFile = process.env.OPENCLAW_VITEST_INCLUDE_FILE;
 await validateTestExclusions({ paths: [excluded[2]], configs: selectedExtension, cwd: root });
-await assert.rejects(
-  () => validateTestExclusions({ paths: [extensionOutsideSelection], configs: selectedExtension, cwd: root }),
-  error => error instanceof Error && error.message.includes(extensionOutsideSelection),
+const rejectsExclusion = (file, selectedConfigs = configs) => assert.rejects(
+  () => validateTestExclusions({ paths: [file], configs: selectedConfigs, cwd: root }),
+  error => error instanceof Error && error.message.includes(file),
 );
+await rejectsExclusion(extensionOutsideSelection, selectedExtension);
 assert.equal(process.env.OPENCLAW_VITEST_INCLUDE_FILE, inheritedIncludeFile);
 
-for (const invalid of ["src/plugins/missing.test.ts", ${JSON.stringify(outsideSelection)}]) {
-  await assert.rejects(
-    () => validateTestExclusions({ paths: [invalid], configs, cwd: root }),
-    error => error instanceof Error && error.message.includes(invalid),
-  );
+for (const invalid of ["src/plugins/missing.test.ts", outsideSelection]) {
+  await rejectsExclusion(invalid);
 }
-await assert.rejects(
-  () => validateTestExclusions({ paths: [excluded[2]], configs: [configs[0]], cwd: root }),
-  error => error instanceof Error && error.message.includes(excluded[2]),
-);
+await rejectsExclusion(excluded[2], [configs[0]]);
 assertRestored();
 
 const adapter = ${JSON.stringify(path.join(repoRoot, "scripts/frv-test-exclusions.mjs"))};
-const commandEnv = {
+const adapterEnv = (scope = "plugins", paths = excluded.slice(0, 2), selectedConfigs = configs) => ({
   ...process.env,
-  FRV_TEST_EXCLUDE_SCOPE: "plugins",
-  FRV_TEST_EXCLUDE_PATHS_JSON: JSON.stringify(excluded.slice(0, 2)),
-  FRV_TEST_CONFIGS_JSON: JSON.stringify(configs),
-};
+  FRV_TEST_EXCLUDE_SCOPE: scope,
+  FRV_TEST_EXCLUDE_PATHS_JSON: JSON.stringify(paths),
+  FRV_TEST_CONFIGS_JSON: JSON.stringify(selectedConfigs),
+});
+const commandEnv = adapterEnv();
+const runAdapter = (args, env = commandEnv) => spawnSync(process.execPath, [adapter, "run", "--", ...args], {
+  cwd: root, env, encoding: "utf8",
+});
 for (const [mode, scope, paths, selectedConfigs, expectedExit] of [
   ["single", "plugins", [excluded[0]], configs, 0],
   ["unaffected", "plugins", excluded.slice(0, 2), [configs[1]], 0],
@@ -220,24 +160,13 @@ for (const [mode, scope, paths, selectedConfigs, expectedExit] of [
   ["extensions", "extensions", [excluded[2]], configs, 0],
   ["failure", "plugins", excluded.slice(0, 2), configs, 23],
 ]) {
-  const result = spawnSync(process.execPath, [adapter, "run", "--", process.execPath, process.argv[1], mode], {
-    cwd: root,
-    env: {
-      ...commandEnv,
-      FRV_TEST_EXCLUDE_SCOPE: scope,
-      FRV_TEST_EXCLUDE_PATHS_JSON: JSON.stringify(paths),
-      FRV_TEST_CONFIGS_JSON: JSON.stringify(selectedConfigs),
-    },
-    encoding: "utf8",
-  });
+  const result = runAdapter([process.execPath, process.argv[1], mode], adapterEnv(scope, paths, selectedConfigs));
   assert.equal(result.status, expectedExit, mode + ": " + result.stderr);
   assertRestored();
 }
 assert.deepEqual(await discover(configs[0]), pluginBaseline);
 
-const failedSpawn = spawnSync(process.execPath, [adapter, "run", "--", path.join(root, "missing-command")], {
-  cwd: root, env: commandEnv, encoding: "utf8",
-});
+const failedSpawn = runAdapter([path.join(root, "missing-command")]);
 assert.equal(failedSpawn.status, 1, failedSpawn.stderr);
 assert.match(failedSpawn.stderr, /ENOENT/);
 assert.ok(failedSpawn.stderr.includes(path.join(root, "missing-command")));
@@ -267,11 +196,7 @@ if (process.platform !== "win32") {
 
 const secondConfig = "test/vitest/vitest.additional.config.ts";
 fs.writeFileSync(path.join(root, secondConfig), original[0]);
-const conflicted = spawnSync(process.execPath, [adapter, "run", "--", process.execPath, process.argv[1], "conflict"], {
-  cwd: root,
-  env: { ...commandEnv, FRV_TEST_CONFIGS_JSON: JSON.stringify([secondConfig, ...configs]) },
-  encoding: "utf8",
-});
+const conflicted = runAdapter([process.execPath, process.argv[1], "conflict"], adapterEnv("plugins", excluded.slice(0, 2), [secondConfig, ...configs]));
 assert.equal(conflicted.status, 1, conflicted.stderr);
 assert.match(conflicted.stderr, /candidate failure before cleanup/);
 assert.match(conflicted.stderr, /Command exited with status 23/);

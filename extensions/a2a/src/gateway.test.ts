@@ -1,48 +1,17 @@
-import {
-  createPluginRuntimeMock,
-  createStartAccountContext,
-} from "openclaw/plugin-sdk/channel-test-helpers";
-import {
-  createTestRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { startA2aGatewayAccount } from "./gateway.js";
-import { setA2aChannelRuntime } from "./runtime.js";
-import type { ResolvedA2aChannelAccount } from "./types.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { a2aChannelPlugin } from "./channel.js";
+import { createA2aGatewayFixture } from "./gateway.test-support.js";
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-function createA2aGatewayFixture() {
-  const registry = createTestRegistry([]);
-  setActivePluginRegistry(registry);
-  const runtime = createPluginRuntimeMock();
-  setA2aChannelRuntime(runtime);
-  const controller = new AbortController();
-  const account: ResolvedA2aChannelAccount = {
-    accountId: "default",
-    enabled: true,
-    configured: true,
-    config: { peers: { hermes: { token: "test-token" } } },
-  };
-  const statusPatchSink = vi.fn();
-  const ctx = createStartAccountContext({
-    account,
-    abortSignal: controller.signal,
-    statusPatchSink,
-  });
-  ctx.channelRuntime = runtime.channel;
-  return { registry, runtime, controller, account, statusPatchSink, ctx };
-}
-
 describe("A2A gateway account lifecycle", () => {
   it("registers exact plugin-owned routes and removes them when the account stops", async () => {
     const fixture = createA2aGatewayFixture();
-    const lifecycle = startA2aGatewayAccount(fixture.ctx);
+    const lifecycle = a2aChannelPlugin.gateway!.startAccount!(fixture.ctx);
 
     expect(fixture.registry.httpRoutes).toEqual(
       ["/.well-known/agent-card.json", "/.well-known/agent.json", "/a2a/v1"].map((path) =>
@@ -73,7 +42,9 @@ describe("A2A gateway account lifecycle", () => {
       throwOnFailure: true,
     });
 
-    await expect(startA2aGatewayAccount(fixture.ctx)).rejects.toThrow(/other-plugin/);
+    await expect(a2aChannelPlugin.gateway!.startAccount!(fixture.ctx)).rejects.toThrow(
+      /other-plugin/,
+    );
 
     expect(fixture.registry.httpRoutes).toEqual([
       expect.objectContaining({
@@ -91,7 +62,9 @@ describe("A2A gateway account lifecycle", () => {
     const fixture = createA2aGatewayFixture();
     fixture.account.configured = false;
 
-    await expect(startA2aGatewayAccount(fixture.ctx)).rejects.toThrow(/not configured/);
+    await expect(a2aChannelPlugin.gateway!.startAccount!(fixture.ctx)).rejects.toThrow(
+      /not configured/,
+    );
 
     expect(fixture.registry.httpRoutes).toEqual([]);
   });

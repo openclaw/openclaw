@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WebInboundMessage } from "./inbound/types.js";
 import {
+  buildNotifyMessageUpsert,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
   startInboxMonitor,
@@ -10,46 +11,23 @@ import {
   waitForPairingPromptSent,
 } from "./monitor-inbox.test-harness.js";
 
-const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
-const DEFAULT_MESSAGES_CFG = {
-  messagePrefix: undefined,
-  responsePrefix: undefined,
-} as const;
-const TIMESTAMP_OFF_MESSAGES_CFG = {
-  ...DEFAULT_MESSAGES_CFG,
-  timestampPrefix: false,
-} as const;
+const DEFAULT_MESSAGES_CFG = { messagePrefix: undefined, responsePrefix: undefined } as const;
+const TIMESTAMP_OFF_MESSAGES_CFG = { ...DEFAULT_MESSAGES_CFG, timestampPrefix: false } as const;
 
-const createNotifyUpsert = (message: Record<string, unknown>) => ({
-  type: "notify",
-  messages: [message],
-});
-
-const createDmMessage = (params: { id: string; remoteJid: string; conversation: string }) => ({
-  key: {
-    id: params.id,
-    fromMe: false,
-    remoteJid: params.remoteJid,
-  },
-  message: { conversation: params.conversation },
-  messageTimestamp: nowSeconds(),
-});
-
-const createGroupMessage = (params: {
-  id: string;
-  remoteJid?: string;
-  participant: string;
-  conversation: string;
-}) => ({
-  key: {
-    id: params.id,
-    fromMe: false,
-    remoteJid: params.remoteJid ?? "11111@g.us",
-    participant: params.participant,
-  },
-  message: { conversation: params.conversation },
-  messageTimestamp: nowSeconds(),
-});
+function emitMessage(
+  sock: Awaited<ReturnType<typeof startInboxMonitor>>["sock"],
+  params: { id: string; remoteJid?: string; participant?: string; conversation: string },
+) {
+  sock.ev.emit(
+    "messages.upsert",
+    buildNotifyMessageUpsert({
+      ...params,
+      remoteJid: params.remoteJid ?? "11111@g.us",
+      text: params.conversation,
+      timestamp: Math.floor(Date.now() / 1000),
+    }),
+  );
+}
 
 async function startWebInboxMonitor(params: {
   config?: Record<string, unknown>;
@@ -80,33 +58,19 @@ describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
   it("delivery coordinator blocks unauthorized senders outside allowFrom", async () => {
-    // Test for auto-recovery fix: early allowFrom filtering prevents Bad MAC errors
-    // from unauthorized senders corrupting sessions
     const config = {
-      channels: {
-        whatsapp: {
-          // Only allow +111
-          allowFrom: ["+111"],
-        },
-      },
+      channels: { whatsapp: { allowFrom: ["+111"] } },
       messages: DEFAULT_MESSAGES_CFG,
     };
 
-    const { onMessage, listener, sock } = await startWebInboxMonitor({
-      config,
-    });
+    const { onMessage, listener, sock } = await startWebInboxMonitor({ config });
 
     // Message from unauthorized sender +999 (not in allowFrom)
-    sock.ev.emit(
-      "messages.upsert",
-      createNotifyUpsert(
-        createDmMessage({
-          id: "unauth1",
-          remoteJid: "999@s.whatsapp.net",
-          conversation: "unauthorized message",
-        }),
-      ),
-    );
+    emitMessage(sock, {
+      id: "unauth1",
+      remoteJid: "999@s.whatsapp.net",
+      conversation: "unauthorized message",
+    });
     await waitForPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     // Should NOT call onMessage for unauthorized senders
@@ -119,21 +83,11 @@ describe("web monitor inbox", () => {
 
   it("delivery coordinator applies hot-reloaded dmPolicy to the active listener", async () => {
     const startupConfig = {
-      channels: {
-        whatsapp: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-        },
-      },
+      channels: { whatsapp: { dmPolicy: "open", allowFrom: ["*"] } },
       messages: DEFAULT_MESSAGES_CFG,
     };
     const reloadedConfig = {
-      channels: {
-        whatsapp: {
-          dmPolicy: "allowlist",
-          allowFrom: ["+111"],
-        },
-      },
+      channels: { whatsapp: { dmPolicy: "allowlist", allowFrom: ["+111"] } },
       messages: DEFAULT_MESSAGES_CFG,
     };
     mockLoadConfig.mockReturnValue(startupConfig);
@@ -144,16 +98,11 @@ describe("web monitor inbox", () => {
     });
     mockLoadConfig.mockReturnValue(reloadedConfig);
 
-    sock.ev.emit(
-      "messages.upsert",
-      createNotifyUpsert(
-        createDmMessage({
-          id: "hot-reload-block",
-          remoteJid: "999@s.whatsapp.net",
-          conversation: "should be blocked after reload",
-        }),
-      ),
-    );
+    emitMessage(sock, {
+      id: "hot-reload-block",
+      remoteJid: "999@s.whatsapp.net",
+      conversation: "should be blocked after reload",
+    });
     await waitForInboundWorkDrained();
 
     expect(onMessage).not.toHaveBeenCalled();
@@ -165,69 +114,33 @@ describe("web monitor inbox", () => {
 
   it("delivery coordinator skips read receipts in self-chat mode", async () => {
     const config = {
-      channels: {
-        whatsapp: {
-          // Self-chat heuristic: allowFrom includes selfE164 (+123).
-          allowFrom: ["+123"],
-        },
-      },
+      channels: { whatsapp: { allowFrom: ["+123"] } },
       messages: DEFAULT_MESSAGES_CFG,
     };
 
-    const { onMessage, listener, sock } = await startWebInboxMonitor({
-      config,
-    });
+    const { onMessage, listener, sock } = await startWebInboxMonitor({ config });
 
-    sock.ev.emit(
-      "messages.upsert",
-      createNotifyUpsert(
-        createDmMessage({
-          id: "self1",
-          remoteJid: "123@s.whatsapp.net",
-          conversation: "self ping",
-        }),
-      ),
-    );
+    emitMessage(sock, { id: "self1", remoteJid: "123@s.whatsapp.net", conversation: "self ping" });
     await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        admission: expect.objectContaining({
-          conversation: expect.objectContaining({
-            id: "+123",
-          }),
-          ingress: expect.objectContaining({
-            decision: "allow",
-          }),
-        }),
-        payload: expect.objectContaining({
-          body: "self ping",
-        }),
-        platform: expect.objectContaining({
-          recipientJid: "+123",
-        }),
-      }),
-    );
+    expect(firstInboundPayload(onMessage)).toMatchObject({
+      admission: { conversation: { id: "+123" }, ingress: { decision: "allow" } },
+      payload: { body: "self ping" },
+      platform: { recipientJid: "+123" },
+    });
     expect(sock.readMessages).not.toHaveBeenCalled();
 
     await listener.close();
   });
 
   it("delivery coordinator skips read receipts when disabled", async () => {
-    const { onMessage, listener, sock } = await startWebInboxMonitor({
-      sendReadReceipts: false,
+    const { onMessage, listener, sock } = await startWebInboxMonitor({ sendReadReceipts: false });
+    emitMessage(sock, {
+      id: "rr-off-1",
+      remoteJid: "222@s.whatsapp.net",
+      conversation: "read receipts off",
     });
-    sock.ev.emit(
-      "messages.upsert",
-      createNotifyUpsert(
-        createDmMessage({
-          id: "rr-off-1",
-          remoteJid: "222@s.whatsapp.net",
-          conversation: "read receipts off",
-        }),
-      ),
-    );
     await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
@@ -238,94 +151,47 @@ describe("web monitor inbox", () => {
 
   it.each([
     {
-      name: "lets group messages through even when sender not in allowFrom",
-      id: "grp3",
+      name: "open groups ignore DM allowFrom",
       groupPolicy: "open",
-      messages: DEFAULT_MESSAGES_CFG,
       allowFrom: ["+1234"],
-      groupAllowFrom: undefined,
-      participant: "999@s.whatsapp.net",
-      remoteJid: undefined,
-      conversation: "unauthorized group message",
       expectedCalls: 1,
       expectedSender: "+999",
     },
     {
-      name: "blocks all group messages when groupPolicy is 'disabled'",
-      id: "grp-disabled",
+      name: "disabled groups block all senders",
       groupPolicy: "disabled",
-      messages: TIMESTAMP_OFF_MESSAGES_CFG,
       allowFrom: ["+1234"],
-      groupAllowFrom: undefined,
-      participant: "999@s.whatsapp.net",
-      remoteJid: undefined,
-      conversation: "group message should be blocked",
       expectedCalls: 0,
-      expectedSender: undefined,
     },
     {
-      name: "blocks group messages from senders not in groupAllowFrom when groupPolicy is 'allowlist'",
-      id: "grp-allowlist-blocked",
-      groupPolicy: "allowlist",
-      messages: TIMESTAMP_OFF_MESSAGES_CFG,
-      allowFrom: undefined,
+      name: "group allowlist blocks unknown senders",
       groupAllowFrom: ["+1234"],
-      participant: "999@s.whatsapp.net",
-      remoteJid: undefined,
-      conversation: "unauthorized group sender",
       expectedCalls: 0,
-      expectedSender: undefined,
     },
     {
-      name: "allows group messages from senders in groupAllowFrom when groupPolicy is 'allowlist'",
-      id: "grp-allowlist-allowed",
-      groupPolicy: "allowlist",
-      messages: TIMESTAMP_OFF_MESSAGES_CFG,
-      allowFrom: undefined,
+      name: "group allowlist admits listed senders",
       groupAllowFrom: ["+15551234567"],
       participant: "15551234567@s.whatsapp.net",
-      remoteJid: undefined,
-      conversation: "authorized group sender",
       expectedCalls: 1,
       expectedSender: "+15551234567",
     },
     {
-      name: "allows all group senders with wildcard in groupPolicy allowlist",
-      id: "grp-wildcard-test",
-      groupPolicy: "allowlist",
-      messages: TIMESTAMP_OFF_MESSAGES_CFG,
-      allowFrom: undefined,
+      name: "group allowlist wildcard admits all",
       groupAllowFrom: ["*"],
       participant: "9999999999@s.whatsapp.net",
       remoteJid: "22222@g.us",
-      conversation: "wildcard group sender",
       expectedCalls: 1,
-      expectedSender: undefined,
     },
-    {
-      name: "blocks group messages when groupPolicy allowlist has no groupAllowFrom",
-      id: "grp-allowlist-empty",
-      groupPolicy: "allowlist",
-      messages: TIMESTAMP_OFF_MESSAGES_CFG,
-      allowFrom: undefined,
-      groupAllowFrom: undefined,
-      participant: "999@s.whatsapp.net",
-      remoteJid: undefined,
-      conversation: "blocked by empty allowlist",
-      expectedCalls: 0,
-      expectedSender: undefined,
-    },
-  ] as const)(
+    { name: "empty group allowlist blocks all", expectedCalls: 0 },
+  ])(
     "$name",
     async ({
-      id,
-      groupPolicy,
-      messages,
+      name,
+      groupPolicy = "allowlist",
       allowFrom,
       groupAllowFrom,
-      participant,
+      participant = "999@s.whatsapp.net",
       remoteJid,
-      conversation,
       expectedCalls,
       expectedSender,
     }) => {
@@ -334,26 +200,15 @@ describe("web monitor inbox", () => {
           channels: {
             whatsapp: {
               groupPolicy,
-              ...(allowFrom ? { allowFrom: [...allowFrom] } : {}),
-              ...(groupAllowFrom ? { groupAllowFrom: [...groupAllowFrom] } : {}),
+              ...(allowFrom ? { allowFrom } : {}),
+              ...(groupAllowFrom ? { groupAllowFrom } : {}),
             },
           },
-          messages,
+          messages: groupPolicy === "open" ? DEFAULT_MESSAGES_CFG : TIMESTAMP_OFF_MESSAGES_CFG,
         },
       });
-      sock.ev.emit(
-        "messages.upsert",
-        createNotifyUpsert(
-          createGroupMessage({
-            id,
-            ...(remoteJid ? { remoteJid } : {}),
-            participant,
-            conversation,
-          }),
-        ),
-      );
+      emitMessage(sock, { id: name, remoteJid, participant, conversation: name });
       await waitForInboundWorkDrained();
-
       expect(onMessage).toHaveBeenCalledTimes(expectedCalls);
       if (expectedCalls === 1) {
         const payload = firstInboundPayload(onMessage);

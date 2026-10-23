@@ -5,13 +5,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
-export type QaRuntimeToolBucket = (typeof QA_RUNTIME_TOOL_BUCKETS)[number];
+type QaRuntimeToolBucket = (typeof QA_RUNTIME_TOOL_BUCKETS)[number];
 
-export type QaRuntimeToolExpectedLayer = (typeof QA_RUNTIME_TOOL_EXPECTED_LAYERS)[number];
+type QaRuntimeToolExpectedLayer = (typeof QA_RUNTIME_TOOL_EXPECTED_LAYERS)[number];
 
-export type QaRuntimeCapabilityLayer = (typeof QA_RUNTIME_CAPABILITY_LAYERS)[number];
-
-export type RuntimeParityComparisonMode = "default" | "codex-native-workspace" | "outcome-only";
+type QaRuntimeCapabilityLayer = (typeof QA_RUNTIME_CAPABILITY_LAYERS)[number];
 
 export type QaRuntimeToolCoverageMetadata = {
   bucket: QaRuntimeToolBucket;
@@ -114,15 +112,11 @@ export function readRuntimeToolCoverageMetadata(params: {
     expectedLayer,
     capabilityLayer,
     required,
-    ...((readString(toolCoverage?.tracking) ?? readString(toolCoverage?.issue))
-      ? { tracking: readString(toolCoverage?.tracking) ?? readString(toolCoverage?.issue) }
-      : {}),
-    ...(readString(toolCoverage?.reason) ? { reason: readString(toolCoverage?.reason) } : {}),
-    ...(readString(toolCoverage?.codexDefaultImpact)
-      ? { codexDefaultImpact: readString(toolCoverage?.codexDefaultImpact) }
-      : {}),
-    ...(readString(toolCoverage?.qaImpact) ? { qaImpact: readString(toolCoverage?.qaImpact) } : {}),
-    ...(readString(toolCoverage?.action) ? { action: readString(toolCoverage?.action) } : {}),
+    tracking: readString(toolCoverage?.tracking) ?? readString(toolCoverage?.issue),
+    reason: readString(toolCoverage?.reason),
+    codexDefaultImpact: readString(toolCoverage?.codexDefaultImpact),
+    qaImpact: readString(toolCoverage?.qaImpact),
+    action: readString(toolCoverage?.action),
   };
 }
 

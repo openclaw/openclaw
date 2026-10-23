@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { applySessionStoreProjection } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
@@ -112,15 +112,14 @@ describe("host-bound session read scope", () => {
       const attached = "agent:main:main";
       const expectedSessionId = "attached-incarnation";
       const storePath = path.join(tempDirs.make("side-chat-read-cap-"), "sessions.sqlite");
-      await applySessionStoreProjection({
-        storePath,
-        skipMaintenance: true,
-        update: (store) => {
-          store[discussion] = { sessionId: "discussion-incarnation", updatedAt: 1 };
-          store[attached] = { sessionId: expectedSessionId, updatedAt: 1 };
-          return { persist: true, result: undefined };
-        },
-      });
+      replaceSessionEntrySync(
+        { storePath, sessionKey: discussion },
+        { sessionId: "discussion-incarnation", updatedAt: 1 },
+      );
+      replaceSessionEntrySync(
+        { storePath, sessionKey: attached },
+        { sessionId: expectedSessionId, updatedAt: 1 },
+      );
       const callGateway = createReadGateway();
       const create = (scoped: boolean) => {
         const opts = {

@@ -19,7 +19,7 @@ const requireFact = (condition, code) => {
 export async function drivePublishedUpgrade(args, source, credential) {
   const scripts = join(source, ".agents/skills/telegram-e2e-userbot/scripts");
   const harness = await import(pathToFileURL(join(scripts, "run-mock-sut-user-e2e.mjs")));
-  const { currentTelegramRun } = await import(
+  const { currentTelegramRun, fetchWithLease } = await import(
     pathToFileURL(join(scripts, "telegram-run-scope.mjs"))
   );
   const { startTelegramTestApiProxy } = await import(
@@ -54,7 +54,7 @@ export async function drivePublishedUpgrade(args, source, credential) {
   requireFact(tester.ok && tester.user?.id && !tester.user.isBot, "LEASED_USER_IDENTITY_INVALID");
   harness.assertTesterMatchesLease(tester.user, credential);
   const proxy = scope.ownProxy(await startTelegramTestApiProxy({ leaseHealth: scope.health }));
-  const bot = await harness.fetchWithLease(
+  const bot = await fetchWithLease(
     `${proxy.apiRoot}/bot${credential.sutToken}/getMe`,
     {},
     scope.health,
@@ -257,7 +257,7 @@ export async function drivePublishedUpgrade(args, source, credential) {
       gatewayChild,
       async () => {
         try {
-          const result = await harness.fetchWithLease(
+          const result = await fetchWithLease(
             `http://127.0.0.1:${args.gatewayPort}/readyz`,
             { signal: AbortSignal.timeout(1000) },
             scope.health,

@@ -1,4 +1,3 @@
-// Small interactive prompt helpers for CLI confirmations.
 import { stdin as input, stdout as output } from "node:process";
 import readline from "node:readline/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -17,12 +16,7 @@ type ReadlineInterface = ReturnType<typeof readline.createInterface>;
 
 function questionUntilClose(rl: ReadlineInterface, question: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    let settled = false;
     const finish = (complete: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
       rl.off("close", onClose);
       complete();
     };
@@ -50,9 +44,9 @@ export async function promptYesNo(question: string, defaultYes = false): Promise
   return answer.startsWith("y");
 }
 
-export async function promptText(question: string): Promise<string> {
+export function promptText(question: string): Promise<string> {
   const rl = readline.createInterface({ input, output });
-  return await questionUntilClose(rl, question).finally(() => {
+  return questionUntilClose(rl, question).finally(() => {
     rl.close();
   });
 }

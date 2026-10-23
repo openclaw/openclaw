@@ -1,18 +1,14 @@
+import assert from "node:assert/strict";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildHuggingfaceProvider,
   discoverHuggingfaceModels,
   HUGGINGFACE_MODEL_CATALOG,
-  isHuggingfacePolicyLocked,
 } from "./api.js";
 
-function stubAbortSignalTimeout() {
-  const controller = new AbortController();
-  return vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
-}
-
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -142,33 +138,39 @@ describe("huggingface models", () => {
     { label: "custom", timeoutMs: 25_000, expected: 25_000 },
     { label: "oversized", timeoutMs: Number.MAX_SAFE_INTEGER, expected: MAX_TIMER_TIMEOUT_MS },
   ])("bounds the $label discovery timeout", async ({ timeoutMs, expected }) => {
-    const timeoutSpy = stubAbortSignalTimeout();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    const started = Promise.withResolvers<void>();
     vi.stubGlobal(
       "fetch",
       vi.fn(
-        async () =>
-          new Response("{}", { status: 500, headers: { "Content-Type": "application/json" } }),
+        (_url, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) {
+              throw new Error("Discovery transport requires cancellation");
+            }
+            signal.addEventListener(
+              "abort",
+              () => {
+                const reason: unknown = signal.reason;
+                assert(reason instanceof Error);
+                reject(reason);
+              },
+              { once: true },
+            );
+            started.resolve();
+          }),
       ),
     );
 
-    await expect(
+    const outcome = expect(
       discoverHuggingfaceModels("hf_test_token", timeoutMs, { discoveryMode: "strict" }),
-    ).rejects.toMatchObject({
-      status: 500,
-    });
-
-    expect(timeoutSpy).toHaveBeenCalledWith(expected);
-  });
-
-  describe("isHuggingfacePolicyLocked", () => {
-    it("returns true for :cheapest and :fastest refs", () => {
-      expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1:cheapest")).toBe(true);
-      expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1:fastest")).toBe(true);
-    });
-
-    it("returns false for base ref and :provider refs", () => {
-      expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1")).toBe(false);
-      expect(isHuggingfacePolicyLocked("huggingface/foo:together")).toBe(false);
-    });
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(expected - 1);
+    expect(vi.mocked(fetch).mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await outcome;
   });
 });

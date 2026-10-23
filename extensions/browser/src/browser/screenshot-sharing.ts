@@ -15,7 +15,6 @@ export async function stageBrowserScreenshotForSharing(
   const source = await readFile(filePath);
   const normalized = await normalizeBrowserScreenshot(source, {
     maxSide: maxDimensionPx ?? DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-    maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   });
   const saved = await saveMediaBuffer(
     normalized.buffer,

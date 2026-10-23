@@ -12,7 +12,6 @@ export function buildMetaCatalogModels(): ModelDefinitionConfig[] {
   return buildMetaProvider().models;
 }
 
-/** Builds the Meta OpenAI-compatible model provider config. */
 export function buildMetaProvider(): ModelProviderConfig {
   return buildManifestModelProviderConfig({
     providerId: "meta",

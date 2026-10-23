@@ -1,3 +1,4 @@
+import type { ExecRequestOwner } from "../../infra/exec-request-context.js";
 import type { SystemEvent } from "../../infra/system-events.js";
 
 const REPLY_SYSTEM_EVENT_CONTEXT = Symbol("openclaw.reply.systemEventContext");
@@ -5,6 +6,7 @@ const REPLY_SYSTEM_EVENT_CONTEXT = Symbol("openclaw.reply.systemEventContext");
 type ReplySystemEventContext = {
   sessionKey: string;
   events?: readonly SystemEvent[];
+  execRequestOwners?: readonly ExecRequestOwner[];
 };
 
 /** Carry the queue and its optional prepared selection through internal option spreads. */

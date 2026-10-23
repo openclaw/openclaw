@@ -1,62 +1,7 @@
-function readDiscordChannelPropertySafe(channel: unknown, key: string): unknown {
-  if (!channel || typeof channel !== "object") {
-    return undefined;
-  }
-  try {
-    if (!(key in channel)) {
-      return undefined;
-    }
-    return (channel as Record<string, unknown>)[key];
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveDiscordChannelStringPropertySafe(
-  channel: unknown,
-  key: string,
-): string | undefined {
-  const value = readDiscordChannelPropertySafe(channel, key);
-  return typeof value === "string" ? value : undefined;
-}
-
-function resolveDiscordChannelNumberPropertySafe(
-  channel: unknown,
-  key: string,
-): number | undefined {
-  const value = readDiscordChannelPropertySafe(channel, key);
-  return typeof value === "number" ? value : undefined;
-}
-
-const DISCORD_CHANNEL_SNAKE_CASE_ALIASES: Record<string, string> = {
-  ownerId: "owner_id",
-  parentId: "parent_id",
-};
-
-function resolveDiscordChannelStringWithAliasSafe(
-  channel: unknown,
-  camelKey: string,
-): string | undefined {
-  const camelValue = resolveDiscordChannelStringPropertySafe(channel, camelKey);
-  if (camelValue !== undefined) {
-    return camelValue;
-  }
-
-  const snakeKey = DISCORD_CHANNEL_SNAKE_CASE_ALIASES[camelKey];
-  if (!snakeKey) {
-    return undefined;
-  }
-
-  const directSnakeValue = resolveDiscordChannelStringPropertySafe(channel, snakeKey);
-  if (directSnakeValue !== undefined) {
-    return directSnakeValue;
-  }
-
-  const rawData = readDiscordChannelPropertySafe(channel, "rawData");
-  return resolveDiscordChannelStringPropertySafe(rawData, snakeKey);
-}
+import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type DiscordChannelInfoSafe = {
+  id?: string;
   name?: string;
   topic?: string;
   type?: number;
@@ -66,37 +11,25 @@ type DiscordChannelInfoSafe = {
 };
 
 export function resolveDiscordChannelNameSafe(channel: unknown): string | undefined {
-  return resolveDiscordChannelStringPropertySafe(channel, "name");
-}
-
-export function resolveDiscordChannelIdSafe(channel: unknown): string | undefined {
-  return resolveDiscordChannelStringPropertySafe(channel, "id");
+  return readStringField(asOptionalObjectRecord(channel), "name");
 }
 
 export function resolveDiscordChannelTopicSafe(channel: unknown): string | undefined {
-  return resolveDiscordChannelStringPropertySafe(channel, "topic");
-}
-
-export function resolveDiscordChannelParentIdSafe(channel: unknown): string | undefined {
-  return resolveDiscordChannelStringWithAliasSafe(channel, "parentId");
-}
-
-function resolveDiscordChannelOwnerIdSafe(channel: unknown): string | undefined {
-  return resolveDiscordChannelStringWithAliasSafe(channel, "ownerId");
-}
-
-export function resolveDiscordChannelParentSafe(channel: unknown): unknown {
-  return readDiscordChannelPropertySafe(channel, "parent");
+  return readStringField(asOptionalObjectRecord(channel), "topic");
 }
 
 export function resolveDiscordChannelInfoSafe(channel: unknown): DiscordChannelInfoSafe {
-  const parent = resolveDiscordChannelParentSafe(channel);
+  const record = asOptionalObjectRecord(channel);
+  const raw = asOptionalObjectRecord(record?.rawData);
+  const readAlias = (camel: string, snake: string) =>
+    readStringField(record, camel) ?? readStringField(record, snake) ?? readStringField(raw, snake);
   return {
-    name: resolveDiscordChannelNameSafe(channel),
-    topic: resolveDiscordChannelTopicSafe(channel),
-    type: resolveDiscordChannelNumberPropertySafe(channel, "type"),
-    parentId: resolveDiscordChannelParentIdSafe(channel),
-    ownerId: resolveDiscordChannelOwnerIdSafe(channel),
-    parentName: resolveDiscordChannelNameSafe(parent),
+    id: readStringField(record, "id"),
+    name: readStringField(record, "name"),
+    topic: readStringField(record, "topic"),
+    type: typeof record?.type === "number" ? record.type : undefined,
+    parentId: readAlias("parentId", "parent_id"),
+    ownerId: readAlias("ownerId", "owner_id"),
+    parentName: readStringField(asOptionalObjectRecord(record?.parent), "name"),
   };
 }

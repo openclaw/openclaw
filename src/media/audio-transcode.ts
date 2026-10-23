@@ -12,20 +12,6 @@ const DEFAULT_OPUS_CHANNELS = 1;
 const DEFAULT_TEMP_PREFIX = "audio-opus-";
 const DEFAULT_OUTPUT_FILE_NAME = "voice.opus";
 
-function normalizeAudioExtension(params: {
-  inputExtension?: string;
-  inputFileName?: string;
-}): string {
-  const fromExtension = params.inputExtension?.trim();
-  const candidate = fromExtension
-    ? fromExtension.startsWith(".")
-      ? fromExtension
-      : `.${fromExtension}`
-    : path.extname(params.inputFileName ?? "");
-  const normalized = candidate.toLowerCase();
-  return /^\.[a-z0-9]{1,12}$/.test(normalized) ? normalized : ".audio";
-}
-
 function normalizeTempPrefix(value?: string): string {
   const sanitized = value?.trim().replace(/[^a-zA-Z0-9._-]/g, "-");
   if (!sanitized || sanitized === "." || sanitized === "..") {
@@ -73,10 +59,15 @@ export async function transcodeAudioBufferToOpus(params: {
       prefix: normalizeTempPrefix(params.tempPrefix),
     },
     async (workspace) => {
-      const inputPath = await workspace.write(
-        `input${normalizeAudioExtension(params)}`,
-        params.audioBuffer,
-      );
+      const fromExtension = params.inputExtension?.trim();
+      const candidate = fromExtension
+        ? fromExtension.startsWith(".")
+          ? fromExtension
+          : `.${fromExtension}`
+        : path.extname(params.inputFileName ?? "");
+      const normalized = candidate.toLowerCase();
+      const inputExtension = /^\.[a-z0-9]{1,12}$/.test(normalized) ? normalized : ".audio";
+      const inputPath = await workspace.write(`input${inputExtension}`, params.audioBuffer);
       const outputFileName = normalizeOutputFileName(params.outputFileName);
       await writeExternalFileWithinRoot({
         rootDir: workspace.dir,
@@ -159,13 +150,13 @@ export async function transcodeAudioBuffer(params: {
   try {
     const inPath = tmp.write(`in.${source}`, params.audioBuffer);
     const outPath = tmp.path(`out.${target}`);
-    const result = await runAfconvert({
+    const failure = await runAfconvert(
       // Opus-in-CAF matches native Messages voice memo attachments.
-      args: ["-f", "caff", "-d", "opus@24000", "-c", "1", inPath, outPath],
-      timeoutMs: params.timeoutMs ?? 5000,
-    });
-    if (!result.ok) {
-      return { ok: false, reason: "transcoder-failed", detail: result.detail };
+      ["-f", "caff", "-d", "opus@24000", "-c", "1", inPath, outPath],
+      params.timeoutMs ?? 5000,
+    );
+    if (failure !== undefined) {
+      return { ok: false, reason: "transcoder-failed", detail: failure };
     }
     return { ok: true, buffer: tmp.read(`out.${target}`) };
   } catch (err) {
@@ -180,22 +171,17 @@ function normalizeContainerExt(ext: string): string | undefined {
   return /^[a-z0-9]{1,12}$/.test(trimmed) ? trimmed : undefined;
 }
 
-async function runAfconvert(params: {
-  args: string[];
-  timeoutMs: number;
-}): Promise<{ ok: true } | { ok: false; detail: string }> {
+async function runAfconvert(args: string[], timeoutMs: number): Promise<string | undefined> {
   try {
-    const result = await runCommandWithTimeout(["/usr/bin/afconvert", ...params.args], {
+    const result = await runCommandWithTimeout(["/usr/bin/afconvert", ...args], {
       maxOutputBytes: 1024,
-      timeoutMs: params.timeoutMs,
+      timeoutMs,
     });
     if (result.termination === "timeout") {
-      return { ok: false, detail: `timeout-${params.timeoutMs}ms` };
+      return `timeout-${timeoutMs}ms`;
     }
-    return result.code === 0
-      ? { ok: true }
-      : { ok: false, detail: `exit-${result.code ?? "unknown"}` };
+    return result.code === 0 ? undefined : `exit-${result.code ?? "unknown"}`;
   } catch (err) {
-    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    return err instanceof Error ? err.message : String(err);
   }
 }

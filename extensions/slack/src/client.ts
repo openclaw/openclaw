@@ -1,7 +1,7 @@
 import { hash } from "node:crypto";
 import { type WebClientOptions, WebClient } from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import type { SlackLookupClientOptions, SlackProxyDispatcher } from "./client-options.js";
+import type { SlackProxyDispatcher } from "./client-options.js";
 import {
   resolveSlackLookupClientOptions,
   resolveSlackReadClientOptions,
@@ -31,18 +31,21 @@ export {
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
 
-export function createSlackWebClient(
-  token: string,
-  options: WebClientOptions = {},
-  assertDirectAdapterHandoff?: () => void,
+function createSlackClientFactory<Options extends WebClientOptions>(
+  resolveOptions: (
+    options?: Options,
+    dispatcher?: SlackProxyDispatcher,
+    assertDirectAdapterHandoff?: () => void,
+  ) => WebClientOptions,
 ) {
-  // Shared or mixed-operation clients stay timeout-free unless the caller opts in.
-  // Slack can commit a mutation before a late response, so a default deadline is unsafe here.
-  return new WebClient(
-    token,
-    resolveSlackWebClientOptions(options, undefined, assertDirectAdapterHandoff),
-  );
+  return (token: string, options?: Options, assertDirectAdapterHandoff?: () => void) =>
+    new WebClient(token, resolveOptions(options, undefined, assertDirectAdapterHandoff));
 }
+
+// Shared clients stay timeout-free: Slack can commit a mutation before a late response.
+export const createSlackWebClient = createSlackClientFactory(resolveSlackWebClientOptions);
+export const createSlackLookupClient = createSlackClientFactory(resolveSlackLookupClientOptions);
+export const createSlackWriteClient = createSlackClientFactory(resolveSlackWriteClientOptions);
 
 export function createSlackReadClient(
   token: string,
@@ -94,28 +97,6 @@ export function createSlackStartupAuthClient(token: string, options: WebClientOp
   });
 }
 
-export function createSlackLookupClient(
-  token: string,
-  options: SlackLookupClientOptions = {},
-  assertDirectAdapterHandoff?: () => void,
-) {
-  return new WebClient(
-    token,
-    resolveSlackLookupClientOptions(options, undefined, assertDirectAdapterHandoff),
-  );
-}
-
-export function createSlackWriteClient(
-  token: string,
-  options: WebClientOptions = {},
-  assertDirectAdapterHandoff?: () => void,
-) {
-  return new WebClient(
-    token,
-    resolveSlackWriteClientOptions(options, undefined, assertDirectAdapterHandoff),
-  );
-}
-
 export function createSlackTokenCacheKey(token: string): string {
   return `sha256:${hash("sha256", token, "base64url")}`;
 }
@@ -157,7 +138,10 @@ export function getSlackListenerWriteClient(params: {
   if (cached) {
     // Bolt pools listener clients by authorized team. Reusing one for a
     // different team is invalid scope, not another write-client key.
-    return cached.teamId === teamId ? cached.client : undefined;
+    if (cached.teamId !== teamId) {
+      return undefined;
+    }
+    return cached.client;
   }
   const headers = Object.fromEntries(
     Object.entries(params.clientOptions?.headers ?? {}).filter(

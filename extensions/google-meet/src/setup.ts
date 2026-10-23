@@ -21,12 +21,8 @@ function resolveUserPath(input: string): string {
 }
 
 function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
-  try {
-    const parsed = new URL(webhookUrl);
-    return isBlockedHostnameOrIp(parsed.hostname);
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(webhookUrl);
+  return parsed ? isBlockedHostnameOrIp(parsed.hostname) : false;
 }
 
 function resolveVoiceCallSetupValue(configured: unknown, fallback: unknown): string | undefined {
@@ -80,7 +76,6 @@ function getVoiceCallWebhookExposureCheck(
 export function getGoogleMeetSetupStatus(
   config: GoogleMeetConfig,
   options?: {
-    env?: NodeJS.ProcessEnv;
     fullConfig?: unknown;
     mode?: GoogleMeetMode;
     transport?: GoogleMeetTransport;
@@ -88,7 +83,6 @@ export function getGoogleMeetSetupStatus(
   },
 ) {
   const checks: MeetingSetupCheck[] = [];
-  const env = options?.env ?? process.env;
   const fullConfig = asRecord(options?.fullConfig);
   const mode = options?.mode ?? config.defaultMode;
   const transport = options?.transport ?? config.defaultTransport;
@@ -103,10 +97,11 @@ export function getGoogleMeetSetupStatus(
 
   if (config.auth.tokenPath) {
     const tokenPath = resolveUserPath(config.auth.tokenPath);
+    const tokenExists = fs.existsSync(tokenPath);
     checks.push({
       id: "google-oauth-token",
-      ok: fs.existsSync(tokenPath),
-      message: fs.existsSync(tokenPath)
+      ok: tokenExists,
+      message: tokenExists
         ? "Google OAuth token file found"
         : `Google OAuth token file missing at ${config.auth.tokenPath}`,
     });
@@ -224,15 +219,15 @@ export function getGoogleMeetSetupStatus(
     if (provider === "twilio") {
       const accountSid = resolveVoiceCallSetupValue(
         voiceCallTwilioConfig.accountSid,
-        env.TWILIO_ACCOUNT_SID,
+        process.env.TWILIO_ACCOUNT_SID,
       );
       const authToken = resolveVoiceCallSetupValue(
         voiceCallTwilioConfig.authToken,
-        env.TWILIO_AUTH_TOKEN,
+        process.env.TWILIO_AUTH_TOKEN,
       );
       const fromNumber = resolveVoiceCallSetupValue(
         voiceCallConfig.fromNumber,
-        env.TWILIO_FROM_NUMBER,
+        process.env.TWILIO_FROM_NUMBER,
       );
       const twilioReady = Boolean(accountSid && authToken && fromNumber);
       checks.push({

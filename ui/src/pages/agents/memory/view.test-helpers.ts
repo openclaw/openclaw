@@ -1,7 +1,9 @@
+import { flush } from "solid-js";
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
-import type { renderDreaming } from "./view.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { renderDreaming } from "./view.tsx";
 
 export const fullDreamingViewAccess: Parameters<typeof renderDreaming>[0]["access"] = {
   canOpenConfig: true,
@@ -81,4 +83,16 @@ export function installDreamingViewTestTranslations(): () => void {
     },
   });
   return () => i18n.registerTranslation("en", en);
+}
+
+const mounts = new WeakMap<HTMLElement, () => void>();
+
+export function renderDreamingView(
+  props: Parameters<typeof renderDreaming>[0],
+  container: HTMLElement,
+) {
+  mounts.get(container)?.();
+  const mounted = mountSolid(() => renderDreaming(props), { container });
+  mounts.set(container, mounted.unmount);
+  flush();
 }

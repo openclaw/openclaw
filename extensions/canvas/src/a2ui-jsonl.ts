@@ -13,13 +13,11 @@ const A2UI_V09_ACTION_KEYS = [
   "deleteSurface",
 ] as const;
 
-/** Validates A2UI JSONL and returns the detected dialect/version metadata. */
 export function validateSupportedA2UIJsonl(jsonl: string) {
   const lines = jsonl.split(/\r?\n/);
   const errors: string[] = [];
   let sawV08 = false;
   let sawV09 = false;
-  let messageCount = 0;
   const messages: unknown[] = [];
 
   lines.forEach((line, idx) => {
@@ -27,7 +25,6 @@ export function validateSupportedA2UIJsonl(jsonl: string) {
     if (!trimmed) {
       return;
     }
-    messageCount += 1;
     let obj: unknown;
     try {
       obj = JSON.parse(trimmed) as unknown;
@@ -86,7 +83,7 @@ export function validateSupportedA2UIJsonl(jsonl: string) {
     messages.push(record);
   });
 
-  if (messageCount === 0) {
+  if (messages.length === 0 && errors.length === 0) {
     errors.push("no JSONL messages found");
   }
   if (sawV08 && sawV09) {
@@ -97,5 +94,5 @@ export function validateSupportedA2UIJsonl(jsonl: string) {
   }
 
   const version: "v0.8" | "v0.9" = sawV09 ? "v0.9" : "v0.8";
-  return { version, messageCount, messages };
+  return { version, messages };
 }

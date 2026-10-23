@@ -28,6 +28,7 @@ export function resolveOpenAIRequestReasoning(
     compat?: unknown;
   },
   reasoning: string | undefined,
+  offDefault: "none" | null = "none",
 ): { effort: string | undefined; thinkingEnabled: boolean | undefined } {
   // Logical off can map to a minimum effort; native none only uses its own explicit mapping.
   const requested = normalizeOpenAIReasoningEffort(reasoning ?? "off");
@@ -39,7 +40,11 @@ export function resolveOpenAIRequestReasoning(
       : (resolveOpenAIReasoningEffortMapping(requested, resolveOpenAIReasoningEffortMap(model)) ??
         modelMapped);
   const intent =
-    mapped !== undefined ? mapped?.trim() : reasoning === undefined ? undefined : requested;
+    mapped !== undefined
+      ? mapped?.trim()
+      : reasoning === undefined || (requested === "off" && offDefault === null)
+        ? undefined
+        : requested;
   const normalizedIntent = normalizeOpenAIReasoningEffort(intent ?? "off");
   const supported = resolveOpenAIModelReasoningEfforts(model);
   const effort =

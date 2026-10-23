@@ -15,7 +15,6 @@ import { resolveDynamicSessionMutationRequiredScope } from "../shared/session-me
 import { isAgentSessionResetCommand } from "./agent-command-policy.js";
 import {
   isCoreGatewayMethodClassified,
-  isCoreNodeGatewayMethod,
   isDynamicOperatorGatewayMethod,
   resolveCoreOperatorGatewayMethodScope,
 } from "./methods/core-method-policy.js";
@@ -26,6 +25,7 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  SESSION_WRITE_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   isOperatorScope,
@@ -72,11 +72,6 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
 
 export function isApprovalMethod(method: string): boolean {
   return resolveScopedMethod(method) === APPROVALS_SCOPE;
-}
-
-/** Returns true when a method is reserved for node-role clients instead of operators. */
-export function isNodeRoleMethod(method: string): boolean {
-  return isCoreNodeGatewayMethod(method);
 }
 
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
@@ -131,6 +126,19 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     return resolveSessionActionLeastPrivilegeScopes(params);
   }
   const record = asOptionalRecord(params);
+  if (method === "sessions.github.action") {
+    return [
+      record?.action === "inspect_pr" ||
+      record?.action === "prepare_pr" ||
+      record?.action === "refresh_base" ||
+      record?.action === "edit" ||
+      record?.action === "request_review" ||
+      record?.action === "upload_evidence" ||
+      (record?.action === "ready" && record.publishingSessionKey === undefined)
+        ? SESSION_WRITE_SCOPE
+        : WRITE_SCOPE,
+    ];
+  }
   if (method === "agent") {
     return isAgentSessionResetCommand(record?.message) ? [ADMIN_SCOPE] : [WRITE_SCOPE];
   }
@@ -183,7 +191,6 @@ function findMissingOperatorScope(
   return requiredScopes.find((scope) => !operatorScopeSatisfied(scope, scopes));
 }
 
-/** Returns the narrowest known operator scopes needed to call a gateway method. */
 export function resolveLeastPrivilegeOperatorScopesForMethod(
   method: string,
   params?: unknown,
@@ -238,7 +245,6 @@ export function projectOperatorScopesForMethod(params: {
   });
 }
 
-/** Checks whether a presented operator scope set authorizes a gateway method call. */
 export function authorizeOperatorScopesForMethod(
   method: string,
   scopes: readonly string[],
@@ -289,7 +295,6 @@ export function authorizeOperatorScopesForMethod(
   );
 }
 
-/** Checks a method registry's already-resolved static scope against presented operator scopes. */
 export function authorizeOperatorScopesForRequiredScope(
   requiredScope: OperatorScope,
   scopes: readonly string[],
@@ -313,13 +318,6 @@ export function authorizeOperatorScopesForRequiredScope(
   return { allowed: false, missingScope: requiredScope };
 }
 
-/** Returns true when a method has any core, node, dynamic, reserved, or plugin scope policy. */
 export function isGatewayMethodClassified(method: string): boolean {
-  if (isNodeRoleMethod(method)) {
-    return true;
-  }
-  if (isDynamicOperatorGatewayMethod(method)) {
-    return true;
-  }
   return isCoreGatewayMethodClassified(method) || resolveScopedMethod(method) !== undefined;
 }

@@ -9,7 +9,6 @@ import { resolveBundledPluginSources, type BundledPluginSource } from "./bundled
 export type StaleLocalBundledPluginInstallRecord = {
   pluginId: string;
   record: PluginInstallRecord;
-  recordPathField: "installPath" | "sourcePath";
   stalePath: string;
   bundledPath: string;
 };
@@ -18,15 +17,12 @@ function normalizePathForCompare(rawPath: string, env?: NodeJS.ProcessEnv): stri
   return path.resolve(normalizeBundledLookupPath(resolveUserPath(rawPath, env)));
 }
 
-function primaryInstallRecordPath(record: PluginInstallRecord): {
-  field: "installPath" | "sourcePath";
-  path: string;
-} | null {
+function primaryInstallRecordPath(record: PluginInstallRecord): string | null {
   if (typeof record.installPath === "string" && record.installPath.trim()) {
-    return { field: "installPath", path: record.installPath };
+    return record.installPath;
   }
   if (typeof record.sourcePath === "string" && record.sourcePath.trim()) {
-    return { field: "sourcePath", path: record.sourcePath };
+    return record.sourcePath;
   }
   return null;
 }
@@ -83,7 +79,7 @@ export function listStaleLocalBundledPluginInstallRecords(params: {
     if (!recordPath) {
       continue;
     }
-    const stalePath = normalizePathForCompare(recordPath.path, params.env);
+    const stalePath = normalizePathForCompare(recordPath, params.env);
     const bundledPath = normalizePathForCompare(bundledSource.localPath, params.env);
     if (stalePath === bundledPath) {
       continue;
@@ -94,7 +90,6 @@ export function listStaleLocalBundledPluginInstallRecords(params: {
     stale.push({
       pluginId,
       record,
-      recordPathField: recordPath.field,
       stalePath,
       bundledPath,
     });
@@ -104,12 +99,9 @@ export function listStaleLocalBundledPluginInstallRecords(params: {
 }
 
 /** Removes stale compiled bundled plugin path records from an install record map. */
-export function pruneStaleLocalBundledPluginInstallRecords(params: {
-  installRecords: Record<string, PluginInstallRecord>;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  bundled?: ReadonlyMap<string, BundledPluginSource>;
-}): {
+export function pruneStaleLocalBundledPluginInstallRecords(
+  params: Parameters<typeof listStaleLocalBundledPluginInstallRecords>[0],
+): {
   records: Record<string, PluginInstallRecord>;
   stale: StaleLocalBundledPluginInstallRecord[];
 } {

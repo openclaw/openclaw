@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLegacyWebhookListenerDoctorContract } from "./legacy-webhook-listener-migration.js";
 
@@ -10,122 +10,100 @@ const contract = createLegacyWebhookListenerDoctorContract({
 const config = (entry: Record<string, unknown>): OpenClawConfig => ({
   channels: { telegram: entry },
 });
+const legacy = (port: number | string, host?: string) => ({
+  legacyWebhook: { port, ...(host === undefined ? {} : { host }) },
+});
+const inherited = { botToken: "synthetic-bot" };
+const withAccounts = (root: Record<string, unknown>, accounts: Record<string, unknown>) => ({
+  ...root,
+  accounts,
+});
 
-describe("legacy webhook listener migration", () => {
-  it("preserves explicit ports and inherited bind addresses without changing unrelated settings", () => {
-    const cfg = config({
-      webhookPort: 8787,
-      webhookHost: "0.0.0.0",
-      webhookPath: "/telegram",
-      accounts: {
-        inherited: { botToken: "synthetic-bot" },
-        port: { webhookPort: 8789 },
-        host: { webhookHost: "127.0.0.2" },
+it.each([
+  [
+    "explicit ports and inherited bind addresses",
+    withAccounts(
+      { webhookPort: 8787, webhookHost: "0.0.0.0", webhookPath: "/telegram" },
+      { inherited, port: { webhookPort: 8789 }, host: { webhookHost: "127.0.0.2" } },
+    ),
+    withAccounts(
+      { ...legacy(8787, "0.0.0.0"), webhookPath: "/telegram" },
+      { inherited, port: legacy(8789, "0.0.0.0"), host: legacy(8787, "127.0.0.2") },
+    ),
+    3,
+    undefined,
+  ],
+  [
+    "explicit host and default port",
+    { webhookHost: "0.0.0.0", accounts: { other: {} } },
+    { ...legacy(8787, "0.0.0.0"), accounts: { other: {} } },
+    1,
+    "legacyWebhook: false",
+  ],
+  [
+    "explicit and inherited opt-outs",
+    withAccounts(
+      { legacyWebhook: false, webhookPort: 8787 },
+      {
+        inherited: { webhookPort: 8789, webhookHost: "0.0.0.0" },
+        disabled: { legacyWebhook: false, webhookPort: 8790 },
+        explicit: { ...legacy(9000), webhookPort: 8791 },
       },
-    });
-    expect(contract.legacyConfigRules[0]!.match?.(cfg.channels?.telegram, cfg)).toBe(true);
-    const result = contract.normalizeCompatibilityConfig({ cfg });
-    expect(result.config).toEqual(
-      config({
-        legacyWebhook: { port: 8787, host: "0.0.0.0" },
-        webhookPath: "/telegram",
-        accounts: {
-          inherited: { botToken: "synthetic-bot" },
-          port: { legacyWebhook: { port: 8789, host: "0.0.0.0" } },
-          host: { legacyWebhook: { port: 8787, host: "127.0.0.2" } },
-        },
-      }),
-    );
-    expect(cfg.channels?.telegram).toHaveProperty("webhookPort", 8787);
-    expect(result.changes).toHaveLength(3);
-    expect(contract.normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
-      config: result.config,
-      changes: [],
-    });
-    expect(
-      contract.legacyConfigRules[0]!.match?.(result.config.channels?.telegram, result.config),
-    ).toBe(false);
-  });
-
-  it("preserves an explicit bind host with the old default port and leaves implicit config unchanged", () => {
-    const result = contract.normalizeCompatibilityConfig({
-      cfg: config({ webhookHost: "0.0.0.0", accounts: { other: {} } }),
-    });
-    expect(result.config).toEqual(
-      config({ legacyWebhook: { port: 8787, host: "0.0.0.0" }, accounts: { other: {} } }),
-    );
-    expect(result.changes).toEqual([expect.stringContaining("legacyWebhook: false")]);
-    const untouched = config({ webhookUrl: "https://example.com/telegram" });
-    expect(contract.normalizeCompatibilityConfig({ cfg: untouched }).config).toBe(untouched);
-  });
-
-  it("preserves explicit and inherited opt-outs while removing retired listener keys", () => {
-    const result = contract.normalizeCompatibilityConfig({
-      cfg: config({
-        legacyWebhook: false,
-        webhookPort: 8787,
-        accounts: {
-          inherited: { webhookPort: 8789, webhookHost: "0.0.0.0" },
-          disabled: { legacyWebhook: false, webhookPort: 8790 },
-          explicit: { legacyWebhook: { port: 9000 }, webhookPort: 8791 },
-        },
-      }),
-    });
-    expect(result.config).toEqual(
-      config({
-        legacyWebhook: false,
-        accounts: {
-          inherited: {},
-          disabled: { legacyWebhook: false },
-          explicit: { legacyWebhook: { port: 9000 } },
-        },
-      }),
-    );
-    expect(contract.normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
-      config: result.config,
-      changes: [],
-    });
-  });
-
-  it.each(["0.0.0.0", undefined])(
-    "inherits canonical root port and host %s when accounts still use retired keys",
-    (host) => {
-      const root = { port: 9000, ...(host === undefined ? {} : { host }) };
-      const result = contract.normalizeCompatibilityConfig({
-        cfg: config({
-          legacyWebhook: root,
-          accounts: {
-            port: { webhookPort: 9001 },
-            host: { webhookHost: "127.0.0.2" },
-          },
+    ),
+    withAccounts(
+      { legacyWebhook: false },
+      {
+        inherited: {},
+        disabled: { legacyWebhook: false },
+        explicit: legacy(9000),
+      },
+    ),
+    4,
+    undefined,
+  ],
+  [
+    "canonical settings and malformed ports",
+    { webhookPort: 8787, ...legacy(9000), accounts: { invalid: { webhookPort: "invalid" } } },
+    { ...legacy(9000), accounts: { invalid: legacy("invalid") } },
+    2,
+    "already configured",
+  ],
+  ...["0.0.0.0", undefined].map(
+    (host) =>
+      [
+        `canonical root port and host ${host}`,
+        withAccounts(legacy(9000, host), {
+          port: { webhookPort: 9001 },
+          host: { webhookHost: "127.0.0.2" },
         }),
-      });
-      expect(result.config).toEqual(
-        config({
-          legacyWebhook: root,
-          accounts: {
-            port: { legacyWebhook: { ...root, port: 9001 } },
-            host: { legacyWebhook: { port: 9000, host: "127.0.0.2" } },
-          },
+        withAccounts(legacy(9000, host), {
+          port: legacy(9001, host),
+          host: legacy(9000, "127.0.0.2"),
         }),
-      );
-    },
-  );
-
-  it("keeps canonical settings authoritative and malformed ports visible to validation", () => {
-    const result = contract.normalizeCompatibilityConfig({
-      cfg: config({
-        webhookPort: 8787,
-        legacyWebhook: { port: 9000 },
-        accounts: { invalid: { webhookPort: "invalid" } },
-      }),
-    });
-    expect(result.config).toEqual(
-      config({
-        legacyWebhook: { port: 9000 },
-        accounts: { invalid: { legacyWebhook: { port: "invalid" } } },
-      }),
-    );
-    expect(result.changes[0]).toContain("already configured");
+        2,
+        undefined,
+      ] as const,
+  ),
+] as const)("preserves %s", (_name, input, expected, changeCount, message) => {
+  const cfg = config(structuredClone(input));
+  const match = (value: OpenClawConfig) =>
+    contract.legacyConfigRules[0]!.match?.(value.channels?.telegram, value);
+  expect(match(cfg)).toBe(true);
+  const result = contract.normalizeCompatibilityConfig({ cfg });
+  expect(result.config).toEqual(config(expected));
+  expect(cfg.channels?.telegram).toEqual(input);
+  expect(result.changes).toHaveLength(changeCount);
+  if (message) {
+    expect(result.changes[0]).toContain(message);
+  }
+  expect(contract.normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
+    config: result.config,
+    changes: [],
   });
+  expect(match(result.config)).toBe(false);
+});
+
+it("leaves implicit config unchanged", () => {
+  const untouched = config({ webhookUrl: "https://example.com/telegram" });
+  expect(contract.normalizeCompatibilityConfig({ cfg: untouched }).config).toBe(untouched);
 });

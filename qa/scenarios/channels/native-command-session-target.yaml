@@ -62,7 +62,7 @@ flow:
             expr: "transport.buildAgentDelivery({ target: `dm:${config.conversationId}` })"
         - set: sessionKey
           value:
-            expr: "buildAgentSessionKey({ agentId: env.cfg.agents?.list?.find((agent) => agent.default)?.id ?? env.cfg.agents?.list?.[0]?.id ?? 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo } })"
+            expr: "resolveAgentRoute({ cfg: env.cfg, channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo } }).sessionKey"
         - sendInbound:
             conversation:
               id:

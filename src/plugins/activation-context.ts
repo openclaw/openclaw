@@ -1,4 +1,3 @@
-// Builds plugin activation context from config, discovery, and manifests.
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
@@ -47,8 +46,6 @@ type BundledCompatActivationParams = PluginActivationParams & {
 export function withActivatedPluginIds(params: {
   config?: OpenClawConfig;
   pluginIds: readonly string[];
-  overrideGlobalDisable?: boolean;
-  overrideExplicitDisable?: boolean;
 }): OpenClawConfig | undefined {
   if (params.pluginIds.length === 0) {
     return params.config;
@@ -71,98 +68,23 @@ export function withActivatedPluginIds(params: {
     }
     allow.add(normalized);
     const existingEntry = entries[normalized];
-    const enabled = existingEntry?.enabled !== false || params.overrideExplicitDisable === true;
+    const enabled = existingEntry?.enabled !== false;
     entryChanged ||= existingEntry?.enabled !== enabled;
     entries[normalized] = {
       ...existingEntry,
       enabled,
     };
   }
-  const forcePluginsEnabled =
-    params.overrideGlobalDisable === true && params.config?.plugins?.enabled === false;
-  if (
-    !forcePluginsEnabled &&
-    !entryChanged &&
-    allow.size === originalAllow.length &&
-    params.config?.plugins?.entries
-  ) {
+  if (!entryChanged && allow.size === originalAllow.length && params.config?.plugins?.entries) {
     return params.config;
   }
   return {
     ...params.config,
     plugins: {
       ...params.config?.plugins,
-      ...(forcePluginsEnabled ? { enabled: true } : {}),
       ...(allow.size > 0 ? { allow: [...allow] } : {}),
       entries,
     },
-  };
-}
-
-function applyPluginAutoEnableForActivation(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-  discovery?: PluginDiscoveryResult;
-  manifestRegistry?: PluginManifestRegistry;
-}) {
-  const currentSnapshot = params.manifestRegistry
-    ? undefined
-    : getCurrentPluginMetadataSnapshot({
-        config: params.config,
-        env: params.env,
-        workspaceDir: params.workspaceDir,
-        allowWorkspaceScopedSnapshot: true,
-      });
-  const defaultDiscoverySnapshot =
-    !params.manifestRegistry && normalizePluginsConfig(params.config.plugins).loadPaths.length === 0
-      ? getCurrentPluginMetadataSnapshot({
-          env: params.env,
-          workspaceDir: params.workspaceDir,
-          allowWorkspaceScopedSnapshot: true,
-          requireDefaultDiscoveryContext: true,
-        })
-      : undefined;
-  const currentManifestRegistry =
-    params.manifestRegistry ??
-    currentSnapshot?.manifestRegistry ??
-    defaultDiscoverySnapshot?.manifestRegistry;
-  return applyPluginAutoEnable({
-    config: params.config,
-    env: params.env,
-    manifestRegistry: currentManifestRegistry,
-    discovery:
-      params.discovery ?? currentSnapshot?.discovery ?? defaultDiscoverySnapshot?.discovery,
-  });
-}
-
-function resolvePluginActivationInputs(params: PluginActivationParams): PluginActivationInputs {
-  const env = params.env ?? process.env;
-  const rawConfig = params.rawConfig ?? params.resolvedConfig;
-  let resolvedConfig = params.resolvedConfig ?? params.rawConfig;
-  let autoEnabledReasons = params.autoEnabledReasons;
-
-  if (params.applyAutoEnable && rawConfig !== undefined) {
-    const autoEnabled = applyPluginAutoEnableForActivation({
-      config: rawConfig,
-      env,
-      workspaceDir: params.workspaceDir,
-      discovery: params.discovery,
-      manifestRegistry: params.manifestRegistry,
-    });
-    resolvedConfig = autoEnabled.config;
-    autoEnabledReasons = autoEnabled.autoEnabledReasons;
-  }
-
-  return {
-    rawConfig,
-    config: resolvedConfig,
-    normalized: normalizePluginsConfig(resolvedConfig?.plugins),
-    activationSourceConfig: rawConfig,
-    activationSource: createPluginActivationSource({
-      config: rawConfig,
-    }),
-    autoEnabledReasons: autoEnabledReasons ?? {},
   };
 }
 
@@ -170,24 +92,64 @@ export function resolveBundledCompatActivationInputs(
   params: BundledCompatActivationParams,
 ): PluginActivationInputs {
   const env = params.env ?? process.env;
-  const snapshot = resolvePluginActivationInputs({ ...params, env });
+  const rawConfig = params.rawConfig ?? params.resolvedConfig;
+  let resolvedConfig = params.resolvedConfig ?? params.rawConfig;
+  let autoEnabledReasons = params.autoEnabledReasons;
+
+  if (params.applyAutoEnable && rawConfig !== undefined) {
+    const currentSnapshot = params.manifestRegistry
+      ? undefined
+      : getCurrentPluginMetadataSnapshot({
+          config: rawConfig,
+          env,
+          workspaceDir: params.workspaceDir,
+          allowWorkspaceScopedSnapshot: true,
+        });
+    const defaultDiscoverySnapshot =
+      !params.manifestRegistry && normalizePluginsConfig(rawConfig.plugins).loadPaths.length === 0
+        ? getCurrentPluginMetadataSnapshot({
+            env,
+            workspaceDir: params.workspaceDir,
+            allowWorkspaceScopedSnapshot: true,
+            requireDefaultDiscoveryContext: true,
+          })
+        : undefined;
+    const currentManifestRegistry =
+      params.manifestRegistry ??
+      currentSnapshot?.manifestRegistry ??
+      defaultDiscoverySnapshot?.manifestRegistry;
+    const autoEnabled = applyPluginAutoEnable({
+      config: rawConfig,
+      env,
+      manifestRegistry: currentManifestRegistry,
+      discovery:
+        params.discovery ?? currentSnapshot?.discovery ?? defaultDiscoverySnapshot?.discovery,
+    });
+    resolvedConfig = autoEnabled.config;
+    autoEnabledReasons = autoEnabled.autoEnabledReasons;
+  }
+
+  const activationSource = createPluginActivationSource({ config: rawConfig });
   const bundledPluginIds = params.resolveBundledPluginIds({
-    config: snapshot.config,
+    config: resolvedConfig,
     workspaceDir: params.workspaceDir,
     env,
     onlyPluginIds: params.onlyPluginIds,
     ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
   });
   const config = withBundledPluginEnablementCompat({
-    config: snapshot.config,
+    config: resolvedConfig,
     pluginIds: bundledPluginIds,
     env,
     ...(params.activation ? { activation: params.activation } : {}),
   });
 
   return {
-    ...snapshot,
+    rawConfig,
     config,
     normalized: normalizePluginsConfig(config?.plugins),
+    activationSourceConfig: rawConfig,
+    activationSource,
+    autoEnabledReasons: autoEnabledReasons ?? {},
   };
 }

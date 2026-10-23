@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,7 +7,6 @@ import {
   asNullableRecord,
   normalizeOptionalString,
   normalizeSingleOrTrimmedStringList,
-  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import { compileMemoryWikiVault } from "./compile.js";
@@ -15,6 +15,10 @@ import { appendMemoryWikiLog } from "./log.js";
 import { forEachMarkdownCodeRange } from "./markdown-links.js";
 import {
   createWikiPageFilename,
+  extractHumanNotesBlock,
+  HUMAN_START_MARKER,
+  HUMAN_END_MARKER,
+  preserveHumanNotesBlock,
   parseWikiMarkdown,
   renderWikiMarkdown,
   slugifyWikiSegment,
@@ -22,7 +26,11 @@ import {
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
-import { writeGuardedVaultPage } from "./vault-page-write.js";
+import {
+  readExistingWikiPageUtf8,
+  readWikiPageStat,
+  writeGuardedVaultPage,
+} from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const OKF_RESERVED_FILENAMES = new Set(["index.md", "log.md"]);
@@ -37,15 +45,10 @@ const OKF_HASH_CHARS = 8;
 type OkfConceptDocument = {
   conceptId: string;
   relativePath: string;
-  absolutePath: string;
   frontmatter: Record<string, unknown>;
   body: string;
   type: string;
   title: string;
-  description?: string;
-  resource?: string;
-  tags: string[];
-  timestamp?: string;
 };
 
 type ImportMemoryWikiOkfWarning = {
@@ -54,32 +57,11 @@ type ImportMemoryWikiOkfWarning = {
   message: string;
 };
 
-type ImportMemoryWikiOkfResult = {
-  bundlePath: string;
-  bundleName: string;
-  okfVersion?: string;
-  importedCount: number;
-  updatedCount: number;
-  removedCount: number;
-  skippedCount: number;
-  pagePaths: string[];
-  removedPagePaths: string[];
-  warnings: ImportMemoryWikiOkfWarning[];
-  indexUpdatedFiles: string[];
-};
+type ImportMemoryWikiOkfResult = Awaited<ReturnType<typeof importMemoryWikiOkfBundle>>;
 
 function toPosixPath(value: string): string {
   return value.split(path.sep).join("/");
 }
-
-function trimMarkdownExtension(value: string): string {
-  return value.replace(/\.md$/i, "");
-}
-
-type OkfBundleMetadata = {
-  key: string;
-  version?: string;
-};
 
 function createOkfBundleKey(params: {
   rootFrontmatter: Record<string, unknown>;
@@ -100,18 +82,14 @@ function createOkfBundleKey(params: {
   return `${slugifyWikiSegment(label)}-${hash}`;
 }
 
-function createOkfPageStem(bundleKey: string, conceptId: string): string {
-  const slug = slugifyWikiSegment(conceptId.replace(/\//g, "-"));
-  const hash = createHash("sha1").update(conceptId).digest("hex").slice(0, OKF_HASH_CHARS);
-  return `okf-${bundleKey}-${slug}-${hash}`;
-}
-
 function createOkfPageIdentity(
   bundleKey: string,
   conceptId: string,
 ): { pageId: string; pagePath: string } {
-  const fileName = createWikiPageFilename(createOkfPageStem(bundleKey, conceptId));
-  const stem = trimMarkdownExtension(fileName);
+  const slug = slugifyWikiSegment(conceptId.replace(/\//g, "-"));
+  const hash = createHash("sha1").update(conceptId).digest("hex").slice(0, OKF_HASH_CHARS);
+  const fileName = createWikiPageFilename(`okf-${bundleKey}-${slug}-${hash}`);
+  const stem = fileName.replace(/\.md$/i, "");
   return {
     pageId: `concept.${stem}`,
     pagePath: `concepts/${fileName}`,
@@ -177,7 +155,15 @@ async function readOkfTextFile(params: {
   relativePath: string;
   warnings: ImportMemoryWikiOkfWarning[];
 }): Promise<string | null> {
-  return await params.bundleRoot.readText(params.relativePath).catch((err: unknown) => {
+  try {
+    const bytes = await params.bundleRoot.readBytes(params.relativePath);
+    if (!isUtf8(bytes)) {
+      throw new Error(
+        "OKF document must be valid UTF-8. Convert the source to UTF-8 and retry the import.",
+      );
+    }
+    return bytes.toString("utf8");
+  } catch (err) {
     params.warnings.push({
       code: "unreadable-entry",
       path: params.relativePath,
@@ -189,56 +175,7 @@ async function readOkfTextFile(params: {
             : "Unable to read OKF concept.",
     });
     return null;
-  });
-}
-
-function deriveOkfTitle(relativePath: string, frontmatter: Record<string, unknown>): string {
-  return (
-    normalizeOptionalString(frontmatter.title) ??
-    path.posix.basename(relativePath, ".md").replace(/[-_]+/g, " ").trim()
-  );
-}
-
-function normalizeOkfConcept(params: {
-  bundlePath: string;
-  relativePath: string;
-  content: string;
-}): { concept?: OkfConceptDocument; warning?: ImportMemoryWikiOkfWarning } {
-  const parsed = parseOkfMarkdown(params.content, params.relativePath);
-  if (parsed.warning) {
-    return { warning: parsed.warning };
   }
-
-  const type = normalizeOptionalString(parsed.frontmatter.type);
-  if (!type) {
-    return {
-      warning: {
-        code: "missing-type",
-        path: params.relativePath,
-        message: "OKF concept is missing required non-empty type frontmatter.",
-      },
-    };
-  }
-
-  const conceptId = trimMarkdownExtension(params.relativePath);
-  const timestamp = normalizeOptionalString(parsed.frontmatter.timestamp);
-  const description = normalizeOptionalString(parsed.frontmatter.description);
-  const resource = normalizeOptionalString(parsed.frontmatter.resource);
-  return {
-    concept: {
-      conceptId,
-      relativePath: params.relativePath,
-      absolutePath: path.join(params.bundlePath, params.relativePath),
-      frontmatter: parsed.frontmatter,
-      body: parsed.body,
-      type,
-      title: deriveOkfTitle(params.relativePath, parsed.frontmatter),
-      ...(description ? { description } : {}),
-      ...(resource ? { resource } : {}),
-      tags: normalizeSingleOrTrimmedStringList(parsed.frontmatter.tags),
-      ...(timestamp ? { timestamp } : {}),
-    },
-  };
 }
 
 function splitMarkdownLinkDestination(target: string): {
@@ -280,7 +217,7 @@ function resolveOkfMarkdownTarget(sourceRelativePath: string, target: string): s
     : path.posix.normalize(
         path.posix.join(path.posix.dirname(sourceRelativePath), targetWithoutSuffix),
       );
-  const conceptId = trimMarkdownExtension(normalized);
+  const conceptId = normalized.replace(/\.md$/i, "");
   return conceptId.startsWith("../") ? null : conceptId;
 }
 
@@ -295,20 +232,16 @@ function safeDecodeOkfLinkPath(value: string | undefined): string {
   }
 }
 
-function getMarkdownDestinationSuffix(destination: string): string {
-  const suffixIndex = destination.search(/[?#]/);
-  return suffixIndex === -1 ? "" : destination.slice(suffixIndex);
-}
-
+type OkfPage = { pageId: string; pagePath: string; title: string };
 function rewriteOkfMarkdownLinks(params: {
   body: string;
   sourcePagePath: string;
   sourceRelativePath: string;
-  pageByConceptId: Map<string, { pageId: string; pagePath: string; title: string }>;
-}): { body: string; linkedConceptIds: string[] } {
-  const linkedConceptIds: string[] = [];
+  pageByConceptId: Map<string, OkfPage>;
+}) {
+  const linkedPages = new Set<OkfPage>();
   if (!params.body.includes("[")) {
-    return { body: params.body, linkedConceptIds };
+    return { body: params.body, linkedPages: [] };
   }
   const rewriteLinks = (markdown: string) =>
     markdown.replace(
@@ -322,18 +255,18 @@ function rewriteOkfMarkdownLinks(params: {
         if (!target) {
           return match;
         }
-        linkedConceptIds.push(conceptId);
+        linkedPages.add(target);
         const { destination, titleSuffix } = splitMarkdownLinkDestination(rawTarget);
         const relativeTarget = path.posix.relative(
           path.posix.dirname(params.sourcePagePath),
           target.pagePath,
         );
-        const suffix = getMarkdownDestinationSuffix(destination);
+        const suffix = destination.match(/[?#].*$/s)?.[0] ?? "";
         return `${imagePrefix}[${label}](${relativeTarget}${suffix}${titleSuffix})`;
       },
     );
   const body = rewriteMarkdownOutsideCode(params.body, rewriteLinks);
-  return { body, linkedConceptIds: uniqueStrings(linkedConceptIds) };
+  return { body, linkedPages: [...linkedPages] };
 }
 
 function rewriteMarkdownOutsideCode(
@@ -365,33 +298,46 @@ function normalizeOkfRenderedPageForComparison(content: string): string {
   return `---\n${frontmatterBody}---\n${withoutRelated.slice(frontmatterMatch[0].length)}`.trimEnd();
 }
 
+function renderOkfBodyWithHumanNotes(producerBody: string): string {
+  const body = producerBody.trimEnd();
+  const notes = `## Notes\n${HUMAN_START_MARKER}\n${HUMAN_END_MARKER}\n`;
+  const rendered = body + "\n\n" + notes;
+  const notesOffset = body.length + 2;
+  let closingFence = "";
+  // Unclosed producer fences are valid Markdown, but must not swallow the local editing area.
+  forEachMarkdownCodeRange(rendered, (start, end) => {
+    if (start <= notesOffset && notesOffset < end) {
+      closingFence = /^ {0,3}(`{3,}|~{3,})/u.exec(rendered.slice(start))?.[1] ?? "";
+      if (!closingFence) {
+        throw new Error("Close the producer Markdown fence before importing this OKF concept.");
+      }
+    }
+  });
+  return closingFence ? body + "\n" + closingFence + "\n\n" + notes : rendered;
+}
+
 async function writeOkfConceptPage(params: {
   vaultRoot: string;
   pagePath: string;
   content: string;
 }): Promise<{ changed: boolean; created: boolean }> {
   const vault = await fsRoot(params.vaultRoot);
-  const pageStat = await vault.stat(params.pagePath).catch((error: unknown) => {
-    if (
-      error instanceof FsSafeError &&
-      (error.code === "not-found" || error.code === "path-alias")
-    ) {
-      return null;
-    }
-    throw error;
+  const pageStat = await readWikiPageStat(vault, params.pagePath);
+  const existing = pageStat ? await readExistingWikiPageUtf8(vault, params.pagePath, () => "") : "";
+  const nextRendered = preserveHumanNotesBlock(params.content, existing, {
+    producerMarkdown: true,
   });
-  const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
   if (
-    existing === params.content ||
+    existing === nextRendered ||
     normalizeOkfRenderedPageForComparison(existing) ===
-      normalizeOkfRenderedPageForComparison(params.content)
+      normalizeOkfRenderedPageForComparison(nextRendered)
   ) {
     return { changed: false, created: !pageStat };
   }
   await writeGuardedVaultPage({
     vault,
     pagePath: params.pagePath,
-    content: params.content,
+    content: nextRendered,
     pageStat,
     pageLabel: "OKF concept page",
   });
@@ -419,31 +365,17 @@ async function removeStaleOkfConceptPages(params: {
     if (params.currentPagePaths.has(pagePath)) {
       continue;
     }
-    const raw = await vault.readText(pagePath).catch(() => "");
+    const raw = await readExistingWikiPageUtf8(vault, pagePath, () => "");
     const parsed = parseWikiMarkdown(raw);
-    if (asNullableRecord(parsed.frontmatter.okf)?.bundleKey === params.bundleKey) {
+    if (
+      asNullableRecord(parsed.frontmatter.okf)?.bundleKey === params.bundleKey &&
+      !extractHumanNotesBlock(raw, { producerMarkdown: true })
+    ) {
       await vault.remove(pagePath);
       removedPagePaths.push(pagePath);
     }
   }
   return removedPagePaths;
-}
-
-function readRootOkfMetadata(params: {
-  rootIndex: string | undefined;
-  bundleName: string;
-  bundlePath: string;
-}): OkfBundleMetadata {
-  const parsed = parseOkfMarkdown(params.rootIndex ?? "", "index.md");
-  const version = normalizeOptionalString(parsed.frontmatter.okf_version);
-  return {
-    key: createOkfBundleKey({
-      rootFrontmatter: parsed.frontmatter,
-      bundleName: params.bundleName,
-      bundlePath: params.bundlePath,
-    }),
-    ...(version ? { version } : {}),
-  };
 }
 
 export function formatOkfImportSummary(result: ImportMemoryWikiOkfResult): string {
@@ -454,7 +386,7 @@ export async function importMemoryWikiOkfBundle(params: {
   config: ResolvedMemoryWikiConfig;
   bundlePath: string;
   nowMs?: number;
-}): Promise<ImportMemoryWikiOkfResult> {
+}) {
   await initializeMemoryWikiVault(params.config, { nowMs: params.nowMs });
   const bundlePath = path.resolve(params.bundlePath);
   const stat = await fs.stat(bundlePath);
@@ -470,8 +402,11 @@ export async function importMemoryWikiOkfBundle(params: {
 
   for (const relativePath of markdownFiles) {
     if (relativePath === "index.md") {
-      rootIndexContent =
-        (await readOkfTextFile({ bundleRoot, relativePath, warnings })) ?? undefined;
+      const content = await readOkfTextFile({ bundleRoot, relativePath, warnings });
+      if (content === null) {
+        throw new Error(`Cannot read OKF bundle index.md: ${warnings.at(-1)?.message}`);
+      }
+      rootIndexContent = content;
     }
     if (OKF_RESERVED_FILENAMES.has(path.posix.basename(relativePath))) {
       continue;
@@ -480,84 +415,91 @@ export async function importMemoryWikiOkfBundle(params: {
     if (content === null) {
       continue;
     }
-    const normalized = normalizeOkfConcept({ bundlePath, relativePath, content });
-    if (normalized.warning) {
-      warnings.push(normalized.warning);
+    const parsed = parseOkfMarkdown(content, relativePath);
+    if (parsed.warning) {
+      warnings.push(parsed.warning);
       continue;
     }
-    if (normalized.concept) {
-      concepts.push(normalized.concept);
+    const type = normalizeOptionalString(parsed.frontmatter.type);
+    if (!type) {
+      warnings.push({
+        code: "missing-type",
+        path: relativePath,
+        message: "OKF concept is missing required non-empty type frontmatter.",
+      });
+      continue;
     }
+    concepts.push({
+      conceptId: relativePath.replace(/\.md$/i, ""),
+      relativePath,
+      frontmatter: parsed.frontmatter,
+      body: parsed.body,
+      type,
+      title:
+        normalizeOptionalString(parsed.frontmatter.title) ??
+        path.posix.basename(relativePath, ".md").replace(/[-_]+/g, " ").trim(),
+    });
   }
 
   const timestamp = resolveMemoryWikiTimestamp(params.nowMs);
   const bundleName = path.basename(bundlePath);
-  const bundleMetadata = readRootOkfMetadata({
-    rootIndex: rootIndexContent,
+  const rootFrontmatter = parseOkfMarkdown(rootIndexContent ?? "", "index.md").frontmatter;
+  const okfVersion = normalizeOptionalString(rootFrontmatter.okf_version);
+  const bundleKey = createOkfBundleKey({
+    rootFrontmatter,
     bundleName,
     bundlePath,
   });
-  const bundleKey = bundleMetadata.key;
-  const pageByConceptId = new Map<string, { pageId: string; pagePath: string; title: string }>();
-  for (const concept of concepts) {
-    pageByConceptId.set(concept.conceptId, {
-      ...createOkfPageIdentity(bundleKey, concept.conceptId),
-      title: concept.title,
-    });
-  }
+  const pages = concepts.map((concept) =>
+    Object.assign({}, concept, createOkfPageIdentity(bundleKey, concept.conceptId)),
+  );
+  const pageByConceptId = new Map(pages.map((page) => [page.conceptId, page]));
 
   const pagePaths: string[] = [];
   let updatedCount = 0;
 
   await fs.mkdir(path.join(params.config.vault.path, "concepts"), { recursive: true });
-  for (const concept of concepts.toSorted((left, right) =>
+  for (const concept of pages.toSorted((left, right) =>
     left.conceptId.localeCompare(right.conceptId),
   )) {
-    const page = pageByConceptId.get(concept.conceptId);
-    if (!page) {
-      continue;
-    }
     const rewritten = rewriteOkfMarkdownLinks({
       body: concept.body,
-      sourcePagePath: page.pagePath,
+      sourcePagePath: concept.pagePath,
       sourceRelativePath: concept.relativePath,
       pageByConceptId,
     });
-    const relationships = rewritten.linkedConceptIds.flatMap((conceptId) => {
-      const target = pageByConceptId.get(conceptId);
-      return target
-        ? [
-            {
-              targetId: target.pageId,
-              targetPath: target.pagePath,
-              targetTitle: target.title,
-              kind: "okf-link",
-              evidenceKind: "okf-markdown-link",
-            },
-          ]
-        : [];
-    });
+    const relationships = rewritten.linkedPages.map((target) => ({
+      targetId: target.pageId,
+      targetPath: target.pagePath,
+      targetTitle: target.title,
+      kind: "okf-link",
+      evidenceKind: "okf-markdown-link",
+    }));
+    const description = normalizeOptionalString(concept.frontmatter.description);
+    const resource = normalizeOptionalString(concept.frontmatter.resource);
+    const tags = normalizeSingleOrTrimmedStringList(concept.frontmatter.tags);
+    const conceptTimestamp = normalizeOptionalString(concept.frontmatter.timestamp);
 
     const frontmatter = {
       pageType: "concept",
-      id: page.pageId,
+      id: concept.pageId,
       title: concept.title,
       sourceType: "okf",
       provenanceMode: "okf-import",
-      sourcePath: concept.absolutePath,
+      sourcePath: path.join(bundlePath, concept.relativePath),
       okfConceptId: concept.conceptId,
       okfType: concept.type,
       sourceIds: [`source.okf.${bundleKey}`],
       importedAt: timestamp,
-      updatedAt: concept.timestamp ?? timestamp,
+      updatedAt: conceptTimestamp ?? timestamp,
       status: "active",
-      ...(concept.description ? { description: concept.description } : {}),
-      ...(concept.resource ? { resource: concept.resource } : {}),
-      ...(concept.tags.length > 0 ? { tags: concept.tags } : {}),
-      ...(concept.timestamp ? { okfTimestamp: concept.timestamp } : {}),
+      ...(description ? { description } : {}),
+      ...(resource ? { resource } : {}),
+      ...(tags.length > 0 ? { tags } : {}),
+      ...(conceptTimestamp ? { okfTimestamp: conceptTimestamp } : {}),
       ...(relationships.length > 0 ? { relationships } : {}),
       okf: {
-        ...(bundleMetadata.version ? { version: bundleMetadata.version } : {}),
+        ...(okfVersion ? { version: okfVersion } : {}),
         bundleName,
         bundleKey,
         conceptId: concept.conceptId,
@@ -568,16 +510,16 @@ export async function importMemoryWikiOkfBundle(params: {
 
     const writeResult = await writeOkfConceptPage({
       vaultRoot: params.config.vault.path,
-      pagePath: page.pagePath,
+      pagePath: concept.pagePath,
       content: renderWikiMarkdown({
         frontmatter,
-        body: rewritten.body,
+        body: renderOkfBodyWithHumanNotes(rewritten.body),
       }),
     });
     if (!writeResult.created && writeResult.changed) {
       updatedCount++;
     }
-    pagePaths.push(page.pagePath);
+    pagePaths.push(concept.pagePath);
   }
   const currentPagePaths = new Set(pagePaths);
   const removedPagePaths =
@@ -608,7 +550,7 @@ export async function importMemoryWikiOkfBundle(params: {
   return {
     bundlePath,
     bundleName,
-    ...(bundleMetadata.version ? { okfVersion: bundleMetadata.version } : {}),
+    ...(okfVersion ? { okfVersion } : {}),
     importedCount: pagePaths.length,
     updatedCount,
     removedCount: removedPagePaths.length,

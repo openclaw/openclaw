@@ -7,7 +7,7 @@ import {
 } from "./request.js";
 import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
 
-/** Optional speed upgrades follow this turn's native model and authenticated client. */
+/** Validate an explicit Ultrafast selection against this turn's native model and client. */
 export async function resolveCodexUltrafastServiceTier(params: {
   enabled: boolean;
   serviceTier?: CodexServiceTier | null;
@@ -29,12 +29,14 @@ export async function resolveCodexUltrafastServiceTier(params: {
   }
   params.signal.throwIfAborted();
   params.assertCurrent();
-  const deadline = Date.now() + params.timeoutMs;
+  // Use the monotonic clock so NTP adjustments or sleep resumes cannot stretch
+  // or shrink the budget while request timers (also monotonic) are in flight.
+  const deadline = performance.now() + params.timeoutMs;
   try {
     const catalog = await listAllCodexAppServerModels({
       includeHidden: true,
       request: (request) => {
-        const timeoutMs = deadline - Date.now();
+        const timeoutMs = deadline - performance.now();
         if (timeoutMs <= 0) {
           throw new Error("Codex Ultrafast catalog deadline exceeded");
         }

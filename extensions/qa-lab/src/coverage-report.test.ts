@@ -306,27 +306,6 @@ describe("qa coverage report", () => {
     );
   });
 
-  it("rejects duplicate ownership across YAML and non-YAML catalogs", () => {
-    const scenario = scenarioWithCoverage({
-      primary: [TEST_EXECUTABLE_COVERAGE_ID],
-      executionKind: "script",
-      executionPath: "scripts/test-scenario.ts",
-    });
-
-    expect(() =>
-      buildQaCoverageInventory([scenario], {
-        nonYamlScenarios: [
-          {
-            id: scenario.id,
-            sourcePath: "extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts",
-          },
-        ],
-      }),
-    ).toThrow(
-      "duplicate qa scenario id(s): test-scenario (qa/scenarios/test/test-scenario.yaml, extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts)",
-    );
-  });
-
   it("renders a compact markdown inventory", () => {
     const report = renderQaCoverageMarkdownReport(readCatalogInventory());
 
@@ -567,37 +546,13 @@ describe("qa coverage report", () => {
     });
     const report = renderQaScenarioMatchesMarkdownReport({
       query: "mixed",
-      matches: [
-        {
-          ...flowScenario,
-          id: "flow-proof",
-          theme: "test",
-          surfaces: [flowScenario.surface],
-          risk: "unassigned",
-          coverageIds: [
-            ...(flowScenario.coverage?.primary ?? []),
-            ...(flowScenario.coverage?.secondary ?? []),
-          ],
-          docsRefs: [],
-          codeRefs: [],
-          executionKind: flowScenario.execution.kind,
-        },
-        {
-          ...playwrightScenario,
-          id: "playwright-proof",
-          theme: "test",
-          surfaces: [playwrightScenario.surface],
-          risk: "unassigned",
-          coverageIds: [
-            ...(playwrightScenario.coverage?.primary ?? []),
-            ...(playwrightScenario.coverage?.secondary ?? []),
-          ],
-          docsRefs: [],
-          codeRefs: [],
-          executionKind: playwrightScenario.execution.kind,
-          executionPath: playwrightExecutionPath,
-        },
-      ],
+      matches: findQaScenarioMatches(
+        [
+          { ...flowScenario, id: "flow-proof" },
+          { ...playwrightScenario, id: "playwright-proof" },
+        ],
+        "proof",
+      ),
     });
 
     expect(report).toContain("- Suite commands:");

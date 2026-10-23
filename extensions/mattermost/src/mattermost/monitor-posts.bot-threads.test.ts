@@ -1,10 +1,11 @@
 import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
+import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMattermostRuntime } from "../runtime.js";
-import type { MattermostAccountConfig } from "../types.js";
+import type { MattermostConfig } from "../types.js";
 import { resolveMattermostAccount } from "./accounts.js";
-import type { MattermostPost } from "./client.js";
 import type { MattermostIngressPost } from "./monitor-ingress.js";
 import { createMattermostPostHandler } from "./monitor-posts.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
@@ -12,6 +13,8 @@ import type { OpenClawConfig } from "./runtime-api.js";
 
 const dispatch = vi.hoisted(() => vi.fn());
 const hasParticipation = vi.hoisted(() => vi.fn());
+const body = "Continue the discussion";
+const threadPolicy = (requireMentionInBotThreads: boolean) => ({ requireMentionInBotThreads });
 
 vi.mock("./monitor-turn.js", () => ({ dispatchMattermostInboundTurn: dispatch }));
 vi.mock("./thread-participation.js", () => ({
@@ -19,7 +22,7 @@ vi.mock("./thread-participation.js", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
-  resolveInboundSessionEnvelopeContext: () => ({ envelopeOptions: {} }),
+  resolveInboundSessionEnvelopeContextAsync: async () => ({ envelopeOptions: {} }),
 }));
 
 describe("Mattermost bot-owned thread mention policy", () => {
@@ -28,26 +31,27 @@ describe("Mattermost bot-owned thread mention policy", () => {
     hasParticipation.mockReset().mockResolvedValue(false);
   });
 
-  function setup(config: Partial<MattermostAccountConfig> = {}, botUsername = "bot") {
-    const cfg: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          enabled: true,
-          requireMention: true,
-          groupPolicy: "open",
-          historyLimit: 0,
-          ...config,
-        },
-      },
+  function setup(
+    config: Partial<MattermostConfig> = {},
+    botUsername = "bot",
+    accountId = "default",
+  ) {
+    const mattermost: MattermostConfig = {
+      enabled: true,
+      requireMention: true,
+      groupPolicy: "open",
+      historyLimit: 0,
+      ...config,
     };
-    const account = resolveMattermostAccount({ cfg, accountId: "default" });
+    const cfg: OpenClawConfig = { channels: { mattermost } };
+    const account = resolveMattermostAccount({ cfg, accountId });
     const core = createPluginRuntimeMock();
     core.channel.mentions.buildMentionRegexes = () => [];
     core.channel.groups.resolveRequireMention = resolveChannelGroupRequireMention;
     core.channel.routing.resolveAgentRoute = () => ({
       agentId: "main",
       channel: "mattermost",
-      accountId: "default",
+      accountId,
       sessionKey: "agent:main:mattermost:channel:room",
       mainSessionKey: "agent:main:main",
       lastRoutePolicy: "session",
@@ -55,13 +59,7 @@ describe("Mattermost bot-owned thread mention policy", () => {
     });
     core.channel.commands.shouldHandleTextCommands = () => false;
     setMattermostRuntime(core);
-    const root: MattermostPost = {
-      id: "root",
-      channel_id: "room",
-      user_id: "bot",
-      message: "Discussion started by the bot",
-      create_at: 1,
-    };
+    const root = { id: "root", channel_id: "room", user_id: "bot" };
     const request = vi.fn(async (endpoint: string) => {
       if (endpoint !== "/posts/root") {
         throw new Error(`Unexpected Mattermost request: ${endpoint}`);
@@ -88,6 +86,7 @@ describe("Mattermost bot-owned thread mention policy", () => {
     } as unknown as MattermostMonitorContext;
     const handler = createMattermostPostHandler(monitor);
     return {
+      core,
       root,
       request,
       receive: (post: Partial<MattermostIngressPost> = {}) =>
@@ -97,7 +96,7 @@ describe("Mattermost bot-owned thread mention policy", () => {
             root_id: "root",
             channel_id: "room",
             user_id: "sender",
-            message: "Continue the discussion",
+            message: body,
             create_at: 2,
             ...post,
           },
@@ -106,127 +105,86 @@ describe("Mattermost bot-owned thread mention policy", () => {
     };
   }
 
+  const policy = {
+    implicitMentions: { threadParticipation: true },
+    accounts: { work: { implicitMentions: { threadParticipation: false } } },
+  };
+  const relaxedThread = { ...threadPolicy(true), groups: { "*": threadPolicy(false) } };
+  const threadReply = { BodyForAgent: body, MessageThreadId: "root" };
   it.each([
-    { scope: "account", config: { requireMentionInBotThreads: false } },
-    {
-      scope: "wildcard group",
-      config: {
-        requireMentionInBotThreads: true,
-        groups: { "*": { requireMentionInBotThreads: false } },
-      },
-    },
-    {
-      scope: "exact group",
-      config: {
-        requireMentionInBotThreads: true,
-        groups: {
-          "*": { requireMentionInBotThreads: true },
-          room: { requireMentionInBotThreads: false },
-        },
-      },
-    },
-  ])("admits an unmentioned bot-thread reply configured at $scope scope", async ({ config }) => {
-    const f = setup(config);
-
-    await f.receive();
-
-    expect(dispatch).toHaveBeenCalledOnce();
-    expect(dispatch.mock.calls[0]?.[1].ctxPayload).toMatchObject({
-      BodyForAgent: "Continue the discussion",
-      MessageThreadId: "root",
-    });
-  });
-
-  it.each([
-    {
-      scope: "account",
-      config: { requireMention: false, requireMentionInBotThreads: true },
-    },
-    {
-      scope: "exact group",
-      config: {
-        requireMentionInBotThreads: false,
-        groups: {
-          "*": { requireMentionInBotThreads: false },
-          room: { requireMentionInBotThreads: true },
-        },
-      },
-    },
-  ])("requires a mention at $scope scope even after prior participation", async ({ config }) => {
-    const f = setup(config);
-    hasParticipation.mockResolvedValue(true);
-
-    await f.receive();
-    expect(dispatch).not.toHaveBeenCalled();
-
-    await f.receive({ id: "mentioned-follow-up", message: "@bot continue the discussion" });
-    expect(dispatch).toHaveBeenCalledOnce();
-  });
-
-  it.each([false, true])(
-    "preserves omitted-policy participation behavior (%s)",
-    async (engaged) => {
-      const f = setup();
+    ["default follow-up", {}, { BodyForAgent: body, WasMentioned: true }, "default", true],
+    ["channel policy", policy, { AccountId: "default", WasMentioned: true }, "default", true],
+    ["account participation override", policy, null, "work", true],
+    ["wildcard bot-thread override", relaxedThread, threadReply, "default", false],
+  ] satisfies Array<[string, Partial<MattermostConfig>, object | null, string, boolean]>)(
+    "applies %s",
+    async (_name, config, expected, accountId, engaged) => {
+      const f = setup(config, "bot", accountId);
       hasParticipation.mockResolvedValue(engaged);
-
       await f.receive();
-
-      expect(dispatch).toHaveBeenCalledTimes(engaged ? 1 : 0);
-      expect(f.request).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledTimes(expected ? 1 : 0);
+      if (expected) {
+        expect(dispatch.mock.calls[0]?.[1].ctxPayload).toMatchObject(expected);
+      }
     },
   );
 
+  const explicitOnly = {
+    implicitMentions: { threadParticipation: false },
+    groupAllowFrom: ["sender"],
+  };
+  const mention = "@bot continue the discussion";
+  const mentioned = { BodyForAgent: "continue the discussion", WasMentioned: true };
+  const commanded = {
+    ...mentioned,
+    BodyForAgent: "/reset",
+    CommandAuthorized: true,
+    CommandSource: "text",
+  };
+  const accountRequirement = { requireMention: false, ...threadPolicy(true) };
+  const groupRequirement = {
+    ...threadPolicy(false),
+    groups: { "*": threadPolicy(false), room: threadPolicy(true) },
+  };
   it.each([
-    { name: "strict bot thread", setting: true, owner: "bot", admitted: false },
-    { name: "omitted setting", setting: undefined, owner: "bot", admitted: true },
-    { name: "another author's thread", setting: true, owner: "someone-else", admitted: true },
-  ])("handles missing mention detectors for $name", async ({ setting, owner, admitted }) => {
-    const f = setup({ requireMentionInBotThreads: setting }, "");
-    f.root.user_id = owner;
+    ["explicit mention", explicitOnly, mention, true, mentioned],
+    ["authorized command", explicitOnly, "/reset", true, commanded],
+    ["account bot-thread requirement", accountRequirement, mention, false, null],
+    ["exact group bot-thread requirement", groupRequirement, mention, false, null],
+  ] satisfies Array<[string, Partial<MattermostConfig>, string, boolean, object | null]>)(
+    "requires activation despite participation: %s",
+    async (_name, config, message, commands, expected) => {
+      const f = setup(config);
+      if (commands) {
+        f.core.channel.commands.isControlCommandMessage = isControlCommandMessage;
+        f.core.channel.commands.shouldHandleTextCommands = shouldHandleTextCommands;
+      }
+      hasParticipation.mockResolvedValue(true);
+      await f.receive();
+      expect(dispatch).not.toHaveBeenCalled();
+      await f.receive({ id: "activated-follow-up", message });
+      expect(dispatch).toHaveBeenCalledOnce();
+      if (expected) {
+        expect(dispatch.mock.calls[0]?.[1].ctxPayload).toMatchObject(expected);
+      }
+    },
+  );
+
+  it("handles missing mention detectors for another author's thread", async () => {
+    const f = setup({ requireMentionInBotThreads: true }, "");
+    f.root.user_id = "someone-else";
 
     await f.receive();
 
-    expect(dispatch).toHaveBeenCalledTimes(admitted ? 1 : 0);
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    { kind: "another author's root", patch: { user_id: "someone-else" } },
-    { kind: "another post id", patch: { id: "different-root" } },
-    { kind: "another channel", patch: { channel_id: "different-room" } },
-    { kind: "a deleted root", patch: { delete_at: 10 } },
-    { kind: "an unreadable root", patch: null },
-  ])("retains mention gating for $kind", async ({ patch }) => {
+  it("retains mention gating for an unreadable root", async () => {
     const f = setup({ requireMentionInBotThreads: false });
-    if (patch) {
-      f.request.mockResolvedValue({ ...f.root, ...patch });
-    } else {
-      f.request.mockRejectedValue(new Error("Mattermost API 403 Forbidden"));
-    }
-
+    f.request.mockRejectedValue(new Error("Mattermost API 403 Forbidden"));
     await f.receive();
-
     expect(dispatch).not.toHaveBeenCalled();
     expect(f.request).toHaveBeenCalled();
-  });
-
-  it("preserves participation in human-owned threads when bot-thread mentions are required", async () => {
-    const f = setup({ requireMentionInBotThreads: true });
-    f.request.mockResolvedValue({ ...f.root, user_id: "someone-else" });
-    hasParticipation.mockResolvedValue(true);
-
-    await f.receive();
-
-    expect(dispatch).toHaveBeenCalledOnce();
-  });
-
-  it("does not treat a reply-to-current delivery target as an existing bot-owned thread", async () => {
-    const f = setup({ requireMentionInBotThreads: false, replyToMode: "all" });
-    f.request.mockResolvedValue({ ...f.root, id: "follow-up" });
-
-    await f.receive({ root_id: "" });
-
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(f.request).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -9,15 +9,6 @@ type AgentRingZeroToolScope = {
 
 const activeRingZeroTools = new AsyncLocalStorage<AgentRingZeroToolScope>();
 
-class HostScopedAgentToolAuthorizationError extends Error {
-  readonly status = 403;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "HostScopedAgentToolAuthorizationError";
-  }
-}
-
 function bindToolToScope(tool: AnyAgentTool, scope: AgentRingZeroToolScope): AnyAgentTool {
   const execute = tool.execute;
   return {
@@ -28,8 +19,9 @@ function bindToolToScope(tool: AnyAgentTool, scope: AgentRingZeroToolScope): Any
       // active because SDK callbacks can run on async resources created outside
       // this ALS store; every retained handle fails after run settlement.
       if (!scope.active) {
-        throw new HostScopedAgentToolAuthorizationError(
-          `host-scoped tool "${tool.name}" is no longer authorized for this run`,
+        throw Object.assign(
+          new Error(`host-scoped tool "${tool.name}" is no longer authorized for this run`),
+          { name: "HostScopedAgentToolAuthorizationError", status: 403 },
         );
       }
       return await execute(toolCallId, params, signal, onUpdate);

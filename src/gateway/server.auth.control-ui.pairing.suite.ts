@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import {
@@ -12,20 +14,148 @@ import {
 import {
   BACKEND_GATEWAY_CLIENT,
   connectReq,
+  createSignedDevice,
   CONTROL_UI_CLIENT,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   openTailscaleWs,
   openWs,
+  onceMessage,
   originForPort,
   readConnectChallengeNonce,
   restoreGatewayToken,
+  rpcReq,
   TEST_OPERATOR_CLIENT,
   testState,
 } from "./server.auth.test-helpers.js";
 
 export function registerControlUiPairingSuite(): void {
-  test("keeps pending Control UI operator pairing reconnecting without enabling ordinary node retries", async () => {
+  test("delivers rejection to every exact pairing waiter without admitting pending browsers", async () => {
+    const { mutateConfigFile } = await import("../config/config.js");
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
+    const token = randomUUID();
+    const origin = "https://control-ui.example.test";
+    testState.gatewayControlUi = { allowedOrigins: [origin] };
+    await mutateConfigFile({
+      mutate(config) {
+        config.gateway = {
+          ...config.gateway,
+          trustedProxies: ["127.0.0.1"],
+          controlUi: { allowedOrigins: [origin] },
+        };
+      },
+      afterWrite: { mode: "auto" },
+    });
+    await withControlUiServer(async ({ port }) => {
+      const sockets: WebSocket[] = [];
+      const first = await createOperatorIdentityFixture("declined-browser-");
+      const second = await createOperatorIdentityFixture("unrelated-browser-");
+      const connectBrowser = async (identityPath: string, scopes = ["operator.admin"]) => {
+        const socket = await openWs(port, { origin, "x-forwarded-for": "203.0.113.50" });
+        sockets.push(socket);
+        const response = await connectReq(socket, {
+          token,
+          client: CONTROL_UI_CLIENT,
+          scopes,
+          device: (
+            await createSignedDevice({
+              identityPath,
+              clientId: CONTROL_UI_CLIENT.id,
+              clientMode: CONTROL_UI_CLIENT.mode,
+              token,
+              scopes,
+              nonce: await readConnectChallengeNonce(socket),
+            })
+          ).device,
+        });
+        return { socket, response };
+      };
+      try {
+        const admin = await openWs(port);
+        sockets.push(admin);
+        expect((await connectReq(admin, { token, client: BACKEND_GATEWAY_CLIENT })).ok).toBe(true);
+        const requester = await connectBrowser(first.identityPath);
+        const sibling = await connectBrowser(first.identityPath);
+        const unrelated = await connectBrowser(second.identityPath, ["operator.read"]);
+        const pending = (await listDevicePairing()).pending;
+        const request = pending.find((entry) => entry.deviceId === first.identity.deviceId)!;
+        const other = pending.find((entry) => entry.deviceId === second.identity.deviceId)!;
+        for (const waiter of [requester, sibling]) {
+          expect(waiter.response.error?.details).toMatchObject({
+            requestId: request.requestId,
+            deviceId: first.identity.deviceId,
+            waitForResolution: true,
+          });
+        }
+        const resolutions = [requester, sibling].map(({ socket }) =>
+          onceMessage(socket, (frame) => frame.event === "device.pair.resolved"),
+        );
+        expect(
+          (await rpcReq(admin, "device.pair.reject", { requestId: request.requestId })).ok,
+        ).toBe(true);
+        for (const event of await Promise.all(resolutions)) {
+          expect(event.payload).toMatchObject({
+            requestId: request.requestId,
+            deviceId: first.identity.deviceId,
+            decision: "rejected",
+          });
+        }
+        expect((await listDevicePairing()).pending.map((entry) => entry.requestId)).toEqual([
+          other.requestId,
+        ]);
+        expect(unrelated.socket.readyState).toBe(1);
+
+        const retried = await connectBrowser(first.identityPath);
+        const retryRequest = (await listDevicePairing()).pending.find(
+          (entry) => entry.deviceId === first.identity.deviceId,
+        )!;
+        expect(retryRequest.requestId).not.toBe(request.requestId);
+        const approval = onceMessage(
+          retried.socket,
+          (frame) => frame.event === "device.pair.resolved",
+        );
+        expect(
+          (await rpcReq(admin, "device.pair.approve", { requestId: retryRequest.requestId })).ok,
+        ).toBe(true);
+        expect((await approval).payload).toMatchObject({
+          requestId: retryRequest.requestId,
+          decision: "approved",
+        });
+        expect((await connectBrowser(first.identityPath)).response.ok).toBe(true);
+
+        const supersededMessages: string[] = [];
+        unrelated.socket.on("message", (message) =>
+          supersededMessages.push(rawDataToString(message)),
+        );
+        const supersededClosed = new Promise<number>((resolve) => {
+          unrelated.socket.once("close", resolve);
+        });
+        const upgraded = await connectBrowser(second.identityPath);
+        expect(await supersededClosed).toBe(1008);
+        expect(supersededMessages).toEqual([]);
+        expect(upgraded.response.error?.details).toMatchObject({ waitForResolution: true });
+
+        const closed = new Promise<number>((resolve) => {
+          upgraded.socket.once("close", resolve);
+        });
+        upgraded.socket.send(
+          JSON.stringify({
+            type: "req",
+            id: "pending-rpc",
+            method: "device.pair.list",
+            params: {},
+          }),
+        );
+        expect(await closed).toBe(1008);
+      } finally {
+        for (const socket of sockets) {
+          socket.close();
+        }
+      }
+    }, token);
+  });
+
+  test("keeps pending Control UI operator and node pairing reconnecting", async () => {
     const { mutateConfigFile } = await import("../config/config.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
@@ -134,10 +264,10 @@ export function registerControlUiPairingSuite(): void {
         code: "PAIRING_REQUIRED",
         reason: "not-paired",
         requestId: expect.any(String),
+        recommendedNextStep: "wait_then_retry",
+        retryable: true,
+        pauseReconnect: false,
       });
-      expect(response.error?.details).not.toHaveProperty("recommendedNextStep");
-      expect(response.error?.details).not.toHaveProperty("retryable");
-      expect(response.error?.details).not.toHaveProperty("pauseReconnect");
     });
   });
 

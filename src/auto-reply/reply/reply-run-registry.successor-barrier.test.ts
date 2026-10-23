@@ -5,10 +5,11 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import {
   registerReplyOperationSuccessorBarrier,
   ReplyRunSuccessorAdmissionBlockedError,
-  waitForReplyRunSuccessorAdmission,
-} from "./reply-run-registry.js";
+} from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
-import { testing } from "./reply-run-registry.test-support.js";
 
 async function withFakeReplyTimers<T>(run: () => Promise<T>): Promise<T> {
   vi.useFakeTimers();
@@ -20,9 +21,43 @@ async function withFakeReplyTimers<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+function barrier(
+  operation: ReturnType<typeof createTestReplyOperation>,
+  sessionKeys = [operation.key],
+) {
+  const release = createDeferred();
+  registerReplyOperationSuccessorBarrier({
+    operation,
+    sessionId: operation.sessionId,
+    sessionKeys,
+    start: () => release.promise,
+  });
+  return release;
+}
+
+function settledSource(operation: ReturnType<typeof createTestReplyOperation>, sessionId: string) {
+  return {
+    settled: true,
+    sources: [
+      {
+        sessionId,
+        sessionIds: operation.captureOwnedSessionIds(),
+        operation,
+        databaseIdentity: undefined,
+      },
+    ],
+  };
+}
+
+function expectBlocked(sessionKey: string) {
+  expect(() => createTestReplyOperation({ sessionKey })).toThrow(
+    ReplyRunSuccessorAdmissionBlockedError,
+  );
+}
+
 describe("reply run successor barriers", () => {
   afterEach(() => {
-    testing.resetReplyRunRegistry();
+    testing.resetSessionControllerForTest();
     resetCommandQueueStateForTest();
     resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
@@ -37,27 +72,13 @@ describe("reply run successor barriers", () => {
         sessionKey: requestKey,
         sessionId: "alias-session",
       });
-      const { promise: firstBarrier, resolve: releaseFirstBarrier } = createDeferred();
-      registerReplyOperationSuccessorBarrier({
-        operation,
-        sessionId: "alias-session",
-        sessionKeys: [requestKey, canonicalKey],
-        start: () => firstBarrier,
-      });
-      const { promise: secondBarrier, resolve: releaseSecondBarrier } = createDeferred();
-      registerReplyOperationSuccessorBarrier({
-        operation,
-        sessionId: "alias-session",
-        sessionKeys: [adoptedKey],
-        start: () => secondBarrier,
-      });
+      const firstBarrier = barrier(operation, [requestKey, canonicalKey]);
+      const secondBarrier = barrier(operation, [adoptedKey]);
 
       operation.updateSessionId("rotated-alias-session");
       operation.complete();
       for (const sessionKey of [requestKey, canonicalKey, adoptedKey]) {
-        expect(() => createTestReplyOperation({ sessionKey })).toThrow(
-          ReplyRunSuccessorAdmissionBlockedError,
-        );
+        expectBlocked(sessionKey);
       }
       const timedWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
       await vi.advanceTimersByTimeAsync(100);
@@ -65,57 +86,18 @@ describe("reply run successor barriers", () => {
 
       const requestWait = waitForReplyRunSuccessorAdmission(requestKey, 100);
       const canonicalWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
-      releaseFirstBarrier();
+      firstBarrier.resolve();
       for (const wait of [requestWait, canonicalWait]) {
-        await expect(wait).resolves.toEqual({
-          settled: true,
-          sources: [
-            {
-              sessionId: "rotated-alias-session",
-              sessionIds: operation.captureOwnedSessionIds(),
-              operation,
-              databaseIdentity: undefined,
-            },
-          ],
-        });
+        await expect(wait).resolves.toEqual(settledSource(operation, "rotated-alias-session"));
       }
-      expect(() => createTestReplyOperation({ sessionKey: adoptedKey })).toThrow(
-        ReplyRunSuccessorAdmissionBlockedError,
+      expectBlocked(adoptedKey);
+      secondBarrier.resolve();
+      await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual(
+        settledSource(operation, "rotated-alias-session"),
       );
-      releaseSecondBarrier();
-      await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual({
-        settled: true,
-        sources: [
-          {
-            sessionId: "rotated-alias-session",
-            sessionIds: operation.captureOwnedSessionIds(),
-            operation,
-            databaseIdentity: undefined,
-          },
-        ],
-      });
       const successor = createTestReplyOperation({ sessionKey: canonicalKey });
       successor.complete();
     });
-  });
-
-  it("stops a successor wait when its signal aborts", async () => {
-    const operation = createTestReplyOperation();
-    registerReplyOperationSuccessorBarrier({
-      operation,
-      sessionId: operation.sessionId,
-      sessionKeys: [operation.key],
-      start: () => new Promise<void>(() => {}),
-    });
-    operation.complete();
-    const controller = new AbortController();
-    const wait = waitForReplyRunSuccessorAdmission(operation.key, null, {
-      signal: controller.signal,
-    });
-
-    controller.abort();
-
-    await expect(wait).resolves.toEqual({ settled: false });
   });
 
   it.each(["pending", "rejected"] as const)(
@@ -145,17 +127,13 @@ describe("reply run successor barriers", () => {
           release.reject(new Error("Synthetic late release failure"));
           await Promise.allSettled([release.promise]);
         }
-        expect(() => createTestReplyOperation({ sessionKey: operation.key })).toThrow(
-          ReplyRunSuccessorAdmissionBlockedError,
-        );
+        expectBlocked(operation.key);
         wait = waitForReplyRunSuccessorAdmission(operation.key, null, {
           signal: controller.signal,
         });
         controller.abort();
         await expect(wait).resolves.toEqual({ settled: false });
-        expect(() => createTestReplyOperation({ sessionKey: operation.key })).toThrow(
-          ReplyRunSuccessorAdmissionBlockedError,
-        );
+        expectBlocked(operation.key);
         if (releaseState === "pending") {
           release.resolve();
           await expect(
@@ -175,4 +153,68 @@ describe("reply run successor barriers", () => {
       }
     },
   );
+
+  it("cancels a bounded wait without releasing the successor fence", async () => {
+    const operation = createTestReplyOperation();
+    const release = barrier(operation);
+    operation.complete();
+    const controller = new AbortController();
+    try {
+      const wait = waitForReplyRunSuccessorAdmission(operation.key, 100, {
+        signal: controller.signal,
+      });
+      controller.abort();
+      await expect(wait).resolves.toEqual({ settled: false });
+      expectBlocked(operation.key);
+    } finally {
+      release.resolve();
+      await waitForReplyRunSuccessorAdmission(operation.key, null);
+    }
+  });
+
+  it("waits for the captured physical owner when logical keys are ambiguous", async () => {
+    const sessionKey = "global";
+    const firstTarget = captureSessionTarget({
+      storeScope: "/synthetic/successor-barrier/first.sqlite",
+      sessionKey,
+    });
+    const secondTarget = captureSessionTarget({
+      storeScope: "/synthetic/successor-barrier/second.sqlite",
+      sessionKey,
+    });
+    const first = createTestReplyOperation({
+      sessionKey,
+      sessionId: "first-session",
+      target: firstTarget,
+    });
+    const second = createTestReplyOperation({
+      sessionKey,
+      sessionId: "second-session",
+      target: secondTarget,
+    });
+    const firstRelease = barrier(first);
+    const secondRelease = barrier(second);
+    first.complete();
+    second.complete();
+
+    let settled = false;
+    const wait = waitForReplyRunSuccessorAdmission(sessionKey, null, {
+      target: firstTarget,
+    }).finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    firstRelease.resolve();
+    await expect(wait).resolves.toMatchObject({ settled: true });
+    expect(() =>
+      createTestReplyOperation({
+        sessionKey,
+        sessionId: "still-blocked",
+        target: secondTarget,
+      }),
+    ).toThrow(ReplyRunSuccessorAdmissionBlockedError);
+
+    secondRelease.resolve();
+  });
 });

@@ -12,10 +12,6 @@ export type PluginSecuritySourceFamily =
 type PluginSecurityMode = "install" | "update";
 type PluginAuditReason = "security_scan_blocked" | "security_scan_failed";
 
-function pluginLifecycleAction(mode: PluginSecurityMode): "plugin.installed" | "plugin.updated" {
-  return mode === "update" ? "plugin.updated" : "plugin.installed";
-}
-
 export function pluginAuditOutcomeForReason(reason: PluginAuditReason): "denied" | "error" {
   return reason === "security_scan_failed" ? "error" : "denied";
 }
@@ -30,7 +26,7 @@ export function emitPluginInstallSecurityEvent(params: {
 }) {
   emitTrustedSecurityEvent({
     category: "plugin",
-    action: pluginLifecycleAction(params.mode),
+    action: params.mode === "update" ? "plugin.updated" : "plugin.installed",
     outcome: "success",
     severity: "medium",
     actor: {

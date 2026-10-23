@@ -1,4 +1,3 @@
-// Openrouter tests cover speech provider plugin behavior.
 import { requireFirstPostJsonRecordRequest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
@@ -29,6 +28,37 @@ function requireHeaders(value: unknown): Headers {
   return value;
 }
 
+function synthesize(
+  modelProvider: { apiKey?: string; baseUrl: string },
+  providerConfig: { baseUrl?: string } = {},
+) {
+  return buildOpenRouterSpeechProvider().synthesize({
+    text: "private proxy speech",
+    cfg: { models: { providers: { openrouter: modelProvider } } } as never,
+    providerConfig,
+    target: "voice-note",
+    timeoutMs: 5000,
+  });
+}
+
+function mockAudioResponse() {
+  postJsonRequestMock.mockResolvedValue({
+    response: new Response(new Uint8Array([1]), { status: 200 }),
+    release: vi.fn(async () => {}),
+  });
+}
+
+function expectDestination(url: string) {
+  const request = requireFirstPostJsonRecordRequest(
+    postJsonRequestMock,
+    "OpenRouter speech request",
+  );
+  expect(request.url).toBe(url);
+  expect(requireHeaders(request.headers).get("authorization")).toBe(
+    "Bearer synthetic-private-proxy-key",
+  );
+}
+
 describe("openrouter speech provider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
@@ -43,6 +73,7 @@ describe("openrouter speech provider", () => {
 
   it("normalizes provider-owned speech config", () => {
     const provider = buildOpenRouterSpeechProvider();
+    const extra = { options: { openai: { instructions: "Speak warmly." } } };
     const resolved = provider.resolveConfig?.({
       cfg: {} as never,
       timeoutMs: 30_000,
@@ -55,13 +86,7 @@ describe("openrouter speech provider", () => {
             voiceId: "Kore",
             speed: 1.1,
             responseFormat: " MP3 ",
-            provider: {
-              options: {
-                openai: {
-                  instructions: "Speak warmly.",
-                },
-              },
-            },
+            provider: extra,
           },
         },
       },
@@ -74,183 +99,54 @@ describe("openrouter speech provider", () => {
       voice: "Kore",
       speed: 1.1,
       responseFormat: "mp3",
-      provider: {
-        options: {
-          openai: {
-            instructions: "Speak warmly.",
-          },
-        },
-      },
+      provider: extra,
     });
-  });
-
-  it("synthesizes OpenAI-compatible speech through OpenRouter", async () => {
-    const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(new Uint8Array([1, 2, 3]), { status: 200 }),
-      release,
-    });
-
-    const provider = buildOpenRouterSpeechProvider();
-    const result = await provider.synthesize({
-      text: "hello",
-      cfg: {
-        models: {
-          providers: {
-            openrouter: {
-              apiKey: "sk-openrouter",
-              baseUrl: "https://openrouter.ai/v1/",
-            },
-          },
-        },
-      } as never,
-      providerConfig: {
-        model: "openai/gpt-4o-mini-tts-2025-12-15",
-        voice: "nova",
-        speed: 1.2,
-      },
-      target: "voice-note",
-      timeoutMs: 12_345,
-    });
-
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
-    expect(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0]).toEqual({
-      baseUrl: "https://openrouter.ai/api/v1",
-      defaultBaseUrl: "https://openrouter.ai/api/v1",
-      allowPrivateNetwork: false,
-      defaultHeaders: {
-        Authorization: "Bearer sk-openrouter",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://openclaw.ai",
-        "X-OpenRouter-Title": "OpenClaw",
-      },
-      provider: "openrouter",
-      capability: "audio",
-      transport: "http",
-    });
-    expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const request = requireFirstPostJsonRecordRequest(
-      postJsonRequestMock,
-      "OpenRouter speech request",
-    );
-    const headers = requireHeaders(request.headers);
-    expect(Object.fromEntries(headers.entries())).toEqual({
-      authorization: "Bearer sk-openrouter",
-      "content-type": "application/json",
-      "http-referer": "https://openclaw.ai",
-      "x-openrouter-title": "OpenClaw",
-    });
-    expect(request).toEqual({
-      url: "https://openrouter.ai/api/v1/audio/speech",
-      headers,
-      body: {
-        model: "openai/gpt-4o-mini-tts-2025-12-15",
-        input: "hello",
-        voice: "nova",
-        response_format: "mp3",
-        speed: 1.2,
-      },
-      timeoutMs: 12_345,
-      fetchFn: fetch,
-      allowPrivateNetwork: false,
-      dispatcherPolicy: undefined,
-    });
-    expect(result.audioBuffer).toEqual(Buffer.from([1, 2, 3]));
-    expect(result.outputFormat).toBe("mp3");
-    expect(result.fileExtension).toBe(".mp3");
-    expect(result.voiceCompatible).toBe(true);
-    expect(release).toHaveBeenCalledOnce();
   });
 
   it("never sends a custom model-provider credential to the public speech endpoint", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(new Uint8Array([1]), { status: 200 }),
-      release: vi.fn(async () => {}),
+    mockAudioResponse();
+    const result = await synthesize({
+      apiKey: "synthetic-private-proxy-key",
+      baseUrl: "https://private.example.invalid/router/v1///",
     });
 
-    await buildOpenRouterSpeechProvider().synthesize({
-      text: "private proxy speech",
-      cfg: {
-        models: {
-          providers: {
-            openrouter: {
-              apiKey: "synthetic-private-proxy-key",
-              baseUrl: "https://private.example.invalid/router/v1///",
-            },
-          },
-        },
-      } as never,
-      providerConfig: {},
-      target: "voice-note",
-      timeoutMs: 5000,
+    expectDestination("https://private.example.invalid/router/v1/audio/speech");
+    expect(
+      requireFirstPostJsonRecordRequest(postJsonRequestMock, "speech request").body,
+    ).toMatchObject({
+      model: "hexgrad/kokoro-82m",
+      input: "private proxy speech",
+      voice: "af_alloy",
+      response_format: "mp3",
     });
-
-    const request = requireFirstPostJsonRecordRequest(
-      postJsonRequestMock,
-      "OpenRouter speech request",
-    );
-    expect(request.url).toBe("https://private.example.invalid/router/v1/audio/speech");
-    expect(requireHeaders(request.headers).get("authorization")).toBe(
-      "Bearer synthetic-private-proxy-key",
-    );
+    expect(result.audioBuffer).toEqual(Buffer.from([1]));
   });
 
   it("preserves a speech-specific custom destination over the model-provider base URL", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(new Uint8Array([1]), { status: 200 }),
-      release: vi.fn(async () => {}),
-    });
-
-    await buildOpenRouterSpeechProvider().synthesize({
-      text: "speech-specific private proxy",
-      cfg: {
-        models: {
-          providers: {
-            openrouter: {
-              apiKey: "synthetic-private-proxy-key",
-              baseUrl: "https://model-proxy.example.invalid/v1",
-            },
-          },
-        },
-      } as never,
-      providerConfig: { baseUrl: "https://speech-proxy.example.invalid/router/v1///" },
-      target: "voice-note",
-      timeoutMs: 5000,
-    });
-
-    const request = requireFirstPostJsonRecordRequest(
-      postJsonRequestMock,
-      "OpenRouter speech request",
+    mockAudioResponse();
+    await synthesize(
+      {
+        apiKey: "synthetic-private-proxy-key",
+        baseUrl: "https://model-proxy.example.invalid/v1",
+      },
+      { baseUrl: "https://speech-proxy.example.invalid/router/v1///" },
     );
-    expect(request.url).toBe("https://speech-proxy.example.invalid/router/v1/audio/speech");
-    expect(requireHeaders(request.headers).get("authorization")).toBe(
-      "Bearer synthetic-private-proxy-key",
-    );
+
+    expectDestination("https://speech-proxy.example.invalid/router/v1/audio/speech");
   });
 
   it("does not synthesize when a configured private destination has no credential", async () => {
     vi.stubEnv("OPENROUTER_API_KEY", "");
 
-    await expect(
-      buildOpenRouterSpeechProvider().synthesize({
-        text: "missing private key",
-        cfg: {
-          models: {
-            providers: {
-              openrouter: { baseUrl: "https://private.example.invalid/v1" },
-            },
-          },
-        } as never,
-        providerConfig: {},
-        target: "voice-note",
-        timeoutMs: 5000,
-      }),
-    ).rejects.toThrow("OpenRouter API key missing");
+    await expect(synthesize({ baseUrl: "https://private.example.invalid/v1" })).rejects.toThrow(
+      "OpenRouter API key missing",
+    );
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
   it("defaults to a live-proven OpenRouter TTS model", () => {
     const provider = buildOpenRouterSpeechProvider();
+    expect(provider.defaultTimeoutMs).toBe(120_000);
 
     expect(
       provider.resolveConfig?.({ cfg: {} as never, rawConfig: {}, timeoutMs: 30_000 }),
@@ -266,12 +162,8 @@ describe("openrouter speech provider", () => {
     vi.stubEnv("OPENROUTER_API_KEY", "sk-env");
     const provider = buildOpenRouterSpeechProvider();
 
-    expect(
-      provider.isConfigured({
-        cfg: {} as never,
-        providerConfig: {},
-        timeoutMs: 30_000,
-      }),
-    ).toBe(true);
+    expect(provider.isConfigured({ cfg: {} as never, providerConfig: {}, timeoutMs: 30_000 })).toBe(
+      true,
+    );
   });
 });

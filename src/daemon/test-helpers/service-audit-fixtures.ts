@@ -3,24 +3,27 @@ import { vi } from "vitest";
 import type { MockFn } from "../../test-utils/vitest-mock-fn.js";
 import type { resolveBunRuntimeInfo, resolveNodeRuntimeInfo } from "../runtime-paths.js";
 import type { SERVICE_AUDIT_CODES, ServiceConfigAudit } from "../service-audit.js";
-import type { execSystemctlUser } from "../systemd-exec.js";
+import type { execSystemctl, execSystemctlUser } from "../systemd-exec.js";
 
+export const execSystemctlMock: MockFn<typeof execSystemctl> = vi.fn();
 export const execSystemctlUserMock: MockFn<typeof execSystemctlUser> = vi.fn();
 export const resolveBunRuntimeInfoMock: MockFn<typeof resolveBunRuntimeInfo> = vi.fn();
 export const resolveNodeRuntimeInfoMock: MockFn<typeof resolveNodeRuntimeInfo> = vi.fn();
 
 /** Restores the default systemd-unavailable and WAL-safe Bun probe responses. */
 export function resetServiceAuditMocks() {
-  execSystemctlUserMock.mockReset();
-  execSystemctlUserMock.mockResolvedValue({
-    stdout: "",
-    stderr: "systemd unavailable",
-    code: 1,
-    termination: "exit",
-  });
+  for (const mock of [execSystemctlMock, execSystemctlUserMock]) {
+    mock.mockReset();
+    mock.mockResolvedValue({
+      stdout: "",
+      stderr: "systemd unavailable",
+      code: 1,
+      termination: "exit",
+    });
+  }
   resolveBunRuntimeInfoMock.mockReset();
   resolveBunRuntimeInfoMock.mockResolvedValue({
-    version: "1.4.0",
+    version: "1.4.3",
     sqliteVersion: "3.51.3",
     sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
     nodeSharedSqlite: false,

@@ -2,26 +2,57 @@ import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, expect, vi } from "vitest";
 import {
   assertManagedHandoffTestConsumer,
   createManagedHandoffTestBinding,
 } from "../../test/helpers/managed-handoff-isolation.js";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import * as tempRoot from "../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { finishUpdateRun } from "../infra/update-run-write.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db-cache.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
+import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
+import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { useDoctorMaintenanceRuntimeDirectory } from "./doctor-maintenance.test-support.js";
+
+export const doctorMaintenanceTestEnv = {
+  OPENCLAW_HOME: undefined,
+  OPENCLAW_STATE_DIR: undefined,
+  OPENCLAW_CONFIG_PATH: undefined,
+  OPENCLAW_PROFILE: undefined,
+  OPENCLAW_SUPERVISOR_MODE: undefined,
+  OPENCLAW_SERVICE_REPAIR_POLICY: undefined,
+  OPENCLAW_SERVICE_MARKER: undefined,
+  OPENCLAW_SERVICE_KIND: undefined,
+  OPENCLAW_SYSTEMD_UNIT: undefined,
+  OPENCLAW_UPDATE_RUN_ID: undefined,
+  OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+  OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
+};
+
+export function beginDoctorRepair(overrides: Partial<DoctorMaintenanceParams> = {}) {
+  return beginDoctorMaintenance({
+    root: null,
+    options: { repair: true, nonInteractive: true },
+    runtime: { log() {}, error() {}, exit() {} },
+    ...overrides,
+  });
+}
 
 export function setupDoctorAdmissionFixture() {
   const directories = createTempDirTracker();
   useDoctorMaintenanceRuntimeDirectory(() => directories.make("doctor-admission-custody-"));
-  afterEach(() => {
+  afterEach(async () => {
     try {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       directories.cleanup();
     } finally {
@@ -47,6 +78,10 @@ export function setupDoctorAdmissionFixture() {
       import sqlite from 'node:sqlite';
       import { syncBuiltinESMExports } from 'node:module';
       import { fileURLToPath } from 'node:url';
+      if (process.versions.bun) {
+        const { ensureSqliteLibrarySelected } = await import(${JSON.stringify(new URL("../infra/bun-sqlite-library.js", import.meta.url).href)});
+        ensureSqliteLibrarySelected();
+      }
       const root = ${JSON.stringify(root)};
       const expected = ${JSON.stringify(binding.databasePath)};
       const NativeDatabase = sqlite.DatabaseSync;
@@ -76,10 +111,12 @@ export function setupDoctorAdmissionFixture() {
         JSON.stringify({ pid: process.pid, entry: process.argv[1], databasePath: expected }));
     `,
     );
-    vi.stubEnv(
-      "NODE_OPTIONS",
-      `${process.env.NODE_OPTIONS ?? ""} ${binding.nodeOption} --import=${pathToFileURL(guard).href}`.trim(),
+    const childEnv = withRuntimePreload(
+      withRuntimePreload(process.env, binding.preloadPath),
+      guard,
     );
+    vi.stubEnv("NODE_OPTIONS", childEnv.NODE_OPTIONS);
+    vi.stubEnv("BUN_OPTIONS", childEnv.BUN_OPTIONS);
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
     expect(binding.assertPath(resolveManagedUpdateLeaseDatabasePath())).toBe(binding.databasePath);
     // Compiled runtime modules use native builtin exports, outside Vitest's facade.
@@ -152,7 +189,7 @@ export function setupDoctorAdmissionFixture() {
             fs.readFileSync(path.join(root, `sqlite-open-guard-${pid}.json`), "utf8"),
           );
           expect(guarded).toEqual({ pid, entry, databasePath: binding.databasePath });
-          expect(args[marker + 2]).toBe(database);
+          expect([database, resolveClientCredentialStorePath(env)]).toContain(args[marker + 2]);
           // An actual resolver consumer must have its own witness. Explicit-path
           // workers need no fabricated consumer; their native opener is fenced.
           if (records.some((record) => record.phase === "consumer")) {
@@ -161,7 +198,10 @@ export function setupDoctorAdmissionFixture() {
           guardedWorkers++;
         }
       }
-      expect(guardedWorkers).toBeGreaterThan(0);
+      // A warm admitted source can serve current rows without launching an inspection child.
+      if (!keepWriter) {
+        expect(guardedWorkers).toBeGreaterThan(0);
+      }
       binding.assertPath(resolveManagedUpdateLeaseDatabasePath());
     };
     const admitted = resolveDoctorUpdateAdmission(env);
@@ -171,6 +211,7 @@ export function setupDoctorAdmissionFixture() {
       family,
       admission: admitted.assertCurrent,
       assertIsolation,
+      [Symbol.dispose]: assertIsolation,
       createStateDir: () => directories.make("doctor-admission-replacement-"),
     };
   };

@@ -1,7 +1,7 @@
-// Process-local session-state tracker used by diagnostic stuck-session detection.
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+
 export type SessionStateValue = "idle" | "processing" | "waiting";
 
-/** Mutable diagnostic state for one session key or id. */
 export type SessionState = {
   sessionId?: string;
   sessionKey?: string;
@@ -16,15 +16,15 @@ export type SessionState = {
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
+  reasoningSuppressedModels?: Map<string, string>;
 };
 
-/** Compact record of a recent tool call used for loop diagnostics. */
 export type ToolCallRecord = {
   toolName: string;
   argsHash: string;
   toolCallId?: string;
   runId?: string;
-  outcomeKind?: "tool-loop-veto" | "terminal-exec-failure";
+  outcomeKind?: "tool-loop-veto" | "terminal-exec-failure" | "argument-validation";
   resultHash?: string;
   // Keep the raw result identity while this bounded identity survives alias
   // merges and lets the no-progress owner ignore diagnostic drift.
@@ -34,23 +34,21 @@ export type ToolCallRecord = {
   timestamp: number;
 };
 
-/** Partial session identity accepted by diagnostic helpers. */
 export type SessionRef = {
   sessionId?: string;
   sessionKey?: string;
   sessionFile?: string;
 };
 
-/** Shared in-memory diagnostic session state map. */
 export const diagnosticSessionStates = new Map<string, SessionState>();
 
 const SESSION_STATE_TTL_MS = 30 * 60 * 1000;
 const SESSION_STATE_PRUNE_INTERVAL_MS = 60 * 1000;
 const SESSION_STATE_MAX_ENTRIES = 2000;
+const MAX_REASONING_SUPPRESSED_MODELS = 16;
 
 let lastSessionPruneAt = 0;
 
-/** Prunes stale idle session states and caps the process-local state map. */
 export function pruneDiagnosticSessionStates(now = Date.now(), force = false): void {
   const shouldPruneForSize = diagnosticSessionStates.size > SESSION_STATE_MAX_ENTRIES;
   if (!force && !shouldPruneForSize && now - lastSessionPruneAt < SESSION_STATE_PRUNE_INTERVAL_MS) {
@@ -158,6 +156,15 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
       }
     }
   }
+  if (source.reasoningSuppressedModels?.size) {
+    const models = (target.reasoningSuppressedModels ??= new Map());
+    for (const [key, model] of source.reasoningSuppressedModels) {
+      if (models.size >= MAX_REASONING_SUPPRESSED_MODELS) {
+        break;
+      }
+      models.set(key, model);
+    }
+  }
 }
 
 /** Gets or creates diagnostic state, merging aliases that share a session id. */
@@ -165,6 +172,9 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   pruneDiagnosticSessionStates();
   const key = resolveSessionKey(ref);
   const direct = diagnosticSessionStates.get(key);
+  if (ref.sessionId && direct?.sessionId && direct.sessionId !== ref.sessionId) {
+    direct.reasoningSuppressedModels = undefined;
+  }
   // This owner merges id aliases before assigning them; an exact direct hit is already canonical.
   const sessionIdEntry =
     ref.sessionId && direct?.sessionId !== ref.sessionId
@@ -205,6 +215,53 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   return created;
 }
 
+function formatModelReasoningWarning(subject: string): string {
+  return `${subject} emitted reasoning while configured reasoning: false; reasoning was hidden. Set reasoning: true on the model in models.providers.<provider>.models, or choose a non-thinking model.`;
+}
+
+/** Records presence only, with the same lifetime and bounds as other session diagnostics. */
+export function recordReasoningSuppressedDiagnostic(
+  ref: SessionRef,
+  provider: string,
+  model: string,
+): string | undefined {
+  const state = getDiagnosticSessionState(ref);
+  const models = (state.reasoningSuppressedModels ??= new Map());
+  const key = JSON.stringify([provider, model]);
+  if (models.has(key) || models.size >= MAX_REASONING_SUPPRESSED_MODELS) {
+    return undefined;
+  }
+  const label = JSON.stringify(`${provider}/${model}`.slice(0, 200));
+  models.set(key, label);
+  return formatModelReasoningWarning(`Model ${label}`);
+}
+
+export function readModelReasoningWarning(includeSensitive = true): string | undefined {
+  pruneDiagnosticSessionStates();
+  const models = new Set<string>();
+  for (const state of diagnosticSessionStates.values()) {
+    if (isIncognitoSessionKey(state.sessionKey)) {
+      continue;
+    }
+    for (const model of state.reasoningSuppressedModels?.values() ?? []) {
+      models.add(model);
+      if (models.size === 4) {
+        break;
+      }
+    }
+    if (models.size === 4) {
+      break;
+    }
+  }
+  return models.size
+    ? formatModelReasoningWarning(
+        includeSensitive
+          ? `Model${models.size > 1 ? "s" : ""} ${[...models].join(", ")}`
+          : "A model",
+      )
+    : undefined;
+}
+
 /** Looks up diagnostic state without creating a new entry. */
 export function peekDiagnosticSessionState(ref: SessionRef): SessionState | undefined {
   const key = resolveSessionKey(ref);
@@ -214,12 +271,30 @@ export function peekDiagnosticSessionState(ref: SessionRef): SessionState | unde
   );
 }
 
+/** Classify optional output without admitting new diagnostic state. */
+export function resolveDiagnosticSessionKey(ref: SessionRef): string | undefined {
+  return ref.sessionKey ?? peekDiagnosticSessionState(ref)?.sessionKey;
+}
+
+export function isIncognitoDiagnosticSession(ref: SessionRef): boolean {
+  return (
+    isIncognitoSessionKey(ref.sessionKey) ||
+    isIncognitoSessionKey(peekDiagnosticSessionState(ref)?.sessionKey)
+  );
+}
+
+/** Renews this observation and invalidates recovery captured before the progress. */
+export function touchDiagnosticSessionState(state: SessionState): void {
+  state.lastActivity = Date.now();
+  state.generation = (state.generation ?? 0) + 1;
+  state.lastStuckWarnAgeMs = undefined;
+  state.lastLongRunningWarnAgeMs = undefined;
+}
+
 /** Retires collector observations without resetting independent tool-loop or poll policy. */
 export function retireDiagnosticSessionObservations(): void {
   for (const state of diagnosticSessionStates.values()) {
-    // Recovery accepts one completion increment. A collector boundary must
-    // advance beyond that exception before this session can collect fresh work.
-    state.generation = (state.generation ?? 0) + 2;
+    state.generation = (state.generation ?? 0) + 1;
     state.state = "idle";
     state.queueDepth = 0;
     state.activeQueuedTurn = false;
@@ -229,13 +304,12 @@ export function retireDiagnosticSessionObservations(): void {
   }
 }
 
-/** Clears all process-local diagnostic session state for tests. */
+/** @internal Test-support reset; see diagnostic.test-support.ts. */
 export function resetDiagnosticSessionStateForTest(): void {
   diagnosticSessionStates.clear();
   lastSessionPruneAt = 0;
 }
 
-/** Checks whether a generation/state snapshot still matches current diagnostic state. */
 export function isDiagnosticSessionStateCurrent(params: {
   sessionId?: string;
   sessionKey?: string;

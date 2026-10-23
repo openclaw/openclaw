@@ -1,5 +1,5 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createBrowserControlContext,
   ensureBrowserControlRuntime,
@@ -10,7 +10,11 @@ import {
 import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-source.js";
 import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { ensureBrowserControlAuth } from "./browser/control-auth.js";
-import { getExtensionRelayModule } from "./browser/extension-relay.runtime.js";
+import {
+  getExtensionRelayModule,
+  getGatewayExtensionRelayModule,
+} from "./browser/extension-relay.runtime.js";
+import { stopBrowserScreencasts } from "./browser/screencast/session.js";
 import type { BrowserServerState } from "./browser/server-context.js";
 import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
 
@@ -23,7 +27,7 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
     return current;
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const browserCfg = loadBrowserConfigForRuntimeRefresh();
   if (!resolveBrowserPluginEnableState(cfg).enabled) {
     return null;
@@ -41,26 +45,20 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
     logService.warn(`failed to auto-configure browser auth: ${String(err)}`);
   }
 
-  // Ensure the host-local HMAC key exists before relay startup. Gateway hosts
-  // and browser node hosts each own an independent key.
   const hasExtensionProfiles = Object.values(resolved.profiles).some(
     (profile) => profile.driver === "extension",
   );
-  if (hasExtensionProfiles) {
-    const { ensureExtensionRelayToken } = await import("./browser/extension-relay/relay-auth.js");
-    await ensureExtensionRelayToken();
-  }
 
   const state = await ensureBrowserControlRuntime({
     server: null,
     port: resolved.controlPort,
     resolved,
-    owner: "service",
-    onWarn: (message) => logService.warn(message),
   });
 
   // Extension relays listen from service start so the Chrome extension can
-  // (re)connect before the first agent browser request arrives.
+  // (re)connect before the first agent browser request arrives. Each relay
+  // ensures the host-local key itself, so an unusable key fails only the
+  // extension profiles and never the rest of Browser control.
   if (hasExtensionProfiles) {
     const { startConfiguredExtensionRelays } = await getExtensionRelayModule();
     await startConfiguredExtensionRelays(
@@ -80,7 +78,6 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
   return await withBrowserControlStart(startBrowserControlServiceUnlocked);
 }
 
-/** Stops the in-process Browser control service runtime. */
 export async function stopBrowserControlService(): Promise<void> {
   try {
     await stopBrowserControlRuntime({
@@ -90,10 +87,8 @@ export async function stopBrowserControlService(): Promise<void> {
   } finally {
     // Direct Gateway auth sockets can exist before Browser control lazy-starts,
     // so plugin shutdown must close them even when there is no runtime state.
-    const { disposeGatewayExtensionRelay } =
-      await import("./browser/extension-relay/gateway-relay-route.js");
-    disposeGatewayExtensionRelay();
-    const { stopBrowserScreencasts } = await import("./browser/screencast/session.js");
+    const gatewayRelay = await getGatewayExtensionRelayModule.peek();
+    gatewayRelay?.disposeGatewayExtensionRelay();
     await stopBrowserScreencasts();
   }
 }

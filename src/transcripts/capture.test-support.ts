@@ -1,4 +1,4 @@
-import { activeSessions } from "./capture.js";
+import { activeSessions } from "./capture-startup.js";
 
 /** Test lifetimes retire periodic work before discarding capture identities or state. */
 export async function clearTranscriptCapturesForTest(): Promise<void> {

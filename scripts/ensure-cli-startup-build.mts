@@ -23,16 +23,10 @@ type StartupBuildParams = Partial<{
   timeoutMs: number;
 }>;
 
-/**
- * Resolves the CLI startup build timeout from environment.
- */
 export function resolveCliStartupBuildTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
   return readPositiveEnvInt("OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS", env, DEFAULT_BUILD_TIMEOUT_MS);
 }
 
-/**
- * Reports whether required CLI startup build outputs exist.
- */
 export function hasCliStartupBuild(params: StartupBuildParams = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   const exists = params.existsSync ?? existsSync;
@@ -40,9 +34,6 @@ export function hasCliStartupBuild(params: StartupBuildParams = {}) {
   return hasEntry && exists(path.join(rootDir, startupMetadataPath));
 }
 
-/**
- * Builds CLI startup assets when required outputs are missing.
- */
 export function ensureCliStartupBuild(params: StartupBuildParams = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   if (hasCliStartupBuild({ rootDir, existsSync: params.existsSync })) {

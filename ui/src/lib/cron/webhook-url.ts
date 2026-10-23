@@ -8,12 +8,8 @@ export function resolveCronWebhookDeliveryError(deliveryTo: string): string | un
   if (!hasHttpUrlPrefix(target)) {
     return "cron.errors.webhookUrlInvalid";
   }
-  try {
-    const parsed = new URL(target);
-    return parsed.username || parsed.password || parsed.hostname.includes("%")
-      ? "cron.errors.webhookUrlInvalid"
-      : undefined;
-  } catch {
-    return "cron.errors.webhookUrlInvalid";
-  }
+  const parsed = URL.parse(target);
+  return !parsed || parsed.username || parsed.password || parsed.hostname.includes("%")
+    ? "cron.errors.webhookUrlInvalid"
+    : undefined;
 }

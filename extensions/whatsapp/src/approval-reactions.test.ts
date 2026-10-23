@@ -1,7 +1,6 @@
 // Whatsapp tests cover approval reactions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearWhatsAppApprovalReactionTargetsForTest,
   maybeResolveWhatsAppApprovalReaction,
   registerWhatsAppApprovalReactionTarget,
   resolveWhatsAppApprovalReactionTargetWithPersistence,
@@ -12,6 +11,25 @@ import { resolveEquivalentWhatsAppDirectChatJids, resolveJidToE164 } from "./tar
 type LidLookup = NonNullable<
   NonNullable<Parameters<typeof resolveEquivalentWhatsAppDirectChatJids>[1]>["lidLookup"]
 >;
+
+const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
+
+vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
+  return {
+    ...actual,
+    createApprovalReactionTargetStore: <TTarget>(
+      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
+    ) => {
+      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
+      if (params.namespace === "whatsapp.approval-reactions") {
+        reactionStores.add(store);
+      }
+      return store;
+    },
+  };
+});
 
 const resolverMocks = vi.hoisted(() => ({
   resolveWhatsAppApproval: vi.fn(),
@@ -87,7 +105,7 @@ function buildReactionMessage(params: {
 
 describe("WhatsApp approval reactions", () => {
   beforeEach(() => {
-    clearWhatsAppApprovalReactionTargetsForTest();
+    reactionStores.forEach((store) => store.clearForTest());
     resolverMocks.resolveWhatsAppApproval.mockReset();
     resolverMocks.resolveWhatsAppApproval.mockResolvedValue({
       applied: true,
@@ -170,7 +188,7 @@ describe("WhatsApp approval reactions", () => {
   it("rejects persisted targets containing an invalid approval decision", async () => {
     const runtime = vi.spyOn(whatsappRuntime, "getOptionalWhatsAppRuntime").mockReturnValue({
       state: {
-        openKeyedStore: () => ({
+        openKeyedStoreV2: () => ({
           register: async () => {},
           lookup: async () => ({
             version: 1,
@@ -185,7 +203,7 @@ describe("WhatsApp approval reactions", () => {
       },
     } as never);
     try {
-      clearWhatsAppApprovalReactionTargetsForTest();
+      reactionStores.forEach((store) => store.clearForTest());
       await expect(
         resolveWhatsAppApprovalReactionTargetWithPersistence({
           accountId: "default",
@@ -195,7 +213,7 @@ describe("WhatsApp approval reactions", () => {
         }),
       ).resolves.toBeNull();
     } finally {
-      clearWhatsAppApprovalReactionTargetsForTest();
+      reactionStores.forEach((store) => store.clearForTest());
       runtime.mockRestore();
     }
   });

@@ -47,6 +47,49 @@ public enum TalkAudioLevel {
     }
 }
 
+/// PCM scheduling shared by the main-actor and lock-owned meters; callers own their clocks.
+struct PCMPlaybackTimeline {
+    private struct Segment {
+        let start: TimeInterval
+        let end: TimeInterval
+        let level: Double
+    }
+
+    private var segments: [Segment] = []
+    private var scheduleEnd: TimeInterval = 0
+    var bytesPerSecond: Double = 0
+
+    mutating func append(_ chunk: Data, elapsed: TimeInterval) {
+        // Queue bursts behind scheduled audio, but resume stalled streams at the current time.
+        var start = max(elapsed, self.scheduleEnd)
+        let windowBytes = max(2, Int(self.bytesPerSecond * 0.05) & ~1)
+        var offset = chunk.startIndex
+        while offset < chunk.endIndex {
+            let end = min(offset + windowBytes, chunk.endIndex)
+            let window = Data(chunk[offset..<end])
+            let duration = Double(window.count) / self.bytesPerSecond
+            self.segments.append(Segment(
+                start: start,
+                end: start + duration,
+                level: TalkAudioLevel.normalized(rms: TalkAudioLevel.pcm16RMS(window))))
+            start += duration
+            offset = end
+        }
+        self.scheduleEnd = start
+    }
+
+    mutating func level(elapsed: TimeInterval) -> Double? {
+        guard elapsed <= self.scheduleEnd + 0.5 else { return nil }
+        self.segments.removeAll { $0.end < elapsed }
+        return self.segments.first { elapsed >= $0.start && elapsed < $0.end }?.level ?? 0
+    }
+
+    mutating func clear(keepingCapacity: Bool = false) {
+        self.segments.removeAll(keepingCapacity: keepingCapacity)
+        self.scheduleEnd = 0
+    }
+}
+
 /// Builds a playback-time-aligned level envelope from PCM16 chunks that stream
 /// through the app faster than real time (gateway TTS, ElevenLabs PCM, realtime
 /// relay output). Chunks are RMS-metered on arrival but scheduled at their
@@ -54,17 +97,9 @@ public enum TalkAudioLevel {
 /// instead of network arrival bursts.
 @MainActor
 public final class PCMPlaybackEnvelope {
-    private struct Segment {
-        let start: TimeInterval
-        let end: TimeInterval
-        let level: Double
-    }
-
     private let onLevel: @MainActor (Double?) -> Void
-    private var segments: [Segment] = []
-    private var bytesPerSecond: Double = 0
+    private var timeline = PCMPlaybackTimeline()
     private var startedAt: ContinuousClock.Instant?
-    private var scheduleEnd: TimeInterval = 0
     private var publishTask: Task<Void, Never>?
 
     public init(onLevel: @escaping @MainActor (Double?) -> Void) {
@@ -74,37 +109,18 @@ public final class PCMPlaybackEnvelope {
     /// Starts a new envelope; the playback clock is anchored to the first chunk.
     public func begin(sampleRate: Double) {
         self.cancel()
-        self.bytesPerSecond = max(1, sampleRate * Double(MemoryLayout<Int16>.size))
+        self.timeline.bytesPerSecond = max(1, sampleRate * Double(MemoryLayout<Int16>.size))
     }
 
     public func append(_ chunk: Data) {
-        guard self.bytesPerSecond > 1, !chunk.isEmpty else { return }
+        guard self.timeline.bytesPerSecond > 1, !chunk.isEmpty else { return }
         let now = ContinuousClock.now
         if self.startedAt == nil {
             self.startedAt = now
             self.startPublishing()
         }
         guard let startedAt = self.startedAt else { return }
-        let elapsed = Self.seconds(startedAt.duration(to: now))
-        // Chunks queue behind whatever is already scheduled; a stalled stream
-        // resumes at "now" instead of leaving a phantom backlog gap.
-        var start = max(elapsed, self.scheduleEnd)
-        // Meter in ~50 ms windows: a whole clip can arrive as one chunk, and a
-        // single RMS for it would render a flat line instead of an envelope.
-        let windowBytes = max(2, Int(self.bytesPerSecond * 0.05) & ~1)
-        var offset = chunk.startIndex
-        while offset < chunk.endIndex {
-            let end = min(offset + windowBytes, chunk.endIndex)
-            let window = chunk[offset..<end]
-            let duration = Double(window.count) / self.bytesPerSecond
-            self.segments.append(Segment(
-                start: start,
-                end: start + duration,
-                level: TalkAudioLevel.normalized(rms: TalkAudioLevel.pcm16RMS(Data(window)))))
-            start += duration
-            offset = end
-        }
-        self.scheduleEnd = start
+        self.timeline.append(chunk, elapsed: Self.seconds(startedAt.duration(to: now)))
     }
 
     /// Passes PCM chunks through to a player while metering them into this
@@ -137,9 +153,8 @@ public final class PCMPlaybackEnvelope {
     public func cancel() {
         self.publishTask?.cancel()
         self.publishTask = nil
-        self.segments = []
+        self.timeline.clear()
         self.startedAt = nil
-        self.scheduleEnd = 0
         self.onLevel(nil)
     }
 
@@ -162,11 +177,7 @@ public final class PCMPlaybackEnvelope {
     private func publish() -> Bool {
         guard let startedAt = self.startedAt else { return false }
         let elapsed = Self.seconds(startedAt.duration(to: .now))
-        if elapsed > self.scheduleEnd + 0.5 {
-            return false
-        }
-        self.segments.removeAll { $0.end < elapsed }
-        let level = self.segments.first { elapsed >= $0.start && elapsed < $0.end }?.level ?? 0
+        guard let level = self.timeline.level(elapsed: elapsed) else { return false }
         self.onLevel(level)
         return true
     }

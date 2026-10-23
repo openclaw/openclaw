@@ -1,8 +1,6 @@
-// Defines Zod schema fragments for channel configuration.
 import { z } from "zod";
 import type { ChannelsConfig } from "./types.channels.js";
 import { ChannelBotLoopProtectionSchema } from "./zod-schema.channel-bot-loop.js";
-import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import { ContextVisibilityModeSchema, GroupPolicySchema } from "./zod-schema.core.js";
 import { ChannelImplicitMentionsSchema } from "./zod-schema.implicit-mentions.js";
 
@@ -45,14 +43,12 @@ function addLegacyChannelAcpBindingIssues(
 export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
   .object({
     defaults: z
-      .object({
+      .strictObject({
         groupPolicy: GroupPolicySchema.optional(),
         contextVisibility: ContextVisibilityModeSchema.optional(),
-        heartbeatVisibility: ChannelHeartbeatVisibilitySchema,
         botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
         implicitMentions: ChannelImplicitMentionsSchema.optional(),
       })
-      .strict()
       .optional(),
     modelByChannel: ChannelModelByChannelSchema,
   })

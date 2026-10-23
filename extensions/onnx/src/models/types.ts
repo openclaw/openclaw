@@ -9,10 +9,7 @@ export type ClassificationInput = {
   descriptions?: Readonly<Record<string, string>>;
 };
 
-export type ClassificationResult = {
-  logits: number[];
-  inputTokens: number;
-};
+export type ClassificationResult = { logits: number[]; inputTokens: number };
 
 export type ModelContext = {
   session: Pick<InferenceSession, "run">;

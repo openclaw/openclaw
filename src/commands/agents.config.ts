@@ -1,4 +1,3 @@
-// Agent config mutation and summary builders used by `openclaw agents` commands.
 import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
@@ -18,6 +17,7 @@ import { loadAgentIdentityFromWorkspaceAsync } from "../agents/identity-file.js"
 import { pinLegacyInheritedAuthOwnerForRosterTransition } from "../agents/legacy-inherited-auth-dir.js";
 import { pinSurvivorWorkspaceForRosterCollapse } from "../config/agent-workspace-roster-transition.js";
 import { listRouteBindings } from "../config/bindings.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
@@ -48,7 +48,7 @@ export type AgentSummary = {
   isDefault: boolean;
 };
 
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntry = AgentConfig;
 
 export { listAgentEntries };
 
@@ -134,10 +134,17 @@ export function applyAgentConfig(
   },
 ): OpenClawConfig {
   const agentId = normalizeAgentId(params.agentId);
-  const name = params.name?.trim();
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
   const base = (index >= 0 ? list[index] : undefined) ?? { id: agentId };
+  const previousName = normalizeOptionalString(base.name);
+  // Follow identity renames only while the roster label shares that identity;
+  // a distinct operator label keeps its separate meaning.
+  const name =
+    normalizeOptionalString(params.name) ??
+    (previousName && previousName === normalizeOptionalString(base.identity?.name)
+      ? normalizeOptionalString(params.identity?.name)
+      : undefined);
   const mergedIdentity = params.identity ? { ...base.identity, ...params.identity } : undefined;
   const nextEntry: AgentEntry = {
     ...base,
@@ -158,7 +165,7 @@ export function applyAgentConfig(
   } else {
     nextList.push(nextEntry);
   }
-  const { list: _legacyList, ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
+  const { ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
   const nextConfig: OpenClawConfig = {
     ...cfg,
     agents: {
@@ -224,17 +231,24 @@ export function pruneAgentConfig(
     if (normalizeAgentId(entry.id) === id) {
       continue;
     }
-    nextAgentsList.push(
-      entry.subagents?.allowAgents
-        ? {
-            ...entry,
-            subagents: {
-              ...entry.subagents,
-              allowAgents: pruneAllowAgents(entry.subagents.allowAgents),
-            },
-          }
-        : entry,
-    );
+    const nextEntry = { ...entry };
+    if (entry.subagents?.allowAgents) {
+      nextEntry.subagents = {
+        ...entry.subagents,
+        allowAgents: pruneAllowAgents(entry.subagents.allowAgents),
+      };
+    }
+    if (entry.tools?.agentToAgent?.send) {
+      nextEntry.tools = {
+        ...entry.tools,
+        agentToAgent: {
+          ...entry.tools.agentToAgent,
+          // Preserve []: removing the last destination must not restore inherited access.
+          send: pruneAllowAgents(entry.tools.agentToAgent.send),
+        },
+      };
+    }
+    nextAgentsList.push(nextEntry);
   }
   const nextAgents = nextAgentsList.length > 0 ? toAgentEntriesRecord(nextAgentsList) : undefined;
 
@@ -253,20 +267,9 @@ export function pruneAgentConfig(
         },
       }
     : cfg.agents?.defaults;
-  const deletedAgentOwnedHeartbeat =
-    normalizeOptionalString(prunedDefaults?.heartbeat?.agentId) !== undefined &&
-    normalizeAgentId(prunedDefaults?.heartbeat?.agentId) === id;
-  const nextHeartbeat =
-    deletedAgentOwnedHeartbeat && nextAgentsList.length > 1
-      ? undefined
-      : clearOwnerRef(prunedDefaults?.heartbeat, "agents.defaults.heartbeat.agentId");
-  if (deletedAgentOwnedHeartbeat && nextAgentsList.length > 1) {
-    clearedOwnerRefs.push("agents.defaults.heartbeat");
-  }
   const nextDefaults = prunedDefaults
     ? {
         ...prunedDefaults,
-        heartbeat: nextHeartbeat,
         systemAgent: clearOwnerRef(
           prunedDefaults.systemAgent,
           "agents.defaults.systemAgent.agentId",
@@ -295,7 +298,7 @@ export function pruneAgentConfig(
         ),
       }
     : undefined;
-  const { list: _legacyList, ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
+  const { ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
   const nextAgentsConfig = cfg.agents
     ? {
         ...agentsConfig,

@@ -1,3 +1,6 @@
+import { base64ToBytes } from "../../../lib/bytes-base64.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
+
 export function dataImageClipboardFile(
   dataUrl: string,
   baseName = "pasted-image",
@@ -10,14 +13,10 @@ export function dataImageClipboardFile(
     return null;
   }
   try {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    // Avoid the string iterator and a callback per byte on multi-megabyte pastes.
-    for (let index = 0; index < binary.length; index++) {
-      bytes[index] = binary.charCodeAt(index);
-    }
     return {
-      file: new File([bytes], `${baseName}.${mimeType.slice("image/".length)}`, { type: mimeType }),
+      file: new File([base64ToBytes(base64)], `${baseName}.${mimeType.slice("image/".length)}`, {
+        type: mimeType,
+      }),
       dataUrl: `data:${mimeType};base64,${base64}`,
     };
   } catch {
@@ -94,14 +93,16 @@ export async function resizeChatAttachmentImage(
       const worker = new Worker(new URL("./chat-attachment-image.worker.ts", import.meta.url), {
         type: "module",
       });
+      const listeners = new AbortController();
+      const listenerOptions = { once: true, signal: listeners.signal };
       let settled = false;
       const finish = (result: File | null) => {
         if (settled) {
           return;
         }
         settled = true;
+        listeners.abort();
         worker.terminate();
-        signal.removeEventListener("abort", abort);
         if (result && !signal.aborted) {
           resolve(result);
         } else {
@@ -113,19 +114,23 @@ export async function resizeChatAttachmentImage(
         }
       };
       const abort = () => finish(null);
-      signal.addEventListener("abort", abort, { once: true });
-      worker.addEventListener("message", ({ data }: MessageEvent<File | null>) => finish(data), {
-        once: true,
-      });
-      worker.addEventListener(
+      listen(signal, "abort", abort, listenerOptions);
+      listen(
+        worker,
+        "message",
+        ({ data }: MessageEvent<File | null>) => finish(data),
+        listenerOptions,
+      );
+      listen(
+        worker,
         "error",
         (event) => {
           event.preventDefault();
           finish(null);
         },
-        { once: true },
+        listenerOptions,
       );
-      worker.addEventListener("messageerror", () => finish(null), { once: true });
+      listen(worker, "messageerror", () => finish(null), listenerOptions);
       try {
         worker.postMessage({ file, maxBytes } satisfies ChatAttachmentImageRequest, []);
       } catch {

@@ -11,14 +11,11 @@ export class TranscriptPrependAnchor {
   private firstMessageKey: string | undefined;
   private pending: (ChatTranscriptPrependAnchor & { measured: boolean }) | null = null;
 
+  constructor(private readonly messageElements: ReadonlyMap<string, HTMLElement>) {}
+
   /** Stable message identity used to resolve its row in the committed projection. */
   get messageKey(): string | null {
     return this.pending?.messageKey ?? null;
-  }
-
-  /** Keep the retained row mounted while virtual and native offsets reconcile. */
-  get rowKey(): string | null {
-    return this.pending?.rowKey ?? null;
   }
 
   /** Keep the retained bubble mounted against the committed, not candidate, row map. */
@@ -29,7 +26,9 @@ export class TranscriptPrependAnchor {
   ): number[] {
     const messageKey = this.messageKey;
     const rowKey =
-      (messageKey === null ? null : this.committedMessageRows.get(messageKey)) ?? this.rowKey;
+      (messageKey === null ? null : this.committedMessageRows.get(messageKey)) ??
+      this.pending?.rowKey ??
+      null;
     return extractTranscriptRange(range, indexes, [focusedRowKey, rowKey]);
   }
 
@@ -54,7 +53,8 @@ export class TranscriptPrependAnchor {
       this.pending && this.messageKeys.has(this.pending.messageKey) ? this.pending : null;
     const anchor =
       !commanded && (this.hasPrepend || readingProjectionChanged)
-        ? (retained ?? captureTranscriptPrependAnchor(element, this.messageKeys))
+        ? (retained ??
+          captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values()))
         : null;
     if (anchor) {
       this.pending = { ...anchor, measured: false };
@@ -73,7 +73,12 @@ export class TranscriptPrependAnchor {
       return false;
     }
     const changed = measureRows();
-    const moved = restoreTranscriptPrependAnchor(anchor, element, virtualizer);
+    const moved = restoreTranscriptPrependAnchor(
+      anchor,
+      element,
+      virtualizer,
+      this.messageElements.values(),
+    );
     if (anchor.measured && !changed && !moved) {
       this.pending = null;
     }
@@ -106,6 +111,7 @@ export class TranscriptPrependAnchor {
 function captureTranscriptPrependAnchor(
   scrollElement: HTMLDivElement | null,
   next: TranscriptMessageKeys,
+  messageElements: Iterable<HTMLElement>,
 ): ChatTranscriptPrependAnchor | null {
   if (!scrollElement) {
     return null;
@@ -113,9 +119,17 @@ function captureTranscriptPrependAnchor(
   const viewport = scrollElement.getBoundingClientRect();
   // Only rendered, retained bubbles can anchor the reader; overscan above the
   // viewport and messages removed by the new projection are not candidates.
-  for (const bubble of scrollElement.querySelectorAll<HTMLElement>(
-    ".chat-bubble[data-message-id]",
-  )) {
+  // Prepended refs register after retained ones; choose by DOM order, not insertion order.
+  const bubbles = [...messageElements]
+    .filter((bubble) => scrollElement.contains(bubble))
+    .toSorted((left, right) => {
+      const position = left.compareDocumentPosition(right);
+      if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
+        return -1;
+      }
+      return position & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
+    });
+  for (const bubble of bubbles) {
     const messageKey = bubble.dataset.messageId;
     const rect = bubble.getBoundingClientRect();
     if (
@@ -136,18 +150,19 @@ function captureTranscriptPrependAnchor(
 
 /** Reconcile the inner-message anchor after the virtualizer commits its row anchor. */
 function restoreTranscriptPrependAnchor(
-  anchor: ChatTranscriptPrependAnchor | null,
+  anchor: ChatTranscriptPrependAnchor,
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  messageElements: Iterable<HTMLElement>,
 ): boolean {
-  if (!anchor || !scrollElement) {
+  if (!scrollElement) {
     return false;
   }
   // Group renderers may replace the bubble at an array index during prepend;
   // resolve its stable render key in the committed DOM, not an old element.
-  const bubble = [
-    ...scrollElement.querySelectorAll<HTMLElement>(".chat-bubble[data-message-id]"),
-  ].find((element) => element.dataset.messageId === anchor.messageKey);
+  const bubble = [...messageElements].find(
+    (element) => scrollElement.contains(element) && element.dataset.messageId === anchor.messageKey,
+  );
   if (!bubble) {
     return false;
   }

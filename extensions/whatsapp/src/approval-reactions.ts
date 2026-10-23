@@ -18,11 +18,13 @@ import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-rep
 import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
-import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
+import { listWhatsAppDeliveredMessageIdentities } from "./inbound/send-result.js";
+import { buildWhatsAppReactionTargetKey } from "./reaction-target.js";
 import { getOptionalWhatsAppRuntime } from "./runtime.js";
 
 const PERSISTENT_NAMESPACE = "whatsapp.approval-reactions";
@@ -40,21 +42,9 @@ type WhatsAppApprovalReactionTarget = ApprovalReactionTargetRecord & {
   approvalKind: ChannelApprovalKind;
 };
 
-type WhatsAppApprovalReactionEvent = {
-  remoteJids: string[];
-  messageId: string;
-  actorJid: string;
-  reactionKey: string;
-};
-
 type ResolvedWhatsAppApprovalReactionTarget = WhatsAppApprovalReactionResolution & {
   remoteJid: string;
 };
-
-const loadResolveApprovalOverGateway = createLazyRuntimeSurface(
-  () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
-  (runtime) => runtime.resolveApprovalOverGateway,
-);
 
 const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
   getOptionalWhatsAppRuntime,
@@ -68,31 +58,10 @@ const whatsappApprovalReactionTargets =
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
     defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,
-    openStore: (storeParams) => getOptionalWhatsAppRuntime()?.state.openKeyedStore(storeParams),
+    openStore: (storeParams) => getOptionalWhatsAppRuntime()?.state.openKeyedStoreV2(storeParams),
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget: readApprovalReactionTargetRecord,
   });
-
-function buildReactionTargetKey(params: {
-  accountId: string;
-  remoteJid: string;
-  messageId: string;
-}) {
-  const accountId = params.accountId.trim();
-  const remoteJid = params.remoteJid.trim();
-  const messageId = params.messageId.trim();
-  if (!accountId || !remoteJid || !messageId) {
-    return null;
-  }
-  return `${accountId}:${remoteJid}:${messageId}`;
-}
-
-function addCandidateRemoteJid(target: string[], value: string | null | undefined): void {
-  const remoteJid = value?.trim();
-  if (remoteJid && !target.includes(remoteJid)) {
-    target.push(remoteJid);
-  }
-}
 
 function reportApprovalBindingCorrelationMismatch(binding: {
   approvalId: string;
@@ -207,7 +176,7 @@ export async function registerWhatsAppApprovalReactionTarget(params: {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
 }): Promise<WhatsAppApprovalReactionTarget | null> {
-  const key = buildReactionTargetKey(params);
+  const key = buildWhatsAppReactionTargetKey(params);
   const approvalId = params.approvalId.trim();
   const allowedDecisions = listApprovalReactionBindings({
     allowedDecisions: params.allowedDecisions,
@@ -229,44 +198,6 @@ export async function registerWhatsAppApprovalReactionTarget(params: {
   };
   await whatsappApprovalReactionTargets.register(key, target, { ttlMs: params.ttlMs });
   return target;
-}
-
-function listWhatsAppDeliveredMessageIdentities(
-  results: readonly OutboundDeliveryResult[],
-): Array<{ messageId: string; remoteJid: string }> {
-  const identities: Array<{ messageId: string; remoteJid: string }> = [];
-  const seen = new Set<string>();
-  const add = (params: { channel?: string; messageId?: string; toJid?: string }) => {
-    if (params.channel && params.channel !== "whatsapp") {
-      return;
-    }
-    const messageId = params.messageId?.trim() ?? "";
-    const remoteJid = params.toJid?.trim() ?? "";
-    const key = `${remoteJid}:${messageId}`;
-    if (!messageId || messageId === "unknown" || !remoteJid || seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    identities.push({ messageId, remoteJid });
-  };
-
-  for (const result of results) {
-    if (result.channel !== "whatsapp") {
-      continue;
-    }
-    add(result);
-    for (const raw of result.receipt?.raw ?? []) {
-      add(raw);
-    }
-    for (const part of result.receipt?.parts ?? []) {
-      add({
-        channel: part.raw?.channel,
-        messageId: part.raw?.messageId ?? part.platformMessageId,
-        toJid: part.raw?.toJid,
-      });
-    }
-  }
-  return identities;
 }
 
 /** Bind generic forwarded approvals to the exact WhatsApp messages accepted by Baileys. */
@@ -296,7 +227,10 @@ export async function registerWhatsAppApprovalReactionTargetForDeliveredPayload(
     accountId: params.target.accountId,
   }).accountId;
   const registrations: Promise<WhatsAppApprovalReactionTarget | null>[] = [];
-  for (const { messageId, remoteJid } of listWhatsAppDeliveredMessageIdentities(params.results)) {
+  for (const { messageId, remoteJid } of listWhatsAppDeliveredMessageIdentities(
+    params.results,
+    (channel) => !channel || channel === "whatsapp",
+  )) {
     registrations.push(
       registerWhatsAppApprovalReactionTarget({
         accountId,
@@ -317,7 +251,7 @@ export async function unregisterWhatsAppApprovalReactionTarget(params: {
   remoteJid: string;
   messageId: string;
 }): Promise<void> {
-  const key = buildReactionTargetKey(params);
+  const key = buildWhatsAppReactionTargetKey(params);
   if (!key) {
     return;
   }
@@ -330,7 +264,7 @@ export async function resolveWhatsAppApprovalReactionTargetWithPersistence(param
   messageId: string;
   reactionKey: string;
 }): Promise<WhatsAppApprovalReactionResolution | null> {
-  const key = buildReactionTargetKey(params);
+  const key = buildWhatsAppReactionTargetKey(params);
   if (!key) {
     return null;
   }
@@ -347,70 +281,6 @@ export async function resolveWhatsAppApprovalReactionTargetWithPersistence(param
     : null;
 }
 
-async function resolveWhatsAppApprovalReactionTargetFromCandidates(params: {
-  accountId: string;
-  observedRemoteJids: readonly string[];
-  messageId: string;
-  reactionKey: string;
-  resolveReactionTargetJids?: (jid: string) => Promise<readonly string[]>;
-  logVerboseMessage?: (message: string) => void;
-}): Promise<ResolvedWhatsAppApprovalReactionTarget | null> {
-  const candidateRemoteJids: string[] = [];
-  for (const observedRemoteJid of params.observedRemoteJids) {
-    addCandidateRemoteJid(candidateRemoteJids, observedRemoteJid);
-    try {
-      for (const candidate of (await params.resolveReactionTargetJids?.(observedRemoteJid)) ?? []) {
-        addCandidateRemoteJid(candidateRemoteJids, candidate);
-      }
-    } catch (error) {
-      params.logVerboseMessage?.(
-        `whatsapp: approval reaction target JID mapping failed for ${observedRemoteJid}: ${String(error)}`,
-      );
-    }
-  }
-
-  for (const remoteJid of candidateRemoteJids) {
-    const target = await resolveWhatsAppApprovalReactionTargetWithPersistence({
-      accountId: params.accountId,
-      remoteJid,
-      messageId: params.messageId,
-      reactionKey: params.reactionKey,
-    });
-    if (target) {
-      return { ...target, remoteJid };
-    }
-  }
-  return null;
-}
-
-function readWhatsAppApprovalReactionEvent(params: {
-  msg: WAMessage;
-  selfJid?: string | null;
-  selfLid?: string | null;
-}): WhatsAppApprovalReactionEvent | null {
-  const msg = params.msg;
-  const reaction = msg.message?.reactionMessage;
-  const reactionKey = reaction?.text?.trim() ?? "";
-  const messageId = reaction?.key?.id?.trim() ?? "";
-  const remoteJids: string[] = [];
-  addCandidateRemoteJid(remoteJids, reaction?.key?.remoteJid);
-  addCandidateRemoteJid(remoteJids, msg.key?.remoteJid);
-  const actorJid =
-    msg.key?.participant?.trim() ||
-    (msg.key?.fromMe
-      ? (params.selfLid?.trim() ?? params.selfJid?.trim() ?? "")
-      : (msg.key?.remoteJid?.trim() ?? ""));
-  if (!reactionKey || !messageId || remoteJids.length === 0 || !actorJid) {
-    return null;
-  }
-  return {
-    remoteJids,
-    messageId,
-    actorJid,
-    reactionKey,
-  };
-}
-
 export async function maybeResolveWhatsAppApprovalReaction(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -422,27 +292,54 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
   resolveReactionTargetJids?: (jid: string) => Promise<readonly string[]>;
   logVerboseMessage?: (message: string) => void;
 }): Promise<boolean> {
-  const event = readWhatsAppApprovalReactionEvent({
-    msg: params.msg,
-    selfJid: params.selfJid,
-    selfLid: params.selfLid,
-  });
-  if (!event) {
+  const { msg, selfJid, selfLid } = params;
+  const reaction = msg.message?.reactionMessage;
+  const reactionKey = reaction?.text?.trim() ?? "";
+  const messageId = reaction?.key?.id?.trim() ?? "";
+  const remoteJids = normalizeUniqueTrimmedStringList([
+    reaction?.key?.remoteJid,
+    msg.key?.remoteJid,
+  ]);
+  const actorJid =
+    msg.key?.participant?.trim() ||
+    (msg.key?.fromMe
+      ? (selfLid?.trim() ?? selfJid?.trim() ?? "")
+      : (msg.key?.remoteJid?.trim() ?? ""));
+  if (!reactionKey || !messageId || remoteJids.length === 0 || !actorJid) {
     return false;
   }
-  const target = await resolveWhatsAppApprovalReactionTargetFromCandidates({
-    accountId: params.accountId,
-    observedRemoteJids: event.remoteJids,
-    messageId: event.messageId,
-    reactionKey: event.reactionKey,
-    resolveReactionTargetJids: params.resolveReactionTargetJids,
-    logVerboseMessage: params.logVerboseMessage,
-  });
+  const { accountId, resolveReactionTargetJids, logVerboseMessage } = params;
+  const candidateRemoteJids: string[] = [];
+  for (const observedRemoteJid of remoteJids) {
+    candidateRemoteJids.push(observedRemoteJid);
+    try {
+      candidateRemoteJids.push(...((await resolveReactionTargetJids?.(observedRemoteJid)) ?? []));
+    } catch (error) {
+      logVerboseMessage?.(
+        `whatsapp: approval reaction target JID mapping failed for ${observedRemoteJid}: ${String(error)}`,
+      );
+    }
+  }
+
+  let matchedTarget: ResolvedWhatsAppApprovalReactionTarget | null = null;
+  for (const remoteJid of normalizeUniqueTrimmedStringList(candidateRemoteJids)) {
+    const candidateTarget = await resolveWhatsAppApprovalReactionTargetWithPersistence({
+      accountId,
+      remoteJid,
+      messageId,
+      reactionKey,
+    });
+    if (candidateTarget) {
+      matchedTarget = { ...candidateTarget, remoteJid };
+      break;
+    }
+  }
+  const target = matchedTarget;
   if (!target) {
     return false;
   }
 
-  const actorId = await params.resolveInboundJid(event.actorJid);
+  const actorId = await params.resolveInboundJid(actorJid);
   if (!actorId) {
     params.logVerboseMessage?.(
       `whatsapp: approval reaction ignored for ${target.approvalId}; missing actor identity`,
@@ -463,12 +360,13 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     },
     approvers: getWhatsAppApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }),
     authorizeActorAction: (input) => whatsappApprovalAuth.authorizeActorAction(input),
-    loadResolver: loadResolveApprovalOverGateway,
+    loadResolver: async () =>
+      (await import("openclaw/plugin-sdk/approval-gateway-runtime")).resolveApprovalOverGateway,
     clearTarget: () =>
       unregisterWhatsAppApprovalReactionTarget({
         accountId: params.accountId,
         remoteJid: target.remoteJid,
-        messageId: event.messageId,
+        messageId,
       }),
     onResolved: (result) => {
       const canonicalDecision =
@@ -482,9 +380,4 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     logVerboseMessage: params.logVerboseMessage,
   });
   return true;
-}
-
-export function clearWhatsAppApprovalReactionTargetsForTest(): void {
-  whatsappApprovalReactionTargets.clearForTest();
-  loadResolveApprovalOverGateway.clear();
 }

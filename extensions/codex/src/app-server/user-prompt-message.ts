@@ -11,21 +11,6 @@ import {
 
 type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
 
-function buildSenderLabel(params: {
-  senderId?: string;
-  senderName?: string;
-  senderUsername?: string;
-  senderE164?: string;
-}): string | undefined {
-  const label = params.senderName ?? params.senderUsername ?? params.senderE164 ?? params.senderId;
-  if (!label) {
-    return undefined;
-  }
-  return !params.senderId || label.includes(params.senderId)
-    ? label
-    : `${label} (${params.senderId})`;
-}
-
 function buildFromPrepared(
   params: EmbeddedRunAttemptParams,
   preparedUserMessage: MirroredUserMessage | undefined,
@@ -34,7 +19,9 @@ function buildFromPrepared(
   const senderName = normalizeOptionalString(params.senderName);
   const senderUsername = normalizeOptionalString(params.senderUsername);
   const senderE164 = normalizeOptionalString(params.senderE164);
-  const senderLabel = buildSenderLabel({ senderId, senderName, senderUsername, senderE164 });
+  const label = senderName ?? senderUsername ?? senderE164 ?? senderId;
+  const senderLabel =
+    label && senderId && !label.includes(senderId) ? `${label} (${senderId})` : label;
   const sourceChannel = normalizeOptionalString(
     params.inputProvenance?.sourceChannel ?? params.messageChannel ?? params.messageProvider,
   );
@@ -77,8 +64,9 @@ export function promptSnapshot(
 export async function buildResolvedCodexUserPromptMessage(
   params: EmbeddedRunAttemptParams,
 ): Promise<MirroredUserMessage> {
-  const resolvedMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
-  return buildFromPrepared(params, resolvedMessage ?? params.userTurnTranscriptRecorder?.message);
+  const recorder = params.userTurnTranscriptRecorder;
+  const resolvedMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
+  return buildFromPrepared(params, resolvedMessage ?? recorder?.message);
 }
 
 export async function resolveFinalCodexMirrorMessages(params: {

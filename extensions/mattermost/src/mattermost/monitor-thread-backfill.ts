@@ -1,4 +1,5 @@
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { z } from "zod";
 import { isRetryableError, MattermostPostSchema, type MattermostUser } from "./client.js";
 import {
@@ -35,7 +36,6 @@ type ThreadTurn = {
   currentPostTimestamp: number;
 };
 type BackfillResult = {
-  current: boolean;
   /** Transient merge bounded by the server page plus one shared history window. */
   history?: HistoryEntry[];
 };
@@ -61,8 +61,8 @@ export function createMattermostThreadBackfill(params: {
   // Evicting an LRU marker must never free capacity for another unresolved request.
   const inFlight = new Set<Promise<HistoryEntry[]>>();
 
-  const readIdentity = (turn: ThreadTurn): string | null => {
-    const entry = getSessionEntry({
+  const readIdentity = async (turn: ThreadTurn): Promise<string | null> => {
+    const entry = await getSessionEntryAsync({
       agentId: turn.agentId,
       storePath: resolveStorePath(cfg.session?.store, { agentId: turn.agentId }),
       sessionKey: turn.historyKey,
@@ -71,17 +71,6 @@ export function createMattermostThreadBackfill(params: {
     return entry
       ? JSON.stringify([entry.sessionId ?? null, entry.lifecycleRevision ?? null])
       : null;
-  };
-  const owns = (turn: ThreadTurn, recovery: Recovery): boolean => {
-    if (recoveries.get(turn.historyKey) !== recovery) {
-      return false;
-    }
-    try {
-      return readIdentity(turn) === recovery.identity;
-    } catch {
-      // Unreadable storage is not an absent session and cannot authorize a completion.
-      return false;
-    }
   };
   const touch = (key: string, recovery: Recovery) => {
     recoveries.delete(key);
@@ -200,28 +189,23 @@ export function createMattermostThreadBackfill(params: {
       !Number.isFinite(turn.currentPostTimestamp) ||
       turn.currentPostTimestamp <= 0
     ) {
-      return { current: true };
+      return {};
     }
     let identity: string | null;
     try {
-      identity = readIdentity(turn);
+      identity = await readIdentity(turn);
     } catch {
       monitor.logVerboseMessage("mattermost: thread recovery skipped (session store unavailable)");
-      return { current: true };
+      return {};
     }
     const previous = recoveries.get(turn.historyKey);
     let recovery = previous;
     if (!recovery || recovery.identity !== identity) {
-      // Carry spent budgets/cooldowns across materialization, but never adopt an
-      // unbound success: creation and reset may both occur before the next call.
-      // In-flight absent->present transitions likewise have no binding proof.
-      const adopting = previous?.identity === null && identity !== null;
       recovery = {
         identity,
-        attempts: adopting ? previous.attempts : 0,
-        nextAttemptAt: adopting ? previous.nextAttemptAt : 0,
-        status:
-          adopting && !previous.completion && previous.attempts > 0 ? previous.status : "pending",
+        attempts: 0,
+        nextAttemptAt: 0,
+        status: "pending",
       };
       if (!previous && (channelHistories.get(turn.historyKey)?.length ?? 0) > 0) {
         recovery.status = "seeded";
@@ -230,52 +214,48 @@ export function createMattermostThreadBackfill(params: {
     touch(turn.historyKey, recovery);
     if (recovery.completion) {
       const history = await recovery.completion;
-      return { current: owns(turn, recovery), history };
+      return { history };
     }
     if (recovery.status === "settled") {
-      return { current: true };
+      return {};
     }
     if (recovery.status === "seeded" && channelHistories.has(turn.historyKey)) {
-      return { current: true };
+      return {};
     }
     if (
       recovery.attempts >= MAX_ATTEMPTS ||
       Date.now() < recovery.nextAttemptAt ||
       inFlight.size >= MAX_IN_FLIGHT
     ) {
-      return { current: true };
+      return {};
     }
 
     recovery.attempts++;
     recovery.nextAttemptAt = Date.now() + COOLDOWN_MS;
     const owner = recovery;
     const controller = new AbortController();
-    const deadlineAt = performance.now() + TIMEOUT_MS;
-    let timer: ReturnType<typeof setTimeout>;
-    const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
+    const boundedOperation = raceWithTimeout(
+      () => {
+        const operation = fetchEntries(turn, controller.signal);
+        inFlight.add(operation);
+        void operation.then(
+          () => inFlight.delete(operation),
+          () => inFlight.delete(operation),
+        );
+        return operation;
+      },
+      TIMEOUT_MS,
+      () => {
         const error = new DOMException("Mattermost thread recovery deadline", "TimeoutError");
         controller.abort(error);
-        reject(error);
-      }, TIMEOUT_MS);
-    });
-    const operation = fetchEntries(turn, controller.signal);
-    inFlight.add(operation);
-    void operation.then(
-      () => inFlight.delete(operation),
-      () => inFlight.delete(operation),
+        throw error;
+      },
     );
     owner.completion = (async () => {
       try {
-        const entries = await Promise.race([operation, deadline]);
-        if (performance.now() >= deadlineAt) {
-          throw new DOMException("Mattermost thread recovery deadline", "TimeoutError");
-        }
-        if (!owns(turn, owner)) {
-          return undefined;
-        }
-        // Read live history only after every await; merge synchronously after the
-        // authoritative identity check. Live entries win duplicate provider ids.
+        const entries = await boundedOperation;
+        // A reset during this short fetch is best effort; the next turn observes
+        // its session identity. Concurrent live posts still win duplicate IDs.
         const live = channelHistories.get(turn.historyKey) ?? [];
         const merged = new Map<string | HistoryEntry, HistoryEntry>();
         for (const entry of [...entries, ...live]) {
@@ -302,9 +282,6 @@ export function createMattermostThreadBackfill(params: {
         // Newer live posts must not displace the older trigger's recovered context.
         return snapshot;
       } catch (error) {
-        if (!owns(turn, owner)) {
-          return undefined;
-        }
         owner.status =
           error instanceof Error && isRetryableError(error) && owner.attempts < MAX_ATTEMPTS
             ? "pending"
@@ -314,12 +291,10 @@ export function createMattermostThreadBackfill(params: {
         );
         return undefined;
       } finally {
-        clearTimeout(timer!);
-        // Only this unique attempt owns its completion; newer records are untouched.
         owner.completion = undefined;
       }
     })();
     const history = await owner.completion;
-    return { current: owns(turn, owner), history };
+    return { history };
   };
 }

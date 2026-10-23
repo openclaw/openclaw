@@ -1,4 +1,3 @@
-// Normalizes HTTP path values used by plugin manifests and routes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { canonicalizePathVariant } from "../gateway/security-path.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";

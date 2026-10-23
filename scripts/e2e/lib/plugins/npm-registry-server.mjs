@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-// Fixture npm registry server for plugin E2E scenarios.
 import crypto from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -224,17 +223,38 @@ async function metadataWithPublishedVersions(entry, baseUrl) {
   };
 }
 
-function decodePackagePath(pathname) {
+function findPackageForPath(pathname) {
   try {
-    return decodeURIComponent(pathname.slice(1));
+    return packages.get(decodeURIComponent(pathname.slice(1)));
   } catch {
     return undefined;
   }
 }
 
-function findPackageForPath(pathname) {
-  const packageName = decodePackagePath(pathname);
-  return packageName === undefined ? undefined : packages.get(packageName);
+function findPackageTargetForPath(pathname) {
+  for (const entry of packages.values()) {
+    const prefixes = [
+      `/${entry.encodedPackageName}/`,
+      `/${encodeURIComponent(entry.packageName)}/`,
+      `/${entry.packageName}/`,
+    ];
+    const prefix = prefixes.find((candidate) =>
+      pathname.toLowerCase().startsWith(candidate.toLowerCase()),
+    );
+    if (!prefix) {
+      continue;
+    }
+    const encodedTarget = pathname.slice(prefix.length);
+    if (!encodedTarget || encodedTarget.includes("/")) {
+      continue;
+    }
+    try {
+      return { entry, target: decodeURIComponent(encodedTarget) };
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 function findTarballForPath(pathname) {
@@ -367,6 +387,18 @@ async function handleRequest(request, response) {
     return;
   }
 
+  const packageTarget = findPackageTargetForPath(url.pathname);
+  if (packageTarget) {
+    const metadata = await metadataWithPublishedVersions(packageTarget.entry, baseUrl);
+    const version = metadata["dist-tags"]?.[packageTarget.target] ?? packageTarget.target;
+    const manifest = metadata.versions?.[version];
+    if (manifest) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`${JSON.stringify(manifest)}\n`);
+      return;
+    }
+  }
+
   const tarballEntry = findTarballForPath(url.pathname);
   if (tarballEntry) {
     response.writeHead(200, {
@@ -404,6 +436,8 @@ server.listen(requestedPort, bindHost, () => {
   try {
     fs.writeFileSync(tempFile, String(server.address().port));
     fs.renameSync(tempFile, portFile);
+    // Node test callers own IPC; shell callers retain the atomic port-file receipt.
+    process.send?.(server.address().port);
   } finally {
     fs.rmSync(tempFile, { force: true });
   }

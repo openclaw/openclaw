@@ -85,6 +85,10 @@ side-panel tabs when the panes are side by side. In a stacked layout, each
 header stays above its own pane. Side-panel tabs appear only when there are
 views to switch between.
 
+When a tab has one full-width widget, its title and controls live in the task
+menu instead of a pill over the widget, in both split and fullscreen views.
+Smaller widgets and multi-widget tabs keep their individual controls.
+
 ## Build a dashboard by asking
 
 For a pinned data summary, ask for a **native report** with text, metrics, tables,
@@ -209,6 +213,10 @@ never needs the agent.
   `set_presentation` after focusing the tab: `presentation: "expanded"` makes
   the dashboard main and focuses it; `"split"` reveals it using the current
   arrangement, bringing chat alongside when Dashboard is main.
+
+If a widget change fails, its error stays visible when the dashboard refreshes
+without any saved changes. You can retry from the widget menu. A new action or
+updated dashboard state clears the previous error.
 
 ## Show a website fullscreen
 
@@ -352,6 +360,10 @@ administrator browser path remains available under its existing rules.
 
 ## What widgets are allowed to do
 
+Revoking session access denies new dashboard writes. A write already in progress
+when access is revoked may still finish saving its widget or layout. Reading
+private content and using a widget's tools still require current access.
+
 Custom HTML and registered-source widgets that only render need no approval —
 they appear instantly, exactly like inline chat widgets, and their network access
 is fully disabled.
@@ -406,6 +418,14 @@ update-in-place behavior as HTML widgets. The renderer is loaded from the
 Gateway's `/__openclaw__/a2ui/` asset route, so the renderer bundle is not
 copied into each widget. The Canvas plugin and its hosted routes must be
 enabled; both are enabled by default.
+
+The v0.9 basic catalog supports bound form controls, lists, tabs, media, and
+dialogs. Text bodies render basic Markdown; raw HTML, links, and images in
+Markdown are not rendered. Use the catalog's Image component for images.
+
+If a component fails to render, it shows an error and a **Retry** button while
+neighboring components remain interactive. Corrected A2UI updates restore the
+affected component automatically.
 
 A2UI actions use the normal widget bridge. By default, clicks become quiet
 session notices that the agent sees on its next turn. If the widget declares

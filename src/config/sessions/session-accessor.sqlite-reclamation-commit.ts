@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
-import { withSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
+import {
+  retainSqliteWriteAdmissionService,
+  withSqliteWriteAdmissionService,
+} from "../../infra/sqlite-transaction.js";
 
 const COMMIT_DECISION_TIMEOUT_MS = 5_000;
 const WAITING = 0;
@@ -15,7 +19,7 @@ export class SqliteReclamationRequestRefusedError extends Error {}
 /** Preserve the reclamation owner's context when an unrelated synchronous writer helps. */
 export async function withSqliteReclamationAuthorization<T>(
   buffer: SharedArrayBuffer,
-  database: DatabaseSync,
+  database: EngineConnection | string,
   assertCurrent: () => void,
   run: (authorize: () => void) => Promise<T>,
 ): Promise<T> {
@@ -56,7 +60,18 @@ export async function withSqliteReclamationAuthorization<T>(
       }
     }
   };
-  return await withSqliteWriteAdmissionService(database, service, () => run(authorize));
+  if (typeof database !== "string") {
+    return await withSqliteWriteAdmissionService(sqlPublicationAnchor(database), service, () =>
+      run(authorize),
+    );
+  }
+  // The execution owner's admitted native location does not require a host connection.
+  const release = retainSqliteWriteAdmissionService([database], service);
+  try {
+    return await run(authorize);
+  } finally {
+    release();
+  }
 }
 
 function rejectCommit(shared: Int32Array): void {

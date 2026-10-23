@@ -289,10 +289,7 @@ final class ChatComposerNSTextView: NSTextView {
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
-        if !self.handleAttachmentPaste(from: pboard, matching: type) {
-            return super.readSelection(from: pboard, type: type)
-        }
-        return true
+        self.handleAttachmentPaste(from: pboard, matching: type) || super.readSelection(from: pboard, type: type)
     }
 
     override func paste(_ sender: Any?) {
@@ -317,21 +314,13 @@ final class ChatComposerNSTextView: NSTextView {
             return true
         }
         let attachments = ChatComposerPasteSupport.imageAttachments(from: pasteboard, matching: preferredType)
-        if !attachments.isEmpty {
-            self.deliver(attachments)
-            return true
-        }
-
-        return false
-    }
-
-    private func deliver(_ attachments: [ChatComposerPasteSupport.ImageAttachment]) {
         for attachment in attachments {
             self.onPasteImageAttachment?(
                 attachment.data,
                 attachment.fileName,
                 attachment.mimeType)
         }
+        return !attachments.isEmpty
     }
 }
 
@@ -346,12 +335,14 @@ enum ChatComposerPasteSupport {
         from pasteboard: NSPasteboard,
         matching preferredType: NSPasteboard.PasteboardType? = nil) -> [ImageAttachment]
     {
-        let dataAttachments = self.imageAttachmentsFromRawData(in: pasteboard, matching: preferredType)
+        let dataAttachments = (pasteboard.pasteboardItems ?? []).enumerated().compactMap { index, item in
+            self.imageAttachment(from: item, index: index, matching: preferredType)
+        }
         if !dataAttachments.isEmpty {
             return dataAttachments
         }
 
-        if let preferredType, !self.matchesImageType(preferredType) {
+        if let preferredType, !self.preferredImagePasteboardTypes.contains(where: { $0.type == preferredType }) {
             return []
         }
 
@@ -372,16 +363,6 @@ enum ChatComposerPasteSupport {
             return []
         }
         return urls.filter(\.isFileURL)
-    }
-
-    private static func imageAttachmentsFromRawData(
-        in pasteboard: NSPasteboard,
-        matching preferredType: NSPasteboard.PasteboardType?) -> [ImageAttachment]
-    {
-        let items = pasteboard.pasteboardItems ?? []
-        return items.enumerated().compactMap { index, item in
-            self.imageAttachment(from: item, index: index, matching: preferredType)
-        }
     }
 
     private static func imageAttachment(from image: NSImage, index: Int) -> ImageAttachment? {
@@ -439,10 +420,6 @@ enum ChatComposerPasteSupport {
     {
         guard let preferredType else { return true }
         return preferredType == candidate
-    }
-
-    private static func matchesImageType(_ preferredType: NSPasteboard.PasteboardType) -> Bool {
-        self.preferredImagePasteboardTypes.contains { $0.type == preferredType }
     }
 
     private static func defaultFileName(index: Int, ext: String) -> String {

@@ -1,10 +1,15 @@
 import { vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
 
 export async function withGatewayChatConnection(
   request: (method: string, params?: unknown) => Promise<unknown>,
   run: (client: GatewayChatClient, callbacks: GatewayClientOptions) => Promise<void>,
+  connection: ConstructorParameters<typeof GatewayChatClient>[0] = {
+    url: "ws://127.0.0.1:18789",
+    token: "test-token",
+  },
 ) {
   const transport: { options?: GatewayClientOptions } = {};
   let client: GatewayChatClient | undefined;
@@ -26,7 +31,7 @@ export async function withGatewayChatConnection(
   });
   try {
     const { GatewayChatClient: Client } = await import("./gateway-chat.js");
-    client = new Client({ url: "ws://127.0.0.1:18789", token: "test-token" });
+    client = new Client(connection);
     const callbacks = transport.options;
     if (!callbacks?.onHelloOk || !callbacks.onClose) {
       throw new Error("Gateway client did not register its connection lifecycle");

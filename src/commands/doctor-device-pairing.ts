@@ -1,6 +1,4 @@
-/** Doctor diagnostics for pending, paired, and locally cached device auth state. */
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
@@ -8,7 +6,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { loadDeviceAuthTokens } from "../infra/device-auth-store.js";
-import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
+import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
 import {
   summarizeDeviceTokens,
   type DeviceAuthTokenSummary,
@@ -67,11 +65,12 @@ async function loadDoctorPairingSnapshot(params: {
       const payload = await requestGateway<GatewayDevicePairingPayload>({
         method: "device.pair.list",
         timeoutMs: 5_000,
+        sharedStateMode: "read-only",
         config: params.cfg,
       });
       return {
         pending: payload.pending,
-        paired: payload.paired.map((device) => normalizeGatewayPairedDevice(device)),
+        paired: payload.paired.map(normalizeGatewayPairedDevice),
       };
     } catch {
       // Gateway health already reported separately. Fall back to local pairing
@@ -84,7 +83,7 @@ async function loadDoctorPairingSnapshot(params: {
   const local = await listDevicePairingReadOnly();
   return {
     pending: local.pending,
-    paired: local.paired.map((device) => normalizeLocalPairedDevice(device)),
+    paired: local.paired.map(normalizeLocalPairedDevice),
   };
 }
 
@@ -100,6 +99,10 @@ function formatValues(values: string[]): string {
 
 function formatCliArgs(args: string[]): string {
   return formatCliCommand(args.map(quoteCliArg).join(" "));
+}
+
+function formatRotateCommand(deviceId: string, role: string): string {
+  return formatCliArgs(["openclaw", "devices", "rotate", "--device", deviceId, "--role", role]);
 }
 
 function describeDevice(params: {
@@ -121,35 +124,6 @@ function findTokenSummary(
   return device.tokenSummaries.find((entry) => entry.role === normalizedRole && !entry.revokedAtMs);
 }
 
-function hasPendingScopeUpgrade(params: {
-  requestedRoles: string[];
-  pendingScopes: string[];
-  approvedRoles: string[];
-  approvedScopes: string[];
-}): boolean {
-  for (const role of params.requestedRoles) {
-    if (!params.approvedRoles.includes(role)) {
-      continue;
-    }
-    const requestedForRole = params.pendingScopes.filter((scope) =>
-      role === "operator" ? scope.startsWith("operator.") : !scope.startsWith("operator."),
-    );
-    if (requestedForRole.length === 0) {
-      continue;
-    }
-    if (
-      !roleScopesAllow({
-        role,
-        requestedScopes: requestedForRole,
-        allowedScopes: params.approvedScopes,
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthFinding[] {
   const pairedByDeviceId = new Map(snapshot.paired.map((device) => [device.deviceId, device]));
   return snapshot.pending.map((pending): HealthFinding => {
@@ -161,6 +135,8 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     const finding = {
       checkId: DEVICE_PAIRING_CHECK_ID,
       severity: "warning" as const,
+      category: "fix-now" as const,
+      docsUrl: "https://docs.openclaw.ai/cli/devices",
       path: "devices.pending",
       target: `${pending.deviceId}:${pending.requestId}`,
       fixHint,
@@ -168,6 +144,7 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     if (!paired) {
       return {
         ...finding,
+        category: "recommended",
         requirement: "first-time",
         message: `Pending device pairing request ${pending.requestId} for ${deviceLabel}. ${fixHint}`,
       };
@@ -189,6 +166,7 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     if (requestedRoles.some((role) => !approvedRoles.includes(role))) {
       return {
         ...finding,
+        category: "recommended",
         requirement: "role-upgrade",
         message: `Pending role upgrade ${pending.requestId} for ${deviceLabel}: approved roles [${formatValues(approvedRoles)}], requested roles [${formatValues(requestedRoles)}]. ${fixHint}`,
       };
@@ -196,15 +174,20 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     const approvedScopes = resolveApprovedScopes(paired);
     const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
     if (
-      hasPendingScopeUpgrade({
-        requestedRoles,
-        pendingScopes: requestedScopes,
-        approvedRoles,
-        approvedScopes,
-      })
+      requestedRoles.some(
+        (role) =>
+          !roleScopesAllow({
+            role,
+            requestedScopes: requestedScopes.filter((scope) =>
+              role === "operator" ? scope.startsWith("operator.") : !scope.startsWith("operator."),
+            ),
+            allowedScopes: approvedScopes,
+          }),
+      )
     ) {
       return {
         ...finding,
+        category: "recommended",
         requirement: "scope-upgrade",
         message: `Pending scope upgrade ${pending.requestId} for ${deviceLabel}: approved scopes [${formatValues(approvedScopes)}], requested scopes [${formatValues(requestedScopes)}]. ${fixHint}`,
       };
@@ -224,6 +207,8 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
     const finding = {
       checkId: DEVICE_PAIRING_CHECK_ID,
       severity: "warning" as const,
+      category: "fix-now" as const,
+      docsUrl: "https://docs.openclaw.ai/cli/devices",
       path: "devices.paired",
       target: device.deviceId,
     };
@@ -234,19 +219,12 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
         ...finding,
         requirement: "missing-operator-scope-baseline",
         message: `Paired device ${deviceLabel} is missing its approved operator scope baseline. Scope upgrades can get stuck in pairing-required until the device repairs or is re-approved.`,
+        fixHint: `Run ${formatCliArgs(["openclaw", "devices", "list"])} to inspect the device, reconnect it to request the intended scopes, then approve only the scopes you recognize.`,
       });
     }
     for (const role of approvedRoles) {
       const token = findTokenSummary(device, role);
-      const rotateCommand = formatCliArgs([
-        "openclaw",
-        "devices",
-        "rotate",
-        "--device",
-        device.deviceId,
-        "--role",
-        role,
-      ]);
+      const rotateCommand = formatRotateCommand(device.deviceId, role);
       if (!token) {
         findings.push({
           ...finding,
@@ -279,30 +257,22 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
   return findings;
 }
 
-function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): { deviceId: string } | null {
-  try {
-    return loadDeviceIdentityIfPresent({ env });
-  } catch {
-    return null;
-  }
-}
-
-async function readLocalDeviceAuthTokens(deviceId: string, env: NodeJS.ProcessEnv = process.env) {
-  try {
-    return await loadDeviceAuthTokens({ deviceId, env });
-  } catch {
-    return [];
-  }
-}
-
 async function collectLocalDeviceAuthFindings(
   snapshot: DoctorPairingSnapshot,
 ): Promise<HealthFinding[]> {
-  const identity = readLocalIdentity();
+  let identity;
+  try {
+    identity = await loadDeviceIdentityIfPresentAsync({ env: process.env });
+  } catch {
+    return [];
+  }
   if (!identity) {
     return [];
   }
-  const localTokens = await readLocalDeviceAuthTokens(identity.deviceId);
+  const localTokens = await loadDeviceAuthTokens({
+    deviceId: identity.deviceId,
+    env: process.env,
+  }).catch(() => []);
   const paired = snapshot.paired.find((device) => device.deviceId === identity.deviceId);
   if (!paired) {
     return [];
@@ -318,6 +288,8 @@ async function collectLocalDeviceAuthFindings(
     const finding = {
       checkId: DEVICE_PAIRING_CHECK_ID,
       severity: "warning" as const,
+      category: "fix-now" as const,
+      docsUrl: "https://docs.openclaw.ai/cli/devices",
       path: "identity.device-auth",
       target: `${paired.deviceId}:${role}`,
     };
@@ -334,15 +306,7 @@ async function collectLocalDeviceAuthFindings(
       });
       continue;
     }
-    const rotateCommand = formatCliArgs([
-      "openclaw",
-      "devices",
-      "rotate",
-      "--device",
-      paired.deviceId,
-      "--role",
-      role,
-    ]);
+    const rotateCommand = formatRotateCommand(paired.deviceId, role);
     const gatewayIssuedAtMs = pairedToken.rotatedAtMs ?? pairedToken.createdAtMs;
     // Local device auth survives gateway restarts; compare timestamps to catch stale cached tokens.
     if (entry.updatedAtMs < gatewayIssuedAtMs) {
@@ -368,7 +332,6 @@ async function collectLocalDeviceAuthFindings(
   return findings;
 }
 
-/** Warn about retired pairing stores that still need Doctor repair. */
 async function collectLegacyPairingStoreFindings(cfg: OpenClawConfig): Promise<HealthFinding[]> {
   if (cfg.gateway?.mode === "remote") {
     return [];
@@ -377,6 +340,8 @@ async function collectLegacyPairingStoreFindings(cfg: OpenClawConfig): Promise<H
   return (await listLegacyPairingStoreFiles()).map((filePath): HealthFinding => ({
     checkId: DEVICE_PAIRING_CHECK_ID,
     severity: "warning",
+    category: "fix-now",
+    docsUrl: "https://docs.openclaw.ai/cli/devices",
     message: `Legacy pairing store ${filePath} has not been imported into SQLite. Stop the Gateway and run openclaw doctor --fix. Unreadable sources remain in place for repair.`,
     path: "devices.legacy-store",
     requirement: "pairing-store-legacy-file",
@@ -396,16 +361,23 @@ export async function collectDevicePairingHealthFindings(params: {
   // Report this debt even without a reachable remote Gateway or local identity.
   const deviceAuth = detectLegacyDeviceAuth({ stateDir: resolveStateDir(params.env) });
   if (deviceAuth.sourcePresent) {
-    const fixCommand = formatCliCommand("openclaw doctor --fix", params.env);
-    const fixHint = `Stop the Gateway and run ${fixCommand} to finish migration or cleanup.`;
-    legacyStoreFindings.push({
-      checkId: DEVICE_PAIRING_CHECK_ID,
-      severity: "warning",
-      message: `Legacy device auth store ${sanitizeTerminalText(deviceAuth.sourcePath)} is still present, so doctor cannot inspect locally cached device tokens. ${fixHint}`,
-      path: "identity.device-auth",
-      requirement: "device-auth-store-legacy-file",
-      fixHint,
-    });
+    try {
+      // A consumed import remains on disk; local owner admission proves its durable claim.
+      await loadDeviceIdentityIfPresentAsync({ env: params.env ?? process.env });
+    } catch {
+      const fixCommand = formatCliCommand("openclaw doctor --fix", params.env);
+      const fixHint = `Stop the Gateway and run ${fixCommand} to finish local credential migration or repair.`;
+      legacyStoreFindings.push({
+        checkId: DEVICE_PAIRING_CHECK_ID,
+        severity: "warning",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/cli/devices",
+        message: `Legacy device auth store ${sanitizeTerminalText(deviceAuth.sourcePath)} is still present and local credentials require migration or repair. ${fixHint}`,
+        path: "identity.device-auth",
+        requirement: "device-auth-store-legacy-file",
+        fixHint,
+      });
+    }
   }
   const snapshot = await loadDoctorPairingSnapshot({
     cfg: params.cfg,
@@ -420,17 +392,4 @@ export async function collectDevicePairingHealthFindings(params: {
     ...collectPairedRecordFindings(snapshot),
     ...(await collectLocalDeviceAuthFindings(snapshot)),
   ];
-}
-
-/** Render the same local migration and pairing findings as structured Doctor output. */
-export async function noteDevicePairingHealth(params: {
-  cfg: OpenClawConfig;
-  healthOk: boolean;
-  env?: NodeJS.ProcessEnv;
-}): Promise<void> {
-  const findings = await collectDevicePairingHealthFindings(params);
-  if (findings.length === 0) {
-    return;
-  }
-  note(findings.map((finding) => `- ${finding.message}`).join("\n"), "Device pairing");
 }

@@ -2,21 +2,6 @@ import CryptoKit
 import Foundation
 import OpenClawKit
 
-private struct StoredPushRelayRegistrationState: Codable {
-    var relayHandle: String
-    var sendGrant: String
-    var relayOrigin: String?
-    var gatewayDeviceId: String
-    var relayHandleExpiresAtMs: Int64?
-    var tokenDebugSuffix: String?
-    var lastAPNsTokenHashHex: String
-    var installationId: String
-    var lastTransport: String
-    var apnsEnvironment: String?
-    var relayProfile: String?
-    var proofPolicy: String?
-}
-
 enum PushRelayRegistrationStore {
     private static let service = "ai.openclawfoundation.app.pushrelay"
     private static let registrationStateAccount = "registration-state"
@@ -48,25 +33,11 @@ enum PushRelayRegistrationStore {
     static func loadRegistrationState() -> RegistrationState? {
         guard let raw = GenericPasswordKeychainStore.loadString(
             service: self.service,
-            account: self.registrationStateAccount),
-            let data = raw.data(using: .utf8),
-            let decoded = try? JSONDecoder().decode(StoredPushRelayRegistrationState.self, from: data)
+            account: self.registrationStateAccount)
         else {
             return nil
         }
-        return RegistrationState(
-            relayHandle: decoded.relayHandle,
-            sendGrant: decoded.sendGrant,
-            relayOrigin: decoded.relayOrigin,
-            gatewayDeviceId: decoded.gatewayDeviceId,
-            relayHandleExpiresAtMs: decoded.relayHandleExpiresAtMs,
-            tokenDebugSuffix: decoded.tokenDebugSuffix,
-            lastAPNsTokenHashHex: decoded.lastAPNsTokenHashHex,
-            installationId: decoded.installationId,
-            lastTransport: decoded.lastTransport,
-            apnsEnvironment: decoded.apnsEnvironment ?? "production",
-            relayProfile: decoded.relayProfile ?? "production",
-            proofPolicy: decoded.proofPolicy ?? "appleStrict")
+        return try? JSONDecoder().decode(RegistrationState.self, from: Data(raw.utf8))
     }
 
     @discardableResult
@@ -83,12 +54,10 @@ enum PushRelayRegistrationStore {
     }
 
     static func loadAppAttestKeyID(scope: AppAttestScope) -> String? {
-        let value = GenericPasswordKeychainStore.loadString(
+        GenericPasswordKeychainStore.loadString(
             service: self.service,
             account: self.scopedAccount(self.appAttestKeyIDAccount, scope: scope))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value?.isEmpty == false { return value }
-        return nil
+            .trimmedNonEmpty
     }
 
     @discardableResult
@@ -107,12 +76,10 @@ enum PushRelayRegistrationStore {
     }
 
     static func loadAttestedKeyID(scope: AppAttestScope) -> String? {
-        let value = GenericPasswordKeychainStore.loadString(
+        GenericPasswordKeychainStore.loadString(
             service: self.service,
             account: self.scopedAccount(self.appAttestedKeyIDAccount, scope: scope))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value?.isEmpty == false { return value }
-        return nil
+            .trimmedNonEmpty
     }
 
     @discardableResult

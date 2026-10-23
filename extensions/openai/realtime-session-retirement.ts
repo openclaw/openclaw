@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type { RealtimeVoiceCloseDisposition } from "openclaw/plugin-sdk/realtime-voice";
 import type { RawData } from "ws";
@@ -70,28 +71,10 @@ export function createOpenAIRealtimeSessionLease(params: {
         session.retryIndex = 0;
       }
       clearTimeout(session.timer);
-      let resolve!: () => void;
-      let reject!: (error: unknown) => void;
-      const closing = new Promise<void>((accept, fail) => {
-        resolve = accept;
-        reject = fail;
-      });
+      const { promise: closing, resolve, reject } = createDeferred<void>();
       // Retirement removes admission before callbacks; the cleanup capability and
       // reservation remain owned until the remote operation actually settles.
       session.closing = closing;
-      let retirement: void | Promise<void> = undefined;
-      if (activeSessions.delete(session.token)) {
-        session.initialRetirement = closing;
-        retiringSessions.set(session.token, session);
-        try {
-          if (disposition === "detach") {
-            session.detach?.();
-          }
-          retirement = session.retire?.(error);
-        } catch {
-          params.logger.warn("OpenAI realtime local retirement failed; attempting remote cleanup");
-        }
-      }
       const complete = () => {
         retiringSessions.delete(session.token);
         params.releaseReservation(session.token);
@@ -117,26 +100,23 @@ export function createOpenAIRealtimeSessionLease(params: {
         }
         reject(failure);
       };
-      const dispose = () => {
-        try {
-          const disposal = session.dispose?.();
-          if (disposal) {
-            void Promise.resolve(disposal).then(complete, failed);
-          } else {
-            complete();
+      void (async () => {
+        if (activeSessions.delete(session.token)) {
+          session.initialRetirement = closing;
+          retiringSessions.set(session.token, session);
+          try {
+            if (disposition === "detach") {
+              session.detach?.();
+            }
+            await session.retire?.(error);
+          } catch {
+            params.logger.warn(
+              "OpenAI realtime local retirement failed; attempting remote cleanup",
+            );
           }
-        } catch (failure) {
-          failed(failure);
         }
-      };
-      if (retirement) {
-        void retirement.then(dispose, () => {
-          params.logger.warn("OpenAI realtime local retirement failed; attempting remote cleanup");
-          dispose();
-        });
-      } else {
-        dispose();
-      }
+        await session.dispose?.();
+      })().then(complete, failed);
       return closing;
     },
     expireIn: (session: OpenAIRealtimeSession, ttlMs: number) => {

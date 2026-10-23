@@ -1,8 +1,3 @@
-/**
- * Builds auth forwarding decisions for prepared runtime plans. Provider aliases
- * and harness auth owners are resolved before session auth profiles can be
- * safely forwarded.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -28,7 +23,6 @@ function resolveHarnessAuthProvider(params: {
   return harnessId === "codex" || runtime === "codex" ? CODEX_HARNESS_AUTH_PROVIDER : undefined;
 }
 
-/** Builds the auth forwarding plan for one resolved agent runtime. */
 export function buildAgentRuntimeAuthPlan(params: {
   provider: string;
   modelId?: string;

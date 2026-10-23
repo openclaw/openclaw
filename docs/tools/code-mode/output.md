@@ -18,8 +18,8 @@ For a tool made with `defineToolPlugin`, declare the schema beside
 `parameters`:
 
 ```typescript
-import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
 
 const Shipment = Type.Object(
   {
@@ -50,10 +50,16 @@ For `api.registerTool(...)` or a factory tool, put the same `outputSchema`
 property on the returned `AnyAgentTool` object.
 
 Current built-in contracts include `agents_list`, `agents_wait`, `apply_patch`,
-`automations`, `conversations_list`, `conversations_send`, `conversations_turn`, `edit`,
+`automations`, `browser`, `conversations_list`, `conversations_send`, `conversations_turn`, `edit`,
 `openclaw`, `process`, `read`, `screen`,
 `sessions_history`, `sessions_list`, `sessions_search`, `sessions_send`,
 `session_status`, `suggest_task`, `terminal`, `web_fetch`, and `web_search`.
+Browser snapshot and text observations expose a bounded `text` string in the
+structured result, including the untrusted browser-content wrapper. This makes
+page prose and snapshot references available in guest cells without a separate
+evaluate call. Preserve the wrapper when returning page content to the model;
+`query`, `selector`, and `maxChars` narrow reads before wrapping.
+
 `automations` declares scheduler status, paginated job summaries, full jobs,
 run history, and action outcomes. A successful removal can include
 `sessionCleanup: "pending"` when an active run still owns its session. The job is
@@ -76,7 +82,7 @@ metadata; `web_search` declares its exact normalized results/answer/error/raw
 union as a complete quick-index hint. Filesystem contracts return structured
 read text, image, truncation, and optional-not-found outcomes; explicit edit
 change state plus diff/patch data; and apply-patch path summaries. Missing
-canonical daily notes (`memory/YYYY-MM-DD.md`) return an optional `not_found`
+standard daily notes (`memory/YYYY-MM-DD.md`) return an optional `not_found`
 result even when `optional` is omitted; other missing paths throw unless
 `optional: true` is explicitly supplied. When the quick index declares the
 fields, one cell can compose discovery and delivery without a separate
@@ -129,7 +135,12 @@ The contract rules are strict:
   `details` after normal tool hooks and before a catalog call returns. An
   invalid schema cannot run the tool; a mismatch fails without printing the
   value.
-- Compact hints are deterministic and bounded. Handle `describe()` exposes
+- Host-owned execution refusals are outside the tool's output contract. A
+  turn-authority gate returns guidance with `gated: true` and a `message` in
+  Code Mode, without running the tool or throwing a call error. Policy blocks
+  retain their existing call-error behavior for tools with declared outputs.
+  Tool-authored lookalike fields do not bypass output validation.
+- Compact hints follow fixed rules and size limits. Handle `describe()` exposes
   the full trusted schema when the compact hint is insufficient.
 - Installed plugin code is already trusted local code. Remote MCP and client
   metadata remains untrusted and cannot opt into these quick-index hints.
@@ -162,8 +173,8 @@ const prompt = await MCP.docs.prompts.get({
 });
 ```
 
-`API.read("mcp/<server>.d.ts")` returns compact declarations inferred from MCP
-tool metadata:
+`(await API.read("mcp/<server>.d.ts")).content` contains compact declarations
+inferred from MCP tool metadata:
 
 ```typescript
 interface McpToolResult {
@@ -228,9 +239,9 @@ directory. For each code-mode `exec` call, OpenClaw builds the run-scoped tool
 catalog, keeps the visible MCP entries, renders `mcp/index.d.ts` plus one
 `mcp/<server>.d.ts` per visible server, and injects that small read-only table
 into the selected executor's worker. Guest code sees only the `API` object:
-`API.list(prefix?)` returns file metadata and `API.read(path)` returns the
-selected declaration content. Unknown paths and `.`/`..` segments are
-rejected.
+`API.list(prefix?)` returns `{ files }` with file metadata and `API.read(path)`
+returns `{ path, description, content, bytes }`. The `content` field holds the
+declaration text. Unknown paths and `.`/`..` segments are rejected.
 
 This keeps large MCP schemas out of the model prompt: the agent learns the
 virtual API exists from the `exec` tool description, reads only the needed
@@ -241,7 +252,8 @@ single-tool schema response inside the program.
 The guest runtime never sees host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
 
-Tool arguments and values passed to `results.save` must serialize to JSON.
+Tool arguments and values passed to `results.save` or `store` must serialize to JSON
+(except `store(key, undefined)`, which deletes the key).
 BigInts, cycles, and throwing serialization hooks fail the affected call instead
 of silently replacing its data. Catch the error and convert the value explicitly;
 existing saved results remain unchanged.
@@ -374,7 +386,10 @@ of emitting the value. The bounded reference preview is separate from the
 complete saved JSON; `results.load(id)` lets later code select a smaller
 projection without refetching. See
 [Reuse data across cells](/tools/code-mode/quickstart#reuse-data-across-cells)
-for limits and the agent-run lifetime.
+for limits. References expire when the current reply ends; never reuse ids from
+earlier turns. Use `await store(key, value)` and `await load(key)` for small JSON
+values needed across turns and restarts in the same session; see the
+[session store](/tools/code-mode/guest-api#session-store).
 
 Interactive `exec`/`wait` also preserve an oversized final object or array
 automatically when their final display projection would truncate it. A saved

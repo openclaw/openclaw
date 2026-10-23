@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
@@ -107,11 +106,11 @@ describeLive("AgentSession Responses EOF live", () => {
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey("openai", apiKey);
     const { session } = await createAgentSession({
+      systemPrompt: "Follow the user's instructions and use the supplied tools when requested.",
       cwd: root,
-      agentDir: join(root, "agent"),
       model,
       thinkingLevel: "low",
-      noTools: "builtin",
+      tools: ["record_receipt", "inspect_receipt"],
       customTools: [
         {
           name: "record_receipt",
@@ -129,8 +128,7 @@ describeLive("AgentSession Responses EOF live", () => {
           execute: inspect,
         },
       ],
-      resourceLoader: createResourceLoader(),
-      authStorage,
+      resourceLoader: await createResourceLoader(),
       modelRegistry: ModelRegistry.inMemory(authStorage),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({
@@ -193,11 +191,11 @@ describeLive("AgentSession Responses EOF live", () => {
       expect(unfinishedCallId).not.toBe("");
       expect(record).toHaveBeenCalledOnce();
       expect(inspect).not.toHaveBeenCalled();
-      expect(events.filter((event) => event.type === "auto_retry_start")).toMatchObject([
-        { errorMessage: "Responses stream ended with unresolved tool calls" },
+      expect(events.filter((event) => event.type === "auto_retry_start")).toEqual([
+        { type: "auto_retry_start" },
       ]);
-      expect(events.filter((event) => event.type === "auto_retry_end")).toMatchObject([
-        { success: true },
+      expect(events.filter((event) => event.type === "auto_retry_end")).toEqual([
+        { type: "auto_retry_end" },
       ]);
       expect(httpRequests).toBe(3);
       expect(requests).toHaveLength(3);

@@ -1,9 +1,7 @@
-/**
- * HTTP handler for serving bundled A2UI renderer assets.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   handleA2uiHttpRequestWithRootResolver,
   type A2uiHttpRequest,
@@ -14,10 +12,7 @@ import { resolveFileWithinRoot } from "./file-resolver.js";
 
 export { A2UI_PATH, CANVAS_HOST_PATH } from "./a2ui-shared.js";
 
-let cachedA2uiRootReal: string | null | undefined;
-let resolvingA2uiRoot: Promise<string | null> | null = null;
-let cachedA2uiResolvedAtMs = 0;
-const A2UI_ROOT_RETRY_NULL_AFTER_MS = 10_000;
+let cachedA2uiRootReal: Promise<string | null> | undefined;
 
 async function resolveA2uiRoot(): Promise<string | null> {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -56,27 +51,12 @@ async function resolveA2uiRoot(): Promise<string | null> {
   return null;
 }
 
-async function resolveA2uiRootReal(): Promise<string | null> {
-  const nowMs = Date.now();
-  if (
-    cachedA2uiRootReal !== undefined &&
-    (cachedA2uiRootReal !== null || nowMs - cachedA2uiResolvedAtMs < A2UI_ROOT_RETRY_NULL_AFTER_MS)
-  ) {
-    return cachedA2uiRootReal;
-  }
-  if (!resolvingA2uiRoot) {
-    resolvingA2uiRoot = (async () => {
-      const root = await resolveA2uiRoot();
-      cachedA2uiRootReal = root ? await fs.realpath(root) : null;
-      cachedA2uiResolvedAtMs = Date.now();
-      resolvingA2uiRoot = null;
-      return cachedA2uiRootReal;
-    })();
-  }
-  return resolvingA2uiRoot;
+function resolveA2uiRootReal(): Promise<string | null> {
+  return (cachedA2uiRootReal ??= resolveA2uiRoot().then((root) =>
+    root ? fs.realpath(root) : null,
+  ));
 }
 
-/** Handles one HTTP request for the hosted A2UI asset surface. */
 export async function handleA2uiHttpRequest(
   req: A2uiHttpRequest,
   res: A2uiHttpResponse,
@@ -89,18 +69,14 @@ export async function readPublicA2uiResource(
   resourcePath: string,
 ): Promise<{ body: Uint8Array; contentType: string } | undefined> {
   const root = await resolveA2uiRootReal();
-  const opened = root
+  await using opened = root
     ? await resolveFileWithinRoot(root, resourcePath.slice(A2UI_PATH.length))
     : null;
   if (!opened) {
     return undefined;
   }
-  try {
-    return {
-      body: await opened.handle.readFile(),
-      contentType: "application/javascript; charset=utf-8",
-    };
-  } finally {
-    await opened.handle.close();
-  }
+  return {
+    body: await readFileHandleBounded(opened.handle, Infinity),
+    contentType: "application/javascript; charset=utf-8",
+  };
 }

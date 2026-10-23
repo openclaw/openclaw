@@ -23,6 +23,7 @@ import {
   escapeFeishuCardMarkdownText,
   escapeFeishuCardPlainText,
   resolveSafeFeishuButtonUrl,
+  resolveFeishuButtonType,
   readNativeFeishuCardJson,
   sanitizeNativeFeishuCard,
   type FeishuNativeCard,
@@ -92,25 +93,20 @@ export function buildFeishuPresentationFallback(params: {
   };
 }
 
-function countFeishuCardElements(value: unknown, ancestors = new Set<object>()): number {
+function countFeishuCardElements(value: unknown): number {
   if (Array.isArray(value)) {
-    return value.reduce((count, entry) => count + countFeishuCardElements(entry, ancestors), 0);
+    return value.reduce((count, entry) => count + countFeishuCardElements(entry), 0);
   }
   if (!isRecord(value)) {
     return 0;
   }
-  if (ancestors.has(value)) {
-    return FEISHU_CARD_MAX_ELEMENTS + 1;
-  }
-  ancestors.add(value);
   let count = typeof value.tag === "string" ? 1 : 0;
   for (const entry of Object.values(value)) {
-    count += countFeishuCardElements(entry, ancestors);
+    count += countFeishuCardElements(entry);
     if (count > FEISHU_CARD_MAX_ELEMENTS) {
       break;
     }
   }
-  ancestors.delete(value);
   return count;
 }
 
@@ -214,16 +210,6 @@ export function renderFeishuPresentationFallbackText(
   });
 }
 
-function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
-  if (style === "primary" || style === "success") {
-    return "primary";
-  }
-  if (style === "danger") {
-    return "danger";
-  }
-  return "default";
-}
-
 function buildFeishuPayloadButton(button: MessagePresentationButton): Record<string, unknown> {
   const url = resolveSafeFeishuButtonUrl(resolveFeishuButtonUrl(button));
   const value = resolveFeishuCommandButtonValue(button);
@@ -248,7 +234,7 @@ function buildFeishuPayloadButton(button: MessagePresentationButton): Record<str
   return {
     tag: "button",
     text: { tag: "plain_text", content: button.label },
-    type: mapFeishuButtonType(button.style),
+    type: resolveFeishuButtonType(button.style),
     behaviors,
   };
 }

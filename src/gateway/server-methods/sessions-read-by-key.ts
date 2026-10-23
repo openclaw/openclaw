@@ -1,12 +1,18 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { validateSessionsDescribeParams } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  validateSessionsDescribeParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { withNativeSubagentsRead } from "../../agents/harness/native-subagents.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import {
   authorizeIncognitoSessionTarget,
   createSessionListEntryFilter,
@@ -24,6 +30,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     context,
     client,
     sessionMutationAuthorization,
+    signal,
   }) => {
     if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
       return;
@@ -32,52 +39,121 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
+    const projection = requireSessionRowProjection(context);
+    const queries = (cfg: Parameters<typeof resolveRequestedSessionAgentId>[0]) => {
+      const agent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
+      const denied = authorizeIncognitoSessionTarget({
+        client: client ?? null,
+        sessionKey: key,
+        target: null,
+      });
+      return agent.ok && !denied ? [{ key, agentId: agent.agentId }] : [];
+    };
+    const selected = await withReadySessionRows(projection, queries, (read) => {
+      sessionMutationAuthorization?.assertCurrent();
+      const requestedAgent = resolveRequestedSessionAgentId(read.state.cfg, key, params.agentId);
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return undefined;
+      }
+      const query = { key, agentId: requestedAgent.agentId };
+      const presentation = prepareProjectedSessionPresentation(
+        read,
+        client,
+        Date.now(),
+        createVisibleActiveSessionRunProjector(
+          read.state.rowContext.projectedAgentRuns,
+          undefined,
+          context.resolveGatewayContext,
+          read.physicalPaths,
+        ),
+      );
+      const denied = presentation.authorizeDescription(query);
+      if (denied) {
+        respond(false, undefined, denied);
+        return undefined;
+      }
+      const record = read.describe(query);
+      if (
+        !record ||
+        (hasOperatorBoundary(client, read.state.policyConfig) &&
+          presentation.sharing.entryFilter?.(record.key, record.entry) === false)
+      ) {
+        respond(true, { session: null });
+        return undefined;
+      }
+      if (params.includeNativeSubagents) {
+        return record;
+      }
+      respond(true, { session: presentation.present(record, params) });
+      return undefined;
+    });
+    if (!selected) {
+      return;
     }
-    await withReadySessionRows(
-      projection,
-      (cfg) => {
-        const agent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
-        const denied = authorizeIncognitoSessionTarget({
-          client: client ?? null,
-          sessionKey: key,
-          target: null,
-        });
-        return agent.ok && !denied ? [{ key, agentId: agent.agentId }] : [];
-      },
-      (read) => {
-        sessionMutationAuthorization?.assertCurrent();
-        const requestedAgent = resolveRequestedSessionAgentId(read.state.cfg, key, params.agentId);
-        if (!requestedAgent.ok) {
-          respond(false, undefined, requestedAgent.error);
-          return;
-        }
-        const query = { key, agentId: requestedAgent.agentId };
-        const presentation = prepareProjectedSessionPresentation(
-          read,
-          client,
-          Date.now(),
-          createVisibleActiveSessionRunProjector(context, read.state.rowContext.projectedAgentRuns),
-        );
-        const denied = presentation.authorizeDescription(query);
-        if (denied) {
-          respond(false, undefined, denied);
-          return;
-        }
-        const record = read.describe(query);
-        if (
-          !record ||
-          (hasOperatorBoundary(client, read.state.policyConfig) &&
-            presentation.sharing.entryFilter?.(record.key, record.entry) === false)
-        ) {
-          respond(true, { session: null });
-          return;
-        }
-        respond(true, { session: presentation.present(record, params) });
-      },
-    );
+    try {
+      await withNativeSubagentsRead(
+        {
+          agentId: selected.agentId,
+          sessionKey: selected.key,
+          sessionId: selected.entry.sessionId,
+          lifecycleRevision: selected.entry.lifecycleRevision,
+          storePath: selected.storeTarget.storePath,
+          assertCurrent: () => {
+            signal?.throwIfAborted();
+            sessionMutationAuthorization?.assertCurrent();
+            if (!projection.isCurrent(selected)) {
+              throw new Error("Session changed while reading native subagents");
+            }
+          },
+        },
+        async (nativeSubagents, assertCurrent) => {
+          await withReadySessionRows(projection, queries, (read) => {
+            assertCurrent();
+            sessionMutationAuthorization?.assertCurrent();
+            const presentation = prepareProjectedSessionPresentation(
+              read,
+              client,
+              Date.now(),
+              createVisibleActiveSessionRunProjector(
+                read.state.rowContext.projectedAgentRuns,
+                undefined,
+                context.resolveGatewayContext,
+                read.physicalPaths,
+              ),
+            );
+            const query = { key, agentId: selected.agentId };
+            const denied = presentation.authorizeDescription(query);
+            if (denied) {
+              respond(false, undefined, denied);
+              return;
+            }
+            const current = read.describe(query, selected);
+            if (
+              !current ||
+              current.entry.sessionId !== selected.entry.sessionId ||
+              current.entry.lifecycleRevision !== selected.entry.lifecycleRevision ||
+              (hasOperatorBoundary(client, read.state.policyConfig) &&
+                presentation.sharing.entryFilter?.(current.key, current.entry) === false)
+            ) {
+              respond(true, { session: null });
+              return;
+            }
+            assertCurrent();
+            respond(true, {
+              session: presentation.present(current, params),
+              ...(nativeSubagents === undefined ? {} : { nativeSubagents }),
+            });
+          });
+        },
+      );
+    } catch {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "Unable to read native subagents"),
+      );
+    }
   },
   "sessions.get": async ({
     params,
@@ -92,15 +168,9 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const limit =
-      typeof p.limit === "number" && Number.isFinite(p.limit)
-        ? Math.max(1, Math.floor(p.limit))
-        : 200;
+    const limit = resolveIntegerOption(p.limit, 200, { min: 1 });
 
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     const requestedAgent = () =>
       resolveRequestedSessionAgentId(
         context.getRuntimeConfig(),

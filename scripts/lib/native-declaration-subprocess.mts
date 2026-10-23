@@ -130,6 +130,13 @@ if (import.meta.main) {
   if (!request || process.argv.length !== 3) {
     throw new Error("Expected one native declaration request path");
   }
-  const result = await emitNativeDeclarations(readRequest(request));
-  fs.writeFileSync(path.join(path.dirname(request), "result.bin"), serialize(result));
+  try {
+    const result = await emitNativeDeclarations(readRequest(request));
+    fs.writeFileSync(path.join(path.dirname(request), "result.bin"), serialize(result));
+  } catch (error) {
+    // API.close() only ends the compiler's stdin. An uncaught failure would exit
+    // before that shutdown completes; draining the event loop joins the compiler.
+    console.error(error);
+    process.exitCode = 1;
+  }
 }

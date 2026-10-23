@@ -15,6 +15,9 @@ confirmed product failure changes the Code SHA. Use one diagnosis, one fix when
 needed, and one narrow retry, then reassess; do not automatically rerun `all`.
 Narrow evidence is not publish authorization by itself.
 
+Decide blocker or flake for every failed test. Every selected failure blocks
+publication.
+
 Linux, Windows, and macOS Gateway cross-OS install and upgrade lanes are
 required for beta, stable, and full validation. The manifest records their
 actual conclusions, and failures block the release decision. Keep diagnostic
@@ -25,7 +28,7 @@ same commit. In that case, retain the successful full validation parent and
 its exact prepared publication artifacts for both roles. For a later
 changelog-only Release SHA using evidence reuse, also record the reuse policy,
 complete changed-path set, green Code SHA parent run, and Release SHA parent
-run. For extended-stable, record the canonical branch, exact release SHA,
+run. For extended-stable, record the release branch, exact release SHA,
 accepted producer identity, parent run id and attempt, workflow ref, every child run, and any
 frozen-target compatibility repair or intentional omission.
 

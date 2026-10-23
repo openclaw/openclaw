@@ -1,64 +1,49 @@
-// Discord plugin module implements component runtime behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
-import { vi, type Mock } from "vitest";
+import type { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
+import { vi } from "vitest";
 import { setDiscordRuntime } from "../runtime.js";
 
-type UnknownMock = Mock<(...args: unknown[]) => unknown>;
-type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type UnknownFn = (...args: unknown[]) => unknown;
+type AsyncUnknownFn = (...args: unknown[]) => Promise<unknown>;
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
-type DispatchReplyMock = Mock<DispatchReplyWithBufferedBlockDispatcherFn>;
-
-type DiscordComponentRuntimeMocks = {
-  buildPluginBindingResolvedTextMock: UnknownMock;
-  dispatchPluginInteractiveHandlerMock: AsyncUnknownMock;
-  dispatchReplyMock: DispatchReplyMock;
-  enqueueSystemEventMock: UnknownMock;
-  readAllowFromStoreMock: AsyncUnknownMock;
-  readSessionUpdatedAtMock: UnknownMock;
-  recordInboundSessionMock: AsyncUnknownMock;
-  resolveStorePathMock: UnknownMock;
-  resolvePluginConversationBindingApprovalMock: AsyncUnknownMock;
-  upsertPairingRequestMock: AsyncUnknownMock;
-};
-
-const runtimeMocks = vi.hoisted((): DiscordComponentRuntimeMocks => ({
-  buildPluginBindingResolvedTextMock: vi.fn(),
-  dispatchPluginInteractiveHandlerMock: vi.fn(),
+const runtimeMocks = vi.hoisted(() => ({
+  buildPluginBindingResolvedTextMock: vi.fn<UnknownFn>(),
+  dispatchPluginInteractiveHandlerMock: vi.fn<AsyncUnknownFn>(),
   dispatchReplyMock: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(),
-  enqueueSystemEventMock: vi.fn(),
-  readAllowFromStoreMock: vi.fn(),
-  readSessionUpdatedAtMock: vi.fn(),
-  recordInboundSessionMock: vi.fn(),
-  resolveStorePathMock: vi.fn(),
-  resolvePluginConversationBindingApprovalMock: vi.fn(),
-  upsertPairingRequestMock: vi.fn(),
+  enqueueSystemEventMock: vi.fn<UnknownFn>(),
+  readAllowFromStoreMock: vi.fn<AsyncUnknownFn>(),
+  readSessionUpdatedAtMock: vi.fn<UnknownFn>(),
+  recordInboundSessionMock: vi.fn<AsyncUnknownFn>(),
+  resolveStorePathMock: vi.fn<UnknownFn>(),
+  resolvePluginConversationBindingApprovalMock:
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/conversation-runtime").resolvePluginConversationBindingApproval
+    >(),
+  upsertPairingRequestMock: vi.fn<AsyncUnknownFn>(),
 }));
 
-export const readAllowFromStoreMock: AsyncUnknownMock = runtimeMocks.readAllowFromStoreMock;
-export const dispatchPluginInteractiveHandlerMock: AsyncUnknownMock =
-  runtimeMocks.dispatchPluginInteractiveHandlerMock;
-export const dispatchReplyMock: DispatchReplyMock = runtimeMocks.dispatchReplyMock;
-export const enqueueSystemEventMock: UnknownMock = runtimeMocks.enqueueSystemEventMock;
-export const upsertPairingRequestMock: AsyncUnknownMock = runtimeMocks.upsertPairingRequestMock;
-export const recordInboundSessionMock: AsyncUnknownMock = runtimeMocks.recordInboundSessionMock;
-export const readSessionUpdatedAtMock: UnknownMock = runtimeMocks.readSessionUpdatedAtMock;
-export const resolveStorePathMock: UnknownMock = runtimeMocks.resolveStorePathMock;
-const resolvePluginConversationBindingApprovalMock: AsyncUnknownMock =
-  runtimeMocks.resolvePluginConversationBindingApprovalMock;
-const buildPluginBindingResolvedTextMock: UnknownMock =
-  runtimeMocks.buildPluginBindingResolvedTextMock;
+export const {
+  readAllowFromStoreMock,
+  dispatchPluginInteractiveHandlerMock,
+  dispatchReplyMock,
+  enqueueSystemEventMock,
+  upsertPairingRequestMock,
+  recordInboundSessionMock,
+  readSessionUpdatedAtMock,
+  resolveStorePathMock,
+} = runtimeMocks;
+const { resolvePluginConversationBindingApprovalMock, buildPluginBindingResolvedTextMock } =
+  runtimeMocks;
 
-vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
-    "openclaw/plugin-sdk/channel-inbound",
-  );
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
   type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
   return {
     ...actual,
-    runChannelInboundEvent: (params: RunParams) => {
-      const runtime = createPluginRuntimeMock({
+    runChannelInboundEvent: (params: RunParams) =>
+      createPluginRuntimeMock({
         channel: {
           session: {
             resolveStorePath: (...args) => resolveStorePathMock(...args) as string,
@@ -66,84 +51,66 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
               await recordInboundSessionMock(...args);
             },
           },
-          reply: {
-            dispatchReplyWithBufferedBlockDispatcher: (...args) => dispatchReplyMock(...args),
-          },
+          reply: { dispatchReplyWithBufferedBlockDispatcher: dispatchReplyMock },
         },
-      });
-      return runtime.channel.inbound.run(params);
-    },
+      }).channel.inbound.run(params),
   };
 });
-async function readChannelIngressStoreAllowFromForDmPolicy(params: {
-  provider: string;
-  accountId: string;
-  dmPolicy?: string | null;
-  shouldRead?: boolean | null;
-}) {
-  if (
-    params.shouldRead === false ||
-    params.dmPolicy === "allowlist" ||
-    params.dmPolicy === "open"
-  ) {
-    return [];
-  }
-  return await readAllowFromStoreMock(params.provider, params.accountId);
-}
-
-vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-ingress-runtime")>()),
-  readChannelIngressStoreAllowFromForDmPolicy,
-}));
+vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/channel-ingress-runtime")>();
+  return {
+    ...actual,
+    readChannelIngressStoreAllowFromForDmPolicy: async ({
+      provider,
+      accountId,
+      dmPolicy,
+      shouldRead,
+    }: Parameters<typeof actual.readChannelIngressStoreAllowFromForDmPolicy>[0]) =>
+      shouldRead === false || dmPolicy === "allowlist" || dmPolicy === "open"
+        ? []
+        : await readAllowFromStoreMock(provider, accountId),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-  buildPluginBindingResolvedText: (...args: unknown[]) =>
-    buildPluginBindingResolvedTextMock(...args),
-  resolvePluginConversationBindingApproval: (...args: unknown[]) =>
-    resolvePluginConversationBindingApprovalMock(...args),
+  upsertChannelPairingRequest: runtimeMocks.upsertPairingRequestMock,
+  buildPluginBindingResolvedText: runtimeMocks.buildPluginBindingResolvedTextMock,
+  resolvePluginConversationBindingApproval:
+    runtimeMocks.resolvePluginConversationBindingApprovalMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  return {
-    ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>()),
-    createReplyReferencePlanner: vi.fn(
-      (params: {
-        existingId?: string;
-        hasReplied?: boolean;
-        replyToMode?: "off" | "first" | "all" | "batched";
-        startId?: string;
-      }) => {
-        let hasReplied = params.hasReplied ?? false;
-        let nextId = params.existingId ?? params.startId;
-        return {
-          hasReplied() {
-            return hasReplied;
-          },
-          markSent() {
-            hasReplied = true;
-          },
-          use() {
-            if (params.replyToMode === "off") {
-              return undefined;
-            }
-            if (isSingleUseReplyToMode(params.replyToMode ?? "off") && hasReplied) {
-              return undefined;
-            }
-            const value = nextId;
-            hasReplied = true;
-            nextId = undefined;
-            return value;
-          },
-        };
-      },
-    ),
-    finalizeInboundContext: vi.fn((ctx) => ctx),
-    resolveChunkMode: vi.fn(() => "sentences"),
-    resolveTextChunkLimit: vi.fn(() => 2000),
-  };
-});
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>()),
+  createReplyReferencePlanner: vi.fn(
+    (params: Partial<Parameters<typeof createReplyReferencePlanner>[0]>) => {
+      let hasReplied = params.hasReplied ?? false;
+      let nextId = params.existingId ?? params.startId;
+      return {
+        hasReplied: () => hasReplied,
+        markSent() {
+          hasReplied = true;
+        },
+        use() {
+          if (
+            params.replyToMode === "off" ||
+            (isSingleUseReplyToMode(params.replyToMode ?? "off") && hasReplied)
+          ) {
+            return undefined;
+          }
+          const value = nextId;
+          hasReplied = true;
+          nextId = undefined;
+          return value;
+        },
+      };
+    },
+  ),
+  finalizeInboundContext: vi.fn((ctx) => ctx),
+  resolveChunkMode: vi.fn(() => "sentences"),
+  resolveTextChunkLimit: vi.fn(() => 2000),
+}));
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>()),
@@ -156,20 +123,14 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
-  readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
-  resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
+  readSessionUpdatedAtAsync: async (...args: unknown[]) => readSessionUpdatedAtMock(...args),
+  resolveStorePath: runtimeMocks.resolveStorePathMock,
 }));
 
-vi.mock("../interactive-dispatch.js", async () => {
-  const actual = await vi.importActual<typeof import("../interactive-dispatch.js")>(
-    "../interactive-dispatch.js",
-  );
-  return {
-    ...actual,
-    dispatchDiscordPluginInteractiveHandler: (...args: unknown[]) =>
-      dispatchPluginInteractiveHandlerMock(...args),
-  };
-});
+vi.mock("../interactive-dispatch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../interactive-dispatch.js")>()),
+  dispatchDiscordPluginInteractiveHandler: runtimeMocks.dispatchPluginInteractiveHandlerMock,
+}));
 
 export function resetDiscordComponentRuntimeMocks() {
   setDiscordRuntime(createPluginRuntimeMock());
@@ -202,7 +163,6 @@ export function resetDiscordComponentRuntimeMocks() {
       pluginId: "openclaw-codex-app-server",
       pluginName: "OpenClaw App Server",
       pluginRoot: "/plugins/codex",
-      requestedAt: Date.now(),
       conversation: {
         channel: "discord",
         accountId: "default",

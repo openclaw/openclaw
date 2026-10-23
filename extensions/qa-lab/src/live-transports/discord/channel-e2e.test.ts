@@ -5,8 +5,13 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import * as credentialLease from "../shared/credential-lease.runtime.js";
+import { createDiscordQaTransportAdapter } from "./adapter.runtime.js";
 import type { DiscordE2eNativeMessage } from "./channel-e2e-recorder.js";
+import * as channelE2e from "./channel-e2e.js";
 import { createDiscordChannelE2eSession, type DiscordChannelE2eSession } from "./channel-e2e.js";
+import { createFlowInput, runtimeEnv } from "./discord-flow.test-support.js";
+import * as testing from "./discord-live.runtime.js";
 
 const socketHarness = vi.hoisted(() => ({
   current: undefined as (EventEmitter & { terminate(): void }) | undefined,
@@ -56,6 +61,7 @@ afterEach(async () => {
       await session.cleanup().catch(() => {});
     }),
   );
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -145,13 +151,7 @@ function fixture(options: { manageThreads?: boolean; missingPermissions?: boolea
     }
   };
   const session = createDiscordChannelE2eSession({
-    runtimeEnv: {
-      guildId,
-      channelId,
-      sutApplicationId: sutId,
-      driverBotToken: "driver-token",
-      sutBotToken: "sut-token",
-    },
+    runtimeEnv,
     driverId,
     sutId,
     outputDir,
@@ -302,6 +302,72 @@ describe("Discord agent E2E authority and evidence", () => {
     });
   });
 
+  it("cleans marker-correlated replies after a recorder failure without claiming unrelated messages", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const marker = "OWNED_REPLY_MARKER";
+    const trigger = await f.driver.send({ text: `reply with ${marker}`, mention: true });
+    const thread = await f.driver.thread({ name: "owned thread", messageId: trigger.id });
+    const waiting = f.driver.waitForReply({ afterMessageId: trigger.id, textIncludes: marker });
+    const rejected = expect(waiting).rejects.toThrow("closed (1006)");
+    await vi.advanceTimersByTimeAsync(0);
+    const reply = {
+      id: "623456789012345678",
+      channel_id: channelId,
+      author: { id: sutId },
+      content: marker,
+    };
+    const unrelated: DiscordE2eNativeMessage[] = [
+      { ...reply, id: "523456789012345677" },
+      { ...reply, id: "623456789012345679", content: "another conversation" },
+      { ...reply, id: "623456789012345680", author: { id: driverId } },
+      { ...reply, id: "623456789012345681", channel_id: thread.threadId },
+      {
+        ...reply,
+        id: "623456789012345682",
+        message_reference: { message_id: "923456789012345678" },
+      },
+    ];
+    for (const message of [reply, ...unrelated]) {
+      f.messages.set(message.id, message);
+      f.emit("MESSAGE_CREATE", message);
+    }
+    socketHarness.current!.emit("close", 1006);
+    await vi.advanceTimersByTimeAsync(100);
+    await rejected;
+    await f.session.stop();
+    await expect(f.session.cleanup()).rejects.toThrow("closed (1006)");
+
+    expect(f.messages.has(trigger.id)).toBe(false);
+    expect(f.messages.has(reply.id)).toBe(false);
+    expect(unrelated.every((message) => f.messages.has(message.id))).toBe(true);
+    expect(f.mutations.filter((row) => row.method === "DELETE")).toEqual(
+      expect.arrayContaining([
+        {
+          method: "DELETE",
+          route: `/channels/${channelId}/messages/${trigger.id}`,
+          token: "Bot driver-token",
+        },
+        {
+          method: "DELETE",
+          route: `/channels/${channelId}/messages/${reply.id}`,
+          token: "Bot sut-token",
+        },
+      ]),
+    );
+    expect(f.mutations.filter((row) => row.method === "DELETE")).toHaveLength(2);
+    expect(await f.evidence()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "correlation",
+          messageId: reply.id,
+          triggerMessageId: trigger.id,
+        }),
+        expect.objectContaining({ source: "recorder", continuous: false }),
+      ]),
+    );
+  });
+
   it("never retries an uncertain write or sweeps the channel to conceal its missing receipt", async () => {
     const f = fixture();
     await f.driver.doctor();
@@ -447,4 +513,119 @@ describe("Discord agent E2E authority and evidence", () => {
     expect(f.mutations).toHaveLength(writesBefore);
     expect(f.messages.has(message.id)).toBe(true);
   });
+});
+
+function mockAdapterIo(sutUserId = sutId) {
+  const release = vi.fn(async () => {});
+  const heartbeatStop = vi.fn(async () => {});
+  vi.spyOn(credentialLease, "acquireQaCredentialLease").mockResolvedValue({
+    kind: "discord",
+    source: "convex",
+    payload: runtimeEnv,
+    assertHealthy() {},
+    heartbeat: vi.fn(async () => {}),
+    heartbeatIntervalMs: 30_000,
+    leaseTtlMs: 120_000,
+    release,
+  });
+  vi.spyOn(credentialLease, "startQaCredentialLeaseHeartbeat").mockReturnValue({
+    getFailure: () => null,
+    stop: heartbeatStop,
+    throwIfFailed: vi.fn(),
+    whenFailed: new Promise<Error>(() => {}),
+  });
+  vi.spyOn(testing, "getCurrentDiscordUser")
+    .mockResolvedValueOnce({ id: driverId, bot: true })
+    .mockResolvedValueOnce({ id: sutUserId, bot: true });
+  const poll = vi.spyOn(testing, "pollChannelMessages");
+  poll.mockRejectedValue(new Error("observer stopped"));
+  const context = {
+    channelId: "discord",
+    driver: "live",
+    outputDir: "/unused",
+    credentials: {
+      acquire: credentialLease.acquireQaCredentialLease,
+      startHeartbeat: credentialLease.startQaCredentialLeaseHeartbeat,
+    },
+    messages: {
+      addInboundMessage: vi.fn(),
+      addOutboundMessage: vi.fn(),
+      editMessage: vi.fn(),
+    },
+  } satisfies Parameters<typeof createDiscordQaTransportAdapter>[0];
+  return { context, heartbeatStop, poll, release };
+}
+
+it.each([false, true])("orders cleanup (heartbeat failure: %s)", async (heartbeatFails) => {
+  const { context, heartbeatStop, poll, release } = mockAdapterIo();
+  const pendingPoll = createDeferred<never>();
+  poll.mockReturnValue(pendingPoll.promise);
+  if (heartbeatFails) {
+    heartbeatStop.mockRejectedValue(new Error("heartbeat shutdown failed"));
+  }
+  const adapter = await createDiscordQaTransportAdapter(context);
+  expect(poll).toHaveBeenCalledOnce();
+
+  const drained = vi.fn();
+  const cleanup = adapter.cleanup?.().then(drained);
+  await Promise.resolve();
+  expect(drained).not.toHaveBeenCalled();
+  pendingPoll.reject(new Error("observer stopped"));
+  await cleanup;
+
+  expect(drained).toHaveBeenCalledOnce();
+  expect(heartbeatStop).not.toHaveBeenCalled();
+  expect(release).not.toHaveBeenCalled();
+  const postStopCleanup = adapter.cleanupAfterGatewayStop?.();
+  if (heartbeatFails) {
+    await expect(postStopCleanup).rejects.toThrow("heartbeat shutdown failed");
+  } else {
+    await postStopCleanup;
+  }
+  expect(heartbeatStop).toHaveBeenCalledOnce();
+  expect(release).toHaveBeenCalledOnce();
+  expect(heartbeatStop).toHaveBeenCalledBefore(release);
+});
+
+it("defers native cleanup until Gateway stop and releases even when native cleanup fails", async () => {
+  const { context, heartbeatStop, release } = mockAdapterIo();
+  const outputDir = tempDirs.make("discord-adapter-cleanup-");
+  const createSession = channelE2e.createDiscordChannelE2eSession;
+  const nativeCleanup = vi.fn(async () => {
+    throw new Error("native cleanup failed");
+  });
+  vi.spyOn(channelE2e, "createDiscordChannelE2eSession").mockImplementation((params) => {
+    const session = createSession(params);
+    vi.spyOn(session.driver, "doctor").mockResolvedValue({
+      ok: true,
+      checks: [],
+      capabilities: { automated: [], observationOnly: [], manualClient: [], unavailable: [] },
+    });
+    vi.spyOn(session, "cleanup").mockImplementation(nativeCleanup);
+    return session;
+  });
+  const adapter = await createDiscordQaTransportAdapter({
+    ...context,
+    adapterOptions: { agentE2e: true },
+  });
+  await adapter.prepareFlow?.(createFlowInput(outputDir));
+  await adapter.cleanup?.();
+  expect(nativeCleanup).not.toHaveBeenCalled();
+  expect(release).not.toHaveBeenCalled();
+  await expect(adapter.cleanupAfterGatewayStop?.()).rejects.toThrow("native cleanup failed");
+  expect(nativeCleanup).toHaveBeenCalledBefore(heartbeatStop);
+  expect(heartbeatStop).toHaveBeenCalledBefore(release);
+});
+
+it.each([
+  [driverId, "requires two distinct bots"],
+  ["523456789012345678", "application id must match"],
+])("immediately releases for invalid SUT %s (%s)", async (invalidSutId, error) => {
+  const { context, heartbeatStop, poll, release } = mockAdapterIo(invalidSutId);
+
+  await expect(createDiscordQaTransportAdapter(context)).rejects.toThrow(error);
+
+  expect(poll).not.toHaveBeenCalled();
+  expect(heartbeatStop).toHaveBeenCalledOnce();
+  expect(release).toHaveBeenCalledOnce();
 });

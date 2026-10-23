@@ -9,20 +9,32 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import {
+  boundedCronCompletionRetention,
   drainMatrixReconnect,
   matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
-import { holdAcknowledgementReply } from "./delivery-queue-ack.worker.test-support.js";
+import {
+  awaitCustodyReply,
+  installCustodyMatrixPlugin,
+} from "./delivery-queue-custody.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
+import type { DeliverFn } from "./delivery-queue-recovery.js";
 import * as queueStorage from "./delivery-queue-storage.js";
-import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
+import {
+  holdAcknowledgementReply,
+  holdDeliveryQueueReply,
+} from "./delivery-queue-worker-reply.test-support.js";
+import {
+  installDeliveryQueueTmpDirHooks,
+  readQueuedEntry,
+  setQueuedEntryState,
+} from "./delivery-queue.test-helpers.js";
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
-describe("outbound ACK reply loss", () => {
+describe("outbound custody reply loss", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
   beforeAll(async () => {
     ({ deliverOutboundPayloads } = await import("./deliver.js"));
@@ -34,30 +46,24 @@ describe("outbound ACK reply loss", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
+  async function createArtifact(stateDir: string, extension: "txt" | "ogg") {
+    const artifact = path.join(
+      stateDir,
+      "delivery-queue-media",
+      `00000000-0000-4000-8000-000000000001.${extension}`,
+    );
+    await fs.mkdir(path.dirname(artifact), { recursive: true });
+    await fs.writeFile(artifact, "synthetic queued audio");
+    return artifact;
+  }
+
   it.each(["pre-send fallback", "post-send settlement"] as const)(
     "does not replay a committed %s or release unacknowledged media",
     async (phase) => {
       const stateDir = fixtures.tmpDir();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const artifact = path.join(
-        stateDir,
-        "delivery-queue-media",
-        "00000000-0000-4000-8000-000000000001.txt",
-      );
-      await fs.mkdir(path.dirname(artifact), { recursive: true });
-      await fs.writeFile(artifact, "synthetic queued audio");
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "matrix",
-            source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "matrix",
-              outbound: matrixOutboundForQueueTest,
-            }),
-          },
-        ]),
-      );
+      const artifact = await createArtifact(stateDir, "txt");
+      installCustodyMatrixPlugin(matrixOutboundForQueueTest);
       if (phase === "pre-send fallback") {
         vi.spyOn(queueStorage, "markDeliveryPlatformSendAttemptStarted").mockRejectedValueOnce(
           new Error("synthetic marker failure"),
@@ -81,25 +87,11 @@ describe("outbound ACK reply loss", () => {
         (results) => ({ results }),
         (error: unknown) => ({ error }),
       );
-      const { id, reply } = await Promise.race([
-        queued.promise,
-        outcome.then((result) => {
-          throw "error" in result
-            ? result.error
-            : new Error("Delivery settled before queue custody");
-        }),
-      ]);
+      const { id, reply } = await awaitCustodyReply(queued.promise, outcome);
       let failure: unknown;
       let committedArtifact = "";
       try {
-        const committedPaths = await Promise.race([
-          reply.held,
-          outcome.then((result) => {
-            throw "error" in result
-              ? result.error
-              : new Error("Delivery settled before committed ACK reply");
-          }),
-        ]);
+        const committedPaths = await awaitCustodyReply(reply.held, outcome);
         expect(committedPaths).toHaveLength(1);
         committedArtifact = committedPaths[0]!;
         expect(path.dirname(committedArtifact)).toBe(path.join(stateDir, "delivery-queue-media"));
@@ -132,4 +124,85 @@ describe("outbound ACK reply loss", () => {
       expect(send).toHaveBeenCalledTimes(phase === "pre-send fallback" ? 0 : 1);
     },
   );
+
+  it("retains committed claim custody and media until a later explicit recovery", async () => {
+    const stateDir = fixtures.tmpDir();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const id = "cron-direct-delivery:v1:claim-reply-loss";
+    const artifact = await createArtifact(stateDir, "ogg");
+    installCustodyMatrixPlugin(matrixOutboundForQueueTest);
+    await queueStorage.enqueueDeliveryOnce(
+      {
+        channel: "matrix",
+        to: "!synthetic:example",
+        payloads: [{ text: "recover once", mediaUrl: artifact }],
+        queuePolicy: "required",
+        requiresProducerClaim: true,
+        completionRetention: boundedCronCompletionRetention,
+        maxRetries: 2,
+      },
+      id,
+      stateDir,
+    );
+    const before = readQueuedEntry(stateDir, id);
+    const sendMatrix = vi.fn(async () => {
+      await expect(fs.readFile(artifact, "utf8")).resolves.toBe("synthetic queued audio");
+      return { messageId: "recovered-after-claim-expiry" };
+    });
+    const deliver = vi.fn<DeliverFn>((params) =>
+      deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }),
+    );
+    const recover = () => drainMatrixReconnect({ deliver, stateDir });
+    const reply = holdDeliveryQueueReply("deliveryQueue.claimPlatformSend", id, (value) =>
+      typeof value === "string" ? value : undefined,
+    );
+    const outcome = recover().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    let committedClaim: string;
+    let failure: unknown;
+    try {
+      committedClaim = await awaitCustodyReply(reply.held, outcome);
+      await reply.lose();
+      failure = await outcome;
+      expect(reply.attempts()).toBe(1);
+    } finally {
+      reply.restore();
+      reply.release();
+      await outcome;
+    }
+    expect(committedClaim).toEqual(expect.any(String));
+    expect(failure).toBeInstanceOf(Error);
+    expect(collectNestedErrorCandidates(failure).map(extractErrorCode)).toContain(
+      "outcome-unknown",
+    );
+    expect(deliver).not.toHaveBeenCalled();
+    expect(sendMatrix).not.toHaveBeenCalled();
+    await closeOpenClawStateDatabaseAsync();
+    const retained = readQueuedEntry(stateDir, id);
+    expect(retained).toEqual({
+      ...before,
+      recoveryState: "producer_claimed",
+      producerClaimId: committedClaim,
+      availableAt: expect.any(Number),
+    });
+    expect(retained.availableAt as number).toBeGreaterThan(Date.now());
+    await expect(fs.readFile(artifact, "utf8")).resolves.toBe("synthetic queued audio");
+    await recover();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(sendMatrix).not.toHaveBeenCalled();
+    expect(readQueuedEntry(stateDir, id)).toEqual(retained);
+    await expect(fs.readFile(artifact, "utf8")).resolves.toBe("synthetic queued audio");
+    setQueuedEntryState(stateDir, id, { retryCount: 0, availableAt: Date.now() - 1 });
+    await recover();
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir)).toBe(
+      "completed",
+    );
+    await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+    await recover();
+    expect(sendMatrix).toHaveBeenCalledOnce();
+  });
 });

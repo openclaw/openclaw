@@ -1,5 +1,5 @@
 ---
-summary: "JSON output shapes for openclaw mcp status, doctor, and probe"
+summary: "JSON output shapes for openclaw mcp status, doctor, and check"
 title: "JSON output shapes"
 read_when:
   - Scripting or building a dashboard on `openclaw mcp --json` output
@@ -13,7 +13,7 @@ saved server config shape they describe.
 
 Use `--json` for scripts and dashboards. Field sets can grow over time, so consumers should ignore unknown keys.
 
-Read commands report invalid config, unknown servers, and disabled named probes as `{ "ok": false, "error": { "type": "cli_error", "message": "..." } }` with a nonzero exit. Once `doctor` or `probe` produces a report, errors remain in that report rather than producing a second JSON document.
+Read commands report invalid config, unknown servers, and disabled named checks as `{ "ok": false, "error": { "type": "cli_error", "message": "..." } }` with a nonzero exit. Once `doctor` or `probe` produces a report, errors remain in that report rather than producing a second JSON document.
 
 <AccordionGroup>
   <Accordion title="status --json">
@@ -97,6 +97,8 @@ Read commands report invalid config, unknown servers, and disabled named probes 
     ```
 
     `probe --json` opens a live MCP client session and prints its result directly; unlike `status`/`doctor`, the output has no top-level `path` field. Each server includes its effective `codexApprovalMode`; `approvalHint` appears when that mode is `auto` and the discovered tools have no safety annotations. The hint describes approval requirements under prompting postures, not the default full-permission posture. `resources` and `prompts` keys are present only when the server actually advertises that capability (a server without prompts omits the `prompts` key rather than reporting `false`). The command prints the complete result before exiting nonzero when diagnostics are present or a selected enabled server did not connect, so automation can inspect partial successes. Use `probe` for reachability and capability proof, not for static config audits.
+
+    The report also waits for session cleanup. If closure cannot be confirmed, the optional top-level `cleanupError` string explains the failure and the command exits nonzero. Discovered servers, tools, and catalog diagnostics remain in the same report. `doctor --probe` includes cleanup failures as error-level issues for the checked server. Connection checks before `add` or `configure --probe` save configuration also fail when cleanup is uncertain.
 
   </Accordion>
 </AccordionGroup>

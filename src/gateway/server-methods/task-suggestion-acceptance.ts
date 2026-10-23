@@ -1,11 +1,9 @@
-// Settlement and rollback for claimed task suggestions and partial sessions.
 import {
   ErrorCodes,
   errorShape,
   type TaskSuggestion,
   type TaskSuggestionsAcceptResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   abandonTaskSuggestionAcceptance,
   cancelTaskSuggestionAcceptance,
@@ -50,7 +48,7 @@ async function rollbackSuggestedTaskSession(params: {
   agentId?: string;
   options: GatewayRequestHandlerOptions;
 }): Promise<boolean> {
-  let deletionResponse: { ok: true; worktreePreserved: boolean } | { ok: false } | undefined;
+  let deletionConfirmed = false;
   try {
     const deleteSession = sessionDeleteHandlers["sessions.delete"];
     if (!deleteSession) {
@@ -65,31 +63,17 @@ async function rollbackSuggestedTaskSession(params: {
         emitLifecycleHooks: false,
       },
       respond: (ok, payload) => {
-        if (
-          !ok ||
-          !payload ||
-          typeof payload !== "object" ||
-          !("deleted" in payload) ||
-          typeof payload.deleted !== "boolean"
-        ) {
-          deletionResponse = { ok: false };
-          return;
-        }
-        deletionResponse = {
-          ok: true,
-          worktreePreserved:
-            "worktreePreserved" in payload && payload.worktreePreserved !== undefined,
-        };
+        deletionConfirmed = Boolean(
+          ok &&
+          payload &&
+          typeof payload === "object" &&
+          "deleted" in payload &&
+          typeof payload.deleted === "boolean" &&
+          (!("worktreePreserved" in payload) || payload.worktreePreserved === undefined),
+        );
       },
     });
-  } catch {
-    return false;
-  }
-  if (!deletionResponse?.ok || deletionResponse.worktreePreserved) {
-    return false;
-  }
-  try {
-    return !loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }).entry;
+    return deletionConfirmed;
   } catch {
     return false;
   }

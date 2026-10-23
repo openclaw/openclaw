@@ -9,6 +9,7 @@ import { readTranscriptCaptureSnapshot } from "./capture.js";
 import { resolveTranscriptsConfig } from "./config.js";
 import { readConfiguredTranscriptStarts } from "./configured-start-status.js";
 import { manualTranscriptSourceProvider } from "./manual-source.js";
+import { presentTranscriptSession } from "./read-live.js";
 import { projectTranscriptSession, projectTranscriptSource } from "./read.js";
 import { assertTranscriptByteCount, assertTranscriptByteLimit } from "./store-read.js";
 import { transcriptSessionSelector, type TranscriptsStore } from "./store.js";
@@ -112,13 +113,13 @@ export async function readTranscriptLibraryStatus(
   for (const capture of selectedCaptures) {
     const entry = await store.readEntry(transcriptSessionSelector(capture.session));
     if (entry) {
-      const projected = projectTranscriptSession(entry, undefined, undefined, captures);
+      const projected = presentTranscriptSession(projectTranscriptSession(entry), captures);
       activeBytes += Buffer.byteLength(JSON.stringify(projected), "utf8");
       assertTranscriptByteCount(activeBytes);
       active.push(projected);
     }
   }
-  const configuredStarts = readConfiguredTranscriptStarts(cfg.transcripts);
+  const configuredStarts = readConfiguredTranscriptStarts();
   const configuredSources: TranscriptsStatusResult["configuredSources"] = config.autoStart
     .slice(0, TRANSCRIPTS_PAGE_MAX)
     .map((configured, index) => {
@@ -198,7 +199,7 @@ export async function readTranscriptLibraryStatus(
     configuredSources,
     active,
     latestTranscript: latest
-      ? projectTranscriptSession(latest, undefined, undefined, captures)
+      ? presentTranscriptSession(projectTranscriptSession(latest), captures)
       : null,
     omitted: {
       providers: Math.max(0, allProviders.length - TRANSCRIPTS_PAGE_MAX),

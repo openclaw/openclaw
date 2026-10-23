@@ -16,7 +16,6 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
   maxBytes: number;
   contentTypeHint?: string;
   kind?: MSTeamsInboundMedia["kind"];
-  preserveFilenames?: boolean;
 }): Promise<MSTeamsInboundMedia> {
   const response = await params.fetchImpl(params.url, { redirect: "follow" });
   try {
@@ -25,7 +24,6 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
       filePathHint: params.filePathHint,
       maxBytes: params.maxBytes,
       fallbackContentType: params.contentTypeHint,
-      originalFilename: params.preserveFilenames ? params.filePathHint : undefined,
     });
     return {
       path: saved.path,

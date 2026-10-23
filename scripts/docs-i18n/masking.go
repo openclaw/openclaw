@@ -20,14 +20,14 @@ var (
 	numericValueRe = regexp.MustCompile(`(?:0[xX][0-9A-Za-z_]+|0[bB][0-9A-Za-z_]+|0[oO][0-9A-Za-z_]+|[0-9]+(?:\.[0-9]+)?(?::[0-9]+(?:\.[0-9]+)?)+|[0-9]+(?:\.[0-9]+)?(?:/[0-9]+(?:\.[0-9]+)?)+|(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[eE][+-]?[0-9]+)`)
 )
 
-func maskMarkdown(text string, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
-	masked := maskMatches(text, inlineCodeRe, nextPlaceholder, placeholders, mapping)
-	masked = maskMatches(masked, angleLinkRe, nextPlaceholder, placeholders, mapping)
-	masked = maskLinkURLs(masked, nextPlaceholder, placeholders, mapping)
+func maskMarkdown(text string, state *PlaceholderState) string {
+	masked := maskMatches(text, inlineCodeRe, state)
+	masked = maskMatches(masked, angleLinkRe, state)
+	masked = maskLinkURLs(masked, state)
 	return masked
 }
 
-func maskMarkdownFencedLiterals(text string, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
+func maskMarkdownFencedLiterals(text string, state *PlaceholderState) string {
 	angleValues, protocolValues, directiveValues := extractMarkdownFencedLiteralValues(text)
 	unique := map[string]struct{}{}
 	for _, value := range append(append(angleValues, protocolValues...), directiveValues...) {
@@ -52,17 +52,17 @@ func maskMarkdownFencedLiterals(text string, nextPlaceholder func() string, plac
 	}
 	literalRE := regexp.MustCompile(strings.Join(quoted, "|"))
 
-	state := markdownLiteralFenceState{}
+	fenceState := markdownLiteralFenceState{}
 	lines := strings.SplitAfter(text, "\n")
 	for index, line := range lines {
-		if state.consumeLine(line) {
-			lines[index] = maskMatches(line, literalRE, nextPlaceholder, placeholders, mapping)
+		if fenceState.consumeLine(line) {
+			lines[index] = maskMatches(line, literalRE, state)
 		}
 	}
 	return strings.Join(lines, "")
 }
 
-func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
+func maskMarkdownDocSyntax(text string, state *PlaceholderState) string {
 	inlineRanges := make([][2]int, 0)
 	fencedRanges := markdownLiteralFenceByteRanges(text)
 	for _, span := range markdownBlockBacktickRanges(text) {
@@ -71,9 +71,9 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 		}
 	}
 	inlineRanges = append(inlineRanges, protectedMarkdownLinkRanges(text)...)
-	masked := maskByteRanges(text, inlineRanges, nextPlaceholder, placeholders, mapping)
-	masked = maskByteRanges(masked, markdownListMarkerRanges(masked), nextPlaceholder, placeholders, mapping)
-	return maskByteRanges(masked, compositeNumericValueRanges(masked), nextPlaceholder, placeholders, mapping)
+	masked := maskByteRanges(text, inlineRanges, state)
+	masked = maskByteRanges(masked, markdownListMarkerRanges(masked), state)
+	return maskByteRanges(masked, compositeNumericValueRanges(masked), state)
 }
 
 func markdownListMarkerRanges(text string) [][2]int {
@@ -165,15 +165,7 @@ func normalizeMaskedListMarkerSpacing(source, translated string, listPlaceholder
 }
 
 func markdownWhitespaceRunStart(text string, position int) int {
-	for position > 0 {
-		switch text[position-1] {
-		case ' ', '\t', '\r', '\n':
-			position--
-		default:
-			return position
-		}
-	}
-	return position
+	return len(strings.TrimRight(text[:position], " \t\r\n"))
 }
 
 func escapeUnexpectedListItemBodyMarkers(source, translated string, listPlaceholders map[string]string) string {
@@ -246,9 +238,6 @@ func escapeUnexpectedMarkdownListMarkers(text string, listPlaceholders map[strin
 func protectedMarkdownLinkRanges(text string) [][2]int {
 	ranges := make([][2]int, 0)
 	for _, match := range linkLabelRe.FindAllStringSubmatchIndex(text, -1) {
-		if len(match) < 6 {
-			continue
-		}
 		label := text[match[2]:match[3]]
 		destination := markdownInlineLinkDestination(text[match[4]:match[5]])
 		if isProtectedProductLinkLabel(label, destination) {
@@ -384,7 +373,7 @@ func markdownLiteralFenceByteRangesWithMode(text string, includeUnclosed bool) [
 	return ranges
 }
 
-func maskByteRanges(text string, ranges [][2]int, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
+func maskByteRanges(text string, ranges [][2]int, state *PlaceholderState) string {
 	if len(ranges) == 0 {
 		return text
 	}
@@ -402,31 +391,23 @@ func maskByteRanges(text string, ranges [][2]int, nextPlaceholder func() string,
 			continue
 		}
 		out.WriteString(text[pos:start])
-		placeholder := nextPlaceholder()
-		mapping[placeholder] = text[start:end]
-		*placeholders = append(*placeholders, placeholder)
-		out.WriteString(placeholder)
+		out.WriteString(state.mask(text[start:end]))
 		pos = end
 	}
 	out.WriteString(text[pos:])
 	return out.String()
 }
 
-func maskMatches(text string, re *regexp.Regexp, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
-	return re.ReplaceAllStringFunc(text, func(match string) string {
-		placeholder := nextPlaceholder()
-		mapping[placeholder] = match
-		*placeholders = append(*placeholders, placeholder)
-		return placeholder
-	})
+func maskMatches(text string, re *regexp.Regexp, state *PlaceholderState) string {
+	return re.ReplaceAllStringFunc(text, state.mask)
 }
 
-func maskLinkURLs(text string, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
+func maskLinkURLs(text string, state *PlaceholderState) string {
 	ranges := make([][2]int, 0)
 	for _, span := range linkURLRe.FindAllStringSubmatchIndex(text, -1) {
 		ranges = append(ranges, [2]int{span[2], span[3]})
 	}
-	return maskByteRanges(text, ranges, nextPlaceholder, placeholders, mapping)
+	return maskByteRanges(text, ranges, state)
 }
 
 func unmaskMarkdown(text string, placeholders []string, mapping map[string]string) string {

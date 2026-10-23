@@ -1,24 +1,11 @@
 import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkBlocker,
-  type GatewayActiveWorkInspectors,
 } from "./gateway-active-work.js";
 import { scheduleGatewayRestart, type ScheduledRestart } from "./restart.js";
 
 // Safe restart coordination checks active local work before scheduling SIGUSR2
 // restarts, while still allowing explicit deferral bypasses for operators.
-type SafeGatewayRestartCounts = {
-  queueSize: number;
-  pendingReplies: number;
-  embeddedRuns: number;
-  cronRuns: number;
-  backgroundExecSessions: number;
-  rootRequests: number;
-  agentRuns: number;
-  acpRuns: number;
-  mediaRuns: number;
-  totalActive: number;
-};
 type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
   kind:
     | "queue"
@@ -32,38 +19,15 @@ type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
     | "media-generation";
 };
 
-type SafeRestartInspectors = Pick<
-  GatewayActiveWorkInspectors,
-  | "getQueueSize"
-  | "getPendingReplies"
-  | "getEmbeddedRuns"
-  | "getCronRuns"
-  | "getBackgroundExecSessions"
-  | "getRootRequests"
-  | "getAgentRuns"
-  | "getAcpRuns"
-  | "getMediaRuns"
->;
-
-type SafeGatewayRestartPreflight = {
-  safe: boolean;
-  counts: SafeGatewayRestartCounts;
-  blockers: SafeGatewayRestartBlocker[];
-  summary: string;
-};
-
 export type SafeGatewayRestartRequestResult = {
   ok: true;
   status: "scheduled" | "deferred" | "coalesced";
-  preflight: SafeGatewayRestartPreflight;
+  preflight: ReturnType<typeof createSafeGatewayRestartPreflight>;
   restart: ScheduledRestart;
 };
 
-export function createSafeGatewayRestartPreflight(
-  inspectors: Partial<SafeRestartInspectors> = {},
-): SafeGatewayRestartPreflight {
+export function createSafeGatewayRestartPreflight() {
   const snapshot = createGatewayActiveWorkSnapshot({
-    ...inspectors,
     getSessionAdmissions: () => 0,
     getSessionMutations: () => 0,
     getChatRuns: () => 0,
@@ -71,7 +35,7 @@ export function createSafeGatewayRestartPreflight(
     getTerminalPersistence: () => 0,
     getTerminalSessions: () => 0,
   });
-  const counts: SafeGatewayRestartCounts = {
+  const counts = {
     queueSize: snapshot.counts.queueSize,
     pendingReplies: snapshot.counts.pendingReplies,
     embeddedRuns: snapshot.counts.embeddedRuns,
@@ -81,17 +45,8 @@ export function createSafeGatewayRestartPreflight(
     agentRuns: snapshot.counts.agentRuns,
     acpRuns: snapshot.counts.acpRuns,
     mediaRuns: snapshot.counts.mediaRuns,
-    totalActive:
-      snapshot.counts.queueSize +
-      snapshot.counts.pendingReplies +
-      snapshot.counts.embeddedRuns +
-      snapshot.counts.cronRuns +
-      snapshot.counts.backgroundExecSessions +
-      snapshot.counts.rootRequests +
-      snapshot.counts.agentRuns +
-      snapshot.counts.acpRuns +
-      snapshot.counts.mediaRuns,
   };
+  const totalActive = Object.values(counts).reduce((total, count) => total + count, 0);
   const blockers = snapshot.blockers as SafeGatewayRestartBlocker[];
 
   const summary =
@@ -99,8 +54,8 @@ export function createSafeGatewayRestartPreflight(
       ? "safe to restart now"
       : `restart deferred: ${blockers.map((blocker) => blocker.message).join("; ")}`;
   return {
-    safe: counts.totalActive === 0,
-    counts,
+    safe: totalActive === 0,
+    counts: { ...counts, totalActive },
     blockers,
     summary,
   };
@@ -110,21 +65,15 @@ export function createSafeGatewayRestartPreflight(
 export function scheduleSafeGatewayRestart(
   opts: {
     reason?: string;
-    delayMs?: number;
     skipDeferral?: boolean;
-    preservePendingEmitHooks?: boolean;
-    inspect?: Partial<SafeRestartInspectors>;
   } = {},
 ): SafeGatewayRestartRequestResult {
-  const preflight = createSafeGatewayRestartPreflight(opts.inspect);
+  const preflight = createSafeGatewayRestartPreflight();
   const skipDeferral = opts.skipDeferral === true;
   const restart = scheduleGatewayRestart({
-    delayMs: opts.delayMs ?? 0,
+    delayMs: 0,
     reason: opts.reason ?? "gateway.restart.safe",
-    ...(opts.preservePendingEmitHooks === true || skipDeferral
-      ? { preservePendingEmitHooksOnDeferralBypass: true }
-      : {}),
-    ...(skipDeferral ? { skipDeferral: true } : {}),
+    ...(skipDeferral ? { preservePendingEmitHooksOnDeferralBypass: true, skipDeferral: true } : {}),
   });
   const status = restart.coalesced
     ? "coalesced"

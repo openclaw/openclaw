@@ -4,19 +4,14 @@ import type {
   ActivePluginChannelRegistry,
   ActivePluginChannelRegistration,
 } from "../../plugins/channel-registry-state.types.js";
-import {
-  getActivePluginChannelRegistrySnapshotFromState,
-  type ActivePluginChannelRegistrySnapshot,
-} from "../../plugins/runtime-channel-state.js";
-import { CHAT_CHANNEL_ORDER } from "../registry.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import { CHAT_CHANNEL_ORDER } from "../ids.js";
+import { resolveRegisteredChannelPluginLookup } from "../registry-lookup.js";
+import type { AnyChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
 type ChannelPluginView = {
-  snapshot: ActivePluginChannelRegistrySnapshot;
+  lookup: ReturnType<typeof resolveRegisteredChannelPluginLookup>;
   sorted: ActiveChannelPluginRuntimeShape[];
-  byId: Map<string, ActiveChannelPluginRuntimeShape>;
-  entriesById: Map<string, ActivePluginChannelRegistration>;
 };
 
 let cachedChannelPluginView: ChannelPluginView | undefined;
@@ -35,40 +30,19 @@ export function compareChannelPlugins(
 }
 
 function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelPluginView {
-  const snapshot = getActivePluginChannelRegistrySnapshotFromState();
-  const currentRegistry = registry === undefined || registry === snapshot.registry;
-  if (currentRegistry && cachedChannelPluginView?.snapshot === snapshot) {
+  const lookup = resolveRegisteredChannelPluginLookup(registry);
+  if (cachedChannelPluginView?.lookup === lookup) {
     return cachedChannelPluginView;
   }
-  const selectedRegistry = registry ?? snapshot.registry;
-
-  const seen = new Set<string>();
-  const byId = new Map<string, ActiveChannelPluginRuntimeShape>();
-  const entriesById = new Map<string, ActivePluginChannelRegistration>();
-  if (selectedRegistry && Array.isArray(selectedRegistry.channels)) {
-    for (const entry of selectedRegistry.channels) {
-      const plugin = entry?.plugin;
-      const id = normalizeOptionalString(plugin?.id);
-      if (!plugin || !id || seen.has(id)) {
-        continue;
-      }
-      // Channel registration is first-wins. Keep its implementation and
-      // provenance together so a colliding plugin cannot borrow its authority.
-      seen.add(id);
-      byId.set(plugin.id, plugin);
-      entriesById.set(plugin.id, { ...entry, plugin });
-    }
-  }
-
-  const sorted = [...byId.values()].toSorted(compareChannelPlugins);
+  const sorted = [...lookup.byExactId.values()]
+    .map((entry) => entry.plugin)
+    .toSorted(compareChannelPlugins);
 
   const view = {
-    snapshot: currentRegistry ? snapshot : { registry: selectedRegistry, version: 0 },
+    lookup,
     sorted,
-    byId,
-    entriesById,
   };
-  if (currentRegistry) {
+  if (lookup.currentRegistry) {
     // Runtime snapshots invalidate the single process-root registry view.
     cachedChannelPluginView = view;
   }
@@ -82,22 +56,18 @@ export function listLoadedChannelPlugins(): ActiveChannelPluginRuntimeShape[] {
 /** Lists one exact registry without substituting a pinned or active registry. */
 export function listLoadedChannelPluginsForRegistry(
   registry: ActivePluginChannelRegistry,
-): ChannelPlugin[] {
+): AnyChannelPlugin[] {
   return resolveChannelPlugins(registry).sorted.slice();
 }
 
 export function getLoadedChannelPluginById(
   id: string,
 ): ActiveChannelPluginRuntimeShape | undefined {
-  const resolvedId = normalizeOptionalString(id) ?? "";
-  if (!resolvedId) {
-    return undefined;
-  }
-  return resolveChannelPlugins().byId.get(resolvedId);
+  return getLoadedChannelPluginEntryById(id)?.plugin;
 }
 
 /** Returns one loaded channel plugin without triggering bundled discovery. */
-export function getLoadedChannelPluginForRead(id: ChannelId): ChannelPlugin | undefined {
+export function getLoadedChannelPluginForRead(id: ChannelId): AnyChannelPlugin | undefined {
   return getLoadedChannelPluginById(id);
 }
 
@@ -109,5 +79,5 @@ export function getLoadedChannelPluginEntryById(
   if (!resolvedId) {
     return undefined;
   }
-  return resolveChannelPlugins(registry).entriesById.get(resolvedId);
+  return resolveRegisteredChannelPluginLookup(registry).byExactId.get(resolvedId);
 }

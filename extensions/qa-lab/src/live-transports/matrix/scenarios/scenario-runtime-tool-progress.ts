@@ -4,7 +4,6 @@ import { QaSuiteScenarioSkipError } from "../../../errors.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import { createCurrentScenarioEventPredicate } from "./scenario-runtime-event-scope.js";
 import {
-  advanceMatrixQaActorCursor,
   buildMatrixQaToken,
   buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
@@ -17,7 +16,6 @@ import {
   isMatrixQaMessageLikeKind,
   MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME,
   primeMatrixQaDriverScenarioClient,
-  truncateMatrixQaPreview,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
 import {
@@ -80,6 +78,17 @@ async function runMatrixToolProgressScenario(
     mentionUserIds: [context.sutUserId],
     roomId: context.roomId,
   });
+  const finish = (result: { final: MatrixQaObservedEvent; details: string[] }) => {
+    const finalReply = buildMatrixReplyArtifact(result.final, params.finalText);
+    return {
+      details: [
+        `driver event: ${driverEventId}`,
+        `scenario: ${params.label}`,
+        ...result.details,
+        ...buildMatrixReplyDetails("final reply", finalReply),
+      ].join("\n"),
+    } satisfies MatrixQaScenarioExecution;
+  };
   const matchesExpectedProgress = (body: string | undefined) =>
     params.progressPattern.test(body ?? "") ||
     (params.allowGenericProgressLine === true && hasMatrixQaToolProgressPreviewLine(body));
@@ -172,62 +181,23 @@ async function runMatrixToolProgressScenario(
       if (params.mentionSafety) {
         assertMatrixQaToolProgressMentionsInert(progressAfterFinal.event);
       }
-      advanceMatrixQaActorCursor({
-        actorId: "driver",
-        syncState: context.syncState,
-        nextSince: progressAfterFinal.since,
-        startSince,
-      });
-      const finalReply = buildMatrixReplyArtifact(preview.event, params.finalText);
-      return {
-        artifacts: {
-          driverEventId,
-          previewBodyPreview: truncateMatrixQaPreview(progressAfterFinal.event.body),
-          previewEventId: progressPreviewEventId,
-          previewFormattedBodyPreview: truncateMatrixQaPreview(
-            progressAfterFinal.event.formattedBody,
-          ),
-          previewMentions: progressAfterFinal.event.mentions,
-          reply: finalReply,
-          token: params.finalText,
-          triggerBody,
-        },
+      return finish({
+        final: preview.event,
         details: [
-          `driver event: ${driverEventId}`,
-          `scenario: ${params.label}`,
           `preview event: ${progressPreviewEventId}`,
           `preview kind: ${progressAfterFinal.event.kind}`,
           `preview body: ${progressAfterFinal.event.body ?? "<none>"}`,
           "final reply relation: <none>; final delivered before observable tool-progress failure",
-          ...buildMatrixReplyDetails("final reply", finalReply),
-        ].join("\n"),
-      } satisfies MatrixQaScenarioExecution;
+        ],
+      });
     }
 
     if (params.allowFinalOnly === true) {
       assertProgressStaysInPreview(preview.event.eventId);
-      advanceMatrixQaActorCursor({
-        actorId: "driver",
-        syncState: context.syncState,
-        nextSince: preview.since,
-        startSince,
+      return finish({
+        final: preview.event,
+        details: ["preview event: <none>; final delivered before observable tool-progress preview"],
       });
-      const finalReply = buildMatrixReplyArtifact(preview.event, params.finalText);
-      return {
-        artifacts: {
-          driverEventId,
-          previewEventId: undefined,
-          reply: finalReply,
-          token: params.finalText,
-          triggerBody,
-        },
-        details: [
-          `driver event: ${driverEventId}`,
-          `scenario: ${params.label}`,
-          "preview event: <none>; final delivered before observable tool-progress preview",
-          ...buildMatrixReplyDetails("final reply", finalReply),
-        ].join("\n"),
-      } satisfies MatrixQaScenarioExecution;
     }
   }
   const previewRootEventId = getPreviewRootEventId(preview.event);
@@ -311,36 +281,17 @@ async function runMatrixToolProgressScenario(
         );
       }));
   assertProgressStaysInPreview(finalized.event.eventId, previewRootEventId);
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: topLevelFinalBeforeProgress ? progress.since : finalized.since,
-    startSince,
-  });
-  const finalReply = buildMatrixReplyArtifact(finalized.event, params.finalText);
-  return {
-    artifacts: {
-      driverEventId,
-      previewBodyPreview: truncateMatrixQaPreview(progress.event.body),
-      previewEventId: previewRootEventId,
-      previewFormattedBodyPreview: truncateMatrixQaPreview(progress.event.formattedBody),
-      previewMentions: progress.event.mentions,
-      reply: finalReply,
-      token: params.finalText,
-      triggerBody,
-    },
+  return finish({
+    final: finalized.event,
     details: [
-      `driver event: ${driverEventId}`,
-      `scenario: ${params.label}`,
       `preview event: ${preview.event.eventId}`,
       `preview kind: ${progress.event.kind}`,
       `preview body: ${progress.event.body ?? "<none>"}`,
       `preview mentions: ${JSON.stringify(progress.event.mentions ?? {})}`,
       `final reply relation: ${finalized.event.relatesTo?.relType ?? "<none>"}`,
       `final reply target: ${finalized.event.relatesTo?.eventId ?? "<none>"}`,
-      ...buildMatrixReplyDetails("final reply", finalReply),
-    ].join("\n"),
-  } satisfies MatrixQaScenarioExecution;
+    ],
+  });
 }
 
 async function writeMatrixToolProgressTaskFile(
@@ -450,20 +401,8 @@ export async function runToolProgressPreviewOptOutScenario(context: MatrixQaScen
       `Matrix tool-progress opt-out still emitted preview progress: ${unexpectedPreviewProgressEvents.map((event) => `${event.eventId}:${event.body ?? ""}`).join("; ")}`,
     );
   }
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: finalized.since,
-    startSince,
-  });
   const finalReply = buildMatrixReplyArtifact(finalized.event, finalText);
   return {
-    artifacts: {
-      driverEventId,
-      reply: finalReply,
-      token: finalText,
-      triggerBody,
-    },
     details: [
       `driver event: ${driverEventId}`,
       "scenario: tool progress preview opt-out",

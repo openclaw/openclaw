@@ -62,6 +62,8 @@ JavaScript-only host export; its declarations are excluded from the package.
 
     Uses core `tts` configuration and provider selection. Returns PCM audio buffer + sample rate. `textToSpeechStream` is also available for streaming synthesis.
 
+    `buildSystemPromptHintAsync(config, agentId?, options?)` prepares the TTS prompt hint through the state owner and returns `Promise<string | undefined>`. It is optional on older host interfaces; require an upgrade when absent. See the [async prompt preparation recipe](/plugins/sdk-migration/async-transcript-and-tts#tts-prompts).
+
   </Accordion>
   <Accordion title="api.runtime.mediaUnderstanding">
     Image, audio, and video analysis.

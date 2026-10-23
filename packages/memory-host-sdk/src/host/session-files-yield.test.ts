@@ -1,26 +1,19 @@
 // Memory Host SDK tests cover session files yield behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  replaceSessionEntry,
-  replaceTranscriptEventsSync,
-} from "../../../../src/config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it } from "vitest";
+import { replaceSessionEntry } from "../../../../src/config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { useSessionStoreTempDirs } from "../../../../src/test-utils/session-state-cleanup.js";
 import { buildSessionEntry } from "./session-files.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "session-entry-yield-");
 
 describe("buildSessionEntry responsiveness", () => {
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-  });
-
   it.each(["archive", "sqlite"])(
     "yields at raw ordinals even for excluded %s records",
     async (source) => {
-      const root = tempDirs.make("session-entry-yield-");
+      const root = sessionDirs.make();
       const scope = {
         agentId: "main",
         sessionId: "yield",

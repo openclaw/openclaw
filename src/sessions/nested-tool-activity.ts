@@ -2,7 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
-const NESTED_TOOL_ACTIVITY_CUSTOM_TYPE = "openclaw.nested-tool.v1";
+export const NESTED_TOOL_ACTIVITY_CUSTOM_TYPE = "openclaw.nested-tool.v1";
 
 const correlationId = z.string().min(1).max(1024);
 const activityDetails = z

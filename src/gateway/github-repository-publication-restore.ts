@@ -1,5 +1,5 @@
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../worker/node-workspace-protocol.js";
-import { GITHUB_PUBLICATION_CONFIG_GUARD_JS } from "./github-publication-base.js";
+import { GITHUB_PUBLICATION_CONFIG_GUARD } from "./github-publication-base.js";
 import {
   createGitHubPublicationCommandRunner,
   readGitHubPublicationTree,
@@ -17,7 +17,7 @@ const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^GIT_/i.test(key)) delete env[key];
 Object.assign(env, { GIT_CONFIG_GLOBAL: gitNullPath, GIT_CONFIG_SYSTEM: gitNullPath,
   GIT_CONFIG_COUNT: "0", GIT_ATTR_NOSYSTEM: "1", GIT_NO_REPLACE_OBJECTS: "1" });
-${GITHUB_PUBLICATION_CONFIG_GUARD_JS}
+${GITHUB_PUBLICATION_CONFIG_GUARD.script}
 const action = process.argv[1];
 if (action !== "add" && action !== "remove") throw Error("Invalid publication restore operation");
 const operation = action === "remove" ? ["update-index", "--force-remove", "-z", "--stdin"] :

@@ -21,7 +21,7 @@ export async function resolveCronSkillsSnapshot(params: {
 
   const runtime = await skillsSnapshotRuntimeLoader.load();
   const skillFilter = runtime.resolveEffectiveAgentSkillFilter(params.config, params.agentId);
-  const nodeSkills = runtime.resolveNodeExecEligibility({
+  const nodeSkills = await runtime.resolveNodeExecEligibilityAsync({
     cfg: params.config,
     agentId: params.agentId,
   });

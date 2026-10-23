@@ -38,10 +38,8 @@ import {
   writeFixtureText,
   pluginManifest,
 } from "./loader.test-harness.js";
-import {
-  listMemoryPromptPreparations,
-  listMemoryPromptSupplements,
-} from "./memory-state.test-fixtures.js";
+import { listMemoryPromptPreparations } from "./memory-state.test-fixtures.js";
+import { requireActivePluginRegistry } from "./runtime.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 afterEach(globalAfterEach0);
@@ -505,7 +503,7 @@ describe("loadOpenClawPlugins", () => {
     expect(loaded?.error).toBe(error);
     expectRegistryErrorDiagnostic({ registry, pluginId: id, message: error });
     expect(errors).toEqual([
-      `[plugins] ${id} ${error}; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+      `[plugins] ${id} ${error}; check that plugin is loaded via bundled channel discovery, not legacy plugin loader`,
     ]);
   });
 
@@ -644,7 +642,7 @@ describe("loadOpenClawPlugins", () => {
             pluginId: "memory-prompt-supplement-malformed",
             message: "memory prompt supplement registration missing builder",
           });
-          expect(listMemoryPromptSupplements()).toStrictEqual([]);
+          expect(requireActivePluginRegistry().memoryPromptSupplements).toStrictEqual([]);
         },
       },
       {

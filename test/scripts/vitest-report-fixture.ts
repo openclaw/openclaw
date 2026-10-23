@@ -2,7 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
-import { waitForPidFile } from "../helpers/process-wait.js";
+import {
+  fixtureReceiptClientSource,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const configs = [
@@ -61,6 +66,7 @@ export type ReportFixtureMode =
 /** Tiny native configs shared by regression tests and retained operator proofs. */
 export function createVitestReportFixture(
   root: string,
+  observation: { receipts: FixtureReceiptChannel; signal: AbortSignal },
   evidence = path.join(root, "reports"),
   compileCache = path.join(root, "node-compile-cache"),
 ) {
@@ -90,7 +96,6 @@ export function createVitestReportFixture(
     NODE_COMPILE_CACHE: compileCache,
     COREPACK_ENABLE_NETWORK: "0",
     GIT_OPTIONAL_LOCKS: "0",
-    CI: "1",
     NO_COLOR: "1",
     FORCE_COLOR: "0",
     TZ: "UTC",
@@ -114,6 +119,8 @@ export function createVitestReportFixture(
       report?: boolean;
       configOutput?: boolean;
       crashSignal?: "SIGABRT" | "SIGKILL";
+      finalIndexFailure?: boolean;
+      env?: NodeJS.ProcessEnv;
     } = {},
   ) => {
     const deadline = performance.now() + 45000;
@@ -140,6 +147,24 @@ export function createVitestReportFixture(
       );
     }
     const output = path.join(evidence, "result.json");
+    if (options.finalIndexFailure) {
+      const preload = path.join(root, "final-index-failure.mjs");
+      write(
+        preload,
+        `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const write = fs.writeFileSync;
+fs.writeFileSync = (file, data, ...args) => {
+  if (String(file).endsWith("/index.json") && typeof data === "string" && JSON.parse(data).complete) {
+    write(String(file) + ".final-write-attempt", data);
+    throw new Error("owned final index write failure");
+  }
+  return write(file, data, ...args);
+};
+syncBuiltinESMExports();`,
+      );
+      env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
+    }
     const ready = path.join(root, "ready");
     if (options.configOutput) {
       write(path.join(root, "config-coverage/canary"), "retained");
@@ -172,6 +197,7 @@ if(output&&path.basename(path.dirname(output))==='1'&&process.argv.some(arg=>arg
       write(path.join(env.HOME!, "canary"), "synthetic caller home\n");
     }
     const isParallel = ["parallel", "batch-parallel", "failure", "overlap"].includes(mode);
+    const releaseAfterBeta = ["parallel", "batch-parallel", "automatic"].includes(mode);
     const testFiles =
       mode === "automatic"
         ? [
@@ -207,6 +233,7 @@ ${["missing", "corrupt"].includes(mode) && index === 0 ? `if(!merging)process.on
         (["failure", "batch-failure"].includes(mode) && index === 1) ||
         (["fail-fast", "batch-fail-fast"].includes(mode) && index === 0);
       const body = `import fs from 'node:fs';import {test,expect,describe,afterAll} from 'vitest';
+${releaseAfterBeta || (["cancel", "batch-cancel"].includes(mode) && index === 0) ? fixtureReceiptClientSource(observation.receipts.endpoint) : ""}
 ${realHomeReplay ? "import {homedir} from 'node:os';" : ""}
 ${["metadata", "coverage-missing"].includes(mode) ? "import {classify} from './covered';" : ""}
 let attempt=0;
@@ -214,11 +241,11 @@ test('${name}/one',${mode === "retry" && index === 0 ? "{retry:1}," : ""}async()
  fs.appendFileSync(${JSON.stringify(events)},JSON.stringify({name:'${name}/one',pid:process.pid})+'\\n');
  ${mode === "automatic" ? `expect(fs.existsSync(${JSON.stringify(output)})).toBe(false);` : ""}
  ${realHomeReplay ? `expect(process.env.HOME).toBe(${JSON.stringify(env.HOME)});expect(homedir()).toBe(${JSON.stringify(env.HOME)});` : ""}
- ${["parallel", "batch-parallel", "automatic"].includes(mode) && index === 0 ? `const {waitForFile}=await import(${JSON.stringify(path.join(repoRoot, "test/helpers/process-wait.ts"))});await waitForFile(${JSON.stringify(done)},15000);` : ""}
- ${["cancel", "batch-cancel"].includes(mode) && index === 0 ? `fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));await new Promise(()=>setInterval(()=>{},1000));` : ""}
+ ${releaseAfterBeta && index === 0 ? `await awaitRelease(${JSON.stringify(ready)},'beta-done');` : ""}
+ ${["cancel", "batch-cancel"].includes(mode) && index === 0 ? `fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));sendReceipt(${JSON.stringify(ready)},'ready');await new Promise(()=>setInterval(()=>{},1000));` : ""}
  ${["unhandled", "ignored-unhandled"].includes(mode) && index === 1 ? "void Promise.reject(new Error('owned unhandled rejection'));await new Promise(resolve=>setImmediate(resolve));" : ""}
  ${["metadata", "coverage-missing"].includes(mode) ? `expect(classify(${index})).toMatchInlineSnapshot(${JSON.stringify(index === 0 ? '"zero"' : '"one"')});` : mode === "overlap" ? "expect(0, 'independent failure pid='+process.pid).toBe(1);" : mode === "retry" && index === 0 ? "expect(++attempt).toBe(2);" : `expect(1).toBe(${failure ? 2 : 1});`}
- ${index === 1 ? `fs.writeFileSync(${JSON.stringify(done)},'done');` : ""}
+ ${index === 1 ? `fs.writeFileSync(${JSON.stringify(done)},'done');${releaseAfterBeta ? `sendReceipt(${JSON.stringify(done)},'done');` : ""}` : ""}
 });
 ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/skip',()=>{});test.todo('beta/todo');"}`;
       write(path.join(root, testFiles[index]!), body);
@@ -354,10 +381,41 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
         ...args,
       ];
     }
+    if (options.entry === "batch-cli" && options.finalIndexFailure) {
+      const plan = {
+        extensionCount: 2,
+        extensionIds: ["alpha", "beta"],
+        estimatedCost: 2,
+        hasTests: true,
+        testFileCount: 2,
+        planGroups: configs.map((config, i) => ({
+          config: path.join(root, config),
+          estimatedCost: 1,
+          extensionIds: [i ? "beta" : "alpha"],
+          roots: [path.join(root, i ? "beta.test.ts" : "alpha.test.ts")],
+          testFileCount: 1,
+        })),
+      };
+      const owner = pathToFileURL(path.join(repoRoot, "scripts/lib/extension-test-plan.mts")).href;
+      const fixture = pathToFileURL(path.join(root, "batch-plan.mjs")).href;
+      write(
+        path.join(root, "batch-plan.mjs"),
+        `export * from ${JSON.stringify(owner)};
+export function resolveExtensionBatchPlan() { return ${JSON.stringify(plan)}; }`,
+      );
+      const preload = path.join(root, "batch-plan-loader.mjs");
+      write(
+        preload,
+        `import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  const resolved = nextResolve(specifier, context);
+  return resolved.url === ${JSON.stringify(owner)} && context.parentURL !== ${JSON.stringify(fixture)} ? {...resolved, url: ${JSON.stringify(fixture)}} : resolved;
+}});`,
+      );
+      env.NODE_OPTIONS += ` --import=${pathToFileURL(preload).href}`;
+    }
     if (options.entry === "batch-cli") {
       command = [
-        "--import",
-        path.join(repoRoot, "node_modules/tsx/dist/loader.mjs"),
         path.join(repoRoot, "scripts/test-extension-batch.mts"),
         "alpha,beta",
         "--",
@@ -384,7 +442,7 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       const entry = path.join(root, "batch.mts");
       write(
         entry,
-        `import {runExtensionBatchPlan} from ${JSON.stringify(path.join(repoRoot, "scripts/test-extension-batch.mts"))};process.exitCode=await runExtensionBatchPlan(${JSON.stringify(plan)},{vitestArgs:${JSON.stringify(args)}});`,
+        `import {runExtensionBatchPlan} from ${JSON.stringify(path.join(repoRoot, "scripts/test-extension-batch-run.mts"))};process.exitCode=await runExtensionBatchPlan(${JSON.stringify(plan)},{vitestArgs:${JSON.stringify(args)}});`,
       );
       command = ["--import", path.join(repoRoot, "node_modules/tsx/dist/loader.mjs"), entry];
     }
@@ -398,20 +456,25 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       );
       command.unshift("--import", preload);
     }
-    const childEnv = {
-      ...env,
-      // V8 coverage needs fresh compilation; other phases can share private bytecode.
-      NODE_DISABLE_COMPILE_CACHE: ["metadata", "coverage-missing"].includes(mode) ? "1" : undefined,
-      OPENCLAW_TEST_PROJECTS_PARALLEL: mode === "automatic" ? "" : isParallel ? "2" : "1",
-      OPENCLAW_TEST_PROJECTS_SERIAL: mode === "automatic" ? "" : isParallel ? "0" : "1",
-      OPENCLAW_EXTENSION_BATCH_PARALLEL: isParallel ? "2" : "1",
-      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
-        mode === "automatic" ? "" : env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
-      OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT:
-        mode === "automatic" ? path.join(root, "automatic-cache") : undefined,
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS:
-        mode === "watchdog" ? "1500" : env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
-    };
+    const childEnv = testRunnerFixtureEnv(
+      {
+        // V8 coverage needs fresh compilation; other phases can share private bytecode.
+        NODE_DISABLE_COMPILE_CACHE: ["metadata", "coverage-missing"].includes(mode)
+          ? "1"
+          : undefined,
+        OPENCLAW_TEST_PROJECTS_PARALLEL: mode === "automatic" ? "" : isParallel ? "2" : "1",
+        OPENCLAW_TEST_PROJECTS_SERIAL: mode === "automatic" ? "" : isParallel ? "0" : "1",
+        OPENCLAW_EXTENSION_BATCH_PARALLEL: isParallel ? "2" : "1",
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
+          mode === "automatic" ? "" : env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
+        OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT:
+          mode === "automatic" ? path.join(root, "automatic-cache") : undefined,
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS:
+          mode === "watchdog" ? "1500" : env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
+        ...options.env,
+      },
+      env,
+    );
     let executable = process.execPath;
     if (process.platform === "linux" && options.crashSignal === "SIGABRT") {
       // Preserve an inherited zero hard limit; raising it needs OS authority we do not own.
@@ -444,11 +507,44 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       Math.max(0, deadline - performance.now()),
     );
     try {
+      if (releaseAfterBeta) {
+        // A deliberate early crash still returns its native outcome. Successful
+        // beta writes its durable record first, even if completion overtakes its receipt.
+        await withinTest(
+          Promise.race([observation.receipts.waitFor(done, "done"), completion]),
+          observation.signal,
+        );
+        if (fs.existsSync(done)) {
+          observation.receipts.release(ready, "beta-done");
+        }
+      }
       if (["cancel", "batch-cancel"].includes(mode)) {
-        await waitForPidFile(ready, 15000);
+        const readyWasWritten = () => {
+          const pid = fs.existsSync(ready)
+            ? Number.parseInt(fs.readFileSync(ready, "utf8"), 10)
+            : Number.NaN;
+          return Number.isInteger(pid) && pid > 0;
+        };
+        // The durable PID precedes the receipt; command completion may overtake delivery.
+        const settled = completion.then(
+          () => {
+            if (!readyWasWritten()) {
+              throw new Error(`timeout waiting for pid in ${ready}`);
+            }
+          },
+          (error: unknown) => {
+            if (!readyWasWritten()) {
+              throw error;
+            }
+          },
+        );
+        await withinTest(
+          Promise.race([observation.receipts.waitFor(ready, "ready"), settled]),
+          observation.signal,
+        );
         child.kill("SIGTERM");
       }
-      const result = await completion;
+      const result = await withinTest(completion, observation.signal);
       write(path.join(evidence, "stdout.log"), stdout);
       write(path.join(evidence, "stderr.log"), stderr);
       write(
@@ -469,6 +565,9 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       const reportSet = stderr.match(/\[test\] native report set: (.+)/u)?.[1];
       return { ...result, stdout, stderr, output, reportSet };
     } finally {
+      if (releaseAfterBeta) {
+        observation.receipts.release(ready, "beta-done");
+      }
       clearTimeout(timeout);
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGTERM");

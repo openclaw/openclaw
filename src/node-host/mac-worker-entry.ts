@@ -9,6 +9,9 @@ import { withConsoleLogsRoutedToStderrForJson } from "../cli/json-output-mode.js
 import { createNodeWorkerCommand } from "../cli/node-cli/command-options.js";
 import { runCliWithExitFinalization } from "../cli/one-shot-exit.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "../cli/profile.js";
+import { withCliPluginInvocation } from "../cli/run-main-plugin-cache.js";
+import { withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
+import { closeCliResources } from "../cli/runtime-cleanup.js";
 import { normalizeEnv } from "../infra/env.js";
 import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "../infra/openclaw-exec-env.js";
@@ -20,14 +23,14 @@ import { runNodeHostWorker } from "./worker.js";
 
 const COMMAND_PATH = ["node", "worker"] as const;
 
-export function resolveMacNodeWorkerArgv(
-  argv: string[],
-):
-  | { ok: true; argv: string[]; profile: string | null; desktopSharingEnabled?: boolean }
-  | { ok: false; error: string } {
+export function resolveMacNodeWorkerArgv(argv: string[]): {
+  argv: string[];
+  profile: string | null;
+  desktopSharingEnabled?: boolean;
+} {
   const parsed = parseCliProfileArgs(argv);
   if (!parsed.ok) {
-    return parsed;
+    throw new Error(parsed.error);
   }
   const command = parsed.argv.slice(2);
   // Share the CLI's option semantics without registering its other commands.
@@ -38,19 +41,17 @@ export function resolveMacNodeWorkerArgv(
     remaining.operands.length ||
     remaining.unknown.length
   ) {
-    return { ok: false, error: "Private macOS worker accepts only: node worker" };
+    throw new Error("Private macOS worker accepts only: node worker");
   }
   return {
-    ...parsed,
+    argv: parsed.argv,
+    profile: parsed.profile,
     desktopSharingEnabled: worker.opts<{ desktopSharing?: boolean }>().desktopSharing,
   };
 }
 
 async function runMacNodeWorkerEntry(argv: string[] = process.argv): Promise<void> {
   const parsed = resolveMacNodeWorkerArgv(argv);
-  if (!parsed.ok) {
-    throw new Error(parsed.error);
-  }
   process.title = "openclaw-node-worker";
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
@@ -58,7 +59,7 @@ async function runMacNodeWorkerEntry(argv: string[] = process.argv): Promise<voi
   if (parsed.profile) {
     applyCliProfileEnv({ profile: parsed.profile });
   }
-  loadCliDotEnv({ quiet: true });
+  loadCliDotEnv();
   enableConsoleCapture();
   await assertSupportedRuntime(undefined, undefined, parsed.argv, true, { ...process.env });
   const startupPolicy = resolveCliStartupPolicy({
@@ -82,10 +83,26 @@ async function runMacNodeWorkerEntry(argv: string[] = process.argv): Promise<voi
 }
 
 if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
-  // The worker records its exit request after draining runtime-owned resources.
-  // Finalize it here so plugin-owned pipes cannot pin shutdown or startup failure.
+  // This sealed entry bypasses runMain. Give its registrations and plugin
+  // children the same explicit executable lifetime, including failed startup.
   await runCliWithExitFinalization({
-    run: () => runMacNodeWorkerEntry(),
+    run: () =>
+      withCliProcessScope(() =>
+        withCliPluginInvocation(false, async (cleanup) => {
+          const resources = cleanup?.pluginResources;
+          try {
+            await (resources
+              ? resources.run(() => runMacNodeWorkerEntry())
+              : runMacNodeWorkerEntry());
+          } finally {
+            try {
+              await closeCliResources(cleanup);
+            } finally {
+              await resources?.release();
+            }
+          }
+        }),
+      ),
     onError: (error: unknown) => {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;

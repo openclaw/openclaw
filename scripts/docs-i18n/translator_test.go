@@ -160,12 +160,9 @@ func TestCodexTranslatorStripsInputWrapperEcho(t *testing.T) {
 func TestCodexTranslatorUsesExactGlossaryMatchWithoutPrompt(t *testing.T) {
 	t.Parallel()
 
-	translator, err := NewCodexTranslator("en", "zh-CN", []GlossaryEntry{
+	translator := NewCodexTranslator("en", "zh-CN", []GlossaryEntry{
 		{Source: "LINE", Target: "LINE"},
 	}, "low")
-	if err != nil {
-		t.Fatalf("NewCodexTranslator returned error: %v", err)
-	}
 	translator.runPrompt = func(context.Context, codexPromptRequest) (string, error) {
 		t.Fatal("exact glossary matches should not call Codex")
 		return "", nil
@@ -451,10 +448,7 @@ printf 'translated\n' > "$out"
 			t.Setenv(envDocsI18nCodexExecutable, fakeCodex)
 			t.Setenv(envDocsI18nModel, "private-primary")
 			t.Setenv("OPENCLAW_DOCS_I18N_FALLBACK_MODEL", "private-fallback")
-			translator, err := NewCodexTranslator("en", "de", nil, "high")
-			if err != nil {
-				t.Fatal(err)
-			}
+			translator := NewCodexTranslator("en", "de", nil, "high")
 			got, err := translator.TranslateRaw(context.Background(), "Hello", "en", "de")
 			if tc.fallback {
 				if err != nil || got != "translated" {
@@ -491,10 +485,7 @@ func TestCodexTranslatorRejectsPrivateModelDisclosure(t *testing.T) {
 	t.Setenv(envDocsI18nModel, "private-primary")
 	t.Setenv("OPENCLAW_DOCS_I18N_FALLBACK_MODEL", "private-fallback")
 	for _, model := range []string{"private-primary", "private-fallback"} {
-		translator, err := NewCodexTranslator("en", "de", nil, "high")
-		if err != nil {
-			t.Fatal(err)
-		}
+		translator := NewCodexTranslator("en", "de", nil, "high")
 		translator.runPrompt = func(context.Context, codexPromptRequest) (string, error) { return "Translated by " + model, nil }
 		got, err := translator.TranslateRaw(context.Background(), "Hello", "en", "de")
 		if err == nil || got != "" || strings.Contains(err.Error(), model) {

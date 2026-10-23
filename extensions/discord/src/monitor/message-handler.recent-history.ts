@@ -1,9 +1,9 @@
-import type { APIGuildMember, APIMessage } from "discord-api-types/v10";
+import { Routes, type APIGuildMember, type APIMessage } from "discord-api-types/v10";
 import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
 import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { getGuildMember, listChannelMessages, Message, MessageType } from "../internal/discord.js";
+import { getGuildMember, Message, MessageType } from "../internal/discord.js";
 import { resolveTimestampMs } from "./format.js";
 import {
   createDiscordHistorySenderProvenance,
@@ -56,10 +56,10 @@ export async function recoverDiscordChannelHistory(params: {
   try {
     while (remaining > 0 && isCurrent()) {
       const limit = Math.min(100, remaining);
-      const page = await listChannelMessages(ctx.client.rest, ctx.messageChannelId, {
+      const page = (await ctx.client.rest.get(Routes.channelMessages(ctx.messageChannelId), {
         before,
         limit,
-      });
+      })) as APIMessage[]; // SAFETY: Discord's list-messages route returns APIMessage[].
       if (!isCurrent()) {
         return [];
       }
@@ -192,7 +192,7 @@ export async function recoverDiscordChannelHistory(params: {
       entries: entries.toReversed(),
       mode: params.mode,
       isSenderAllowed: params.isSenderAllowed,
-    }).entries.slice(-ctx.historyLimit);
+    }).slice(-ctx.historyLimit);
   } catch (error) {
     ctx.runtime.error(
       danger(`discord: recent history omitted for ${ctx.messageChannelId}: ${String(error)}`),

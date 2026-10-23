@@ -6,13 +6,14 @@ import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { SignalDaemonHandle } from "./daemon.js";
+import type { MonitorSignalOpts } from "./monitor.js";
 import { setSignalRuntime } from "./runtime.js";
 import { clearSignalRuntimeForTest } from "./runtime.test-support.js";
 import type { SignalIngressMonitor } from "./signal-ingress.js";
 
 type SignalDaemonExitEvent = Awaited<SignalDaemonHandle["exited"]>;
 
-type SignalToolResultTestMocks = {
+type SignalToolResultMocks = {
   waitForTransportReadyMock: MockFn;
   enqueueSystemEventMock: MockFn;
   sendMock: MockFn;
@@ -26,19 +27,35 @@ type SignalToolResultTestMocks = {
   assertSignalDaemonEndpointAvailableMock: MockFn;
   spawnSignalDaemonMock: MockFn;
 };
-
-const waitForTransportReadyMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
-const enqueueSystemEventMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
-const sendMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
-const replyMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
-const updateLastRouteMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
-const readAllowFromStoreMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
-const upsertPairingRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
-const streamMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
-const signalCheckMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
-const signalRpcRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
-const assertSignalDaemonEndpointAvailableMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
-const spawnSignalDaemonMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const signalToolResultMocks: SignalToolResultMocks = vi.hoisted(() => ({
+  waitForTransportReadyMock: vi.fn(),
+  enqueueSystemEventMock: vi.fn(),
+  sendMock: vi.fn(),
+  replyMock: vi.fn(),
+  updateLastRouteMock: vi.fn(),
+  readAllowFromStoreMock: vi.fn(),
+  upsertPairingRequestMock: vi.fn(),
+  streamMock: vi.fn(),
+  signalCheckMock: vi.fn(),
+  signalRpcRequestMock: vi.fn(),
+  assertSignalDaemonEndpointAvailableMock: vi.fn(),
+  spawnSignalDaemonMock: vi.fn(),
+}));
+export { signalToolResultMocks };
+const {
+  waitForTransportReadyMock,
+  enqueueSystemEventMock,
+  sendMock,
+  replyMock,
+  updateLastRouteMock,
+  readAllowFromStoreMock,
+  upsertPairingRequestMock,
+  streamMock,
+  signalCheckMock,
+  signalRpcRequestMock,
+  assertSignalDaemonEndpointAvailableMock,
+  spawnSignalDaemonMock,
+} = signalToolResultMocks;
 const signalToolResultSessionStore = vi.hoisted(() => ({ path: "" }));
 const signalToolResultIngressMonitor = vi.hoisted(() => ({
   current: undefined as SignalIngressMonitor | undefined,
@@ -46,7 +63,7 @@ const signalToolResultIngressMonitor = vi.hoisted(() => ({
 let signalToolResultState: OpenClawTestState | undefined;
 let signalToolResultIngressQueue: ReturnType<typeof createChannelIngressQueueForTests> | undefined;
 
-export function toSignalToolResultTestError(value: unknown, fallbackMessage: string): Error {
+function toSignalToolResultTestError(value: unknown, fallbackMessage: string): Error {
   return value instanceof Error ? value : new Error(fallbackMessage, { cause: value });
 }
 
@@ -58,7 +75,7 @@ export async function waitForSignalToolResultIngressDispatchIdle() {
   await monitor.waitForIdle();
 }
 
-export async function waitForSignalToolResultIngressIdle() {
+async function waitForSignalToolResultIngressIdle() {
   const queue = signalToolResultIngressQueue;
   if (!queue) {
     throw new Error("Signal tool-result ingress monitor is not initialized");
@@ -80,68 +97,65 @@ export async function waitForSignalToolResultIngressIdle() {
   );
 }
 
-export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
-  return {
-    waitForTransportReadyMock,
-    enqueueSystemEventMock,
-    sendMock,
-    replyMock,
-    updateLastRouteMock,
-    readAllowFromStoreMock,
-    upsertPairingRequestMock,
-    streamMock,
-    signalCheckMock,
-    signalRpcRequestMock,
-    assertSignalDaemonEndpointAvailableMock,
-    spawnSignalDaemonMock,
-  };
+export async function receiveSignalPayloads(params: {
+  payloads: unknown[];
+  opts?: Partial<MonitorSignalOpts>;
+}) {
+  const abortController = new AbortController();
+  let ingressError: Error | undefined;
+  streamMock.mockImplementation(async ({ onEvent }) => {
+    try {
+      for (const payload of params.payloads) {
+        await onEvent({
+          event: "receive",
+          data: JSON.stringify(payload),
+        });
+      }
+      await waitForSignalToolResultIngressIdle();
+    } catch (error) {
+      ingressError = toSignalToolResultTestError(error, "Signal ingress delivery failed");
+    } finally {
+      abortController.abort();
+    }
+  });
+
+  const { monitorSignalProvider } = await import("./monitor.js");
+  await monitorSignalProvider({
+    autoStart: false,
+    baseUrl: "http://127.0.0.1:8080",
+    abortSignal: abortController.signal,
+    ...params.opts,
+  });
+  if (ingressError) {
+    throw ingressError;
+  }
 }
 
-export let config: Record<string, unknown> = {};
+let config: Record<string, unknown> = {};
 
-export function setSignalToolResultTestConfig(next: Record<string, unknown>) {
-  config = next;
-}
-
-export function createSignalToolResultConfig(
+export function configureSignalToolResultTest(
   overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
+  messages?: Record<string, unknown>,
+) {
   const base = config as { channels?: Record<string, unknown> };
   const channels = base.channels ?? {};
   const signal = (channels.signal ?? {}) as Record<string, unknown>;
-  const {
-    autoStart,
-    cliPath,
-    configPath,
-    httpHost,
-    httpPort,
-    startupTimeoutMs,
-    receiveMode,
-    ignoreAttachments,
-    ignoreStories,
-    ...accountOverrides
-  } = overrides;
+  const { autoStart, httpPort, ...accountOverrides } = overrides;
   const transport =
     autoStart === false
       ? { kind: "external-native", url: "http://127.0.0.1:8080" }
       : {
           kind: "managed-native",
-          ...(typeof cliPath === "string" ? { cliPath } : {}),
-          ...(typeof configPath === "string" ? { configPath } : {}),
-          ...(typeof httpHost === "string" ? { httpHost } : {}),
           ...(typeof httpPort === "number" ? { httpPort } : {}),
-          ...(typeof startupTimeoutMs === "number" ? { startupTimeoutMs } : {}),
-          ...(receiveMode === "on-start" || receiveMode === "manual" ? { receiveMode } : {}),
-          ...(typeof ignoreStories === "boolean" ? { ignoreStories } : {}),
         };
-  return {
+  config = {
     ...base,
+    ...(messages ? { messages } : {}),
     channels: {
       ...channels,
       signal: {
         ...signal,
         transport,
-        ...(typeof ignoreAttachments === "boolean" ? { ignoreAttachments } : {}),
         dmPolicy: "open",
         allowFrom: ["*"],
         ...accountOverrides,
@@ -151,46 +165,32 @@ export function createSignalToolResultConfig(
 }
 
 export function createMockSignalDaemonHandle(
-  overrides: {
-    stop?: MockFn;
-    exited?: Promise<SignalDaemonExitEvent>;
-    isExited?: () => boolean;
-  } = {},
+  overrides: Partial<SignalDaemonHandle> = {},
 ): SignalDaemonHandle {
-  const stop = overrides.stop ?? (vi.fn() as unknown as MockFn);
-  const exited = overrides.exited ?? new Promise<SignalDaemonExitEvent>(() => {});
-  const isExited = overrides.isExited ?? (() => false);
   return {
-    stop: stop as unknown as () => Promise<void>,
-    exited,
-    isExited,
+    stop: vi.fn(),
+    exited: new Promise<SignalDaemonExitEvent>(() => {}),
+    ...overrides,
   };
 }
 
 // Use importActual so shared-worker mocks from earlier test files do not leak
 // into this harness's partial overrides.
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
-  >("openclaw/plugin-sdk/runtime-config-snapshot");
-  return {
-    ...actual,
-    getRuntimeConfig: () => config,
-  };
-});
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => ({
+  ...(await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>(
+    "openclaw/plugin-sdk/runtime-config-snapshot",
+  )),
+  captureRuntimeConfigAsyncReader: () => async () => config,
+}));
 
-vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => ({
+  ...(await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
     "openclaw/plugin-sdk/session-store-runtime",
-  );
-  return {
-    ...actual,
-    resolveStorePath: vi.fn(() => signalToolResultSessionStore.path),
-    updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
-    readSessionUpdatedAt: vi.fn(() => undefined),
-    recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
-  };
-});
+  )),
+  resolveStorePath: vi.fn(() => signalToolResultSessionStore.path),
+  updateLastRoute: updateLastRouteMock,
+  recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
@@ -198,6 +198,13 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   );
   return {
     ...actual,
+    resolveInboundSessionEnvelopeContextAsync: vi.fn(
+      async ({ cfg }: Parameters<typeof actual.resolveInboundSessionEnvelopeContextAsync>[0]) => ({
+        storePath: signalToolResultSessionStore.path,
+        envelopeOptions: actual.resolveEnvelopeFormatOptions(cfg),
+        previousTimestamp: undefined,
+      }),
+    ),
     runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
       const resolveTurn = params.adapter.resolveTurn;
       return await actual.runChannelInboundEvent({
@@ -223,60 +230,48 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   };
 });
 
-vi.mock("./send.js", async () => {
-  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
-  return {
-    ...actual,
-    sendMessageSignal: (...args: unknown[]) => sendMock(...args),
-    sendTypingSignal: vi.fn().mockResolvedValue(true),
-    sendReadReceiptSignal: vi.fn().mockResolvedValue(true),
-  };
-});
+vi.mock("./send.js", async () => ({
+  ...(await vi.importActual<typeof import("./send.js")>("./send.js")),
+  sendMessageSignal: sendMock,
+  sendTypingSignal: vi.fn().mockResolvedValue(true),
+  sendReadReceiptSignal: vi.fn().mockResolvedValue(true),
+}));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => ({
+  ...(await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
     "openclaw/plugin-sdk/conversation-runtime",
-  );
-  return {
-    ...actual,
-    readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-  };
-});
+  )),
+  readChannelAllowFromStore: readAllowFromStoreMock,
+  upsertChannelPairingRequest: upsertPairingRequestMock,
+}));
 
-vi.mock("openclaw/plugin-sdk/security-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
+vi.mock("openclaw/plugin-sdk/security-runtime", async () => ({
+  ...(await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
     "openclaw/plugin-sdk/security-runtime",
-  );
-  return {
-    ...actual,
-    readStoreAllowFromForDmPolicy: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  };
-});
+  )),
+  readStoreAllowFromForDmPolicy: readAllowFromStoreMock,
+}));
 
-vi.mock("./client.js", async () => {
-  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
-  return {
-    ...actual,
-    streamSignalEvents: (...args: unknown[]) => streamMock(...args),
-    signalCheck: (...args: unknown[]) => signalCheckMock(...args),
-    signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
-  };
-});
+vi.mock("./client.js", async () => ({
+  ...(await vi.importActual<typeof import("./client.js")>("./client.js")),
+  streamSignalEvents: streamMock,
+  signalCheck: signalCheckMock,
+  signalRpcRequest: signalRpcRequestMock,
+}));
 
+// mock-isolation: Exercise ingress settlement without opening a daemon transport.
 vi.mock("./client-adapter.js", () => ({
-  streamSignalEvents: (...args: unknown[]) => streamMock(...args),
-  signalCheck: (...args: unknown[]) => signalCheckMock(...args),
-  signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
+  streamSignalEvents: streamMock,
+  signalCheck: signalCheckMock,
+  signalRpcRequest: signalRpcRequestMock,
 }));
 
 vi.mock("./daemon.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./daemon.js")>();
   return {
     ...actual,
-    assertSignalDaemonEndpointAvailable: (...args: unknown[]) =>
-      assertSignalDaemonEndpointAvailableMock(...args),
-    spawnSignalDaemon: (...args: unknown[]) => spawnSignalDaemonMock(...args),
+    assertSignalDaemonEndpointAvailable: assertSignalDaemonEndpointAvailableMock,
+    spawnSignalDaemon: spawnSignalDaemonMock,
   };
 });
 
@@ -293,8 +288,9 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async () => {
   };
 });
 
+// mock-isolation: Drive readiness explicitly without polling a live daemon.
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
-  waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
+  waitForTransportReady: waitForTransportReadyMock,
 }));
 
 vi.mock("./signal-ingress.js", async () => {
@@ -315,7 +311,7 @@ export function installSignalToolResultTestHooks() {
   beforeEach(async () => {
     const [{ resetInboundDedupe }, { resetSystemEventsForTest }] = await Promise.all([
       import("openclaw/plugin-sdk/reply-runtime"),
-      import("openclaw/plugin-sdk/system-event-runtime"),
+      import("openclaw/plugin-sdk/test-fixtures"),
     ]);
     resetInboundDedupe();
     signalToolResultState = await createOpenClawTestState({
@@ -367,18 +363,17 @@ export function installSignalToolResultTestHooks() {
       },
     };
 
-    sendMock.mockReset().mockResolvedValue(undefined);
-    replyMock.mockReset();
-    updateLastRouteMock.mockReset();
-    streamMock.mockReset();
-    signalCheckMock.mockReset().mockResolvedValue({ ok: true });
-    signalRpcRequestMock.mockReset().mockResolvedValue({});
-    assertSignalDaemonEndpointAvailableMock.mockReset().mockResolvedValue(undefined);
-    spawnSignalDaemonMock.mockReset().mockReturnValue(createMockSignalDaemonHandle());
-    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-    waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
-    enqueueSystemEventMock.mockReset();
+    for (const mock of Object.values(signalToolResultMocks)) {
+      mock.mockReset();
+    }
+    sendMock.mockResolvedValue(undefined);
+    signalCheckMock.mockResolvedValue({ ok: true });
+    signalRpcRequestMock.mockResolvedValue({});
+    assertSignalDaemonEndpointAvailableMock.mockResolvedValue(undefined);
+    spawnSignalDaemonMock.mockReturnValue(createMockSignalDaemonHandle());
+    readAllowFromStoreMock.mockResolvedValue([]);
+    upsertPairingRequestMock.mockResolvedValue({ code: "PAIRCODE", created: true });
+    waitForTransportReadyMock.mockResolvedValue(undefined);
 
     resetSystemEventsForTest();
   });

@@ -132,9 +132,7 @@ it.each([
           });
         }
         if (!selected && !foreign) {
-          expect(inspection.serviceMutationSkipMessage).toContain(
-            "Restart the Gateway you launched manually",
-          );
+          expect(inspection.serviceMutationSkipMessage).toContain("openclaw gateway stop");
           expect(inspection.serviceEnv).toBeUndefined();
         }
         expect(native.stop).not.toHaveBeenCalled();

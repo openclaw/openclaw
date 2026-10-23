@@ -1,10 +1,6 @@
-// Renders detected-Codex activation responses through the real Model Setup UI.
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import * as setup from "./model-setup-fixtures.test-support.ts";
 import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -16,20 +12,12 @@ suite.define(() => {
   it.each(["before", "after"] as const)(
     "renders detected Codex activation %s guided sign-in",
     async (state) => {
-      const artifacts = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
-        ? createControlUiE2eArtifactDir(
-            "codex-sign-in-" + state,
-            process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR,
-          )
-        : undefined;
       await suite.withPage(
-        {
+        setup.setupContext({
           viewport: { width: 1280, height: 900 },
-          locale: "en-US",
           colorScheme: "light",
-          serviceWorkers: "block",
           reducedMotion: "reduce",
-        },
+        }),
         async ({ page }) => {
           const gateway = await installSetupGateway(page, {
             featureMethods: [
@@ -40,72 +28,35 @@ suite.define(() => {
               "wizard.next",
             ],
             methodResponses: {
-              "openclaw.setup.detect": {
+              "openclaw.setup.detect": setup.makeDetection({
                 candidates: [
-                  {
-                    kind: "codex-cli",
+                  setup.candidate("codex-cli", "Codex", "openai/default", {
                     brandId: "openai",
-                    label: "Codex",
-                    modelRef: "openai/default",
                     detail: "installed; ChatGPT login found",
-                    credentials: true,
-                    recommended: false,
-                  },
+                  }),
                 ],
-                manualProviders: [],
-                workspace: "/tmp/openclaw-e2e",
                 setupComplete: true,
-              },
-              "openclaw.setup.activate.start": {
-                sessionId: "codex-sign-in",
-                done: false,
-                status: "running",
-              },
+              }),
+              "openclaw.setup.activate.start": setup.runningWizard("codex-sign-in"),
               "wizard.next":
                 state === "before"
-                  ? {
-                      done: true,
-                      status: "error",
-                      error: 'No API key found for provider "openai".',
-                      activationRejection: {
-                        disposition: "rejected-before-promotion",
-                        status: "auth",
-                      },
-                    }
+                  ? setup.activationFailure('No API key found for provider "openai".', "auth")
                   : {
                       sequence: [
-                        {
-                          done: false,
-                          status: "running",
-                          step: {
-                            id: "scope",
-                            type: "note",
-                            message: "Scope: System / agent",
-                            executor: "client",
+                        setup.runningStep("scope", "note", "Scope: System / agent", {
+                          executor: "client",
+                        }),
+                        setup.runningStep("device-code", "progress", "Sign in to OpenAI.", {
+                          executor: "gateway",
+                          title: "OpenAI device code",
+                          externalUrl: "https://example.com/device",
+                          deviceCode: {
+                            code: "DEMO-1234",
+                            expiresInMinutes: 15,
+                            message: "Enter this one-time code on the sign-in page.",
                           },
-                        },
-                        {
-                          done: false,
-                          status: "running",
-                          step: {
-                            id: "device-code",
-                            type: "progress",
-                            executor: "gateway",
-                            title: "OpenAI device code",
-                            message: "Sign in to connect OpenAI to OpenClaw.",
-                            externalUrl: "https://example.com/device",
-                            deviceCode: {
-                              code: "DEMO-1234",
-                              expiresInMinutes: 15,
-                              message: "Enter this one-time code on the sign-in page.",
-                            },
-                          },
-                        },
-                        {
-                          done: true,
-                          status: "done",
-                          modelActivation: { modelRef: "openai/default" },
-                        },
+                        }),
+                        setup.activated("openai/default"),
                       ],
                     },
             },
@@ -124,18 +75,12 @@ suite.define(() => {
             await gateway.deferNext("wizard.next");
             await gateway.resolveDeferred("wizard.next");
             await page.getByText("DEMO-1234", { exact: true }).waitFor();
-            await page.getByRole("link", { name: "Open sign-in" }).waitFor();
-            await page.getByRole("button", { name: "Cancel", exact: true }).waitFor();
+            await page.getByRole("link", { name: "Reopen browser tab" }).waitFor();
+            await page.getByRole("button", { name: "Cancel sign-in", exact: true }).waitFor();
           } else {
             await page
               .getByText('No API key found for provider "openai".', { exact: true })
               .waitFor();
-          }
-          if (artifacts) {
-            await writeFile(
-              path.join(artifacts, state + ".png"),
-              await takeControlUiViewportScreenshot(page, page.locator(".model-setup-wizard"), []),
-            );
           }
           if (state === "after") {
             await gateway.resolveDeferred("wizard.next");

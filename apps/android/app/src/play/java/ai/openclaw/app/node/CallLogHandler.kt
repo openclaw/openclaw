@@ -8,9 +8,5 @@ class CallLogHandler(
 ) {
   fun handleCallLogSearch(
     @Suppress("unused") paramsJson: String?,
-  ): GatewaySession.InvokeResult =
-    GatewaySession.InvokeResult.error(
-      code = "CALL_LOG_UNAVAILABLE",
-      message = "CALL_LOG_UNAVAILABLE: call log not available on this build",
-    )
+  ): GatewaySession.InvokeResult = nodeInvokeError("CALL_LOG_UNAVAILABLE", "call log not available on this build")
 }

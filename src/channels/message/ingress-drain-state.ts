@@ -1,5 +1,4 @@
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.types.js";
 
 export class IngressAdoptionLostError extends Error {
@@ -18,6 +17,10 @@ export function isIngressAdoptionLostError(error: unknown): error is IngressAdop
 
 export type ChannelIngressDrainDispatchResult =
   | { kind: "completed" }
+  /** The dispatch owner already committed this claim to its durable receipt. */
+  | { kind: "transferred" }
+  /** Normal admission backpressure; the caller owns the next wake. */
+  | { kind: "pending" }
   | { kind: "deferred" }
   | { kind: "failed-retryable"; error: unknown };
 
@@ -42,30 +45,34 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   settleOnce: (fn: () => Promise<void>) => Promise<void>;
 };
 
+export function isPreAdoptionState<TPayload, TMetadata>(
+  state: ActiveHandlerState<TPayload, TMetadata>,
+): boolean {
+  return (
+    (state.phase === "dispatching" || state.phase === "deferred") &&
+    !state.guillotined &&
+    !state.superseded
+  );
+}
+
 export function createIngressSettleOwner<TPayload, TMetadata>(
   state: ActiveHandlerState<TPayload, TMetadata>,
   removeActive: (state: ActiveHandlerState<TPayload, TMetadata>) => void,
 ): (fn: () => Promise<void>) => Promise<void> {
   let settlePromise: Promise<void> | undefined;
-  let settled = false;
   return async (fn) => {
-    if (settled) {
+    if (state.phase === "settled") {
       return;
     }
     if (settlePromise) {
-      await settlePromise;
-      return;
+      return settlePromise;
     }
-    const settlement = createDeferredCore();
-    settlePromise = settlement.promise;
-    state.settlement = settlePromise;
-    void (async () => {
+    settlePromise = Promise.resolve().then(async () => {
       try {
         // Only mark settled after the tombstone/fail/release write commits.
         // Write failure must keep heartbeat + in-memory ownership (wedged > duplicated).
         await fn();
         state.settlementFailure = undefined;
-        settled = true;
         state.phase = "settled";
         removeActive(state);
       } catch (error) {
@@ -74,7 +81,8 @@ export function createIngressSettleOwner<TPayload, TMetadata>(
       } finally {
         state.settlement = undefined;
       }
-    })().then(settlement.resolve, settlement.reject);
+    });
+    state.settlement = settlePromise;
     try {
       await settlePromise;
     } catch (err) {

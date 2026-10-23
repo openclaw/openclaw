@@ -2,12 +2,12 @@ import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-co
 import {
   fetchClawHubJson,
   readClawHubBooleanField,
+  readClawHubNonEmptyStringFields,
   readClawHubStringArrayField,
   readClawHubStringField,
   readRequiredClawHubBooleanField,
   readRequiredClawHubNumberField,
   readRequiredClawHubStringField,
-  type ClawHubFetch,
 } from "./clawhub-client.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 
@@ -39,8 +39,6 @@ export type ClawHubPromotion = {
   launchPageUrl?: string;
 };
 
-type ClawHubPromotionDetails = Omit<ClawHubPromotion, "status" | "active">;
-
 // Shell-safe contract for provider/model refs: they are echoed into
 // copy-paste CLI commands, so whitespace and shell metacharacters must fail
 // parsing rather than reach a terminal.
@@ -56,11 +54,8 @@ function parseClawHubPromotionModel(value: unknown, context: string): ClawHubPro
   }
   const model: ClawHubPromotionModel = {
     modelRef,
+    ...readClawHubNonEmptyStringFields(value, ["alias"], context),
   };
-  const alias = readClawHubStringField(value, "alias", context);
-  if (alias) {
-    model.alias = alias;
-  }
   const suggestedDefault = readClawHubBooleanField(value, "suggestedDefault", context);
   if (suggestedDefault !== undefined) {
     model.suggestedDefault = suggestedDefault;
@@ -74,10 +69,11 @@ const CLAWHUB_PROMOTION_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 const CLAWHUB_PROMOTION_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._@/-]*$/;
 
-function parseClawHubPromotionCore(
-  value: Record<string, unknown>,
-  context: string,
-): ClawHubPromotionDetails {
+function parseClawHubPromotion(value: unknown): ClawHubPromotion {
+  const context = "promotion";
+  if (!isJsonObject(value)) {
+    throw new Error(`Malformed ClawHub ${context}: expected an object.`);
+  }
   const modelsRaw = value.models;
   if (!Array.isArray(modelsRaw) || modelsRaw.length === 0) {
     throw new Error(`Malformed ClawHub ${context}: expected models to be a non-empty array.`);
@@ -91,21 +87,19 @@ function parseClawHubPromotionCore(
   if (endsAt <= startsAt) {
     throw new Error(`Malformed ClawHub ${context}: promotion window must end after it starts.`);
   }
-  const promotion: ClawHubPromotionDetails = {
+  const promotion: Omit<ClawHubPromotion, "status" | "active"> = {
     slug,
     title: readRequiredClawHubStringField(value, "title", context),
     blurb: readRequiredClawHubStringField(value, "blurb", context),
     startsAt,
     endsAt,
     models: modelsRaw.map((entry) => parseClawHubPromotionModel(entry, context)),
+    ...readClawHubNonEmptyStringFields(
+      value,
+      ["sponsor", "signupUrl", "docsUrl", "launchPageUrl"],
+      context,
+    ),
   };
-  const optionalStrings = ["sponsor", "signupUrl", "docsUrl", "launchPageUrl"] as const;
-  for (const field of optionalStrings) {
-    const parsed = readClawHubStringField(value, field, context);
-    if (parsed) {
-      promotion[field] = parsed;
-    }
-  }
   // Identifier fields are echoed into error messages and config; hold them to
   // a safe identifier grammar so remote payloads cannot smuggle terminal
   // controls or whitespace through failure paths.
@@ -132,33 +126,16 @@ function parseClawHubPromotionCore(
     }
     promotion.pluginNames = pluginNames;
   }
-  return promotion;
-}
-
-function parseClawHubPromotion(value: unknown): ClawHubPromotion {
-  const context = "promotion";
-  if (!isJsonObject(value)) {
-    throw new Error(`Malformed ClawHub ${context}: expected an object.`);
-  }
   return {
-    ...parseClawHubPromotionCore(value, context),
+    ...promotion,
     status: readRequiredClawHubStringField(value, "status", context),
     active: readRequiredClawHubBooleanField(value, "active", context),
   };
 }
 
-export async function fetchClawHubPromotions(
-  params: {
-    baseUrl?: string;
-    timeoutMs?: number;
-    fetchImpl?: ClawHubFetch;
-  } = {},
-): Promise<ClawHubPromotion[]> {
+export async function fetchClawHubPromotions(): Promise<ClawHubPromotion[]> {
   const response = await fetchClawHubJson<unknown>({
-    baseUrl: params.baseUrl,
     path: "/api/v1/promotions",
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
   if (!isJsonObject(response) || !Array.isArray(response.promotions)) {
     throw new Error("Malformed ClawHub promotions response: expected a promotions array.");
@@ -166,17 +143,9 @@ export async function fetchClawHubPromotions(
   return response.promotions.map((entry) => parseClawHubPromotion(entry));
 }
 
-export async function fetchClawHubPromotion(params: {
-  slug: string;
-  baseUrl?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubPromotion> {
+export async function fetchClawHubPromotion(params: { slug: string }): Promise<ClawHubPromotion> {
   const response = await fetchClawHubJson<unknown>({
-    baseUrl: params.baseUrl,
     path: `/api/v1/promotions/${encodeURIComponent(params.slug)}`,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
   return parseClawHubPromotion(response);
 }

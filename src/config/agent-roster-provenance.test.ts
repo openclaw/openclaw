@@ -35,7 +35,7 @@ describe("agent roster include provenance", () => {
   it("recognizes an include at the entries boundary", () => {
     const value = snapshot({
       parsed: { agents: { entries: { $include: "./agents.json" } } },
-      sourceConfigBeforeMigrations: { agents: { entries: { ops: { default: true } } } },
+      sourceConfigBeforeMigrations: { agents: { entries: { ops: {} } } },
     });
 
     expect(configIncludeOwnsAgentRoster(value)).toBe(true);

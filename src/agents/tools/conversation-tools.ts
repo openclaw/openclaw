@@ -11,6 +11,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -24,6 +25,7 @@ import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
+import { createSessionsSendTool } from "./sessions-send-tool.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
@@ -46,8 +48,7 @@ const ConversationsSendSchema = Type.Object(
 
 const ConversationsTurnSchema = Type.Object(
   {
-    conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN.source }),
-    message: Type.String({ minLength: 1 }),
+    ...ConversationsSendSchema.properties,
     timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 300 })),
   },
   { additionalProperties: false },
@@ -59,14 +60,6 @@ type ConversationToolOptions = {
   agentSessionKey?: string;
   config?: OpenClawConfig;
   senderIsOwner?: boolean;
-};
-
-type ConversationToolDeps = {
-  callGateway: AgentToolGatewayRequestCaller;
-};
-
-const defaultDeps: ConversationToolDeps = {
-  callGateway: callAgentToolGatewayRequest,
 };
 
 function resolveToolAgentId(options: ConversationToolOptions): string {
@@ -82,7 +75,6 @@ function requireOwner(options: ConversationToolOptions): void {
 function conversationMessageExecutor(
   action: "send" | "turn",
   options: ConversationToolOptions,
-  deps: ConversationToolDeps,
 ): AnyAgentTool["execute"] {
   return async (toolCallId, args, signal) => {
     requireOwner(options);
@@ -129,72 +121,85 @@ function conversationMessageExecutor(
       };
     }
     return jsonResult(
-      await deps.callGateway<ConversationSendResult | ConversationTurnResult>(request),
+      await callAgentToolGatewayRequest<ConversationSendResult | ConversationTurnResult>(request),
     );
   };
 }
 
-export function createConversationsListTool(
-  options: ConversationToolOptions = {},
-  deps: ConversationToolDeps = defaultDeps,
-): AnyAgentTool {
-  return {
-    label: "Conversations",
-    name: "conversations_list",
-    displaySummary: "List exact external conversation addresses.",
-    description:
-      "List external conversations as stable conversationRef values. Sessions hold local model context; conversationRef selects an exact external channel destination.",
-    parameters: ConversationsListSchema,
-    outputSchema: ConversationListResultSchema,
-    execute: async (_toolCallId, args) => {
-      requireOwner(options);
-      const params = args as Record<string, unknown>;
-      const limit = Math.min(readPositiveIntegerParam(params, "limit") ?? 50, 100);
-      const channel = readToolStringParam(params, "channel");
-      const query = readToolStringParam(params, "query");
-      const result = await deps.callGateway<ConversationListResult>({
-        method: "conversations.list",
-        params: {
-          agentId: resolveToolAgentId(options),
-          limit,
-          ...(channel ? { channel } : {}),
-          ...(query ? { query } : {}),
-        },
-        ...(options.config ? { config: options.config } : {}),
-      });
-      return jsonResult(result);
+export function createHostedConversationTools(
+  options: OpenClawToolsOptions | undefined,
+  sessionAgentId: string,
+  sessionConfig: OpenClawConfig | undefined,
+): AnyAgentTool[] {
+  const conversationOptions = {
+    ...options,
+    agentId: sessionAgentId,
+    agentSessionId: options?.sessionId,
+  };
+  return [
+    {
+      label: "Conversations",
+      name: "conversations_list",
+      displaySummary: "List exact external conversation addresses.",
+      description:
+        "List external conversations as stable conversationRef values. Sessions hold local model context; conversationRef selects an exact external channel destination.",
+      parameters: ConversationsListSchema,
+      outputSchema: ConversationListResultSchema,
+      execute: async (_toolCallId, args) => {
+        requireOwner(conversationOptions);
+        const params = args as Record<string, unknown>;
+        const limit = Math.min(readPositiveIntegerParam(params, "limit") ?? 50, 100);
+        const channel = readToolStringParam(params, "channel");
+        const query = readToolStringParam(params, "query");
+        const result = await callAgentToolGatewayRequest<ConversationListResult>({
+          method: "conversations.list",
+          params: {
+            agentId: resolveToolAgentId(conversationOptions),
+            limit,
+            ...(channel ? { channel } : {}),
+            ...(query ? { query } : {}),
+          },
+          ...(conversationOptions.config ? { config: conversationOptions.config } : {}),
+        });
+        return jsonResult(result);
+      },
     },
-  };
-}
-
-export function createConversationsSendTool(
-  options: ConversationToolOptions = {},
-  deps: ConversationToolDeps = defaultDeps,
-): AnyAgentTool {
-  return {
-    label: "Conversation Send",
-    name: "conversations_send",
-    displaySummary: "Send to an exact external conversation.",
-    description:
-      "Send directly through a conversationRef. This performs channel delivery; it does not run the local agent in the backing session.",
-    parameters: ConversationsSendSchema,
-    outputSchema: ConversationSendResultSchema,
-    execute: conversationMessageExecutor("send", options, deps),
-  };
-}
-
-export function createConversationsTurnTool(
-  options: ConversationToolOptions = {},
-  deps: ConversationToolDeps = defaultDeps,
-): AnyAgentTool {
-  return {
-    label: "Conversation Turn",
-    name: "conversations_turn",
-    displaySummary: "Send and wait for the correlated peer reply.",
-    description:
-      "Send through a conversationRef and wait for its correlated inbound reply. The reply returns here instead of starting a second local agent turn; unsolicited messages still start normal turns.",
-    parameters: ConversationsTurnSchema,
-    outputSchema: ConversationTurnResultSchema,
-    execute: conversationMessageExecutor("turn", options, deps),
-  };
+    {
+      label: "Conversation Send",
+      name: "conversations_send",
+      displaySummary: "Send to an exact external conversation.",
+      description:
+        "Send directly through a conversationRef. This performs channel delivery; it does not run the local agent in the backing session.",
+      parameters: ConversationsSendSchema,
+      outputSchema: ConversationSendResultSchema,
+      execute: conversationMessageExecutor("send", conversationOptions),
+    },
+    {
+      label: "Conversation Turn",
+      name: "conversations_turn",
+      displaySummary: "Send and wait for the correlated peer reply.",
+      description:
+        "Send through a conversationRef and wait for its correlated inbound reply. The reply returns here instead of starting a second local agent turn; unsolicited messages still start normal turns.",
+      parameters: ConversationsTurnSchema,
+      outputSchema: ConversationTurnResultSchema,
+      execute: conversationMessageExecutor("turn", conversationOptions),
+    },
+    // Keep the in-process caller so materialized agent roots retain their creation stamp.
+    createSessionsSendTool({
+      ...options,
+      requesterTurnRunId: options?.runId,
+      agentId: sessionAgentId,
+      // Match sessions_spawn: spawned children record the durable run
+      // session as spawnedBy, so the parent check must use the same key.
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      agentSessionId: options?.sessionId,
+      requesterOrigin: {
+        channel: options?.agentChannel,
+        accountId: options?.agentAccountId,
+        to: options?.currentMessagingTarget ?? options?.currentChannelId ?? options?.agentTo,
+        threadId: options?.currentThreadTs ?? options?.agentThreadId,
+      },
+      config: sessionConfig,
+    }),
+  ];
 }

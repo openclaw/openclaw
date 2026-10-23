@@ -135,7 +135,7 @@ suite.define(() => {
           const previousRequests = (await gateway.getRequests("cron.runs")).length;
           const statusFilter = history.locator('[data-filter="status"]');
           await statusFilter.locator(".cron-filter-dropdown__trigger").click();
-          await statusFilter.locator('wa-dropdown-item[value="option:ok"]').click();
+          await statusFilter.locator('[data-value="option:ok"]').click();
           await expect
             .poll(async () =>
               (await gateway.getRequests("cron.runs")).slice(previousRequests).some((request) => {
@@ -144,7 +144,7 @@ suite.define(() => {
               }),
             )
             .toBe(true);
-          await statusFilter.locator('wa-dropdown-item[value="command:clear"]').click();
+          await statusFilter.locator('[data-value="command:clear"]').click();
           await page.keyboard.press("Escape");
         }
         expect(pageErrors).toEqual([]);

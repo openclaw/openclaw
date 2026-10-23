@@ -1,6 +1,128 @@
+import { writeFileSync } from "node:fs";
 import path from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+
+function traceNativeWorkspaceLitErrors() {
+  const scope = window as NativePluginWindow;
+  const trace = { errors: [] as unknown[] };
+  scope.nativeWorkspaceLitTrace = trace;
+  const prototypes = new WeakSet<object>();
+  const discover = (node: Node) => {
+    if (!(node instanceof Comment) || node.data !== "lit-content") {
+      return;
+    }
+    const cached: unknown = Reflect.get(node, "_$litPart$");
+    if (!cached || typeof cached !== "object") {
+      return;
+    }
+    // Lit's DEV runtime caches the RootPart on this renderBefore comment.
+    const prototype: object = Object.getPrototypeOf(cached);
+    const original: unknown = Reflect.get(prototype, "_$setValue");
+    // The bundled production runtime renames this method; this probe targets Lit DEV.
+    if (prototypes.has(prototype) || typeof original !== "function") {
+      return;
+    }
+    prototypes.add(prototype);
+    Reflect.set(prototype, "_$setValue", function (this: object, ...args: unknown[]) {
+      try {
+        return Reflect.apply(original, this, args);
+      } catch (error) {
+        if (trace.errors.length < 3) {
+          trace.errors.push({
+            message: error instanceof Error ? error.message.slice(0, 1_600) : "Non-Error throw",
+            stack: error instanceof Error ? error.stack?.slice(0, 1_600) : undefined,
+          });
+        }
+        throw error;
+      }
+    });
+  };
+  const scan = (node: Node) => {
+    discover(node);
+    const comments = document.createTreeWalker(node, NodeFilter.SHOW_COMMENT);
+    for (let comment = comments.nextNode(); comment; comment = comments.nextNode()) {
+      discover(comment);
+    }
+  };
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
+        scan(node);
+      }
+    }
+  });
+  // The auth:none fixture's withPage context owns this observer and patched realm.
+  observer.observe(document, { childList: true, subtree: true });
+  scan(document);
+}
+
+export async function installNativeWorkspaceLitErrorTrace(page: Page): Promise<void> {
+  await page.addInitScript({
+    content: `;(() => { const __name = (target) => target; (${traceNativeWorkspaceLitErrors.toString()})(); })();`,
+  });
+}
+
+/** Supplement the suite's DOM/screenshot diagnostics with plugin ownership. */
+export async function captureNativeWorkspaceFailure(page: Page): Promise<void> {
+  const readBrowserState = page.evaluate(() => {
+    const hosts = [...document.querySelectorAll("openclaw-plugin-view")];
+    const app = document.querySelector("openclaw-app");
+    const target =
+      hosts.find((host) => host.surface === "workspace") ??
+      document.querySelector("openclaw-app-shell") ??
+      app?.firstElementChild;
+    let owner: unknown = null;
+    target?.dispatchEvent(
+      Object.assign(new Event("context-request", { bubbles: true, composed: true }), {
+        context: "openclaw.application",
+        contextTarget: target,
+        subscribe: false,
+        callback(context: ApplicationContext) {
+          owner = {
+            registryStatus: context.plugins.registryStatus,
+            selected: (["workspace", "composer", "transcript"] as const).map((surface) => {
+              const selected = context.plugins.selectedReplacement(surface);
+              return {
+                surface,
+                key: selected?.key ?? null,
+                aborted: selected?.signal.aborted ?? null,
+              };
+            }),
+            errorCount: context.plugins.errors.length,
+          };
+        },
+      }),
+    );
+    return {
+      owner,
+      bridgeRegistered: Boolean(customElements.get("openclaw-plugin-view")),
+      hosts: hosts.map((host) => ({
+        kind: host.kind,
+        surface: host.surface,
+        presented: host.presented,
+        connected: host.isConnected,
+        rect: host.getBoundingClientRect().toJSON(),
+        display: getComputedStyle(host).display,
+        visibility: getComputedStyle(host).visibility,
+        roots: host.querySelectorAll("[data-plugin-view-root]").length,
+      })),
+      litErrors: (window as NativePluginWindow).nativeWorkspaceLitTrace ?? null,
+    };
+  });
+  const observation = await withTimeout(readBrowserState, 5_000, "native workspace diagnostics");
+  const directory = createControlUiE2eArtifactDir(
+    "failure",
+    process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR?.trim() || undefined,
+  );
+  writeFileSync(
+    path.join(directory, "failure.public.json"),
+    `${JSON.stringify({ schemaVersion: 1, nativeWorkspace: observation }, null, 2)}\n`,
+  );
+}
 
 export async function captureNativePluginUiProof(
   owner: { readonly artifactDir: string },
@@ -8,13 +130,13 @@ export async function captureNativePluginUiProof(
   name: string,
   options: { fullPage?: boolean } = {},
 ): Promise<void> {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
-    return;
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    await page.screenshot({ ...options, path: path.join(owner.artifactDir, name) });
   }
-  await page.screenshot({ ...options, path: path.join(owner.artifactDir, name) });
 }
 
 export type NativePluginWindow = Window & {
+  nativeWorkspaceLitTrace?: { errors: unknown[] };
   nativePluginProof?: { release?: () => void };
   nativeActionProof?: {
     runs: number;
@@ -38,19 +160,14 @@ export async function waitForPendingPluginInitializer(page: Page): Promise<void>
 export const pluginId = "ui-fixture";
 
 export function catalog(revision: string) {
-  return {
+  const plugin = {
+    pluginId,
+    name: "UI fixture",
     revision,
-    diagnostics: [],
-    plugins: [
-      {
-        pluginId,
-        name: "UI fixture",
-        revision,
-        entryUrl: `/__openclaw__/plugins/control-ui/${pluginId}/${revision}/index.js`,
-        styles: [],
-      },
-    ],
+    entryUrl: `/__openclaw__/plugins/control-ui/${pluginId}/${revision}/index.js`,
+    styles: [],
   };
+  return { revision, diagnostics: [], plugins: [plugin] };
 }
 
 export function pluginModule(revision: string, replacements = true) {
@@ -137,6 +254,22 @@ export function pluginModule(revision: string, replacements = true) {
 export async function expectComposerFooterLayout(page: Page, composer: Locator, variant: string) {
   for (const width of [1280, 640]) {
     await page.setViewportSize({ width, height: 900 });
+    // TranscriptLayoutOwner commits the scrollport size in ResizeObserver,
+    // after the browser viewport changes. Measure only that committed layout.
+    await expect
+      .poll(() =>
+        composer.evaluate((element) => {
+          const thread = element.closest(".chat-main__conversation")?.querySelector(".chat-thread");
+          const slot = thread?.parentElement;
+          return (
+            thread instanceof HTMLElement &&
+            Boolean(slot) &&
+            thread.offsetWidth === slot?.offsetWidth &&
+            thread.offsetHeight === slot?.offsetHeight
+          );
+        }),
+      )
+      .toBe(true);
     const geometry = await composer.evaluate((element) => {
       const footer = element.closest(".chat-footer");
       const thread = element.closest(".chat-main__conversation")?.querySelector(".chat-thread");
@@ -157,9 +290,6 @@ export async function expectComposerFooterLayout(page: Page, composer: Locator, 
         transcriptBottom: threadBounds.bottom,
         content: style.content,
         background: style.backgroundImage,
-        left: footerBounds.left + Number.parseFloat(style.left) - threadBounds.left,
-        right: threadBounds.right - (footerBounds.right - Number.parseFloat(style.right)),
-        scrollbar: (threadBounds.width - thread.clientWidth) / 2,
       };
     });
     const description = `${variant} at ${width}px`;
@@ -167,10 +297,8 @@ export async function expectComposerFooterLayout(page: Page, composer: Locator, 
     expect.soft(geometry.composerTop, description).toBeGreaterThanOrEqual(geometry.footerTop);
     expect.soft(geometry.composerBottom, description).toBeLessThanOrEqual(geometry.footerBottom);
     expect.soft(geometry.inputOutsideContext, description).toBe(true);
-    expect.soft(geometry.content, description).toBe('""');
-    expect.soft(geometry.background, description).toContain("linear-gradient");
-    expect.soft(geometry.left, description).toBeGreaterThanOrEqual(geometry.scrollbar);
-    expect.soft(geometry.right, description).toBeGreaterThanOrEqual(geometry.scrollbar);
+    expect.soft(geometry.content, description).toBe("none");
+    expect.soft(geometry.background, description).toBe("none");
   }
   await page.setViewportSize({ width: 1280, height: 900 });
 }

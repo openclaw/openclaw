@@ -1,115 +1,136 @@
-import { describe, expect, it, vi } from "vitest";
-import { resolvePairingGatewayUrl } from "./setup-code.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { classifyGatewaySecret } from "../../ui/src/lib/gateway-secret-shape.ts";
+import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
+import {
+  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+} from "../shared/device-bootstrap-profile.js";
+import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
+import {
+  encodePairingSetupCode,
+  resolvePairingGatewayUrl,
+  resolvePairingSetupFromConfig,
+} from "./setup-code.js";
+
+// mock-isolation: Keep bootstrap credential issuance outside this URL and payload fixture.
+vi.mock("../infra/device-bootstrap.js", () => ({
+  issueDevicePairSetupBootstrapToken: vi.fn(async () => ({
+    token: "bootstrap-123",
+    expiresAtMs: 123,
+    setupId: "setup-123",
+  })),
+}));
 
 const options = { env: {}, networkInterfaces: () => ({}) };
+const localPassword = "synthetic-local-password";
 
-describe("pairing public origin", () => {
-  it.each([
-    ["https://gateway.example.test", "wss://gateway.example.test"],
-    ["http://127.0.0.1:19821", "ws://127.0.0.1:19821"],
-    ["https://gateway.example.test/openclaw-gw", "wss://gateway.example.test/openclaw-gw"],
-  ])("normalizes gateway.publicOrigin %s", async (publicOrigin, url) => {
+type OriginCase = [
+  NonNullable<Parameters<typeof resolvePairingGatewayUrl>[0]["gateway"]>,
+  Awaited<ReturnType<typeof resolvePairingGatewayUrl>>,
+  Parameters<typeof resolvePairingGatewayUrl>[1]["networkInterfaces"]?,
+];
+it.each<OriginCase>([
+  [
+    { bind: "loopback", publicOrigin: "https://gateway.example.test/openclaw-gw" },
+    { url: "wss://gateway.example.test/openclaw-gw", source: "gateway.publicOrigin" },
+  ],
+  [
+    { bind: "loopback", publicOrigin: "https://gateway.example.test:notaport" },
+    { error: "Configured gateway.publicOrigin is invalid." },
+  ],
+  [
+    { bind: "lan", port: 19001, publicOrigin: "https://gateway.example.test" },
+    { url: "ws://192.168.1.20:19001", source: "gateway.bind=lan" },
+    () =>
+      makeNetworkInterfacesSnapshot({
+        en0: [{ address: "192.168.1.20", family: "IPv4", netmask: "255.255.255.0" }],
+      }),
+  ],
+])(
+  "resolves public-origin fallback for %j",
+  async (gateway, expected, networkInterfaces = options.networkInterfaces) => {
     await expect(
-      resolvePairingGatewayUrl({ gateway: { bind: "loopback", publicOrigin } }, options),
-    ).resolves.toEqual({ url, source: "gateway.publicOrigin" });
+      resolvePairingGatewayUrl({ gateway }, { ...options, networkInterfaces }),
+    ).resolves.toEqual(expected);
+  },
+);
+
+it("preserves Tailscale Funnel ahead of publicOrigin for device pairing", async () => {
+  const config = {
+    gateway: {
+      bind: "loopback",
+      publicOrigin: "https://gateway.example.test",
+      remote: { url: "wss://remote.example.test" },
+      tailscale: { mode: "funnel" },
+    },
+  } satisfies Parameters<typeof resolvePairingGatewayUrl>[0];
+  const runCommandWithTimeout = vi.fn(async () => ({
+    code: 0,
+    stdout: '{"Self":{"DNSName":"gateway.tailnet.ts.net"}}',
+  }));
+  const resolveOptions = { ...options, runCommandWithTimeout };
+  await expect(resolvePairingGatewayUrl(config, resolveOptions)).resolves.toEqual({
+    url: "wss://gateway.tailnet.ts.net",
+    source: "gateway.tailscale.mode=funnel",
   });
-
-  it.each(["serve", "funnel"] as const)(
-    "preserves Tailscale %s ahead of publicOrigin for device pairing",
-    async (mode) => {
-      const config = {
-        gateway: {
-          bind: "loopback",
-          publicOrigin: "https://gateway.example.test",
-          remote: { url: "wss://remote.example.test" },
-          tailscale: { mode },
-        },
-      } satisfies Parameters<typeof resolvePairingGatewayUrl>[0];
-      const runCommandWithTimeout = vi.fn(async () => ({
-        code: 0,
-        stdout: '{"Self":{"DNSName":"gateway.tailnet.ts.net"}}',
-      }));
-      const resolveOptions = { ...options, runCommandWithTimeout };
-      await expect(resolvePairingGatewayUrl(config, resolveOptions)).resolves.toEqual({
-        url: "wss://gateway.tailnet.ts.net",
-        source: `gateway.tailscale.mode=${mode}`,
-      });
-      await expect(
-        resolvePairingGatewayUrl(config, {
-          ...resolveOptions,
-          preferRemoteUrl: true,
-          publicUrl: "https://pairing.example.test",
-        }),
-      ).resolves.toEqual({
-        url: "wss://pairing.example.test",
-        source: "plugins.entries.device-pair.config.publicUrl",
-      });
-      expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each([
-    {
-      preferRemoteUrl: undefined,
-      url: "wss://remote.example.test",
-      source: "gateway.remote.url",
-    },
-    {
+  await expect(
+    resolvePairingGatewayUrl(config, {
+      ...resolveOptions,
       preferRemoteUrl: true,
-      url: "wss://remote.example.test",
-      source: "gateway.remote.url",
-    },
-  ])(
-    "selects $source when preferRemoteUrl=$preferRemoteUrl",
-    async ({ preferRemoteUrl, url, source }) => {
-      await expect(
-        resolvePairingGatewayUrl(
-          {
-            gateway: {
-              publicOrigin: "https://gateway.example.test",
-              remote: { url: "wss://remote.example.test" },
-            },
-          },
-          { ...options, preferRemoteUrl },
-        ),
-      ).resolves.toEqual({ url, source });
-    },
-  );
-
-  it("preserves the advertised LAN address when publicOrigin is configured", async () => {
-    await expect(
-      resolvePairingGatewayUrl(
-        { gateway: { bind: "lan", port: 19001, publicOrigin: "https://gateway.example.test" } },
-        {
-          ...options,
-          networkInterfaces: () => ({
-            en0: [
-              {
-                address: "192.168.1.20",
-                family: "IPv4",
-                internal: false,
-                netmask: "255.255.255.0",
-                mac: "00:00:00:00:00:00",
-                cidr: "192.168.1.20/24",
-              },
-            ],
-          }),
-        },
-      ),
-    ).resolves.toEqual({ url: "ws://192.168.1.20:19001", source: "gateway.bind=lan" });
+      publicUrl: "https://pairing.example.test",
+    }),
+  ).resolves.toEqual({
+    url: "wss://pairing.example.test",
+    source: "plugins.entries.device-pair.config.publicUrl",
   });
+  expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
+});
 
-  it("rejects an invalid publicOrigin when the loopback fallback needs it", async () => {
-    await expect(
-      resolvePairingGatewayUrl(
-        {
-          gateway: {
-            bind: "loopback",
-            publicOrigin: "https://gateway.example.test:notaport",
-          },
+describe("trusted-proxy pairing setup", () => {
+  beforeEach(() => vi.mocked(issueDevicePairSetupBootstrapToken).mockClear());
+
+  it.each<[string, NodeJS.ProcessEnv, string | undefined, boolean]>([
+    ["TLS without shared secret", {}, undefined, false],
+    ["ambient password", { OPENCLAW_GATEWAY_PASSWORD: localPassword }, undefined, false],
+    ["configured password", {}, localPassword, false],
+    ["limited plaintext LAN", {}, undefined, true],
+  ])("preserves trusted-proxy setup: %s", async (_name, env, password, limited) => {
+    const url = limited ? "ws://192.168.1.20:18789" : "wss://gateway.example.test";
+    const result = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "custom",
+          customBindHost: "127.0.0.1",
+          auth: { mode: "trusted-proxy", ...(password ? { password } : {}) },
         },
-        options,
-      ),
-    ).resolves.toEqual({ error: "Configured gateway.publicOrigin is invalid." });
+      },
+      { env, publicUrl: url },
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      authLabel: "trusted-proxy",
+      setupId: "setup-123",
+      expiresAtMs: 123,
+      urlSource: "plugins.entries.device-pair.config.publicUrl",
+      access: limited ? "limited" : "full",
+      accessDowngraded: limited,
+    });
+    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledExactlyOnceWith({
+      profile: limited
+        ? PAIRING_SETUP_BOOTSTRAP_PROFILE
+        : FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    if (result.ok) {
+      expect(result.payload).toEqual({ url, bootstrapToken: "bootstrap-123", expiresAtMs: 123 });
+    }
   });
+});
+
+it("recognizes an encoded setup link in the Control UI even after expiry", () => {
+  const setupCode = encodePairingSetupCode({
+    url: "wss://gateway.example/日本語",
+    bootstrapToken: "synthetic-bootstrap-token",
+    expiresAtMs: 1,
+  });
+  expect(classifyGatewaySecret(`  OC-PAIR://${setupCode}\n`)).toBe("setup-code");
 });

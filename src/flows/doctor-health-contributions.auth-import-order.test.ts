@@ -8,7 +8,7 @@ import {
 } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
-  createAuthProfileMigrationSourceReceipt,
+  prepareAuthProfileSourceReceipt,
   type AuthProfileMigrationSourceReceipt,
 } from "../commands/doctor-auth-migration-receipts.js";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
@@ -22,15 +22,18 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { showDoctorHealthSummary } from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
 } from "./doctor-health-contributions.test-support.js";
 
+// mock-isolation: Scenario fixtures own credential state and migration outcomes; isolate filesystem writes and provider login effects proved by their owner suites.
 vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (config: OpenClawConfig) => ({
     config,
     retiredProfileCleanupPlans: [],
+    findings: [],
   })),
 }));
 
@@ -38,11 +41,12 @@ vi.mock("../commands/doctor-model-catalog-credentials.js", () => ({
   maybeMigrateModelCatalogCredentials: vi.fn(async () => undefined),
 }));
 
+// mock-isolation: Auth migration fixtures isolate live credential stores and OAuth refresh while proving migration and persistence ordering.
 vi.mock("../commands/doctor-auth.js", () => ({
-  noteAuthProfileHealth: vi.fn(async () => undefined),
-  noteCopilotAmbientToken: vi.fn(),
-  noteLegacyCodexProviderOverride: vi.fn(() => undefined),
-  noteSharedAuthStoreStatus: vi.fn(() => undefined),
+  inspectAuthProfileHealth: vi.fn(async () => []),
+  collectCopilotAmbientTokenFindings: vi.fn(() => []),
+  collectLegacyCodexProviderOverrideFindings: vi.fn(() => []),
+  collectSharedAuthStoreFindings: vi.fn(() => []),
 }));
 
 const states: OpenClawTestState[] = [];
@@ -162,16 +166,15 @@ afterEach(async () => {
 });
 
 describe("interactive Doctor auth migration", () => {
-  it.each(["failed", "completed", "declined"] as const)(
+  it.each(["failed", "declined"] as const)(
     "reports interrupted archive recovery when the remaining migration is %s",
     async (outcome) => {
       const state = await makeState();
       const sourcePath = await state.writeText("credentials/oauth.json", "{}\n");
       const sourceBytes = fs.readFileSync(sourcePath);
-      const receipt = createAuthProfileMigrationSourceReceipt({
-        sourcePath,
-        sourceBytes,
-        sourceRecordCount: 0,
+      const receipt = prepareAuthProfileSourceReceipt({
+        pathname: sourcePath,
+        now: Date.now,
         targetDatabasePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
         targetTable: "auth_profile_store",
         env: state.env,
@@ -184,9 +187,12 @@ describe("interactive Doctor auth migration", () => {
           .run("invalid_target", receipt.sourceKey);
       }
       const remainingPath = outcome === "declined" ? await writeLegacyCredentialStore(state) : null;
+      const statePath = outcome === "declined" ? await writeLegacyRotationState(state) : null;
+      const cfg = makeLegacyConfig();
+      const originalConfig = structuredClone(cfg);
       const prompter = makePrompter(false);
       const ctx = createDoctorHealthFlowContext({
-        cfg: {},
+        cfg,
         prompter,
         env: state.env,
         configPath: path.join(state.stateDir, "openclaw.json"),
@@ -194,6 +200,11 @@ describe("interactive Doctor auth migration", () => {
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 
       await authProfileMigrationContribution().run(ctx);
+      showDoctorHealthSummary(ctx);
+      const summary = vi
+        .mocked(ctx.runtime.log)
+        .mock.calls.map(([message]) => message)
+        .join("\n");
 
       const output = stripVTControlCharacters(
         stdout.mock.calls.map(([chunk]) => String(chunk)).join(""),
@@ -202,11 +213,12 @@ describe("interactive Doctor auth migration", () => {
         .replace(/\s+/g, " ");
       stdout.mockRestore();
       if (outcome === "failed") {
-        expect(output).toContain("Doctor warnings");
-        expect(
-          output.match(/Could not finalize an interrupted auth profile archive/g),
-        ).toHaveLength(1);
-        expect(output).toContain("invalid pending auth profile migration receipt");
+        expect(output).not.toContain("Doctor warnings");
+        expect(summary).not.toContain("Historical recovery notices");
+        expect(summary).not.toContain("Could not finalize an interrupted auth profile archive");
+        expect(ctx.updateWarnings).toEqual([
+          expect.stringContaining("Could not finalize an interrupted auth profile archive"),
+        ]);
         expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
         expect(fs.existsSync(receipt.archivePath)).toBe(false);
       } else {
@@ -218,6 +230,9 @@ describe("interactive Doctor auth migration", () => {
       if (remainingPath) {
         expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
         expect(fs.existsSync(remainingPath)).toBe(true);
+        expect(statePath && fs.existsSync(statePath)).toBe(true);
+        expect(ctx.cfg).toEqual(originalConfig);
+        expect(loadMigratedStore(state)).toBeNull();
       } else {
         expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
       }
@@ -249,28 +264,8 @@ describe("interactive Doctor auth migration", () => {
       usageStats: { "openai:chatgpt-bravo": { lastUsed: 123 } },
     });
     expect(ctx.cfg.auth?.profiles).toHaveProperty("openai:chatgpt-bravo");
+    expect(ctx.healthFindings ?? []).toEqual([]);
     expect(ctx.cfg.auth?.profiles).not.toHaveProperty("openai-codex:bravo");
     expect(ctx.cfg.auth?.order?.openai).toEqual(["openai:chatgpt-bravo"]);
-  });
-
-  it("leaves config and standalone state unchanged when migration is declined", async () => {
-    const state = await makeState();
-    const cfg = makeLegacyConfig();
-    const authPath = await writeLegacyCredentialStore(state);
-    const statePath = await writeLegacyRotationState(state);
-    const ctx = createDoctorHealthFlowContext({
-      cfg,
-      cfgForPersistence: structuredClone(cfg),
-      prompter: makePrompter(false),
-      env: state.env,
-      configPath: path.join(state.stateDir, "openclaw.json"),
-    });
-
-    await authProfileMigrationContribution().run(ctx);
-
-    expect(ctx.cfg).toEqual(cfg);
-    expect(fs.existsSync(authPath)).toBe(true);
-    expect(fs.existsSync(statePath)).toBe(true);
-    expect(loadMigratedStore(state)).toBeNull();
   });
 });

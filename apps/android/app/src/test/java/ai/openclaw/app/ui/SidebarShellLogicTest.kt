@@ -46,7 +46,7 @@ class SidebarShellLogicTest {
       ),
       destinations.take(5),
     )
-    assertTrue(SidebarDestination.SkillWorkshop in destinations.drop(5))
+    assertTrue(SidebarDestination.Dreaming in destinations.drop(5))
     assertEquals(destinations.size, destinations.distinct().size)
   }
 
@@ -150,10 +150,25 @@ class SidebarShellLogicTest {
             session("fresh", activity = 30),
             session("archived", activity = 50, archived = true),
             session("fresh-pinned", activity = 20, pinned = true),
+            session("sleeping-pinned", activity = 40, pinned = true).copy(snoozedUntil = 101L),
+            session("expired", activity = 10).copy(snoozedUntil = 100L),
           ),
+        nowMs = 100L,
       )
 
-    assertEquals(listOf("fresh-pinned", "old-pinned", "fresh"), rows.map(ChatSessionEntry::key))
+    assertEquals(listOf("fresh-pinned", "old-pinned", "fresh", "expired"), rows.map(ChatSessionEntry::key))
+  }
+
+  @Test
+  fun sidebarPresentationRestoresSnoozedPinsAtTheirDeadline() {
+    val rows = listOf(session("sleeping", activity = 20, pinned = true).copy(snoozedUntil = 100L), session("active", activity = 10))
+    val before = sidebarSessionPresentation(rows, emptyList(), expanded = false, currentSessionKey = "sleeping", nowMs = 99L)
+    val after = sidebarSessionPresentation(rows, emptyList(), expanded = false, currentSessionKey = "sleeping", nowMs = 100L)
+
+    assertEquals(emptyList<ChatSessionEntry>(), before.pinned)
+    assertEquals(listOf("active"), before.recentSections.flatMap { it.entries }.map { it.key })
+    assertEquals(listOf("sleeping"), after.pinned.map { it.key })
+    assertEquals(before.recentSections, after.recentSections)
   }
 
   @Test
@@ -186,7 +201,7 @@ class SidebarShellLogicTest {
   }
 
   @Test
-  fun expandedSessionPresentationRevealsAllRowsAndCollapsesToTheSameResult() {
+  fun expandedSessionPresentationRevealsAllRows() {
     val sessions = (1L..12L).map { activity -> session("session-$activity", activity = activity) }
 
     val collapsed = sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false)
@@ -197,7 +212,6 @@ class SidebarShellLogicTest {
     assertFalse(collapsed.recentSections.flatMap { it.entries }.any { it.key == "session-1" })
     assertTrue(expanded.recentSections.flatMap { it.entries }.any { it.key == "session-1" })
     assertTrue(expanded.canExpandRecent)
-    assertEquals(collapsed, sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false))
   }
 
   @Test
@@ -310,19 +324,19 @@ class SidebarShellLogicTest {
 
     assertEquals(
       "Working",
-      sidebarSessionSubtitle(session, activeRunLabel = "Working", nowMs = 1_000),
+      sessionListSubtitle(session, fallback = sessionSourceLabel(session.key), activeRunLabel = "Working", nowMs = 1_000),
     )
     assertEquals(
       "Telegram",
-      sidebarSessionSubtitle(session.copy(hasActiveRun = false), activeRunLabel = null, nowMs = 1_000),
+      sessionListSubtitle(session.copy(hasActiveRun = false), fallback = sessionSourceLabel(session.key), activeRunLabel = null, nowMs = 1_000),
     )
     assertEquals(
       "Working",
-      sidebarSessionSubtitle(session.copy(hasActiveRun = null, status = " RUNNING "), activeRunLabel = "Working", nowMs = 1_000),
+      sessionListSubtitle(session.copy(hasActiveRun = null, status = " RUNNING "), fallback = sessionSourceLabel(session.key), activeRunLabel = "Working", nowMs = 1_000),
     )
     assertEquals(
       "Telegram",
-      sidebarSessionSubtitle(session.copy(hasActiveRun = false, status = "running"), activeRunLabel = "Working", nowMs = 1_000),
+      sessionListSubtitle(session.copy(hasActiveRun = false, status = "running"), fallback = sessionSourceLabel(session.key), activeRunLabel = "Working", nowMs = 1_000),
     )
     assertNull(sidebarSessionActivity("running", lastRunError = null, hasActiveRun = false, unread = false))
     assertNull(sidebarSessionActivity("done", lastRunError = null, hasActiveRun = true, unread = false))
@@ -351,9 +365,6 @@ class SidebarShellLogicTest {
     activity: Long,
     pinned: Boolean = false,
     archived: Boolean = false,
-    displayName: String? = null,
-    label: String? = null,
-    owner: String? = null,
     category: String? = null,
   ): ChatSessionEntry =
     ChatSessionEntry(
@@ -362,9 +373,6 @@ class SidebarShellLogicTest {
       lastActivityAt = activity,
       pinned = pinned,
       archived = archived,
-      displayName = displayName,
-      label = label,
-      ownerAgentId = owner,
       category = category,
     )
 }

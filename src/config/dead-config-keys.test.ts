@@ -58,12 +58,8 @@ describe("dead config keys", () => {
     "agents.defaults.videoGenerationModel",
     "agents.defaults.musicGenerationModel",
     "agents.defaults.promptOverlays",
+    "agents.defaults.agentRuntime",
     "agents.defaults.cliBackends",
-    "agents.defaults.heartbeat.ackMaxChars",
-    "agents.defaults.heartbeat.includeReasoning",
-    "agents.defaults.heartbeat.includeSystemPromptSection",
-    "agents.defaults.heartbeat.skipWhenBusy",
-    "agents.defaults.heartbeat.suppressToolErrorWarnings",
     "messages.suppressToolErrors",
     "agents.entries.test.groupChat.visibleReplies",
     "agents.defaults.envelopeTimestamp",
@@ -93,6 +89,7 @@ describe("dead config keys", () => {
     "ui.prefs.showAdvancedSettings",
     "cron.failureDestination",
     "channels.defaults.heartbeat",
+    "channels.defaults.heartbeatVisibility",
     "tools.loopDetection.historySize",
     "tools.loopDetection.warningThreshold",
     "tools.loopDetection.detectors",
@@ -315,11 +312,17 @@ describe("dead config keys", () => {
     });
   });
 
+  it("directs legacy agents.list to Doctor", () => {
+    expect(validateConfigObjectRaw({ agents: { list: [{ id: "main" }] } })).toMatchObject({
+      ok: false,
+      issues: [{ path: "agents.list", message: expect.stringContaining("openclaw doctor --fix") }],
+    });
+  });
+
   it.each([
     ["canvasHost", { enabled: true }],
     ["tui", { footer: { showRemoteHost: true } }],
     ["defaultModel", "openai/gpt-5.6"],
-    ["agents.list", [{ id: "main" }]],
     ["channels.slack.identity", "bot"],
     ["channels.whatsapp.messagePrefix", "x"],
     ["channels.whatsapp.ackReaction", { emoji: "x" }],

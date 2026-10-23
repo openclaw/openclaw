@@ -5,6 +5,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { expect, vi } from "vitest";
+import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -19,7 +20,6 @@ import {
 import { listNodePairing } from "../infra/device-pairing-node.js";
 import { getPairedDevice, resolveNodePairingState } from "../infra/device-pairing.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { NodeRegistry } from "./node-registry.js";
 import { createWatchNodeHttpRuntime } from "./watch-node-http.js";
 
@@ -35,6 +35,7 @@ export async function startWatchNodeHttpRuntime(
     onPollReady?: (response: ServerResponse) => void;
   },
 ) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
   const nodeRegistry = new NodeRegistry({
     resolveCurrentPairingState: async (nodeId) => {
       const state = resolveNodePairingState(await getPairedDevice(nodeId, baseDir));
@@ -52,7 +53,6 @@ export async function startWatchNodeHttpRuntime(
   const runtime = createWatchNodeHttpRuntime({
     nodeRegistry,
     getConfig: () => options?.config ?? {},
-    pairingBaseDir: baseDir,
     broadcast: (event, payload) => broadcasts.push({ event, payload }),
     onNodeConnected: (session) => connectedNodes.push(session.nodeId),
     onNodeDisconnected: (nodeId, reason) => disconnectedNodes.push({ nodeId, reason }),

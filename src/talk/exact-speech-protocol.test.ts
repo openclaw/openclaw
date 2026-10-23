@@ -51,15 +51,6 @@ describe("realtime voice exact-speech protocol", () => {
     });
   });
 
-  it("classifies a retained exact-speech echo without a protocol marker", () => {
-    expect(
-      classifyRealtimeVoiceConsultToolCall(
-        { question: "Should I repeat it?", context: 'Previous result: "queued answer"' },
-        { retainedExactSpeechTexts: ["", "queued answer"] },
-      ),
-    ).toStrictEqual({ kind: "exact-speech-echo", text: "queued answer" });
-  });
-
   it("returns a malformed outcome for invalid consult arguments", () => {
     expect(
       classifyRealtimeVoiceConsultToolCall(

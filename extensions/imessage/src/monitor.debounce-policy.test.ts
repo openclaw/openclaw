@@ -2,6 +2,7 @@ import path from "node:path";
 import { createChannelInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -10,9 +11,9 @@ import {
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { expect, it, vi } from "vitest";
 import { IMessageRpcClient, createIMessageRpcClient } from "./client.js";
-import { monitorIMessageProvider } from "./monitor.js";
 import { resolveIMessageInboundDecision } from "./monitor/inbound-processing.js";
 import { createIMessageDurableIngress } from "./monitor/ingress.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import { getIMessageRuntime } from "./runtime.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
@@ -67,6 +68,7 @@ it("changes iMessage batching delay without replacing the attached RPC client", 
     toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
   });
   const monitor = monitorIMessageProvider({
+    scheduler: createTestPluginServiceScheduler(),
     config: cfg,
     abortSignal: abort.signal,
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -128,17 +130,6 @@ it("changes iMessage batching delay without replacing the attached RPC client", 
     await ingress.waitForIdle();
     await debouncer.drain();
     expect(bodies()).toEqual(["immediate", "first second", "after disable"]);
-    console.log(
-      "MONITOR_DEBOUNCE_PROOF " +
-        JSON.stringify({
-          channel: "imessage",
-          pid: process.pid,
-          clock: "fake",
-          delaysMs: [0, 500, 0],
-          bodies: bodies(),
-          clientsCreated: vi.mocked(createIMessageRpcClient).mock.calls.length,
-        }),
-    );
     expect(createIMessageRpcClient).toHaveBeenCalledTimes(1);
   } finally {
     abort.abort();

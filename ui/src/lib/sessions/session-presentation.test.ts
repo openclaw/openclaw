@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -61,13 +61,9 @@ function harness() {
     },
     subscribeEvents: () => () => undefined,
   } satisfies SessionGateway;
-  const write = vi.fn();
-  const sessions = createSessionCapability(gateway, selection, {
-    rosterCache: { read: async () => null, write },
-  });
+  const sessions = createSessionCapability(gateway, selection);
   return {
     sessions,
-    write,
     gateway,
     client,
     setResult(next: SessionsListResult) {
@@ -102,6 +98,7 @@ describe("session roster presentation", () => {
       h.publish({ phase: "connected", client: h.client });
       h.sessions.reconcile(row);
       expect(h.sessions.canonicalListRevision).toBe(0);
+      expect(h.sessions.canonicalListReady).toBe(false);
       expect(h.sessions.presentation.result?.sessions[0]?.derivedTitle).toBe(row.derivedTitle);
     } finally {
       initial.resolve(sessionsResult([row], 1));
@@ -115,11 +112,10 @@ describe("session roster presentation", () => {
     try {
       await h.sessions.refresh({ agentId: "main" });
       h.hold(refresh.promise);
-      h.write.mockClear();
       const observed: Array<SessionsListResult | null> = [];
       h.sessions.subscribe(() => observed.push(h.sessions.presentation.result));
       h.publish({ phase: "connected", selfUser: { id: "two" } });
-      expect(h.write).not.toHaveBeenCalled();
+      expect(h.sessions.captureBootRoster()).toBeNull();
       expect(observed.length).toBeGreaterThan(0);
       expect(observed.every((result) => result === null)).toBe(true);
     } finally {
@@ -134,6 +130,7 @@ describe("session roster presentation", () => {
     try {
       await h.sessions.refresh({ agentId: "main" });
       const presentation = h.sessions.presentation;
+      expect(h.sessions.canonicalListReady).toBe(true);
       h.hold(reconnect.promise);
       h.publish({ phase: "reconnecting" });
       expect(h.sessions.state.result).toBeNull();
@@ -141,12 +138,14 @@ describe("session roster presentation", () => {
       h.publish({ phase: "connected" });
       h.sessions.reconcile({ ...row, derivedTitle: "Partial" });
       expect(h.sessions.presentation).toBe(presentation);
+      expect(h.sessions.canonicalListReady).toBe(false);
       const renamed = sessionsResult([{ ...row, derivedTitle: "Renamed" }], 2);
       reconnect.resolve(renamed);
       await expect
         .poll(() => h.sessions.presentation.result?.sessions[0]?.derivedTitle)
         .toBe("Renamed");
       expect(h.sessions.presentation.agentId).toBe("main");
+      expect(h.sessions.canonicalListReady).toBe(true);
       h.setResult(sessionsResult([{ ...row, derivedTitle: "" }], 3));
       await h.sessions.refresh({ agentId: "main", force: true });
       expect(h.sessions.presentation.result?.sessions[0]?.derivedTitle).toBe("");

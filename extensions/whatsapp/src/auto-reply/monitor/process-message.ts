@@ -1,8 +1,4 @@
-import {
-  logAckFailure,
-  removeAckReactionHandleAfterReply,
-  type AckReactionHandle,
-} from "openclaw/plugin-sdk/channel-feedback";
+import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
 import {
   type buildChannelInboundEventContext,
   type ChannelInboundTurnPlan,
@@ -27,18 +23,12 @@ import {
   resolveWhatsAppCommandAuthorized,
   resolveWhatsAppInboundPolicy,
 } from "../../inbound-policy.js";
-import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import type { WhatsAppInboundAdmission } from "../../inbound/admission.js";
 import { resolveWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
-import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
-import {
-  resolveWhatsAppDirectSystemPrompt,
-  resolveWhatsAppGroupSystemPrompt,
-} from "../../system-prompt.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
-import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { hasWhatsAppAudioBody, transcribeWhatsAppAudioMessage } from "./audio-preflight.js";
 import {
@@ -51,7 +41,6 @@ import {
   createWhatsAppReplyPlan,
   prepareWhatsAppInboundContext,
   resolveWhatsAppDmRouteTarget,
-  resolveWhatsAppResponsePrefix,
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
 import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
@@ -63,14 +52,14 @@ import {
   logVerbose,
   normalizeE164,
   resolveChannelContextVisibilityMode,
-  resolveInboundSessionEnvelopeContext,
+  resolveInboundSessionEnvelopeContextAsync,
+  resolveIdentityNamePrefix,
   resolvePinnedMainDmOwnerFromAllowlist,
   isControlCommandMessage,
   shouldComputeCommandAuthorized,
   shouldLogVerbose,
   type getChildLogger,
   type getReplyFromConfig,
-  type HistoryEntry,
   type LoadConfigFn,
   type resolveAgentRoute,
 } from "./runtime-api.js";
@@ -85,9 +74,7 @@ const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
   timeoutMs: 2_000,
 };
 
-function mapWhatsAppIngressToTurnAdmission(
-  ingress: ReturnType<typeof requireWhatsAppInboundAdmission>["ingress"],
-) {
+function mapWhatsAppIngressToTurnAdmission(ingress: WhatsAppInboundAdmission["ingress"]) {
   const reason = ingress.reasonCode;
   if (ingress.admission === "dispatch") {
     return { kind: "dispatch" as const, reason };
@@ -167,7 +154,6 @@ export async function processMessage(params: {
   replyResolver: typeof getReplyFromConfig;
   replyLogger: ReturnType<typeof getChildLogger>;
   backgroundTasks: Set<Promise<unknown>>;
-  maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
   groupHistoryLimit?: number;
   suppressGroupHistoryClear?: boolean;
@@ -183,7 +169,7 @@ export async function processMessage(params: {
   buildContext?: typeof buildChannelInboundEventContext;
   dispatchReplyFromConfig?: NonNullable<ChannelInboundTurnPlan["dispatchReplyFromConfig"]>;
 }) {
-  const admission = requireWhatsAppInboundAdmission(params.msg);
+  const admission = params.msg.admission;
   if (admission.ingress.admission !== "dispatch" && admission.ingress.admission !== "observe") {
     return false;
   }
@@ -201,11 +187,12 @@ export async function processMessage(params: {
     channel: "whatsapp",
     accountId: account.accountId,
   });
-  const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
-    cfg: params.cfg,
-    agentId: params.route.agentId,
-    sessionKey: params.route.sessionKey,
-  });
+  const { storePath, envelopeOptions, previousTimestamp } =
+    await resolveInboundSessionEnvelopeContextAsync({
+      cfg: params.cfg,
+      agentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+    });
   // A caller's null result is a completed preflight, so broadcast agents must not retry it.
   let audioTranscript: string | undefined = params.preflightAudioTranscript ?? undefined;
   if (
@@ -266,14 +253,8 @@ export async function processMessage(params: {
   if (conversationKind === "group") {
     const history = visibleGroupHistory ?? [];
     if (history.length > 0) {
-      const historyEntries: HistoryEntry[] = history.map((m) => ({
-        sender: m.sender,
-        body: m.body,
-        timestamp: m.timestamp,
-        media: m.media,
-      }));
       combinedBody = buildHistoryContextFromEntries({
-        entries: historyEntries,
+        entries: history,
         currentMessage: combinedBody,
         excludeLast: false,
         formatEntry: (entry) => {
@@ -316,40 +297,21 @@ export async function processMessage(params: {
   // that do preflight work before processMessage can send it first and set
   // ackAlreadySent so slow STT does not delay user-visible receipt feedback.
   // Skip if the status reaction controller is handling lifecycle signaling.
-  let ackReaction = params.ackReaction ?? null;
-  if (!statusReactionController && !ackReaction && params.ackAlreadySent !== true) {
-    ackReaction = await maybeSendAckReaction({
+  if (!statusReactionController && !params.ackReaction && params.ackAlreadySent !== true) {
+    await maybeSendAckReaction({
       cfg: params.cfg,
       msg: params.msg,
       agentId: params.route.agentId,
       sessionKey: params.route.sessionKey,
       verbose: params.verbose,
-      info: params.replyLogger.info.bind(params.replyLogger),
       warn: params.replyLogger.warn.bind(params.replyLogger),
     });
   }
-
-  const correlationId = params.msg.event.id ?? newConnectionId();
-  params.replyLogger.info(
-    {
-      connectionId: params.connectionId,
-      correlationId,
-      from: conversationId,
-      to: params.msg.platform.recipientJid,
-      body: elide(combinedBody, 240),
-      mediaType: params.msg.payload.media?.type ?? null,
-      mediaPath: params.msg.payload.media?.path ?? null,
-    },
-    "inbound web message",
-  );
 
   const kindLabel = params.msg.payload.media?.type ? `, ${params.msg.payload.media?.type}` : "";
   whatsappInboundLog.info(
     `Inbound message ${conversationId} -> ${params.msg.platform.recipientJid} (${conversationKind}${kindLabel}, ${combinedBody.length} chars)`,
   );
-  if (shouldLogVerbose()) {
-    whatsappInboundLog.debug(`Inbound body: ${elide(combinedBody, 400)}`);
-  }
 
   const sender = getSenderIdentity(params.msg);
   const commandBody = params.msg.payload.commandBody ?? params.msg.payload.body;
@@ -374,41 +336,36 @@ export async function processMessage(params: {
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
-  const responsePrefix = resolveWhatsAppResponsePrefix({
-    cfg: params.cfg,
-    agentId: params.route.agentId,
-    isSelfChat: conversationKind !== "group" && inboundPolicy.isSelfChat,
-    pipelineResponsePrefix: replyPipeline.responsePrefix,
-  });
+  const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
+  const responsePrefix =
+    replyPipeline.responsePrefix ??
+    (configuredResponsePrefix === "auto"
+      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
+      : configuredResponsePrefix) ??
+    (conversationKind !== "group" && inboundPolicy.isSelfChat
+      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
+      : undefined);
   const replyThreading = resolveBatchedReplyThreadingPolicy(
     account.replyToMode ?? "off",
     params.msg.event.isBatched === true,
   );
 
-  const conversationSystemPrompt =
-    conversationKind === "group"
-      ? resolveWhatsAppGroupSystemPrompt({
-          accountConfig: account,
-          groupId: conversationId,
-        })
-      : resolveWhatsAppDirectSystemPrompt({
-          accountConfig: account,
-          peerId: dmRouteTarget ?? conversationId,
-        });
+  const conversationPrompts = conversationKind === "group" ? account.groups : account.direct;
+  const promptTargetId =
+    conversationKind === "group" ? conversationId : (dmRouteTarget ?? conversationId);
+  const selectedPrompt = promptTargetId
+    ? (conversationPrompts?.[promptTargetId]?.systemPrompt ??
+      conversationPrompts?.["*"]?.systemPrompt)
+    : undefined;
+  const conversationSystemPrompt = selectedPrompt?.trim() || undefined;
 
-  const commandAuthorization =
-    commandAuthorized === undefined
-      ? ({ kind: "not_checked" } as const)
-      : commandAuthorized
-        ? ({ kind: "authorized" } as const)
-        : ({ kind: "denied" } as const);
   const prepared = await prepareWhatsAppInboundContext({
     bodyForAgent: msgForAgent.payload.body,
     combinedBody,
     command: {
       kind: isTextCommand ? "text-slash" : "normal",
       body: commandBody,
-      authorization: commandAuthorization,
+      ...(commandAuthorized !== undefined ? { authorized: commandAuthorized } : {}),
     },
     groupHistory: visibleGroupHistory,
     groupHistoryLimit: params.groupHistoryLimit,
@@ -486,8 +443,7 @@ export async function processMessage(params: {
           context: ctxPayload,
           deliverReply: deliverWebReply,
           maxMediaBytes: params.maxMediaBytes,
-          maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
-          inbound,
+          conversationId,
           onModelSelected,
           replyLogger: params.replyLogger,
           replyPipeline: {
@@ -528,20 +484,5 @@ export async function processMessage(params: {
       },
     },
   });
-  const didSendReply = turnResult.dispatched
-    ? (finalizeReply?.(turnResult.dispatchResult) ?? false)
-    : false;
-  removeAckReactionHandleAfterReply({
-    removeAfterReply: false,
-    ackReaction,
-    onError: (err) => {
-      logAckFailure({
-        log: logVerbose,
-        channel: "whatsapp",
-        target: `${params.msg.platform.chatJid ?? conversationId}/${params.msg.event.id ?? "unknown"}`,
-        error: err,
-      });
-    },
-  });
-  return didSendReply;
+  return turnResult.dispatched ? (finalizeReply?.(turnResult.dispatchResult) ?? false) : false;
 }

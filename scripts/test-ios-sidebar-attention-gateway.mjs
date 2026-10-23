@@ -6,7 +6,7 @@
 import { createServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 
-const port = 19877;
+const port = Number(process.env.OPENCLAW_IOS_ATTENTION_FIXTURE_PORT ?? 19877);
 const mainKey = "agent:main:main";
 const parentKey = "agent:main:attention-parent";
 const reviewKey = "agent:main:attention-review";
@@ -129,6 +129,28 @@ const events = [
   "openclaw.approval.resolved",
   "tick",
 ];
+const staticReplies = {
+  "config.get": {
+    config: { agents: { defaults: {} }, gateway: { mode: "local" } },
+    hash: "synthetic",
+    valid: true,
+  },
+  "agents.list": {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "per-sender",
+    agents: [{ id: "main", name: "Research assistant" }],
+  },
+  "voicewake.get": { triggers: [] },
+  "cron.list": { jobs: [] },
+  "cron.status": { enabled: true, jobs: 0 },
+  "system-presence": [],
+  "node.list": { nodes: [] },
+  "sessions.subscribe": { ok: true },
+  "sessions.unsubscribe": { ok: true },
+  "models.list": { models: [] },
+  "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
+};
 function broadcast(event, payload) {
   for (const ws of wss.clients) {
     if (ws.readyState === WebSocket.OPEN && ws.proofRole === "operator") {
@@ -275,6 +297,10 @@ wss.on("connection", (ws) => {
       );
       return;
     }
+    if (Object.hasOwn(staticReplies, req.method)) {
+      reply(staticReplies[req.method]);
+      return;
+    }
     switch (req.method) {
       case "connect":
         ws.proofRole = params.role;
@@ -310,34 +336,37 @@ wss.on("connection", (ws) => {
           durationMs: 1,
           channels: {},
           agents: [],
-          sessions: { count: 3 },
-        });
-        break;
-      case "config.get":
-        reply({
-          config: { agents: { defaults: {} }, gateway: { mode: "local" } },
-          hash: "synthetic",
-          valid: true,
-        });
-        break;
-      case "agents.list":
-        reply({
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main", name: "Research assistant" }],
+          sessions: { count: 5 },
         });
         break;
       case "sessions.list":
         reply({
           ts: Date.now(),
-          count: 3,
-          totalCount: 3,
+          count: 5,
+          totalCount: 5,
           offset: 0,
-          nextOffset: 3,
+          nextOffset: 5,
           hasMore: false,
           defaults: {},
           sessions: [
+            {
+              key: "agent:main:snooze-active",
+              sessionId: "synthetic-snooze-active",
+              displayName: "Planning notes",
+              label: "Planning notes",
+              kind: "direct",
+              updatedAt: created,
+            },
+            {
+              key: "agent:main:snooze-later",
+              sessionId: "synthetic-snooze-later",
+              displayName: "Follow-up notes",
+              label: "Follow-up notes",
+              kind: "direct",
+              updatedAt: created - 1000,
+              snoozedAt: created,
+              snoozedUntil: Date.parse("2099-01-05T17:00:00Z"),
+            },
             {
               key: mainKey,
               displayName: "Home",
@@ -411,31 +440,6 @@ wss.on("connection", (ws) => {
         break;
       case "approval.resolve":
         fail("Use the fixture lifecycle endpoints; no approval actions execute");
-        break;
-      case "voicewake.get":
-        reply({ triggers: [] });
-        break;
-      case "cron.list":
-        reply({ jobs: [] });
-        break;
-      case "cron.status":
-        reply({ enabled: true, jobs: 0 });
-        break;
-      case "system-presence":
-        reply([]);
-        break;
-      case "node.list":
-        reply({ nodes: [] });
-        break;
-      case "sessions.subscribe":
-      case "sessions.unsubscribe":
-        reply({ ok: true });
-        break;
-      case "models.list":
-        reply({ models: [] });
-        break;
-      case "sessions.groups.list":
-        reply({ groups: [{ name: "Research", position: 0 }] });
         break;
       case "sessions.preview":
         reply({ ts: Date.now(), previews: [] });

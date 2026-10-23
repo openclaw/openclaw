@@ -1,4 +1,4 @@
-import { createDefaultModelsPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
+import { createDefaultModelsConnectionPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildQianfanProvider,
   QIANFAN_BASE_URL,
@@ -7,7 +7,7 @@ import {
 
 export const QIANFAN_DEFAULT_MODEL_REF = `qianfan/${QIANFAN_DEFAULT_MODEL_ID}`;
 
-export const { applyConfig: applyQianfanConfig } = createDefaultModelsPresetAppliers<[]>({
+export const { applyConfig: applyQianfanConfig } = createDefaultModelsConnectionPresetAppliers<[]>({
   primaryModelRef: QIANFAN_DEFAULT_MODEL_REF,
   resolveParams: (cfg) => {
     const existingProvider = cfg.models?.providers?.qianfan;
@@ -17,7 +17,7 @@ export const { applyConfig: applyQianfanConfig } = createDefaultModelsPresetAppl
       providerId: "qianfan",
       api: typeof existingProvider?.api === "string" ? existingProvider.api : "openai-completions",
       baseUrl: existingBaseUrl || QIANFAN_BASE_URL,
-      defaultModels: cfg.models?.mode === "replace" ? buildQianfanProvider().models : [],
+      defaultModels: () => buildQianfanProvider().models,
       defaultModelId: QIANFAN_DEFAULT_MODEL_ID,
       aliases: [{ modelRef: QIANFAN_DEFAULT_MODEL_REF, alias: "QIANFAN" }],
     };

@@ -1,22 +1,120 @@
-import type { DatabaseSync } from "node:sqlite";
-import { prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { sql, type InsertObject, type OperandExpression } from "kysely";
+import { createSqliteQueryCache, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { bindSessionNode, bindSessionRoot } from "./session-accessor.sqlite-session-row.js";
+import {
+  buildSessionEntrySnapshotUpsert,
+  type SessionEntrySnapshot,
+} from "./session-entry-snapshots.js";
+
+type QueryParameter<P> = Parameters<Parameters<typeof prepareSqliteQuerySync<P>>[1]>[0];
+type SessionNodeWriteRow = ReturnType<typeof bindSessionNode> & {
+  legacy_acp_migration_json?: string | null;
+};
 
 type SessionWindowWriteRow = Omit<ReturnType<typeof bindSessionRoot>, "primary_conversation_id"> & {
   primary_conversation_id: string | null;
   transcript_observed_at: number;
 };
 
-function prepareSessionEntryWriteQueries(database: DatabaseSync) {
+export function buildSessionEntryWindowUpsert(
+  database: EngineConnection,
+  rows: readonly InsertObject<DB, "session_windows">[],
+  retainOwner: boolean,
+) {
+  return getSessionKysely(database)
+    .insertInto("session_windows")
+    .values(rows)
+    .onConflict((conflict) =>
+      conflict.column("session_id").doUpdateSet((eb) => ({
+        // Logical nodes can share a physical window. Only creation or a
+        // generation change claims it; metadata updates retain its owner.
+        ...(retainOwner ? {} : { session_key: eb.ref("excluded.session_key") }),
+        previous_session_id: eb.ref("excluded.previous_session_id"),
+        reason: eb.ref("excluded.reason"),
+        session_scope: eb.ref("excluded.session_scope"),
+        transcript_observed_at: eb.ref("excluded.transcript_observed_at"),
+        session_entry_provenance: eb.ref("excluded.session_entry_provenance"),
+        acp_owned: eb.ref("excluded.acp_owned"),
+        plugin_owner_id: eb.ref("excluded.plugin_owner_id"),
+        hook_external_content_source: eb.ref("excluded.hook_external_content_source"),
+        updated_at: eb.ref("excluded.updated_at"),
+        started_at: eb.ref("excluded.started_at"),
+        ended_at: eb.ref("excluded.ended_at"),
+        status: eb.ref("excluded.status"),
+        chat_type: eb.ref("excluded.chat_type"),
+        channel: eb.ref("excluded.channel"),
+        account_id: eb.ref("excluded.account_id"),
+        primary_conversation_id: eb.ref("excluded.primary_conversation_id"),
+        model_provider: eb.ref("excluded.model_provider"),
+        model: eb.ref("excluded.model"),
+        agent_harness_id: eb.ref("excluded.agent_harness_id"),
+        parent_session_key: eb.ref("excluded.parent_session_key"),
+        spawned_by: eb.ref("excluded.spawned_by"),
+        display_name: eb.ref("excluded.display_name"),
+      })),
+    );
+}
+
+export function buildSessionEntryNodeUpsert(
+  database: EngineConnection,
+  rows: readonly InsertObject<DB, "session_nodes">[],
+  withLegacySources = false,
+) {
+  return getSessionKysely(database)
+    .insertInto("session_nodes")
+    .values(rows)
+    .onConflict((conflict) =>
+      conflict.column("session_key").doUpdateSet((eb) => ({
+        current_session_id: eb.ref("excluded.current_session_id"),
+        entry_json: eb.ref("excluded.entry_json"),
+        session_started_at: eb.ref("excluded.session_started_at"),
+        has_optional_references: eb.ref("excluded.has_optional_references"),
+        entry_valid: eb.ref("excluded.entry_valid"),
+        updated_at: eb.ref("excluded.updated_at"),
+        status: eb.ref("excluded.status"),
+        created_at: eb.ref("excluded.created_at"),
+        created_via: eb.ref("excluded.created_via"),
+        created_actor_type: eb.ref("excluded.created_actor_type"),
+        created_actor_id: eb.ref("excluded.created_actor_id"),
+        project_id: eb.ref("excluded.project_id"),
+        parent_session_key: eb.ref("excluded.parent_session_key"),
+        spawned_by: eb.ref("excluded.spawned_by"),
+        fork_source_session_key: eb.ref("excluded.fork_source_session_key"),
+        fork_source_session_id: eb.ref("excluded.fork_source_session_id"),
+        fork_source_entry_id: eb.ref("excluded.fork_source_entry_id"),
+        label: eb.ref("excluded.label"),
+        display_name: eb.ref("excluded.display_name"),
+        category: eb.ref("excluded.category"),
+        icon: eb.ref("excluded.icon"),
+        pinned_at: eb.ref("excluded.pinned_at"),
+        archived_at: eb.ref("excluded.archived_at"),
+        last_read_at: eb.ref("excluded.last_read_at"),
+        last_interaction_at: eb.ref("excluded.last_interaction_at"),
+        last_activity_at: eb.ref("excluded.last_activity_at"),
+        ...(withLegacySources
+          ? { legacy_acp_migration_json: eb.ref("excluded.legacy_acp_migration_json") }
+          : {}),
+      })),
+    );
+}
+
+// Cache fixed SQL shapes only; every write binds fresh rows through the normal executor.
+export const getSessionEntryWriteQueries = createSqliteQueryCache((database: EngineConnection) => {
   const db = getSessionKysely(database);
-  const window = (retainOwner: boolean) =>
-    prepareSqliteQuerySync<SessionWindowWriteRow>(database, (parameter) =>
-      db
-        .insertInto("session_windows")
-        .values({
+  const window = (
+    parameter: QueryParameter<SessionWindowWriteRow>,
+    retainOwner: boolean,
+    sessionKey?: OperandExpression<string>,
+  ) =>
+    buildSessionEntryWindowUpsert(
+      database,
+      [
+        {
           session_id: parameter((row) => row.session_id),
-          session_key: parameter((row) => row.session_key),
+          session_key: sessionKey ?? parameter((row) => row.session_key),
           reason: parameter((row) => row.reason),
           created_at: parameter((row) => row.created_at),
           updated_at: parameter((row) => row.updated_at),
@@ -40,45 +138,23 @@ function prepareSessionEntryWriteQueries(database: DatabaseSync) {
           display_name: parameter((row) => row.display_name),
           primary_conversation_id: parameter((row) => row.primary_conversation_id),
           transcript_observed_at: parameter((row) => row.transcript_observed_at),
-        })
-        .onConflict((conflict) =>
-          conflict.column("session_id").doUpdateSet((eb) => ({
-            // Logical nodes can share a physical window. Only creation or a
-            // generation change claims it; metadata updates retain its owner.
-            ...(retainOwner ? {} : { session_key: eb.ref("excluded.session_key") }),
-            previous_session_id: eb.ref("excluded.previous_session_id"),
-            reason: eb.ref("excluded.reason"),
-            session_scope: eb.ref("excluded.session_scope"),
-            transcript_observed_at: eb.ref("excluded.transcript_observed_at"),
-            session_entry_provenance: eb.ref("excluded.session_entry_provenance"),
-            acp_owned: eb.ref("excluded.acp_owned"),
-            plugin_owner_id: eb.ref("excluded.plugin_owner_id"),
-            hook_external_content_source: eb.ref("excluded.hook_external_content_source"),
-            updated_at: eb.ref("excluded.updated_at"),
-            started_at: eb.ref("excluded.started_at"),
-            ended_at: eb.ref("excluded.ended_at"),
-            status: eb.ref("excluded.status"),
-            chat_type: eb.ref("excluded.chat_type"),
-            channel: eb.ref("excluded.channel"),
-            account_id: eb.ref("excluded.account_id"),
-            primary_conversation_id: eb.ref("excluded.primary_conversation_id"),
-            model_provider: eb.ref("excluded.model_provider"),
-            model: eb.ref("excluded.model"),
-            agent_harness_id: eb.ref("excluded.agent_harness_id"),
-            parent_session_key: eb.ref("excluded.parent_session_key"),
-            spawned_by: eb.ref("excluded.spawned_by"),
-            display_name: eb.ref("excluded.display_name"),
-          })),
-        ),
+        },
+      ],
+      retainOwner,
     );
-  return {
-    node: prepareSqliteQuerySync<ReturnType<typeof bindSessionNode>>(database, (parameter) =>
-      db
-        .insertInto("session_nodes")
-        .values({
+
+  const node = (parameter: QueryParameter<SessionNodeWriteRow>, withLegacySources: boolean) =>
+    buildSessionEntryNodeUpsert(
+      database,
+      [
+        {
           session_key: parameter((row) => row.session_key),
           current_session_id: parameter((row) => row.current_session_id),
           entry_json: parameter((row) => row.entry_json),
+          session_started_at: /* kysely-allow-raw: exact int64 bind; generated INTEGER reads are numbers. */ sql<
+            number | null
+          >`${parameter((row) => row.session_started_at)}`,
+          has_optional_references: parameter((row) => row.has_optional_references),
           entry_valid: parameter((row) => row.entry_valid),
           updated_at: parameter((row) => row.updated_at),
           status: parameter((row) => row.status),
@@ -101,62 +177,95 @@ function prepareSessionEntryWriteQueries(database: DatabaseSync) {
           last_read_at: parameter((row) => row.last_read_at),
           last_interaction_at: parameter((row) => row.last_interaction_at),
           last_activity_at: parameter((row) => row.last_activity_at),
-        })
-        .onConflict((conflict) =>
-          conflict.column("session_key").doUpdateSet((eb) => ({
-            current_session_id: eb.ref("excluded.current_session_id"),
-            entry_json: eb.ref("excluded.entry_json"),
-            entry_valid: eb.ref("excluded.entry_valid"),
-            updated_at: eb.ref("excluded.updated_at"),
-            status: eb.ref("excluded.status"),
-            created_at: eb.ref("excluded.created_at"),
-            created_via: eb.ref("excluded.created_via"),
-            created_actor_type: eb.ref("excluded.created_actor_type"),
-            created_actor_id: eb.ref("excluded.created_actor_id"),
-            project_id: eb.ref("excluded.project_id"),
-            parent_session_key: eb.ref("excluded.parent_session_key"),
-            spawned_by: eb.ref("excluded.spawned_by"),
-            fork_source_session_key: eb.ref("excluded.fork_source_session_key"),
-            fork_source_session_id: eb.ref("excluded.fork_source_session_id"),
-            fork_source_entry_id: eb.ref("excluded.fork_source_entry_id"),
-            label: eb.ref("excluded.label"),
-            display_name: eb.ref("excluded.display_name"),
-            category: eb.ref("excluded.category"),
-            icon: eb.ref("excluded.icon"),
-            pinned_at: eb.ref("excluded.pinned_at"),
-            archived_at: eb.ref("excluded.archived_at"),
-            last_read_at: eb.ref("excluded.last_read_at"),
-            last_interaction_at: eb.ref("excluded.last_interaction_at"),
-            last_activity_at: eb.ref("excluded.last_activity_at"),
-          })),
-        ),
+          ...(withLegacySources
+            ? {
+                legacy_acp_migration_json: parameter(
+                  (row) => row.legacy_acp_migration_json ?? null,
+                ),
+              }
+            : {}),
+        },
+      ],
+      withLegacySources,
+    );
+
+  type NodeWindow = { node: SessionNodeWriteRow; window: SessionWindowWriteRow };
+  type NodeSnapshots = { node: SessionNodeWriteRow; snapshots: readonly SessionEntrySnapshot[] };
+  const nodeWindows = new Map<string, ReturnType<typeof prepareSqliteQuerySync<NodeWindow>>>();
+  const nodeSnapshots = new Map<string, ReturnType<typeof prepareSqliteQuerySync<NodeSnapshots>>>();
+  const postgres = isPostgresSqlConnection(database)
+    ? {
+        nodeWithWindow(
+          this: void,
+          input: NodeWindow,
+          withLegacySources: boolean,
+          retainOwner: boolean,
+        ) {
+          const shape = `${withLegacySources}:${retainOwner}`;
+          let write = nodeWindows.get(shape);
+          if (!write) {
+            write = prepareSqliteQuerySync<NodeWindow>(database, (parameter) =>
+              db
+                .with("written_node", () =>
+                  node((read) => parameter((rows) => read(rows.node)), withLegacySources).returning(
+                    "session_key",
+                  ),
+                )
+                .with("written_window", (query) =>
+                  window(
+                    (read) => parameter((rows) => read(rows.window)),
+                    retainOwner,
+                    query.selectFrom("written_node").select("session_key"),
+                  ).returning("session_id"),
+                )
+                .selectNoFrom(sql.lit(1).as("written")),
+            );
+            nodeWindows.set(shape, write);
+          }
+          write(input);
+        },
+        nodeWithSnapshots(this: void, input: NodeSnapshots, withLegacySources: boolean) {
+          const shape = `${withLegacySources}:${input.snapshots.length}`;
+          let write = nodeSnapshots.get(shape);
+          if (!write) {
+            write = prepareSqliteQuerySync<NodeSnapshots>(database, (parameter) =>
+              db
+                .with("written_node", () =>
+                  node((read) => parameter((rows) => read(rows.node)), withLegacySources).returning(
+                    "session_key",
+                  ),
+                )
+                .with("written_snapshots", (query) =>
+                  buildSessionEntrySnapshotUpsert(
+                    database,
+                    input.snapshots.map((_, index) => ({
+                      session_key: query.selectFrom("written_node").select("session_key"),
+                      field: parameter((rows) => rows.snapshots[index]!.field),
+                      value_json: parameter((rows) => rows.snapshots[index]!.valueJson),
+                    })),
+                  ).returning("session_key"),
+                )
+                .selectNoFrom(sql.lit(1).as("written")),
+            );
+            nodeSnapshots.set(shape, write);
+          }
+          write(input);
+        },
+      }
+    : undefined;
+  return {
+    node: prepareSqliteQuerySync<SessionNodeWriteRow>(database, (parameter) =>
+      node(parameter, false),
     ),
-    markValid: prepareSqliteQuerySync<string>(database, (parameter) =>
-      db
-        .updateTable("session_nodes")
-        .set({ entry_valid: 1 })
-        .where(
-          "session_key",
-          "=",
-          parameter((key) => key),
-        ),
+    nodeWithLegacySources: prepareSqliteQuerySync<SessionNodeWriteRow>(database, (parameter) =>
+      node(parameter, true),
     ),
-    claimWindow: window(false),
-    retainWindow: window(true),
+    claimWindow: prepareSqliteQuerySync<SessionWindowWriteRow>(database, (parameter) =>
+      window(parameter, false),
+    ),
+    retainWindow: prepareSqliteQuerySync<SessionWindowWriteRow>(database, (parameter) =>
+      window(parameter, true),
+    ),
+    postgres,
   };
-}
-
-// Cache fixed SQL shapes only; every write binds fresh rows through the normal executor.
-const sessionEntryWriteQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareSessionEntryWriteQueries>
->();
-
-export function getSessionEntryWriteQueries(database: DatabaseSync) {
-  let queries = sessionEntryWriteQueries.get(database);
-  if (!queries) {
-    queries = prepareSessionEntryWriteQueries(database);
-    sessionEntryWriteQueries.set(database, queries);
-  }
-  return queries;
-}
+});

@@ -22,14 +22,15 @@ export function isRequesterParentOfBackgroundAcpSession(
   entry: SessionInteractionEntry | null | undefined,
   requesterSessionKey: string | null | undefined,
 ): boolean {
-  if (!isParentOwnedBackgroundAcpSession(entry)) {
+  if (!entry?.acp) {
     return false;
   }
   const requester = normalizeOptionalString(requesterSessionKey);
   if (!requester) {
     return false;
   }
-  const spawnedBy = normalizeOptionalString(entry?.spawnedBy);
-  const parentSessionKey = normalizeOptionalString(entry?.parentSessionKey);
-  return requester === spawnedBy || requester === parentSessionKey;
+  return (
+    requester === normalizeOptionalString(entry.spawnedBy) ||
+    requester === normalizeOptionalString(entry.parentSessionKey)
+  );
 }

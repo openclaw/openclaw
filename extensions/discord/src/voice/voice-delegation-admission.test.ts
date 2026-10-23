@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createDiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
@@ -68,6 +69,7 @@ defineDiscordVoiceTests(
           };
         });
         const manager = new managerModule.DiscordVoiceManager({
+          scheduler: createTestPluginServiceScheduler(),
           readPolicy,
           client: client as never,
           cfg,

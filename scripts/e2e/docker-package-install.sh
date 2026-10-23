@@ -39,6 +39,7 @@ docker_e2e_build_or_reuse "$MUSL_IMAGE_NAME" docker-package-install-musl "$ROOT_
 # The package proofs share the registry and lifecycle harness. Copy its complete
 # script roots so all three managers install the same candidate dependency bytes.
 for harness_path in \
+  packages/llm-core/src/types.ts \
   packages/normalization-core/src \
   scripts; do
   mkdir -p "$PACKAGE_HARNESS_DIR/$(dirname "$harness_path")"
@@ -139,7 +140,7 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
-    npm install -g --prefix /tmp/bun-runtime bun@1.4.2 --no-fund --no-audit
+    npm install -g --prefix /tmp/bun-runtime bun@1.4.3 --no-fund --no-audit
     cd /repo
     BUN_BIN=/tmp/bun-runtime/bin/bun \
       OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0 \

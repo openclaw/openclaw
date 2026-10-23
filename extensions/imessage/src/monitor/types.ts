@@ -1,10 +1,11 @@
-// Imessage type declarations define plugin contracts.
 import type {
   ChannelAccountSnapshot,
   ChannelRuntimeSurface,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { IMessagePollSentOption as IMessagePollOption } from "../actions.runtime.js";
 
 export type IMessageAttachment = {
   original_path?: string | null;
@@ -12,11 +13,6 @@ export type IMessageAttachment = {
   missing?: boolean | null;
   transfer_name?: string | null;
   uti?: string | null;
-};
-
-type IMessagePollOption = {
-  id: string;
-  text: string;
 };
 
 type IMessagePollVote = {
@@ -70,16 +66,11 @@ export type IMessagePayload = {
 };
 
 export type MonitorIMessageOpts = {
+  scheduler: PluginServiceSchedulerV1;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  cliPath?: string;
-  dbPath?: string;
   accountId?: string;
   config?: OpenClawConfig;
-  allowFrom?: Array<string | number>;
-  groupAllowFrom?: Array<string | number>;
-  includeAttachments?: boolean;
-  mediaMaxMb?: number;
   requireMention?: boolean;
   /**
    * Surface for registering channel runtime contexts (e.g. the approval native

@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readCodexAsyncQuestions } from "./async-questions.js";
 import {
@@ -26,12 +26,7 @@ const CODEX_HISTORY_ZERO_USAGE: Usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-export type CodexThreadHistoryImportResult = {
-  importedMessages: number;
-  omittedMessages: number;
-};
-
-type BoundedCodexThreadHistoryProjection = CodexThreadHistoryImportResult & {
+type BoundedCodexThreadHistoryProjection = {
   responseItems: JsonValue[];
   transcriptMessages: AgentMessage[];
 };
@@ -41,15 +36,6 @@ type ProjectedCodexHistoryMessage = {
   responseItem: JsonValue;
   messageBytes: number;
 };
-
-function historyAssistantFields(provider: string) {
-  return {
-    api: "openai-chatgpt-responses" as const,
-    provider,
-    model: "native-history",
-    usage: CODEX_HISTORY_ZERO_USAGE,
-  };
-}
 
 function projectCodexHistoryMessage(
   message: Extract<AgentMessage, { role: "user" | "assistant" }>,
@@ -79,10 +65,7 @@ function projectCodexHistoryMessage(
 }
 
 function normalizeImportedHistoryText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const text = value.trim();
+  const text = normalizeOptionalString(value);
   if (!text) {
     return undefined;
   }
@@ -99,11 +82,10 @@ export function projectCodexUserItemText(item: Record<string, unknown>): string 
     return undefined;
   }
   const parts: string[] = [];
-  for (const value of item.content) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+  for (const input of item.content) {
+    if (!isRecord(input)) {
       continue;
     }
-    const input = value as Record<string, unknown>;
     if (input.type === "text") {
       const text = normalizeImportedHistoryText(input.text);
       if (text) {
@@ -156,14 +138,17 @@ function projectCodexThreadHistory(params: {
   turns: CodexTurn[];
   importedAt: number;
   modelProvider?: string;
-  includeErrorOnlyTurns?: boolean;
 }): ProjectedCodexHistoryMessage[] {
   const projected: ProjectedCodexHistoryMessage[] = [];
-  const assistantFields = historyAssistantFields(
-    normalizeOptionalString(params.modelProvider) ??
+  const assistantFields = {
+    api: "openai-chatgpt-responses" as const,
+    provider:
+      normalizeOptionalString(params.modelProvider) ??
       normalizeOptionalString(params.thread.modelProvider) ??
       CODEX_HISTORY_ASSISTANT_PROVIDER,
-  );
+    model: "native-history",
+    usage: CODEX_HISTORY_ZERO_USAGE,
+  };
   const threadTimestamp =
     typeof params.thread.createdAt === "number" && Number.isFinite(params.thread.createdAt)
       ? params.thread.createdAt * 1000
@@ -243,12 +228,7 @@ function projectCodexThreadHistory(params: {
           : attachCodexMirrorIdentity({ role, content: text, timestamp }, identity);
       projected.push(projectCodexHistoryMessage(message, text));
     }
-    if (
-      params.includeErrorOnlyTurns &&
-      !hasAssistantMessage &&
-      turn.status === "failed" &&
-      turn.error?.message
-    ) {
+    if (!hasAssistantMessage && turn.status === "failed" && turn.error?.message) {
       const timestamp = (turn.completedAt ?? turn.startedAt ?? threadTimestamp / 1000) * 1000;
       const text = normalizeImportedHistoryText(turn.error.message) ?? "Codex turn failed.";
       const message: AssistantMessage = attachCodexMirrorIdentity(
@@ -302,13 +282,10 @@ export function projectBoundedCodexThreadHistory(params: {
     thread: params.thread,
     turns: selectTurnsThroughBoundary(params.thread, params.throughTurnId),
     importedAt: params.importedAt,
-    includeErrorOnlyTurns: true,
     ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
   });
   const selected = selectBoundedCodexHistoryTail(projected);
   return {
-    importedMessages: selected.length,
-    omittedMessages: projected.length - selected.length,
     // Failed assistant fragments remain visible in operator transcripts, but
     // injecting them would permanently replay incomplete model output.
     responseItems: selected

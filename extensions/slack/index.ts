@@ -1,6 +1,4 @@
-// Slack plugin entrypoint registers its OpenClaw integration.
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
-import { registerSlackPluginHttpRoutes } from "./http-routes-api.js";
 
 export default defineBundledChannelEntry({
   id: "slack",
@@ -22,11 +20,5 @@ export default defineBundledChannelEntry({
   accountInspect: {
     specifier: "./account-inspect-api.js",
     exportName: "inspectSlackReadOnlyAccount",
-  },
-  registerFull: (api) => {
-    if (api.registrationMode !== "full") {
-      return;
-    }
-    registerSlackPluginHttpRoutes(api);
   },
 });
