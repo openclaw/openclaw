@@ -14,7 +14,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
-import { prepareSessionMemoryEntries } from "./session-memory-entry.worker.js";
+import { collectSessionMemoryEntries } from "./session-memory-entry.worker.test-support.js";
 
 const sliceBudget = vi.hoisted(() => ({ bytes: undefined as number | undefined }));
 const transactionLog = vi.hoisted(() => ({
@@ -331,7 +331,7 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
     };
   }
 
-  function entryContent(result: Awaited<ReturnType<typeof prepareSessionMemoryEntries>>[number]) {
+  function entryContent(result: Awaited<ReturnType<typeof collectSessionMemoryEntries>>[number]) {
     return "entry" in result ? result.entry?.content : undefined;
   }
 
@@ -363,7 +363,7 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
       expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(4 * MIB);
       sliceBudget.bytes = 1;
       transactionLog.afterFirst = changed ? touchTranscript(scope) : undefined;
-      const [result] = await prepareSessionMemoryEntries([
+      const [result] = await collectSessionMemoryEntries([
         { ...memoryEntry(scope), admission: { ...anchor, logicalTurnId: "fenced", role: "user" } },
       ]);
       expect(transactionLog.entries.length).toBeGreaterThan(1);
@@ -381,7 +381,7 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
     expect(largeSize).toBeGreaterThan(4 * MIB);
     // The large transcript fits one slice, so it takes exactly one transaction after the batch.
     sliceBudget.bytes = 2 * largeSize;
-    const results = await prepareSessionMemoryEntries(
+    const results = await collectSessionMemoryEntries(
       [first, second, third].map(({ scope }) => memoryEntry(scope)),
     );
     expect(transactionLog.entries).toEqual(["transaction", "transaction"]);
@@ -405,7 +405,7 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
       expect(size).toBeLessThanOrEqual(4 * MIB);
       sliceBudget.bytes = 1;
       transactionLog.entries = [];
-      const [first] = await prepareSessionMemoryEntries([memoryEntry(scope)]);
+      const [first] = await collectSessionMemoryEntries([memoryEntry(scope)]);
       expect(transactionLog.entries).toEqual(["transaction"]);
       expect(entryContent(first!)).toContain(MARKER);
       // The append pushes it past the limit.
@@ -425,7 +425,7 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
       });
       transactionLog.afterFirst = changed ? touchTranscript(scope) : undefined;
       statsReads.count = 0;
-      const [next] = await prepareSessionMemoryEntries([memoryEntry(scope)]);
+      const [next] = await collectSessionMemoryEntries([memoryEntry(scope)]);
       // The batch transaction, then only the appended row after the retained projection.
       expect(transactionLog.entries).toEqual(["transaction", "transaction", "transaction"]);
       // An unchanged transcript keeps the batch head; a changed one reads its statistics again.
@@ -450,7 +450,7 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
         )
         .run(scope.sessionId, "0".repeat(64));
     };
-    await expect(prepareSessionMemoryEntries([memoryEntry(scope)])).resolves.toEqual([
+    await expect(collectSessionMemoryEntries([memoryEntry(scope)])).resolves.toEqual([
       { cold: true },
     ]);
   });

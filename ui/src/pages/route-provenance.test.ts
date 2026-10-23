@@ -4,13 +4,12 @@ import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
-import { page as agentsPage } from "./agents/route.ts";
 import { page as devicesPage } from "./devices/route.ts";
 import { page as modelProvidersPage } from "./model-providers/route.ts";
-import { pages as pluginPages } from "./plugins/route.ts";
+import { pages as pluginPages } from "./plugins/route.tsx";
 import { pages as skillPages } from "./skills/route.ts";
-import type { SkillsRouteData } from "./skills/skills-page.tsx";
-import { page as usagePage } from "./usage/route.ts";
+import type { SkillsRouteData } from "./skills/view-types.ts";
+import { page as usagePage } from "./usage/route.tsx";
 
 const selection = (id: string | null, intentRevision = 0) => ({
   state: { selectedId: id, scopeId: id },
@@ -79,13 +78,6 @@ function provenance(request: () => Promise<unknown> = vi.fn(async () => ({})), c
 
 it("records the exact gateway source and snapshot for synchronous route state", async () => {
   const source = provenance(undefined, false);
-  await source.load(agentsPage, {
-    settingsAgentSelection: selection(null),
-    agents: {
-      state: { agentsList: null, agentsError: null },
-      ensureList: vi.fn(async () => null),
-    },
-  });
   await source.load(devicesPage);
 });
 

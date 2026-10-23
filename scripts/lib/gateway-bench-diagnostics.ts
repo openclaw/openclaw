@@ -14,9 +14,11 @@ const CHANNELS = [
   "openclaw.session.write",
   "openclaw.session.list",
   "openclaw.worker.task",
+  "openclaw.agent-database.reservation",
   "openclaw.gateway.request.stages",
   "openclaw.git.operation",
   "openclaw.gateway.rpc",
+  "openclaw.benchmark.broadcast",
 ] as const;
 const sources = CHANNELS.map((name) => [name, channel(name)] as const);
 const METRICS = [
@@ -163,12 +165,19 @@ export function startGatewayBenchDiagnostics() {
         if (!isRecord(message)) {
           return;
         }
-        const operation = name === "openclaw.worker.task" ? message.worker : message.operation;
+        const operation =
+          name === "openclaw.worker.task"
+            ? message.worker
+            : name === "openclaw.agent-database.reservation"
+              ? (message.caller ?? message.operation)
+              : message.operation;
         if (typeof operation !== "string" || !/^[a-zA-Z0-9_.-]{1,160}$/.test(operation)) {
           return;
         }
         const outcome =
-          name === "openclaw.gateway.request.stages" || name === "openclaw.gateway.rpc"
+          name === "openclaw.gateway.request.stages" ||
+          name === "openclaw.gateway.rpc" ||
+          name === "openclaw.benchmark.broadcast"
             ? "observed"
             : message.outcome === "ok" ||
                 message.outcome === "error" ||

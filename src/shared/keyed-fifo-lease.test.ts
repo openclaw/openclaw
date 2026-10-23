@@ -17,8 +17,8 @@ describe("keyed FIFO leases", () => {
     const newer = registry.reserve(["target"])!;
     let newerReady = false;
 
-    const newerWait = newer.wait().then((ready) => {
-      newerReady = ready;
+    const newerWait = newer.wait().then(() => {
+      newerReady = true;
     });
     await Promise.resolve();
     expect(newerReady).toBe(false);
@@ -29,28 +29,24 @@ describe("keyed FIFO leases", () => {
     newer.release();
   });
 
-  it("does not release an aborted waiter's reserved slot", async () => {
+  it("keeps a reserved slot until its idempotent release", async () => {
     const registry = createKeyedFifoLeaseRegistry(TEST_KEY);
     const older = registry.reserve(["target"])!;
-    const aborted = registry.reserve(["target"])!;
+    const middle = registry.reserve(["target"])!;
     const newer = registry.reserve(["target"])!;
-    const controller = new AbortController();
-    const abortedWait = aborted.wait(controller.signal);
     const newerWait = newer.wait();
     let newerReady = false;
     void newerWait.then(() => {
       newerReady = true;
     });
 
-    controller.abort();
-    await expect(abortedWait).resolves.toBe(false);
     older.release();
     await Promise.resolve();
     expect(newerReady).toBe(false);
 
-    aborted.release();
-    aborted.release();
-    await expect(newerWait).resolves.toBe(true);
+    middle.release();
+    middle.release();
+    await expect(newerWait).resolves.toBeUndefined();
     newer.release();
   });
 
@@ -59,11 +55,11 @@ describe("keyed FIFO leases", () => {
     const first = registry.reserve(["b", "a", "b"])!;
     const second = registry.reserve(["a", "b"])!;
     let secondReady = false;
-    const secondWait = second.wait().then((ready) => {
-      secondReady = ready;
+    const secondWait = second.wait().then(() => {
+      secondReady = true;
     });
 
-    await expect(first.wait()).resolves.toBe(true);
+    await expect(first.wait()).resolves.toBeUndefined();
     await Promise.resolve();
     expect(secondReady).toBe(false);
     first.release();
@@ -77,7 +73,7 @@ describe("keyed FIFO leases", () => {
     const first = registry.reserve(["target"])!;
     first.release();
     const second = registry.reserve(["target"])!;
-    await expect(second.wait()).resolves.toBe(true);
+    await expect(second.wait()).resolves.toBeUndefined();
     const third = registry.reserve(["target"])!;
     let thirdReady = false;
     void third.wait().then(() => {
@@ -87,7 +83,7 @@ describe("keyed FIFO leases", () => {
     await Promise.resolve();
     expect(thirdReady).toBe(false);
     second.release();
-    await expect(third.wait()).resolves.toBe(true);
+    await expect(third.wait()).resolves.toBeUndefined();
     third.release();
   });
 
@@ -98,12 +94,12 @@ describe("keyed FIFO leases", () => {
     const idle = registry.reserve(["idle"])!;
     const busy = registry.reserve(["busy"])!;
     let busyReady = false;
-    const busyWait = busy.wait().then((ready) => {
-      busyReady = ready;
+    const busyWait = busy.wait().then(() => {
+      busyReady = true;
     });
 
     mixed.release();
-    await expect(idle.wait()).resolves.toBe(true);
+    await expect(idle.wait()).resolves.toBeUndefined();
     expect(busyReady).toBe(false);
     idle.release();
 
@@ -134,7 +130,7 @@ describe("keyed FIFO leases", () => {
     await Promise.resolve();
     expect(secondReady).toBe(false);
     first.release();
-    await expect(second.wait()).resolves.toBe(true);
+    await expect(second.wait()).resolves.toBeUndefined();
     second.release();
   });
 
@@ -144,9 +140,8 @@ describe("keyed FIFO leases", () => {
     registry.reserve(["target"]);
     const last = registry.reserve(["target"])!;
     let ready = false;
-    const lastWait = last.wait().then((result) => {
-      ready = result;
-      return result;
+    const lastWait = last.wait().then(() => {
+      ready = true;
     });
 
     await drainGlobalSingletonLifecycleState("restart");
@@ -154,10 +149,10 @@ describe("keyed FIFO leases", () => {
     expect(ready).toBe(false);
 
     await drainGlobalSingletonLifecycleState("close");
-    await expect(lastWait).resolves.toBe(true);
+    await expect(lastWait).resolves.toBeUndefined();
 
     const fresh = registry.reserve(["target"])!;
-    await expect(fresh.wait()).resolves.toBe(true);
+    await expect(fresh.wait()).resolves.toBeUndefined();
     fresh.release();
   });
 });

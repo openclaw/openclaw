@@ -1,5 +1,7 @@
+import { writeFile } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -103,6 +105,87 @@ async function addComment(page: Page, source: Locator, comment: string) {
 }
 
 suite.define(() => {
+  it.each([
+    { width: 1440, height: 900, theme: "dark" },
+    { width: 390, height: 844, theme: "light" },
+  ] as const)(
+    "keeps an annotation-only quote on one line at $width px",
+    async ({ width, height, theme }) => {
+      await suite.withPage(
+        { ...pageOptions, viewport: { width, height }, colorScheme: theme },
+        async ({ page }) => {
+          const selected = `${passage} The selected deployment and rollback instructions must remain available in full.\nKeep the complete second line and the long identifier deployment_configuration_review_012345678901234567890123456789.`;
+          const comment =
+            "Keep all of the selected context.\nExplain the rollback steps before changing the deployment.";
+          const { source, gateway } = await openChat(page, undefined, selected);
+          await addComment(page, source, comment);
+          await button(page, "Send message").click();
+          const request = await gateway.waitForRequest("chat.send");
+          // SAFETY: the real send path supplies the chat.send request captured by the fixture.
+          const params = request.params as {
+            idempotencyKey: string;
+            sessionKey: string;
+            message: string;
+            attachments: Array<{ content: string }>;
+          };
+          expect(params.message).toBe("");
+          expect(params.attachments).toHaveLength(1);
+          const payload = Buffer.from(params.attachments[0]!.content, "base64").toString("utf8");
+          expect(payload).toContain(`Selected text:\n${selected}\n\nUser comment:\n${comment}`);
+          expect(payload).toContain("Source session:");
+          await gateway.emitChatFinal({
+            runId: params.idempotencyKey,
+            sessionKey: params.sessionKey,
+            text: "I will keep the full context and explain the rollback steps.",
+          });
+          await page
+            .locator(".chat-text")
+            .getByText("I will keep the full context and explain the rollback steps.", {
+              exact: true,
+            })
+            .waitFor();
+          await waitForChatScrollIdle(page);
+          const inline = page.locator(".chat-sent-comments-inline");
+          await inline.waitFor();
+          const authored = inline.locator(".chat-sent-comments-inline__comment");
+          await expect.poll(() => authored.textContent()).toBe(comment);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            const frame = await takeControlUiScreenshotFrame(page, inline, [authored], {
+              elements: [inline],
+              scrollTo: inline,
+              animations: "disabled",
+            });
+            await writeFile(`${suite.artifactDir}/annotation-${width}-${theme}.png`, frame.png);
+          }
+          const selection = inline.getByRole("button", { name: selected });
+          await selection.waitFor();
+          const geometry = await selection.evaluate((element) => ({
+            height: element.getBoundingClientRect().height,
+            lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+            overflows: element.scrollWidth > element.clientWidth,
+            documentOverflows: document.documentElement.scrollWidth > window.innerWidth,
+          }));
+          expect(geometry.height).toBeLessThanOrEqual(geometry.lineHeight + 1);
+          expect(geometry.overflows).toBe(true);
+          expect(geometry.documentOverflows).toBe(false);
+          await page.keyboard.press("Tab");
+          await selection.focus();
+          const fullQuote = inline.getByRole("region", {
+            name: "Highlighted passage:",
+            exact: true,
+          });
+          await fullQuote.waitFor({ state: "visible" });
+          expect(await fullQuote.textContent()).toBe(selected);
+          await page.keyboard.press("Escape");
+          await fullQuote.waitFor({ state: "hidden" });
+          await selection.click();
+          await fullQuote.waitFor({ state: "visible" });
+          expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+        },
+      );
+    },
+  );
+
   it.each(["delegated-composer", "failing-composer"])(
     "shows one usable comment chip when %s restores the built-in composer",
     async (replacement) => {

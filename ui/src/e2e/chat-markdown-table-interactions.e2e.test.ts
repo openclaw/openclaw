@@ -1,5 +1,8 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   auditMarkdownTable,
@@ -49,6 +52,10 @@ function readTableGeometry(element: Element) {
   const column = thread.querySelector<HTMLElement>(".chat-thread-inner")!;
   const viewport = element.querySelector<HTMLElement>(".markdown-table__viewport")!;
   return {
+    publishedColumn: getComputedStyle(thread)
+      .getPropertyValue("--chat-transcript-column-width")
+      .trim(),
+    measuredColumn: column.clientWidth,
     contained: bounds.left >= pane.left && bounds.right <= pane.right,
     currentColumn:
       getComputedStyle(thread).getPropertyValue("--chat-transcript-column-width").trim() ===
@@ -102,6 +109,10 @@ ${auditMarkdownTable}`,
     await shell.waitFor({ state: "visible" });
     for (const width of [1920, 1440, 1280, 760, 390, 932]) {
       await page.setViewportSize({ width, height: width === 932 ? 430 : 1000 });
+      await waitForLayoutSettled(
+        page,
+        '.chat-thread, [data-entry-id="wrapping-table"] .markdown-table',
+      );
       await page.locator(".chat-thread").evaluate((element) => {
         element.scrollTop = 0;
       });
@@ -131,10 +142,65 @@ ${auditMarkdownTable}`,
         return geometry.contained && geometry.overflow <= 1;
       })
       .toBe(true);
-    await page.getByRole("button", { name: "Close Files" }).click();
-    await expand.click();
     const dialog = page.locator(".markdown-table-dialog");
-    await dialog.waitFor({ state: "visible" });
+    const expansion = await expand.evaluateHandle((trigger) => {
+      const state = {
+        clicked: false,
+        trigger,
+        pane: trigger.closest<HTMLElement>("openclaw-chat-pane"),
+        workspace: document.querySelector<HTMLElement>('[data-panel-slot="workspace"]'),
+      };
+      trigger.addEventListener(
+        "click",
+        () => {
+          state.clicked = true;
+        },
+        { once: true, capture: true },
+      );
+      return state;
+    });
+    try {
+      await page.getByRole("button", { name: "Close Files" }).click();
+      await waitForLayoutSettled(
+        page,
+        '.chat-thread, [data-entry-id="wrapping-table"] .markdown-table',
+      );
+      await expand.click();
+      await dialog.waitFor({ state: "visible" });
+    } catch (error) {
+      await withTimeout(
+        expansion.evaluate((state) => {
+          const content = document.querySelector(".markdown-table-dialog");
+          const modal = document.querySelector(".markdown-table-modal");
+          return {
+            expandClickObserved: state.clicked,
+            originalExpandConnected: state.trigger.isConnected,
+            originalExpandFocused: state.trigger === document.activeElement,
+            originalExpandStillSelected:
+              state.trigger ===
+              document.querySelector('[data-entry-id="wrapping-table"] .markdown-table__expand'),
+            retainedPaneConnected: state.pane?.isConnected ?? false,
+            retainedPaneHidden: state.pane?.getAttribute("aria-hidden") === "true",
+            retainedPaneInert: state.pane?.inert ?? null,
+            retainedPaneVisible: state.pane?.checkVisibility({ visibilityProperty: true }) ?? false,
+            workspaceConnected: state.workspace?.isConnected ?? false,
+            workspaceHidden: state.workspace ? Boolean(state.workspace.hidden) : null,
+            workspaceVisible:
+              state.workspace?.checkVisibility({ visibilityProperty: true }) ?? false,
+            tableDialogCount: document.querySelectorAll(".markdown-table-dialog").length,
+            tableDialogVisible: content?.checkVisibility({ visibilityProperty: true }) ?? false,
+            tableModalPresent: Boolean(modal),
+            nativeDialogOpen: modal?.querySelector("dialog")?.open ?? null,
+          };
+        }),
+        1_000,
+      )
+        .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+        .catch(() => undefined);
+      throw error;
+    } finally {
+      await expansion.dispose().catch(() => undefined);
+    }
     await dialog.evaluate((element) => {
       element.scrollTop = 400;
     });
@@ -196,17 +262,22 @@ ${overflowTable}`,
           ),
       )
       .toBe("82%");
-    const contained = async () =>
-      (
-        await Promise.all((await tables.all()).map((table) => table.evaluate(readTableGeometry)))
-      ).every((geometry) => geometry.contained && geometry.currentColumn);
+    const expectContained = () =>
+      expect
+        .poll(async () =>
+          Promise.all((await tables.all()).map((table) => table.evaluate(readTableGeometry))),
+        )
+        .toMatchObject([
+          { contained: true, currentColumn: true },
+          { contained: true, currentColumn: true },
+        ]);
     for (const width of [1440, 1920, 1280]) {
       await page.setViewportSize({ width, height: 1000 });
       for (const direction of ["ltr", "rtl"]) {
         await page.evaluate((value) => {
           document.documentElement.dir = value;
         }, direction);
-        await expect.poll(contained).toBe(true);
+        await expectContained();
         const sizing = await overflow.evaluate(readTableGeometry);
         // The 18px gutter plus 12px inset is independent of native scrollbar width.
         expect(sizing.leadingGap).toBeGreaterThanOrEqual(29);
@@ -226,10 +297,10 @@ ${overflowTable}`,
       document.documentElement.dir = "ltr";
     });
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await expect.poll(contained).toBe(true);
+    await expectContained();
     await openChatSidePanelType(page, "Files");
     await page.locator('.side-panel__panel[data-panel-slot="workspace"]').waitFor();
-    await expect.poll(contained).toBe(true);
+    await expectContained();
     expect(
       await shell
         .locator(".markdown-table__viewport")

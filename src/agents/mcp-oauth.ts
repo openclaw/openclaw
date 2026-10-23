@@ -1,6 +1,7 @@
 /** MCP OAuth credential provider, flow coordinator, and login helpers. */
 import { auth, type FetchLike } from "@modelcontextprotocol/client";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import {
   type OpenClawStateAsyncLeaseContext,
   withOpenClawStateLeaseAsync,
@@ -8,13 +9,18 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { buildMcpOAuthAuthorizationFetch, buildMcpOAuthHttpFetch } from "./mcp-http-fetch.js";
-import { requesterMcpOAuthStoreKeyPrefix, type McpOAuthIdentity } from "./mcp-oauth-identity.js";
+import {
+  mcpOAuthSignInHint,
+  requesterMcpOAuthStoreKeyPrefix,
+  type McpOAuthIdentity,
+} from "./mcp-oauth-identity.js";
 import {
   createMcpOAuthClientProvider,
   type McpOAuthConfig,
   type McpOAuthLoginLifecycle,
   withMcpOAuthLeaseSignal,
 } from "./mcp-oauth-provider.js";
+import { createMcpOAuthRefreshBoundary } from "./mcp-oauth-refresh-boundary.js";
 import {
   projectMcpOAuthCredentialsStatus,
   type McpOAuthPrincipalStatus,
@@ -71,9 +77,9 @@ async function withMcpOAuthLease<T>(
   );
 }
 
-function mcpOAuthAdditionalAuthorizationError(serverName: string): Error {
+function mcpOAuthAdditionalAuthorizationError(identity: McpOAuthIdentity): Error {
   return new Error(
-    `MCP server "${serverName}" requires additional OAuth authorization. Run openclaw mcp login ${serverName}.`,
+    `MCP server "${identity.serverName}" requires additional OAuth authorization. ${mcpOAuthSignInHint(identity)}`,
   );
 }
 
@@ -102,9 +108,19 @@ export async function resolveMcpOAuthAccessToken(
   params: ResolveMcpOAuthAccessTokenParams,
 ): Promise<string | undefined> {
   const storeKey = params.identity.storeKey;
-  return await withMcpOAuthLease(
+  const caller = params.signal;
+  caller?.throwIfAborted();
+  // Lease waiting follows the caller; once admitted, a caller abort detaches instead of
+  // interrupting a possibly rotating exchange that must settle under its lease.
+  const waiting = new AbortController();
+  const detached = new AbortController();
+  let admitted = false;
+  const onAbort = () => (admitted ? detached : waiting).abort(caller?.reason);
+  caller?.addEventListener("abort", onAbort, { once: true });
+  const work = withMcpOAuthLease(
     storeKey,
     async (lease, context) => {
+      admitted = true;
       const store = await readMcpOAuthStore(storeKey, context);
       await lease.assertOwned();
       const tokens = store.tokens;
@@ -132,17 +148,20 @@ export async function resolveMcpOAuthAccessToken(
         params.interactiveAuthorizationRequired === true &&
         challengeAppliesToCurrentState
       ) {
-        throw mcpOAuthAdditionalAuthorizationError(params.identity.serverName);
+        throw mcpOAuthAdditionalAuthorizationError(params.identity);
       }
       if (store.pendingAuthorizationChallenge?.requiresAuthorization === true) {
-        throw mcpOAuthAdditionalAuthorizationError(params.identity.serverName);
+        throw mcpOAuthAdditionalAuthorizationError(params.identity);
+      }
+      if (store.refreshClaim) {
+        throw new Error("MCP OAuth refresh outcome is uncertain; sign in again.");
       }
       if (!tokens?.access_token) {
         if (params.allowMissingToken === true) {
           return undefined;
         }
         throw new Error(
-          `MCP server "${params.identity.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.identity.serverName}.`,
+          `MCP server "${params.identity.serverName}" requires OAuth authorization. ${mcpOAuthSignInHint(params.identity)}`,
         );
       }
 
@@ -159,22 +178,22 @@ export async function resolveMcpOAuthAccessToken(
       }
       if (!tokens.refresh_token) {
         throw new Error(
-          `MCP server "${params.identity.serverName}" has expired OAuth credentials. Run openclaw mcp login ${params.identity.serverName}.`,
+          `MCP server "${params.identity.serverName}" has expired OAuth credentials. ${mcpOAuthSignInHint(params.identity)}`,
         );
       }
 
       const pendingChallenge = store.pendingAuthorizationChallenge;
       await mutateMcpOAuthStore({ storeKey, lease, context }, { kind: "bindTokensIssuer" });
+      const boundary = createMcpOAuthRefreshBoundary({ storeKey, lease, context });
       const provider = await createMcpOAuthClientProvider({
         identity: params.identity,
         config: params.config,
         lease,
         storeContext: context,
+        refreshBoundary: boundary,
       });
       const fetchFn =
         params.fetchFn ?? buildMcpOAuthHttpFetch({ resourceUrl: params.identity.serverUrl });
-      const leasedFetchFn = withMcpOAuthLeaseSignal(fetchFn, lease.signal);
-      let latestFetchFailure: { error: unknown } | undefined;
       let result: Awaited<ReturnType<typeof auth>>;
       try {
         result = await auth(provider, {
@@ -188,36 +207,27 @@ export async function resolveMcpOAuthAccessToken(
             params.scope ??
             normalizeOptionalString(pendingChallenge?.scope) ??
             normalizeOptionalString(params.config?.scope),
-          fetchFn: async (url, init) => {
-            try {
-              const response = await leasedFetchFn(url, init);
-              latestFetchFailure = undefined;
-              return response;
-            } catch (error) {
-              latestFetchFailure = { error };
-              throw error;
-            }
-          },
+          fetchFn: boundary.wrap(withMcpOAuthLeaseSignal(fetchFn, lease.signal)),
         });
-      } catch (error) {
-        // SDK 1.30.0 converts refresh transport failures into an authorization fallback.
-        // Preserve the actionable failure when no later request recovered from it.
-        throw latestFetchFailure ? latestFetchFailure.error : error;
-      }
-      if (latestFetchFailure) {
-        throw latestFetchFailure.error;
+      } finally {
+        await boundary.finish();
       }
       await lease.assertOwned();
       const refreshedTokens = await provider.tokens();
       if (result !== "AUTHORIZED" || !refreshedTokens?.access_token) {
         throw new Error(
-          `MCP server "${params.identity.serverName}" could not refresh OAuth credentials. Run openclaw mcp login ${params.identity.serverName}.`,
+          `MCP server "${params.identity.serverName}" could not refresh OAuth credentials. ${mcpOAuthSignInHint(params.identity)}`,
         );
       }
       return refreshedTokens.access_token;
     },
-    params.signal,
+    waiting.signal,
   );
+  try {
+    return await racePromiseWithAbortSignal(work, detached.signal);
+  } finally {
+    caller?.removeEventListener("abort", onAbort);
+  }
 }
 
 /** Persist a terminal resource rejection without overwriting newer credentials. */
@@ -330,6 +340,10 @@ async function runMcpOAuthAuthorizationAttempt(
   context: OpenClawStateWorkerContext,
 ): Promise<"authorized" | "redirect"> {
   params.login?.assertCurrent();
+  const boundary = createMcpOAuthRefreshBoundary(
+    { storeKey: params.identity.storeKey, lease, context },
+    params.login?.assertCurrent,
+  );
   const provider = await createMcpOAuthClientProvider({
     identity: params.identity,
     config: params.config,
@@ -339,15 +353,23 @@ async function runMcpOAuthAuthorizationAttempt(
     lease,
     login: params.login,
     storeContext: context,
+    refreshBoundary: boundary,
   });
   params.login?.assertCurrent();
-  const result = await auth(provider, {
-    serverUrl: params.identity.serverUrl,
-    authorizationCode: normalizeOptionalString(params.authorizationCode),
-    resourceMetadataUrl: params.resourceMetadataUrl,
-    scope: normalizeOptionalString(params.scope) ?? normalizeOptionalString(params.config?.scope),
-    fetchFn: withMcpOAuthLeaseSignal(params.fetchFn, lease.signal, params.login?.assertCurrent),
-  });
+  let result: Awaited<ReturnType<typeof auth>> | undefined;
+  try {
+    result = await auth(provider, {
+      serverUrl: params.identity.serverUrl,
+      authorizationCode: normalizeOptionalString(params.authorizationCode),
+      resourceMetadataUrl: params.resourceMetadataUrl,
+      scope: normalizeOptionalString(params.scope) ?? normalizeOptionalString(params.config?.scope),
+      fetchFn: boundary.wrap(
+        withMcpOAuthLeaseSignal(params.fetchFn, lease.signal, params.login?.assertCurrent),
+      ),
+    });
+  } finally {
+    await boundary.finish({ redirected: result === "REDIRECT" });
+  }
   params.login?.assertCurrent();
   await lease.assertOwned();
   params.login?.assertCurrent();
@@ -368,9 +390,11 @@ export async function startMcpOAuthAuthorization(
       opts.login?.assertCurrent();
       await lease.assertOwned();
       opts.login?.assertCurrent();
+      // A fenced refresh claim blocks every token use, so only a new sign-in can clear it.
       if (
         opts.login &&
         store.tokens?.access_token &&
+        !store.refreshClaim &&
         store.pendingAuthorizationChallenge?.requiresAuthorization !== true &&
         (store.tokenExpiresAt === undefined ||
           store.tokenExpiresAt > Date.now() + TOKEN_EXPIRY_SKEW_MS)

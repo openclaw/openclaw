@@ -33,9 +33,9 @@ function liveModel(overrides: Partial<Model<"openai-responses">> = {}) {
 }
 
 describeLive("OpenAI Responses live", () => {
-  it(
-    "streams a reply through a terminal event with usage accounting",
-    async () => {
+  it.each([undefined, "30m", "12h"] as const)(
+    "streams a reply with cache lifetime %s through a terminal event with usage accounting",
+    async (promptCacheTtl) => {
       const context: Context = {
         messages: [{ role: "user", content: "Reply with exactly: OK", timestamp: 0 }],
       };
@@ -43,6 +43,7 @@ describeLive("OpenAI Responses live", () => {
         apiKey: OPENAI_KEY,
         maxTokens: 256,
         temperature: 0.5,
+        promptCacheTtl,
       }).result();
 
       expect(result.errorMessage).toBeUndefined();

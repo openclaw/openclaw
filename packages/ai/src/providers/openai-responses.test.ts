@@ -209,6 +209,55 @@ describe("OpenAI Responses provider", () => {
     },
   );
 
+  it.each<{
+    options: Options;
+    model: Partial<ResponsesModel>;
+    expected: { ttl: "30m" | "12h" } | undefined;
+  }>([
+    {
+      options: { promptCacheTtl: "12h", cacheRetention: "long" },
+      model: { id: "gpt-5.6-sol" },
+      expected: { ttl: "12h" },
+    },
+    { options: { promptCacheTtl: "30m" }, model: { id: "gpt-6.1-sol" }, expected: { ttl: "30m" } },
+    {
+      options: { promptCacheTtl: "12h", cacheRetention: "none" },
+      model: { id: "gpt-6.1-sol" },
+      expected: undefined,
+    },
+    { options: { promptCacheTtl: "12h" }, model: { id: "gpt-5.5" }, expected: undefined },
+    {
+      options: { promptCacheTtl: "12h" },
+      model: { id: "gpt-6.1-sol", compat: { supportsLongCacheRetention: false } },
+      expected: undefined,
+    },
+    {
+      options: { promptCacheTtl: "12h" },
+      model: { id: "gpt-6.1-sol", baseUrl: "https://proxy.example/v1" },
+      expected: undefined,
+    },
+  ])(
+    "honors the explicit Responses cache lifetime only on eligible routes: %j",
+    async ({ options, model: modelOverrides, expected }) => {
+      const requests = await bothRequests(
+        { sessionId: "cache-session", ...options },
+        modelOverrides,
+      );
+      for (const params of requests) {
+        expect(params.prompt_cache_options).toEqual(expected);
+        expect(params.prompt_cache_retention).toBeUndefined();
+      }
+    },
+  );
+
+  it("preserves the cache lifetime through simple Responses completions", async () => {
+    await streamSimpleOpenAIResponses(model({ id: "gpt-6.1-sol" }), context, {
+      apiKey: "test",
+      promptCacheTtl: "12h",
+    }).result();
+    expect(openAiMockState.params[0]).toMatchObject({ prompt_cache_options: { ttl: "12h" } });
+  });
+
   it("omits cache fields for custom endpoints without cache-key opt-in", async () => {
     const requests = await bothRequests(
       { cacheRetention: "long" },

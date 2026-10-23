@@ -1,4 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { cronAddDiagnostics, cronUpdateDiagnostics } from "./cron-validation-diagnostics.js";
 import { lazyCompile as compile } from "./protocol-validator.js";
 import * as S from "./schema-modules.js";
 import type {
@@ -187,6 +188,7 @@ export const validateWorktreesCreateParams = compile(S.WorktreesCreateParamsSche
 export const validateWorktreesRemoveParams = compile(S.WorktreesRemoveParamsSchema);
 export const validateWorktreesRestoreParams = compile(S.WorktreesRestoreParamsSchema);
 export const validateWorktreesGcParams = compile(S.WorktreesGcParamsSchema);
+export const validateWorktreesRecoverFileParams = compile(S.WorktreesRecoverFileParamsSchema);
 export const validateWorktreesRecoverRemovalParams = compile(S.WorktreesRecoverRemovalParamsSchema);
 export const validateWorktreesRetireSnapshotParams = compile(S.WorktreesRetireSnapshotParamsSchema);
 export const validateWorktreesBranchesParams = compile(S.WorktreesBranchesParamsSchema);
@@ -530,8 +532,12 @@ export const validateSkillsFileGetParams = compile(S.SkillsFileGetParamsSchema);
 export const validateCronListParams = compile(S.CronListParamsSchema);
 export const validateCronStatusParams = compile(S.CronStatusParamsSchema);
 export const validateCronGetParams = compile(S.CronGetParamsSchema);
-export const validateCronAddParams = compile(S.CronAddParamsSchema);
-export const validateCronUpdateParams = compile(S.CronUpdateParamsSchema);
+export const validateCronAddParams = compile(S.CronAddParamsSchema, undefined, cronAddDiagnostics);
+export const validateCronUpdateParams = compile(
+  S.CronUpdateParamsSchema,
+  undefined,
+  cronUpdateDiagnostics,
+);
 export const validateCronRemoveParams = compile(S.CronRemoveParamsSchema);
 export const validateCronRunParams = compile(S.CronRunParamsSchema);
 export const validateCronRunsParams = compile(S.CronRunsParamsSchema);

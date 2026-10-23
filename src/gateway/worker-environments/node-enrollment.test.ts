@@ -292,7 +292,8 @@ describe("worker node enrollment", () => {
     const record = await createProvisioning();
     let transferNow = 0;
     let tarballBytes = 1;
-    transfer = createWorkerBootstrapArtifactTransferService({ now: () => transferNow });
+    vi.spyOn(Date, "now").mockImplementation(() => transferNow);
+    transfer = createWorkerBootstrapArtifactTransferService();
     const manager = createManager({
       prepareArtifact: async () => ({ ...artifact(), tarballBytes }),
     });

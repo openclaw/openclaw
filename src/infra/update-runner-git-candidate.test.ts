@@ -1,28 +1,26 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import YAML from "yaml";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runPackageUpdateDoctor } from "../cli/update-cli/update-command-package.js";
 import * as processExec from "../process/exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
+import { verifyGitUpdateRecovery } from "./update-git-runtime.js";
 import {
-  advanceFixtureRemote,
-  createGitFixtureCheckout,
+  createGitUpdateFixture,
   expectNoGitRuntimeStagingPaths,
   expectRuntime,
   prepareDeletedTrackedRuntimeAsset,
-  registerGitRuntimeStagingTests,
-  registerGitRuntimeRestorationTests,
   runFixtureGit as git,
   resolveCandidateNodeRuntimeForTest,
   runtimeImports,
   writeGitFixtureManifest,
-  writeRuntime,
-  type VirtualStoreLayout,
+  writeFixtureTree,
+  type GitUpdateFixture,
   expectHead,
   expectMissing,
   readText,
@@ -31,72 +29,34 @@ import {
   type GitCandidateFixture,
 } from "./update-runner-git-candidate.test-support.js";
 import { registerGitActivationDoctorOutcomeTests } from "./update-runner-git-transactions.test-support.js";
-import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
 
 describe("Git candidate activation", () => {
+  const directories = useAutoCleanupTempDirTracker(afterEach);
   const packageMetadata = { openclaw: { schemaVersions: { state: 5, agent: 14 } } };
   let directory: string;
   let root: string;
   let remote: string;
-  let beforeSha: string;
-  let events: string[];
-  let stopped: boolean;
-  let runCommand: CommandRunner;
-  let virtualStoreLayout: VirtualStoreLayout;
+  let state: GitUpdateFixture;
   let inspectedTargets: string[];
-  let inspectionRoots: string[];
-
-  const writeCheckoutRuntime = (
-    checkout = root,
-    sha = beforeSha,
-    layout: string = virtualStoreLayout,
-  ) => writeRuntime(checkout, sha, path.join(directory, "shared-store"), layout);
 
   beforeEach(async () => {
-    directory = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-candidate-")),
-    );
-    ({ root, remote, beforeSha } = await createGitFixtureCheckout(directory, packageMetadata));
-    virtualStoreLayout = "node_modules/.pnpm";
-    await writeCheckoutRuntime();
-    events = [];
-    stopped = false;
+    directory = await fs.realpath(directories.make("openclaw-git-candidate-"));
+    state = await createGitUpdateFixture(directory, packageMetadata);
+    ({ root, remote } = state);
     inspectedTargets = [];
-    inspectionRoots = [];
-    runCommand = async (argv, options) => {
-      if (argv[0] === "git") {
-        if (argv.includes("init") && argv.includes("--bare")) {
-          const mirror = argv.at(-1);
-          assert(mirror);
-          inspectionRoots.push(path.dirname(mirror));
-        }
-        return runCommandWithTimeout(argv, options);
-      }
-      if (argv[0] === "pnpm") {
-        if (argv[1] === "build") {
-          expect(stopped).toBe(false);
-          expect(options.cwd).not.toBe(root);
-          await writeCheckoutRuntime(options.cwd!, await git(options.cwd!, "rev-parse", "HEAD"));
-          events.push("build");
-        }
-        return { code: 0, stdout: argv[1] === "--version" ? "12.0.0" : "", stderr: "" };
-      }
-      throw new Error(`Unexpected command: ${argv.join(" ")}`);
-    };
   });
 
   afterEach(async () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
-    await fs.rm(directory, { recursive: true, force: true });
   });
 
-  const advanceRemote = () => advanceFixtureRemote(remote);
+  const advanceRemote = () => state.advanceRemote();
 
   function observeCommands(observe: (...args: Parameters<CommandRunner>) => void | Promise<void>) {
-    const execute = runCommand;
-    runCommand = async (...args) => {
+    const execute = state.runCommand;
+    state.runCommand = async (...args) => {
       await observe(...args);
       return execute(...args);
     };
@@ -105,7 +65,7 @@ describe("Git candidate activation", () => {
   function update(opts: Partial<UpdateRunnerOptions> = {}) {
     const { prepareGitExposure, runGitDoctor, ...overrides } = opts;
     const runActivationDoctor = async (doctorRoot: string) => {
-      expect(stopped).toBe(true);
+      expect(state.stopped).toBe(true);
       const sha = await git(doctorRoot, "rev-parse", "HEAD");
       expect(inspectedTargets).toContain(sha);
       const doctor = await runPackageUpdateDoctor({
@@ -120,77 +80,79 @@ describe("Git candidate activation", () => {
       });
       expect(doctor?.exitCode, doctor?.stderrTail ?? undefined).toBe(0);
       expect(doctor?.stdoutTail?.trim().split("\n")).toEqual(runtimeImports.map(() => sha));
-      events.push("migrate");
+      state.events.push("migrate");
       return doctor;
     };
-    return updateGitCheckout({
-      gitRoot: root,
-      runCommand,
-      defaultCommandEnv: undefined,
-      timeoutMs: 5000,
-      startedAt: Date.now(),
-      opts: {
-        channel: "dev",
-        inspectGitTarget: async (target) => {
-          expect(target).toEqual({
-            sha: expect.stringMatching(/^[0-9a-f]{40}$/u),
-            version: "2026.9.1",
-            schemaVersions: { state: 5, agent: 14 },
-          });
-          assert(target.sha);
-          inspectedTargets.push(target.sha);
-        },
-        validateCandidate: async (candidateRoot) => {
-          expect(stopped).toBe(false);
-          await expectHead(root, beforeSha);
-          expect(candidateRoot).not.toBe(root);
-          const candidateSha = await git(candidateRoot, "rev-parse", "HEAD");
-          expect(inspectedTargets).toContain(candidateSha);
-          await expectRuntime(candidateRoot, candidateSha);
-          events.push("validate");
-        },
-        beforeGitMutation: async (target) => {
-          expect(inspectedTargets).toContain(target.sha);
-          expect(stopped).toBe(false);
-          stopped = true;
-          events.push("stop");
-        },
-        ...overrides,
-        ...(prepareGitExposure
-          ? { prepareGitExposure }
-          : { runGitDoctor: runGitDoctor ?? runActivationDoctor }),
+    return state.update({
+      inspectGitTarget: async (target) => {
+        expect(target).toEqual({
+          sha: expect.stringMatching(/^[0-9a-f]{40}$/u),
+          version: "2026.9.1",
+          schemaVersions: { state: 5, agent: 14 },
+        });
+        assert(target.sha);
+        inspectedTargets.push(target.sha);
       },
+      validateCandidate: async (candidateRoot) => {
+        expect(inspectedTargets).toContain(await git(candidateRoot, "rev-parse", "HEAD"));
+        await state.validateCandidate(candidateRoot);
+      },
+      beforeGitMutation: async (target) => {
+        expect(inspectedTargets).toContain(target.sha);
+        await state.beforeGitMutation();
+      },
+      ...overrides,
+      ...(prepareGitExposure
+        ? { prepareGitExposure }
+        : { runGitDoctor: runGitDoctor ?? runActivationDoctor }),
     });
   }
 
-  const expectNoRuntimeStagingPaths = () => expectNoGitRuntimeStagingPaths(root, inspectionRoots);
+  const expectNoRuntimeStagingPaths = () =>
+    expectNoGitRuntimeStagingPaths(root, state.inspectionRoots);
+  const writeFiles = (files: Record<string, string>, checkout = root) =>
+    writeFixtureTree(checkout, files);
+  async function commitFiles(files: Record<string, string>, checkout = root) {
+    await writeFiles(files, checkout);
+    await git(checkout, "add", ...Object.keys(files));
+    await git(checkout, "commit", "-m", "fixture change");
+    return git(checkout, "rev-parse", "HEAD");
+  }
+  async function expectInstalled(sha: string) {
+    await expectHead(root, sha);
+    await expectRuntime(root, sha);
+  }
+  async function expectOriginalServing() {
+    expect(state.stopped).toBe(false);
+    await expectInstalled(state.beforeSha);
+    await expectNoRuntimeStagingPaths();
+  }
 
   it("separates work deadlines from observation budgets", async () => {
-    const timeoutMs = undefined;
     await advanceRemote();
     const commands: Array<{ argv: string[]; timeoutMs: number | undefined }> = [];
     const doctorCommands = vi.spyOn(processExec, "runCommandWithTimeout");
     observeCommands((argv, options) => {
       commands.push({ argv, timeoutMs: options.timeoutMs });
     });
-    expect((await update({ timeoutMs })).status).toBe("ok");
+    expect((await update()).status).toBe("ok");
     const doctorOptions = doctorCommands.mock.calls.find(([argv]) => argv.includes("doctor"))?.[1];
     expect(doctorOptions).toBeDefined();
-    expect(typeof doctorOptions === "number" ? doctorOptions : doctorOptions?.timeoutMs).toBe(
-      timeoutMs,
-    );
-    for (const work of ["install", "build", "fetch", "checkout"]) {
-      const command = commands.find(({ argv }) => argv.includes(work));
-      expect(command, work).toBeDefined();
-      expect(command?.timeoutMs, work).toBe(timeoutMs);
+    expect(
+      typeof doctorOptions === "number" ? doctorOptions : doctorOptions?.timeoutMs,
+    ).toBeUndefined();
+    for (const [names, budget] of [
+      [["install", "build", "fetch", "checkout"], undefined],
+      [["--version", "rev-parse", "status", "remove"], 5_000],
+    ] as const) {
+      for (const name of names) {
+        expect(
+          commands.find(({ argv }) => argv.includes(name)),
+          name,
+        ).toMatchObject({ timeoutMs: budget });
+      }
     }
-    for (const probe of ["--version", "rev-parse", "status"]) {
-      const command = commands.find(({ argv }) => argv.includes(probe));
-      expect(command, probe).toBeDefined();
-      expect(command?.timeoutMs, probe).toBe(5_000);
-    }
-    expect(commands.find(({ argv }) => argv.includes("remove"))?.timeoutMs).toBe(5_000);
-    expect(inspectionRoots).not.toHaveLength(0);
+    expect(state.inspectionRoots).not.toHaveLength(0);
     await expectNoRuntimeStagingPaths();
   });
 
@@ -207,11 +169,11 @@ describe("Git candidate activation", () => {
     expect(result.status).toBe("ok");
     const names = result.steps.map((step) => step.name);
     expect(result.steps).toContainEqual(cleanup);
-    expect(names.indexOf("candidate-state-cleanup")).toBeGreaterThanOrEqual(0);
     expect(names.indexOf("candidate-state-cleanup")).toBeLessThan(
       names.indexOf("preflight-update-clean-check"),
     );
-    expect(result.steps.find((step) => step.name === "git-runtime-activation")).toMatchObject({
+    expectStep(result.steps, {
+      name: "git-runtime-activation",
       exitCode: 0,
       durationMs: expect.any(Number),
     });
@@ -219,78 +181,19 @@ describe("Git candidate activation", () => {
   });
 
   const fixture = (): GitCandidateFixture => ({
-    directory,
     root,
-    beforeSha,
-    events,
-    virtualStoreLayout,
-    runCommand,
+    beforeSha: state.beforeSha,
+    events: state.events,
+    runCommand: state.runCommand,
     advanceRemote,
     update,
     expectNoRuntimeStagingPaths,
-    isStopped: () => stopped,
+    isStopped: () => state.stopped,
     setRunCommand: (runner) => {
-      runCommand = runner;
+      state.runCommand = runner;
     },
   });
   registerGitActivationDoctorOutcomeTests(fixture);
-
-  it("preserves an incomplete installed runtime when the candidate build fails", async () => {
-    await fs.rm(path.join(root, "dist", ".runtime-postbuildstamp"));
-    await advanceRemote();
-    const execute = runCommand;
-    runCommand = (argv, options) =>
-      argv[0] === "pnpm" && argv[1] === "build"
-        ? Promise.resolve({ code: 1, stdout: "", stderr: "synthetic build failure" })
-        : execute(argv, options);
-
-    const result = await update();
-
-    expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
-    expect({ stopped, events }).toEqual({ stopped: false, events: [] });
-    await expectMissing(path.join(root, "dist", ".runtime-postbuildstamp"));
-    await expectHead(root, beforeSha);
-    await expectNoRuntimeStagingPaths();
-  });
-
-  it("rebuilds a source-current checkout before activating its stale runtime", async () => {
-    const builtSha = beforeSha;
-    const target = await advanceRemote();
-    await git(remote, "tag", "v2026.9.1");
-    await git(root, "pull", "--ff-only");
-    beforeSha = target;
-    const buildInfoPath = path.join(root, "dist", "build-info.json");
-    await fs.writeFile(buildInfoPath, JSON.stringify({ buildId: builtSha }));
-    await expectRuntime(root, builtSha);
-
-    const result = await update({
-      beforeGitMutation: async () => {
-        expect(stopped).toBe(false);
-        await expectRuntime(root, builtSha);
-        stopped = true;
-        events.push("stop");
-      },
-    });
-
-    expect(result).toMatchObject({
-      status: "ok",
-      before: { sha: target, buildId: builtSha },
-      after: { sha: target, buildId: target },
-    });
-    expect(events).toEqual(["build", "validate", "stop", "migrate"]);
-    await expectRuntime(root, target);
-    expect(JSON.parse(await readText(buildInfoPath))).toMatchObject({ commit: target });
-
-    stopped = false;
-    events.length = 0;
-    expect(await update()).toMatchObject({
-      status: "skipped",
-      reason: "already-current",
-      before: { sha: target, buildId: target },
-    });
-    expect({ stopped, events }).toEqual({ stopped: false, events: [] });
-    await expectNoRuntimeStagingPaths();
-  });
 
   it("keeps build and exposure source selection in the admitted candidate", async () => {
     vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", root);
@@ -334,21 +237,18 @@ describe("Git candidate activation", () => {
   });
 
   it("rejects after all bounded rebased dev candidates require an incompatible Node runtime", async () => {
-    const upstreamBase = beforeSha;
+    const upstreamBase = state.beforeSha;
     const nodeRuntime = await resolveCandidateNodeRuntimeForTest();
     const requiredMajor = Number.parseInt(nodeRuntime.version.split(".")[0]!, 10) + 1;
     const requiredEngine = `>=${requiredMajor}.0.0`;
     await writeGitFixtureManifest(root, { engines: { node: requiredEngine }, ...packageMetadata });
     await git(root, "add", "package.json");
     await git(root, "commit", "-m", "local change");
-    beforeSha = await git(root, "rev-parse", "HEAD");
-    await writeCheckoutRuntime();
+    state.beforeSha = await git(root, "rev-parse", "HEAD");
+    await state.writeRuntime();
 
     const olderCandidate = await advanceRemote();
-    await fs.writeFile(path.join(remote, "latest.txt"), "latest\n");
-    await git(remote, "add", "latest.txt");
-    await git(remote, "commit", "-m", "latest candidate");
-    const latestCandidate = await git(remote, "rev-parse", "HEAD");
+    const latestCandidate = await commitFiles({ "latest.txt": "latest\n" }, remote);
 
     const packageManagerCommands: string[][] = [];
     observeCommands((argv) => {
@@ -382,19 +282,8 @@ describe("Git candidate activation", () => {
       expect(output).toContain(nodeRuntime.version);
     }
     expect(packageManagerCommands).toEqual([]);
-    expect({ stopped, events }).toEqual({ stopped: false, events: [] });
-    await expectHead(root, beforeSha);
-    await expectRuntime(root, beforeSha);
-  });
-
-  it("does not exempt stale staging paths during initial admission", async () => {
-    const stale = path.join(root, "dist.openclaw-update-00000000-0000-0000-0000-000000000000.tmp");
-    await fs.mkdir(stale);
-    await fs.writeFile(path.join(stale, "candidate"), "operator-owned");
-    const result = await update();
-    expect(result).toMatchObject({ status: "error", reason: "dirty" });
-    expect(events).toEqual([]);
-    await expectFile(path.join(stale, "candidate"), "operator-owned");
+    expect(state.events).toEqual([]);
+    await expectOriginalServing();
   });
 
   it.each(["untracked", "head", "branch"] as const)(
@@ -404,34 +293,28 @@ describe("Git candidate activation", () => {
       const result = await update({
         validateCandidate: async () => {
           if (mutation === "untracked") {
-            await fs.mkdir(path.join(root, "dist.openclaw-update-operator.tmp"));
-            await fs.writeFile(
-              path.join(root, "dist.openclaw-update-operator.tmp", "keep.txt"),
-              "keep this change",
-            );
+            await writeFiles({ "dist.openclaw-update-operator.tmp/keep.txt": "keep this change" });
           } else if (mutation === "head") {
-            await fs.writeFile(path.join(root, "operator-change.txt"), "committed change");
-            await git(root, "add", "operator-change.txt");
-            await git(root, "commit", "-m", "operator change");
+            await commitFiles({ "operator-change.txt": "committed change" });
           } else {
             await git(root, "checkout", "-b", "operator-branch");
           }
         },
       });
       expect(result).toMatchObject({ status: "error", reason: "dirty" });
-      expect(stopped).toBe(false);
+      expect(state.stopped).toBe(false);
       if (mutation === "untracked") {
         await expectFile(
           path.join(root, "dist.openclaw-update-operator.tmp", "keep.txt"),
           "keep this change",
         );
       } else if (mutation === "head") {
-        expect(await git(root, "rev-parse", "HEAD")).not.toBe(beforeSha);
+        expect(await git(root, "rev-parse", "HEAD")).not.toBe(state.beforeSha);
       } else {
         expect(await git(root, "branch", "--show-current")).toBe("operator-branch");
       }
       if (mutation !== "head") {
-        await expectHead(root, beforeSha);
+        await expectHead(root, state.beforeSha);
       }
       await expectNoRuntimeStagingPaths();
     },
@@ -464,8 +347,8 @@ describe("Git candidate activation", () => {
       await git(remote, "commit", "-m", "operator store");
       await git(root, "fetch", "origin");
       await git(root, "merge", "--ff-only", "origin/main");
-      beforeSha = await git(root, "rev-parse", "HEAD");
-      await writeCheckoutRuntime(root, beforeSha, operatorStore);
+      state.beforeSha = await git(root, "rev-parse", "HEAD");
+      await state.writeRuntime(root, state.beforeSha, operatorStore);
       const target = await advanceRemote();
       for (const key of [
         "npm_config_virtual_store_dir",
@@ -477,8 +360,8 @@ describe("Git candidate activation", () => {
       }
       vi.stubEnv("OPENCLAW_UPDATE_PREFLIGHT_LINT", "1");
       const candidateCommands = ["install", "build", "ui:build", "lint"];
-      const command = runCommand;
-      runCommand = async (argv, options) => {
+      const command = state.runCommand;
+      state.runCommand = async (argv, options) => {
         if (argv[0] !== "pnpm") {
           return command(argv, options);
         }
@@ -502,8 +385,8 @@ describe("Git candidate activation", () => {
         const selected = config.virtualStoreDir ?? ambient;
         const store = path.resolve(cwd, selected ?? "node_modules/.pnpm");
         // Model pruning the previous package generation, as the real pnpm proof does.
-        await fs.rm(path.join(store, beforeSha), { recursive: true, force: true });
-        await writeCheckoutRuntime(cwd, await git(cwd, "rev-parse", "HEAD"), store);
+        await fs.rm(path.join(store, state.beforeSha), { recursive: true, force: true });
+        await state.writeRuntime(cwd, await git(cwd, "rev-parse", "HEAD"), store);
         if (argv[1] === "build") {
           await fs.rm(path.join(cwd, "dist", "control-ui", "index.html"));
           if (dirtyWorkspace) {
@@ -513,9 +396,9 @@ describe("Git candidate activation", () => {
             );
           }
         }
-        expect(stopped).toBe(false);
-        await expectRuntime(root, beforeSha);
-        events.push(argv[1]!);
+        expect(state.stopped).toBe(false);
+        await expectRuntime(root, state.beforeSha);
+        state.events.push(argv[1]!);
         return { code: 0, stdout: "", stderr: "" };
       };
       const result = await update({
@@ -523,16 +406,16 @@ describe("Git candidate activation", () => {
         prepareGitExposure: async (cwd, sha, env) => {
           expect(sha).toBe(target);
           expect(env).toBeDefined();
-          await runCommand(["pnpm", "install"], { cwd, env });
-          events.push("exposure");
+          await state.runCommand(["pnpm", "install"], { cwd, env });
+          state.events.push("exposure");
         },
         beforeGitMutation: async (candidate) => {
           expect(candidate.sha).toBe(target);
           expect(inspectedTargets).toContain(target);
-          await expectRuntime(root, beforeSha);
+          await expectRuntime(root, state.beforeSha);
           await expectFile(path.join(root, "pnpm-workspace.yaml"), workspace);
-          stopped = true;
-          events.push("stop");
+          state.stopped = true;
+          state.events.push("stop");
         },
       });
       await expectFile(path.join(root, "pnpm-workspace.yaml"), workspace);
@@ -548,16 +431,13 @@ describe("Git candidate activation", () => {
           exitCode: 1,
           stdoutTail: expect.stringContaining("pnpm-workspace.yaml"),
         });
-        expect(events).toEqual(candidateEvents);
-        expect(stopped).toBe(false);
-        await expectHead(root, beforeSha);
-        await expectRuntime(root, beforeSha);
+        expect(state.events).toEqual(candidateEvents);
+        await expectOriginalServing();
         return;
       }
       expect(result.status, JSON.stringify(result)).toBe("ok");
-      expect(events).toEqual([...candidateEvents, "stop"]);
-      await expectHead(root, target);
-      await expectRuntime(root, target);
+      expect(state.events).toEqual([...candidateEvents, "stop"]);
+      await expectInstalled(target);
       const manifest = YAML.parse(await readText(path.join(root, "node_modules", ".modules.yaml")));
       expect(path.resolve(root, "node_modules", manifest.virtualStoreDir)).toBe(
         path.join(root, "node_modules", ".pnpm"),
@@ -565,21 +445,38 @@ describe("Git candidate activation", () => {
     },
   );
 
-  it.each(["cache/deps", "../store", "external", "symlink"] as const)(
-    "activates the validated %s runtime",
+  it.each(["cache/deps", "../store", "external", "symlink", "source-current"] as const)(
+    "activates the validated runtime from %s",
     async (layout) => {
-      virtualStoreLayout = layout;
-      await writeCheckoutRuntime(root, beforeSha, layout);
+      const stale = layout === "source-current";
+      const builtSha = state.beforeSha;
+      state.virtualStoreLayout = stale ? "node_modules/.pnpm" : layout;
+      await state.writeRuntime();
       const target = await advanceRemote();
+      if (stale) {
+        await git(remote, "tag", "v2026.9.1");
+        await git(root, "pull", "--ff-only");
+        state.beforeSha = target;
+        await fs.writeFile(
+          path.join(root, "dist/build-info.json"),
+          JSON.stringify({ buildId: builtSha }),
+        );
+        await expectRuntime(root, builtSha);
+      }
       const unrelated = path.join(root, "operator-project", "node_modules", "keep.cjs");
-      await fs.mkdir(path.dirname(unrelated), { recursive: true });
-      await fs.writeFile(unrelated, "operator-owned");
-      const result = await update();
+      await writeFiles({ "operator-project/node_modules/keep.cjs": "operator-owned" });
+      const result = await update({
+        beforeGitMutation: async (candidate) => {
+          expect(inspectedTargets).toContain(candidate.sha);
+          await expectRuntime(root, builtSha);
+          await state.beforeGitMutation();
+        },
+      });
       await expectFile(unrelated, "operator-owned");
       expect(result.status, JSON.stringify(result)).toBe("ok");
-      expect(events).toEqual(["build", "validate", "stop", "migrate"]);
+      expect(state.events).toEqual(["build", "validate", "stop", "migrate"]);
       const current = await git(root, "rev-parse", "HEAD");
-      expect(result.before?.buildId).toBe(beforeSha);
+      expect(result.before).toMatchObject({ sha: state.beforeSha, buildId: builtSha });
       expect(result.after).toMatchObject({ sha: current, buildId: current });
       expect(result.gitRuntime).toEqual({
         commit: current,
@@ -596,7 +493,7 @@ describe("Git candidate activation", () => {
           ? path.join(directory, "shared-store", "virtual-store")
           : layout === "symlink"
             ? path.join(directory, "shared-store", "linked-store", current)
-            : path.resolve(root, layout);
+            : path.resolve(root, state.virtualStoreLayout);
       expect(await fs.realpath(path.resolve(root, "node_modules", manifest.virtualStoreDir))).toBe(
         expectedStore,
       );
@@ -612,6 +509,18 @@ describe("Git candidate activation", () => {
           return [];
         });
       expect(retainedArtifacts).toEqual([]);
+      if (stale) {
+        expect(current).toBe(target);
+        state.stopped = false;
+        state.events.length = 0;
+        expect(await update()).toMatchObject({
+          status: "skipped",
+          reason: "already-current",
+          before: { sha: target, buildId: target },
+        });
+        expect(state.events).toEqual([]);
+        await expectOriginalServing();
+      }
     },
   );
 
@@ -623,20 +532,16 @@ describe("Git candidate activation", () => {
     await git(root, "config", "branch.main.merge", "refs/heads/operator-target");
     const result = await update();
     expect(result.status, JSON.stringify(result)).toBe("ok");
-    await expectHead(root, target);
     expect(await git(root, "rev-parse", "--symbolic-full-name", "@{upstream}")).toBe(
       "refs/heads/operator-target",
     );
-    await expectRuntime(root, target);
+    await expectInstalled(target);
   });
 
   it("preserves required signatures when a candidate rebase fails", async () => {
     await advanceRemote();
-    await fs.writeFile(path.join(root, "local.txt"), "operator change\n");
-    await git(root, "add", "local.txt");
-    await git(root, "commit", "-m", "local change");
-    beforeSha = await git(root, "rev-parse", "HEAD");
-    await writeCheckoutRuntime();
+    state.beforeSha = await commitFiles({ "local.txt": "operator change\n" });
+    await state.writeRuntime();
     // A deliberately non-signing executable rejects Git's signing request without a key.
     await git(root, "config", "gpg.program", process.execPath);
     await git(root, "config", "commit.gpgSign", "true");
@@ -653,11 +558,8 @@ describe("Git candidate activation", () => {
       result.steps.some((step) => step.name === "preflight-rebase" && step.exitCode !== 0),
     ).toBe(true);
     expect(new Set(abortTimeouts)).toEqual(new Set([5_000]));
-    await expectHead(root, beforeSha);
-    await expectRuntime(root, beforeSha);
+    await expectInstalled(state.beforeSha);
   });
-
-  registerGitRuntimeStagingTests(fixture);
 
   it("refuses activation when validation commits source outside the selected commit", async () => {
     await fs.writeFile(path.join(remote, "openclaw.mjs"), "throw new Error('broken launcher');\n");
@@ -668,9 +570,7 @@ describe("Git candidate activation", () => {
       progress: { onStepComplete },
       validateCandidate: async (candidateRoot) => {
         const launcher = path.join(candidateRoot, "openclaw.mjs");
-        await fs.writeFile(launcher, "export {};\n");
-        await git(candidateRoot, "add", "openclaw.mjs");
-        await git(candidateRoot, "commit", "-m", "repair launcher");
+        await commitFiles({ "openclaw.mjs": "export {};\n" }, candidateRoot);
         const probe = await runCommandWithTimeout([process.execPath, launcher], {
           timeoutMs: 5000,
         });
@@ -683,10 +583,8 @@ describe("Git candidate activation", () => {
         .map(([step]) => step.exitCode),
     ).toEqual([0]);
     expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
-    expect(stopped).toBe(false);
-    await expectHead(root, beforeSha);
+    await expectOriginalServing();
     await expectFile(path.join(root, "openclaw.mjs"), "export {};\n");
-    await expectNoRuntimeStagingPaths();
   });
 
   it.each([
@@ -700,21 +598,18 @@ describe("Git candidate activation", () => {
       const { restoreSource, restoreRuntime, timeoutMs } = scenario;
       let trackedAsset: string | undefined;
       if ("trackedRuntime" in scenario) {
-        ({ beforeSha, asset: trackedAsset } = await prepareDeletedTrackedRuntimeAsset(
-          remote,
-          root,
-        ));
+        ({ beforeSha: state.beforeSha, asset: trackedAsset } =
+          await prepareDeletedTrackedRuntimeAsset(remote, root));
       }
-      await writeCheckoutRuntime();
+      await state.writeRuntime();
       const originalCache = path.join(root, "node_modules", ".cache", "jiti", "original.cjs");
-      await fs.mkdir(path.dirname(originalCache), { recursive: true });
-      await fs.writeFile(originalCache, "original runtime cache");
+      await writeFiles({ "node_modules/.cache/jiti/original.cjs": "original runtime cache" });
       const candidateSha = await advanceRemote();
-      const command = runCommand;
+      const command = state.runCommand;
       let resetFaultInjected = false;
       const rollbackFailure = new Error("rollback command unavailable");
       const recoveryTimeouts: Array<number | undefined> = [];
-      runCommand = async (argv, options) => {
+      state.runCommand = async (argv, options) => {
         if (faultInjected && argv[0] === "git" && argv[2] === root) {
           recoveryTimeouts.push(options.timeoutMs);
         }
@@ -724,7 +619,7 @@ describe("Git candidate activation", () => {
           argv[2] === root &&
           argv[3] === "reset" &&
           argv[4] === "--hard" &&
-          argv[5] === beforeSha
+          argv[5] === state.beforeSha
         ) {
           resetFaultInjected = true;
           if (restoreSource === "throw") {
@@ -745,8 +640,7 @@ describe("Git candidate activation", () => {
         }
         if (!restoreRuntime && source === distBackup && destination === path.join(root, "dist")) {
           restoreFaultInjected = true;
-          await fs.mkdir(destination, { recursive: true });
-          await fs.writeFile(path.join(destination, "restore-race"), "occupied");
+          await writeFixtureTree(destination, { "restore-race": "occupied" });
         }
         if (
           String(source).endsWith(`${path.sep}candidate`) &&
@@ -784,30 +678,34 @@ describe("Git candidate activation", () => {
           status: restoreSource && restoreRuntime ? "succeeded" : "failed",
         }),
       );
-      expect(faultInjected).toBe(true);
-      expect(resetFaultInjected).toBe(!restoreSource);
-      expect(restoreFaultInjected).toBe(!restoreRuntime);
+      expect({ faultInjected, resetFaultInjected, restoreFaultInjected }).toEqual({
+        faultInjected: true,
+        resetFaultInjected: !restoreSource,
+        restoreFaultInjected: !restoreRuntime,
+      });
       expect(result).toMatchObject({
         status: "error",
         recovery: !restoreSource
           ? { serviceRestartSafe: false, reason: "source-rollback-failed" }
           : restoreRuntime
-            ? { serviceRestartSafe: true, buildId: beforeSha }
+            ? { serviceRestartSafe: true, buildId: state.beforeSha }
             : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       });
-      expect(events).toEqual(["build", "validate", "stop"]);
-      const expectedSha = restoreSource ? beforeSha : candidateSha;
+      expect(state.events).toEqual(["build", "validate", "stop"]);
+      const expectedSha = restoreSource ? state.beforeSha : candidateSha;
       await expectHead(root, expectedSha);
       expectStep(result.steps, {
         name: "git-rollback-verify-head",
         exitCode: restoreSource ? 0 : 1,
         stdoutTail: expectedSha,
-        ...(restoreSource ? {} : { stderrTail: `expected ${beforeSha}, found ${candidateSha}` }),
+        ...(restoreSource
+          ? {}
+          : { stderrTail: `expected ${state.beforeSha}, found ${candidateSha}` }),
       });
       if (!restoreRuntime) {
         assert(distBackup, "The original dist backup was not observed.");
         expect(JSON.parse(await readText(path.join(distBackup, "build-info.json")))).toMatchObject({
-          commit: beforeSha,
+          commit: state.beforeSha,
         });
         expectStep(result.steps, {
           name: "git-runtime-rollback",
@@ -816,10 +714,122 @@ describe("Git candidate activation", () => {
         });
         return;
       }
-      await expectRuntime(root, beforeSha, trackedAsset);
+      await expectRuntime(root, state.beforeSha, trackedAsset);
       await expectFile(originalCache, "original runtime cache");
     },
   );
 
-  registerGitRuntimeRestorationTests(fixture);
+  it("omits generated tool caches while preserving runtime files during promotion", async () => {
+    const target = await advanceRemote();
+    const stagingProgress: string[] = [];
+    const contents = "keep or regenerate";
+    const copy = fs.cp.bind(fs);
+    vi.spyOn(fs, "cp").mockImplementation(async (...args) => {
+      if (String(args[1]).includes(".openclaw-update-")) {
+        expect(stagingProgress).toEqual(["start"]);
+        expect(state.stopped).toBe(false);
+      }
+      return copy(...args);
+    });
+    const omitted = [
+      "node_modules/.cache/jiti",
+      "node_modules/.vite",
+      "node_modules/.vite-temp",
+      "ui/node_modules/.cache/jiti",
+    ];
+    const retained = [
+      "node_modules/.cache/other-tool",
+      "node_modules/package/.cache/jiti",
+      "node_modules/package/.vite",
+      "packages/runtime/node_modules/.cache/jiti",
+      "dist/.cache/jiti",
+      "dist-runtime/.vite",
+    ];
+    const markStage =
+      (event: string) =>
+      ({ name }: { name: string }) => {
+        if (name === "preflight-runtime-stage") {
+          stagingProgress.push(event);
+        }
+      };
+    const result = await update({
+      progress: {
+        onStepStart: markStage("start"),
+        onStepComplete: markStage("complete"),
+      },
+      validateCandidate: async (candidateRoot) => {
+        await writeFixtureTree(
+          candidateRoot,
+          Object.fromEntries(
+            [...omitted, ...retained].map((relative) => [`${relative}/content`, contents]),
+          ),
+        );
+        await expectRuntime(candidateRoot, target);
+      },
+    });
+    expect(result.status, JSON.stringify(result)).toBe("ok");
+    expect(stagingProgress).toEqual(["start", "complete"]);
+    expectStep(result.steps, {
+      name: "preflight-runtime-stage",
+      exitCode: 0,
+      durationMs: expect.any(Number),
+    });
+    for (const relative of omitted) {
+      await expectMissing(path.join(root, relative));
+    }
+    for (const relative of retained) {
+      await expectFile(path.join(root, relative, "content"), contents);
+    }
+    await expectRuntime(root, target);
+    await expectNoRuntimeStagingPaths();
+  });
+
+  it.each(["validation", "runtime staging"])(
+    "leaves the old runtime serving when candidate %s fails",
+    async (failurePoint) => {
+      await advanceRemote();
+      const failure = new Error("candidate canary failed");
+      const onStepComplete = vi.fn();
+      const cause: unknown = await update({
+        progress: {
+          onStepComplete,
+          onStepStart: ({ name }) => {
+            if (failurePoint === "runtime staging" && name === "preflight-cleanup") {
+              expect(onStepComplete).toHaveBeenCalledWith(
+                expect.objectContaining({
+                  name: "preflight-runtime-stage",
+                  exitCode: 1,
+                  failureFacts: [expect.objectContaining({ check: "preflight-runtime-stage" })],
+                }),
+              );
+            }
+          },
+        },
+        validateCandidate: async () => {
+          if (failurePoint === "validation") {
+            throw failure;
+          }
+          vi.spyOn(fs, "cp").mockRejectedValueOnce(failure);
+        },
+      }).catch((error: unknown) => error);
+      if (failurePoint === "validation") {
+        expect(cause).toBe(failure);
+      } else {
+        const { resolveMutableUpdateFailure } =
+          await import("../cli/update-cli/update-command-result.js");
+        const { result } = await resolveMutableUpdateFailure({
+          cause,
+          durationMs: 0,
+          mode: "git",
+          root,
+          originalRecovery: () => verifyGitUpdateRecovery({ root, sha: state.beforeSha }),
+        });
+        expect(result.recovery).toMatchObject({
+          serviceRestartSafe: true,
+          buildId: state.beforeSha,
+        });
+      }
+      await expectOriginalServing();
+    },
+  );
 });

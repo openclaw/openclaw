@@ -6,6 +6,7 @@
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
+  filterStringEntries,
   normalizeStringEntries,
   uniqueValues,
 } from "@openclaw/normalization-core/string-normalization";
@@ -419,11 +420,9 @@ export function normalizeToolParameterSchema(
     setOwnSchemaProperty(mergedProperties, key, merged);
   }
 
-  const baseRequired = Array.isArray(schemaRecord.required)
-    ? schemaRecord.required.filter((key) => typeof key === "string")
-    : undefined;
+  const baseRequired = filterStringEntries(schemaRecord.required);
   const mergedRequired =
-    baseRequired && baseRequired.length > 0
+    baseRequired.length > 0
       ? baseRequired
       : objectVariants > 0
         ? Array.from(requiredCounts.entries())

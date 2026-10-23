@@ -3,9 +3,13 @@ import path from "node:path";
 import timers from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, vi } from "vitest";
 import * as binaryDiscovery from "./crabbox-binary.js";
+import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import * as processRunner from "./crabbox-process.js";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
@@ -41,7 +45,7 @@ export async function destroyAndWait(
 }
 
 export function createProviderFixtures(defaults: ProviderFixtureDependencies = {}) {
-  const providers = new Set<ReturnType<typeof createCrabboxWorkerProvider>>();
+  const providers = new Set<Provider>();
   return {
     providers,
     createProvider: (dependencies: ProviderFixtureDependencies) => {
@@ -106,6 +110,43 @@ export function createProviderFixtures(defaults: ProviderFixtureDependencies = {
   };
 }
 
+export function createProviderTestHarness(
+  defaults: ProviderFixtureDependencies = {},
+  statePrefix?: string,
+) {
+  const fixtures = createProviderFixtures(defaults);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      try {
+        await Promise.all([...fixtures.providers].map((provider) => provider.dispose()));
+      } finally {
+        fixtures.providers.clear();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+        if (statePrefix) {
+          await closeOpenClawStateDatabaseAsync();
+          resetPluginStateStoreForTests();
+        }
+        vi.unstubAllEnvs();
+        syncBuiltinESMExports();
+        cleanup();
+      }
+    }),
+  );
+  beforeEach(() => {
+    vi.mocked(ensureManagedCrabboxBinary)
+      .mockReset()
+      .mockImplementation(async (params) => ({
+        binary: params?.binary ?? "crabbox",
+        version: "999.0.0",
+      }));
+    if (statePrefix) {
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make(statePrefix));
+    }
+  });
+  return { ...fixtures, tempDirs };
+}
+
 export function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
   return {
     stdout: "",
@@ -147,12 +188,8 @@ export function classProfile(
     architecture: "amd64",
     primary: {
       type: "native-8vcpu-16gb",
-      architecture: "amd64",
-      vcpu: null,
-      memory: null,
       ...primary,
     },
-    fallbacks: [],
     ...selectors,
   };
 }

@@ -19,7 +19,6 @@ import { resolveUserPath } from "../../../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.types.js";
-import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { expectSharedPendingSpawnCapacity } from "./subagent-spawn.pending-capacity.test-support.js";
 import {
   createConfigOverride,
@@ -60,6 +59,8 @@ let configOverride: Record<string, unknown>;
 let resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 let closeSwarmScheduler: typeof import("../swarm/swarm-scheduler.js").closeSwarmScheduler;
+let observeSwarmSchedulerWork: typeof import("../swarm/swarm-scheduler.lifecycle.test-support.js").observeSwarmSchedulerWork;
+let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
@@ -113,10 +114,12 @@ describe("spawnSubagentDirect seam flow", () => {
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
     }));
     ({ closeSwarmScheduler } = await import("../swarm/swarm-scheduler.js"));
+    ({ observeSwarmSchedulerWork } =
+      await import("../swarm/swarm-scheduler.lifecycle.test-support.js"));
   });
 
   beforeEach(async () => {
-    swarmSchedulerTesting.reset();
+    schedulerWork = observeSwarmSchedulerWork();
     await resetSubagentRegistryForTests();
     for (const mock of Object.values(hoisted)) {
       mock.mockReset();
@@ -151,9 +154,12 @@ describe("spawnSubagentDirect seam flow", () => {
     );
   });
 
-  afterEach(() => {
-    swarmSchedulerTesting.reset();
-    vi.unstubAllEnvs();
+  afterEach(async () => {
+    try {
+      await schedulerWork.close();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it.each([false, true])(
@@ -948,7 +954,11 @@ describe("spawnSubagentDirect seam flow", () => {
           expect(result.status).toBe("accepted");
           const child = persistedStore?.[result.childSessionKey as string];
           expect(child).toMatchObject({ createdVia: "spawn", parentSessionKey });
-          expect(child?.createdActor).toEqual(required ? actor : { type: "agent", id: "main" });
+          expect(child?.createdActor).toEqual(
+            required
+              ? { ...actor, delegatedBy: { type: "agent", id: "main" } }
+              : { type: "agent", id: "main" },
+          );
           expect(child?.sandbox).toBe(required ? "required" : undefined);
           expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
         } finally {

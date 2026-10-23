@@ -1158,8 +1158,8 @@ describe("finalizeSetupWizard", () => {
       outcome: "repair-required",
       state: { installed: true, loaded: true, running: false },
       issues: [
-        { code: "port-mismatch", message: "service is configured for another port" },
-        { code: "missing-program", message: "service command points at a missing path" },
+        { message: "service is configured for another port" },
+        { message: "service command points at a missing path" },
       ],
     });
 

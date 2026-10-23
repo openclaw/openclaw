@@ -5,9 +5,9 @@ import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   patchSessionEntryCore,
-  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { seedHistorySession, expectHistoryError } from "./chat-history-fixture.test-support.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import * as historyPages from "./chat-history-pages.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
@@ -17,14 +17,9 @@ import type { RespondFn } from "./types.js";
 it("withholds plugin guidance when Control UI session access is revoked after history preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     await captureRuntimeConfigAsyncReader()();
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:steering-history-revocation",
-      sessionId: "steering-history-revocation",
-    };
-    await upsertSessionEntryCore(scope, {
-      sessionId: scope.sessionId,
-      updatedAt: 1,
+    const guidance = "Keep the change small.";
+    const steering = { pluginId: "reviewer", pluginName: "Reviewer", displayText: guidance };
+    const scope = await seedHistorySession("steering", {
       visibility: "shared",
       createdActor: { type: "human", source: "profile", id: "owner" },
     });
@@ -33,15 +28,9 @@ it("withholds plugin guidance when Control UI session access is revoked after hi
       message: {
         role: "user",
         display: false,
-        content: "Private model prefix\n\nKeep the change small.",
+        content: `Private model prefix\n\n${guidance}`,
         provenance: { kind: "internal_system", sourceTool: "plugin:reviewer" },
-        __openclaw: {
-          pluginSteering: {
-            pluginId: "reviewer",
-            pluginName: "Reviewer",
-            displayText: "Keep the change small.",
-          },
-        },
+        __openclaw: { pluginSteering: steering },
       },
     });
     const client = identifiedClient("viewer");
@@ -53,27 +42,19 @@ it("withholds plugin guidance when Control UI session access is revoked after hi
         client,
         context,
         respond,
-        req: { type: "req", id: "steering-history-revocation", method: "chat.history" },
+        req: { type: "req", id: scope.sessionId, method: "chat.history" },
         isWebchatConnect: () => true,
       });
     const initial = vi.fn<RespondFn>();
     await call(initial);
-    expect(initial).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        messages: [
-          expect.objectContaining({
-            display: true,
-            content: [{ type: "text", text: "Keep the change small." }],
-          }),
-        ],
-      }),
-    );
+    const text = { type: "text", text: guidance };
+    const visible = expect.objectContaining({ display: true, content: [text] });
+    expect(initial).toHaveBeenCalledWith(true, expect.objectContaining({ messages: [visible] }));
 
     const prepared = createDeferred();
     const release = createDeferred();
     const read = historyPages.readChatHistoryPage;
-    const readSpy = vi
+    using readSpy = vi
       .spyOn(historyPages, "readChatHistoryPage")
       .mockImplementationOnce(async (...args) => {
         const page = await read(...args);
@@ -90,18 +71,10 @@ it("withholds plugin guidance when Control UI session access is revoked after hi
       await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
     } finally {
       release.resolve();
-      try {
-        await pending;
-      } finally {
-        readSpy.mockRestore();
-      }
+      await pending;
     }
-    expect(respond).toHaveBeenCalledExactlyOnceWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-    expect(JSON.stringify(respond.mock.calls)).not.toContain("Keep the change small.");
+    expectHistoryError(respond, { code: "INVALID_REQUEST" });
+    expect(JSON.stringify(respond.mock.calls)).not.toContain(guidance);
     expect(JSON.stringify(respond.mock.calls)).not.toContain("Private model prefix");
   });
 });

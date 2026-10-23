@@ -1,7 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openFileActions, selectFileAction } from "./chat-file-actions.test-support.ts";
+import { chatMessage, exactButton } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "File copy retirement" });
@@ -17,31 +17,42 @@ declare global {
   }
 }
 
+function fileResponse(content: string) {
+  return {
+    root: "/workspace",
+    file: {
+      previewKind: "text",
+      contentEncoding: "utf8",
+      content,
+      kind: "read",
+      missing: false,
+      name: "notes.txt",
+      path: "notes.txt",
+      workspacePath: "notes.txt",
+    },
+  };
+}
+
 suite.define(() => {
   it.each(
-    (["current", "close", "raw"] as const).flatMap((lifecycle) =>
+    (["current", "close", "replacement"] as const).flatMap((lifecycle) =>
       (["path", "contents"] as const).map((action) => ({ lifecycle, action })),
     ),
   )(
     "scopes $action copy fallback to its $lifecycle file presentation",
     async ({ lifecycle, action }) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const content = "File contents";
         await page.clock.install();
         await page.addInitScript(() => {
           window.fileCopyProof = { nativeWrites: [], fallbacks: [] };
-          Object.defineProperty(navigator, "clipboard", {
-            configurable: true,
-            value: {
-              writeText: (text: string) => {
-                window.fileCopyProof.nativeWrites.push(text);
-                return new Promise<void>((resolve, reject) => {
-                  window.fileCopyProof.resolve = resolve;
-                  window.fileCopyProof.reject = () =>
-                    reject(new Error("Synthetic clipboard rejection"));
-                });
-              },
-            },
-          });
+          const writeText = (text: string) =>
+            new Promise<void>((resolve, reject) => {
+              window.fileCopyProof.nativeWrites.push(text);
+              window.fileCopyProof.resolve = resolve;
+              window.fileCopyProof.reject = () => reject(new Error("Clipboard denied"));
+            });
+          Object.defineProperty(navigator, "clipboard", { value: { writeText } });
           document.execCommand = (command: string) => {
             if (command !== "copy") {
               throw new Error(`Unexpected clipboard command: ${command}`);
@@ -53,95 +64,70 @@ suite.define(() => {
             return true;
           };
         });
-        await installMockGateway(page, {
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Review `notes.txt`." }],
-              timestamp: 1,
-            },
-          ],
+        const gateway = await installMockGateway(page, {
+          historyMessages: [chatMessage("assistant", "Review `notes.txt`.", { timestamp: 1 })],
           methodResponses: {
-            "sessions.files.get": {
-              root: "/workspace",
-              file: {
-                previewKind: "text",
-                contentEncoding: "utf8",
-                content: "Synthetic file copy content",
-                kind: "read",
-                missing: false,
-                name: "notes.txt",
-                path: "notes.txt",
-                workspacePath: "notes.txt",
-              },
-            },
+            "sessions.files.get": fileResponse(content),
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
         const panel = page.locator("openclaw-chat-detail-panel:visible");
         await panel.locator(".cm-content").waitFor({ state: "visible" });
-        await panel
-          .getByRole("button", {
-            name: action === "path" ? "Copy path" : "Copy file contents",
+        const copyTitle = action === "path" ? "Copy path" : "Copy file contents";
+        const copy = () => selectFileAction(panel, copyTitle);
+        const copied = () =>
+          panel.getByRole(action === "path" ? "menuitem" : "button", {
+            name: "Copied!",
             exact: true,
-          })
-          .click();
+          });
+        await copy();
         await page.waitForFunction(() => window.fileCopyProof.nativeWrites.length === 1);
-        const expected = action === "path" ? "notes.txt" : "Synthetic file copy content";
+        const expected = action === "path" ? "notes.txt" : content;
         expect(await page.evaluate(() => window.fileCopyProof.nativeWrites)).toEqual([expected]);
-        await page.screenshot({ path: path.join(suite.artifactDir, "copy-pending.png") });
         if (lifecycle === "close") {
-          await page.getByRole("button", { name: "Close tab: notes.txt", exact: true }).click();
+          await exactButton(page, "Close tab: notes.txt").click();
           await expect.poll(() => page.locator(".sidebar-file-view:visible").count()).toBe(0);
-        } else if (lifecycle === "raw") {
-          await panel.getByRole("button", { name: "View Raw Text", exact: true }).click();
-          await expect.poll(() => panel.locator(".sidebar-file-view").count()).toBe(0);
+        } else if (lifecycle === "replacement") {
+          await gateway.setMethodResponse("sessions.files.get", fileResponse("Updated file bytes"));
+          await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
+          await expect
+            .poll(() => panel.locator(".cm-content").textContent())
+            .toContain("Updated file bytes");
+          expect(await gateway.getRequests("sessions.files.get")).toHaveLength(2);
         }
-        // Keep transient feedback alive while proof capture crosses host I/O boundaries.
+        // Settle native menu frames before freezing the feedback clock.
+        if (lifecycle === "current" && action === "path") {
+          await openFileActions(panel);
+        }
+        // Keep transient feedback alive until its assertions settle.
         const pendingAt = await page.evaluate(() => Date.now());
         await page.clock.pauseAt(pendingAt + 1_000);
         await page.evaluate(() => window.fileCopyProof.reject!());
         if (lifecycle === "current") {
-          await panel
-            .getByRole("button", { name: "Copied!", exact: true })
-            .waitFor({ state: "visible" });
+          await page.waitForFunction(() => window.fileCopyProof.fallbacks.length === 1);
+          expect(await page.evaluate(() => window.fileCopyProof.fallbacks)).toEqual([expected]);
+          await copied().waitFor({ state: "visible" });
         }
-        const evidence = await page.evaluate(() => ({
-          nativeWrites: window.fileCopyProof.nativeWrites,
-          fallbacks: window.fileCopyProof.fallbacks,
-        }));
-        await writeFile(
-          path.join(suite.artifactDir, "clipboard-result.json"),
-          JSON.stringify({ lifecycle, action, ...evidence }, null, 2),
+        expect(await page.evaluate(() => window.fileCopyProof.fallbacks)).toEqual(
+          lifecycle === "current" ? [expected] : [],
         );
-        await page.screenshot({ path: path.join(suite.artifactDir, "copy-settled.png") });
-        expect(evidence.fallbacks).toEqual(lifecycle === "current" ? [expected] : []);
         if (lifecycle === "current") {
-          expect(await panel.getByRole("button", { name: "Copied!", exact: true }).count()).toBe(1);
-          const copyButton = panel.getByRole("button", {
-            name: action === "path" ? "Copy path" : "Copy file contents",
-            exact: true,
-          });
           // Retire the first attempt's feedback before proving native success.
           await page.clock.fastForward(1_500);
-          await copyButton.waitFor({ state: "visible" });
-          await copyButton.click();
+          await page.clock.resume();
+          await copy();
           await page.waitForFunction(() => window.fileCopyProof.nativeWrites.length === 2);
+          if (action === "path") {
+            await openFileActions(panel);
+          }
+          const nativePendingAt = await page.evaluate(() => Date.now());
+          await page.clock.pauseAt(nativePendingAt + 1_000);
           await page.evaluate(() => window.fileCopyProof.resolve!());
-          await panel
-            .getByRole("button", { name: "Copied!", exact: true })
-            .waitFor({ state: "visible" });
-          const nativeSuccess = await page.evaluate(() => ({
-            nativeWrites: window.fileCopyProof.nativeWrites,
-            fallbacks: window.fileCopyProof.fallbacks,
-          }));
-          expect(nativeSuccess.nativeWrites).toEqual([expected, expected]);
-          expect(nativeSuccess.fallbacks).toEqual([expected]);
-          await writeFile(
-            path.join(suite.artifactDir, "native-success.json"),
-            JSON.stringify(nativeSuccess, null, 2),
-          );
+          await copied().waitFor({ state: "visible" });
+          const writes = await page.evaluate(() => window.fileCopyProof.nativeWrites);
+          expect(writes).toEqual([expected, expected]);
+          expect(await page.evaluate(() => window.fileCopyProof.fallbacks)).toEqual([expected]);
         } else {
           expect(await page.locator(".sidebar-file-view:visible button.copied").count()).toBe(0);
           expect(await page.locator(".file-view__save-notice:visible").count()).toBe(0);

@@ -49,7 +49,7 @@ function storageChange(key: string | null, oldRecord: BootRecord | null, next: B
   );
 }
 function hello(source: ReturnType<ReturnType<typeof createGatewayStoreTestStore>["current"]>) {
-  source.opts.onHello?.({
+  source.testOptions.onHello?.({
     type: "hello-ok",
     protocol: 1,
     auth: { role: "operator", scopes: [], method: "trusted-proxy", recoveryScope: "account-a" },

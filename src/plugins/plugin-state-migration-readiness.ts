@@ -1,40 +1,49 @@
 import {
+  readDeferredPluginMigrationReceipt,
   readDeferredPluginMigrations,
   readDeferredPluginMigrationsAsync,
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
-import { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
+import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
+import { captureOpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
 import {
   resolveInstalledPluginIndexStateDatabaseOptions,
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
-import { getPluginCache } from "./plugin-cache.js";
-import type { PluginCache } from "./plugin-cache.types.js";
 
-type Readiness = { token: string; pending: readonly DeferredPluginMigration[] };
-const readiness = new WeakMap<PluginCache["metadata"], Map<string, Readiness>>();
+const readiness = new WeakMap<
+  object,
+  Map<
+    ReturnType<typeof captureOpenClawStateReadContext>["databaseEngineSelection"],
+    readonly DeferredPluginMigration[]
+  >
+>();
 
 function selectReadiness(options: InstalledPluginIndexStoreOptions) {
   const path = resolveInstalledPluginIndexStorePath(options);
-  const database = { ...resolveInstalledPluginIndexStateDatabaseOptions(options), path };
-  const owner = getPluginCache().metadata;
-  const token = readSqliteDatabaseWriteTokenForPath(path);
-  const cached = readiness.get(owner)?.get(path);
+  const context = captureOpenClawStateReadContext(path);
+  const artifactPreservingReadOnly =
+    options.artifactPreservingReadOnly === true || isArtifactPreservingStateRead();
+  const database = {
+    ...resolveInstalledPluginIndexStateDatabaseOptions(options),
+    path,
+    artifactPreservingReadOnly,
+  };
+  const receipt =
+    !artifactPreservingReadOnly && !context.maintenanceScope && !context.existingSchemaPath
+      ? readDeferredPluginMigrationReceipt(path)
+      : undefined;
   return {
     database,
-    pending: token !== undefined && cached?.token === token ? cached.pending : undefined,
+    pending: receipt && readiness.get(receipt)?.get(context.databaseEngineSelection),
     publish(pending: readonly DeferredPluginMigration[]) {
       const held = pending.filter((entry) => entry.requiresStateMigration);
-      // Capture before reading: an overtaking committed write invalidates the next admission.
-      // An unadmitted store has no receipt and must not supply a persistent negative fact.
-      if (token !== undefined) {
-        let stores = readiness.get(owner);
-        if (!stores) {
-          stores = new Map();
-          readiness.set(owner, stores);
-        }
-        stores.set(path, { token, pending: held });
+      if (receipt) {
+        // A committed migration write retires this receipt, including an overtaken read.
+        const stores = readiness.get(receipt) ?? new Map();
+        stores.set(context.databaseEngineSelection, held);
+        readiness.set(receipt, stores);
       }
       return held;
     },

@@ -28,6 +28,12 @@ Doctor keeps plugin repair and diagnostic contracts available through later heal
 checks and service finalization. It releases its private plugin resources when
 the flow ends, including failed runs.
 
+Stale agent model-reference repair reads agent-local `models.json` with the same
+line-comment and trailing-comma support as model loading. It keeps references
+backed by those local providers and repairs references to unavailable providers.
+This repair leaves `models.json` unchanged, preserving its comments. Unreadable
+or malformed catalogs still produce a warning and leave affected references intact.
+
 ## Group allowlist fallback
 
 For channels that support legacy DM sender fallback, Doctor copies `allowFrom`
@@ -90,6 +96,52 @@ remain available. Protected setup secrets keep snapshots enabled; old plaintext
 setup image identities are not adopted as protected images.
 
 ## Runtime config migration
+
+### Heartbeat to ordinary automations
+
+`openclaw doctor --fix` converts supported July 2026 or newer heartbeat settings,
+persisted monitors, and structured heartbeat tasks into ordinary editable
+automations. It preserves job identity, history, scratch revisions and explicit
+unset markers, disabled state, schedule anchors and pending occurrences, tool
+authority, delivery targets, and quiet hours. A standalone `HEARTBEAT_OK` marker
+in a saved prompt becomes `NO_REPLY`; every other prompt byte remains unchanged.
+
+Migrated jobs use standard Automations delivery semantics. Heartbeat-specific
+duplicate suppression and no-route skipping are removed: repeated updates can be
+delivered, and a missing route no longer skips the run before execution. Delivery
+failures follow ordinary automation handling. Doctor prints a one-time note when
+the existing cutover receipt completes, advising users who relied on either
+behavior to review their jobs' delivery settings.
+
+Existing tool caps and run authority are preserved. Standing approvals remain
+bound to their exact job definition, so a converted definition can require a
+one-time approval again; Doctor does not transfer an approval to different
+payload bytes or bypass its live parent approval.
+
+Conversion writes and verifies the canonical job and context data before removing
+legacy config or archiving files. Unsafe or unreadable input remains recoverable
+and the pending automation cannot execute. Existing scratch that was not imported
+from `HEARTBEAT.md` wins when it differs from that file: Doctor retains both, prints
+a notice, and completes conversion. Explicitly unset scratch stays unset. Review
+the retained file before copying wanted instructions into the automation. A
+completed provisioning receipt remains after
+job deletion, so repeated Doctor runs and restarts preserve operator edits and
+deletions. See [Heartbeat migration](/gateway/heartbeat) and the
+[shared-state policy fence](/reference/database-schemas/state-schema-history#state-schema-30).
+
+Candidate update admission validates the projected configuration without changing
+the live config, databases, or backups. The installed updater can then run
+Doctor's backed-up data migration before the legacy settings are removed.
+Package updates using candidate admission also inspect the original heartbeat
+files. Unsafe or unreadable sources refuse the update before the running Gateway
+stops, including when an older updater omits workspace files from its private
+rehearsal. Differing scratch or a file retained after completed conversion does
+not block admission: Doctor preserves the originals and reports them for review.
+Unrelated invalid fields, unsupported legacy shapes, and heartbeat repairs in
+read-only, future-written, or included configuration still require operator
+repair before admission.
+
+### Provider configuration
 
 Runtime config reads require per-model context budgets and current GitHub Copilot
 settings. Doctor migrates retired provider-level `contextTokens` and
@@ -1080,7 +1132,7 @@ against the current SQLite owners before the import can rename profiles.
 
     A tool policy scope with nonempty `allow` and `alsoAllow` lists fails validation. `doctor --fix` merges the lists only when the effective profile grants remain unchanged for every agent and provider that inherits the extras. It retains `alsoAllow: []` as an explicit override so inherited extras cannot reappear. If the extras may extend a profile or grant Gateway configuration-read access, Doctor leaves the conflicting scope untouched and reports the exact keys and values to review manually. This applies at the root `tools` policy, per-agent and per-provider policies, and channel or gateway tool policies. Sandbox lists remain untouched because `allow` and `alsoAllow` inherit independently; conflicting sandbox lists still require manual repair. Plugin-owned `plugins.entries.*.config` is left to the owning plugin's doctor contract. Gateway startup leaves these conflicts unchanged and directs the operator to Doctor; unresolved conflicts still require operator guidance before the config can validate.
 
-    `doctor --fix` removes `workspace: null` from `agents.entries.<id>` so normal workspace resolution can apply. It also removes invalid `heartbeat.activeHours` windows from agent entries and `agents.defaults`, preserving other heartbeat settings. Reconfigure a valid window if needed; without an explicit or inherited window, heartbeat hours are unrestricted. These repairs also apply after migrating a legacy `agents.list` roster.
+    `doctor --fix` removes `workspace: null` from `agents.entries.<id>` so normal workspace resolution can apply, including after migrating a legacy `agents.list` roster. Supported legacy heartbeat settings pass through the durable automation cutover. Invalid active-hour values remain unchanged with a repair diagnostic; Doctor does not silently replace quiet hours with unrestricted execution.
 
   </Accordion>
   <Accordion title="2. Legacy config key migrations">
@@ -1094,6 +1146,8 @@ against the current SQLite owners before the import can rename profiles.
 
     Doctor checks the authored config revision, included files, and environment-resolved values before migration writes. Runtime path expansion (such as `~/.openclaw/wiki` on Windows) does not count as an input change. A real change reports whether the config path, file contents, included files, or resolved values changed; rerun Doctor so migrations can validate the new inputs.
 
+    Doctor preserves model choices that a provider still serves. A model's name, age, or absence from the bundled catalog is not evidence of retirement. Retirement repairs require an explicit provider catalog retirement declaration, with any declared route conditions satisfied. Missing retirement or required route evidence leaves the choice unchanged. Canonical spelling and provider-identity migrations still apply.
+
     When model migrations change a configured consumer between subscription/OAuth and metered API-key billing, Doctor reports the consumer, model, and old and new routes after saving the config. The warning also appears in the diagnostic log and update run record. A later Doctor run does not repeat it when the resolved billing route is unchanged. Missing credentials are not treated as proof of a billing change.
 
     During an update, Doctor records model-retirement repairs that must wait until plugin installation finishes. The updated OpenClaw completes those repairs after plugin convergence, even when no plugin version changed. `openclaw update status` records their completion so retired subscription models do not fall through to metered API credentials.
@@ -1106,7 +1160,7 @@ against the current SQLite owners before the import can rename profiles.
 
     Per-agent migrations apply to both keyed `agents.entries` and legacy `agents.list` rosters, including rosters that already set `agents.ownership: "explicit"`. For example, Doctor preserves an agent's legacy `memorySearch` settings under `memory.search`. Existing values at the current config paths take precedence.
 
-    For legacy rosters with multiple agents and no resolvable ambient owner, Doctor seeds `agents.defaults.systemAgent.agentId` from a uniquely marked `default: true` agent, or `main` when present. Sole-agent rosters need no owner repair. Doctor converts valid legacy default markers into explicit per-surface owners before runtime admission. Explicit fleet ownership disables the legacy default-marker fallback, so those rosters may still need repair. Doctor also pins `agents.defaults.heartbeat.agentId` only when heartbeat enrollment would otherwise be unresolved; existing heartbeat owners, shared defaults, and per-agent enrollment are preserved. These changes are reported and saved by `doctor --fix`, including the update-time doctor pass. If no default can be identified, configure the system-agent owner explicitly.
+    For legacy rosters with multiple agents and no resolvable ambient owner, Doctor seeds `agents.defaults.systemAgent.agentId` from a uniquely marked `default: true` agent, or `main` when present. Sole-agent rosters need no owner repair. Doctor converts valid legacy default markers into explicit per-surface owners before runtime admission. Explicit fleet ownership disables the legacy default-marker fallback, so those rosters may still need repair. Doctor resolves supported legacy heartbeat enrollment before moving each owner to an ordinary automation, then removes the retired heartbeat config. Later config reloads preserve job edits and deletions. These changes are reported and saved by `doctor --fix`, including the update-time doctor pass. If no default can be identified, configure the system-agent owner explicitly.
 
     <Note>
       Migration retention follows the July 2026 cutoff in the
@@ -1156,7 +1210,7 @@ against the current SQLite owners before the import can rename profiles.
     | `browser.ssrfPolicy.hostnameAllowlist`                                                           | wildcard-aware `browser.ssrfPolicy.allowedHostnames`                          |
     | sandbox browser `enableNoVnc`                                                                    | `noVncEnabled`                                                                |
     | root `media`                                                                                     | `attachments`                                                                |
-    | channel/account `heartbeat` visibility blocks                                                   | `heartbeatVisibility`                                                         |
+    | channel/account `heartbeat` or `heartbeatVisibility` visibility blocks                           | Ordinary automation delivery through the durable heartbeat cutover             |
     | `channels.slack.identity`                                                                        | `channels.slack.postAs`                                                       |
     | root `audit`                                                                                     | `logging.audit`                                                               |
     | `gateway.nodes.skills.enabled`                                                                   | `gateway.nodes.allowSkills`                                                   |

@@ -1,5 +1,8 @@
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 // In-flow "earlier history" boundary rendered above the virtualized transcript.
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type ChatHistoryBoundaryProps = {
   hasMore: boolean;

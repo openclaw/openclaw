@@ -14,6 +14,7 @@ import {
   type WorkspaceHashMemo,
   type RemoteWorkspaceManifestEnvelope,
 } from "./workspace-hash-memo.js";
+import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
 import { workspaceManifest } from "./workspace-manifest-fixtures.test-support.js";
 import { captureWorkspaceManifest, preflightWorkspaceApply } from "./workspace-manifest-worker.js";
 
@@ -94,7 +95,8 @@ it("reuses local workspace nodes within one preflight but not across fences", as
     directories: ["parent"],
   };
   const metrics = hashMetrics();
-  const preflight = () => preflightWorkspaceApply({ root, base, current });
+  const prepared = prepareWorkspaceReconciliation(base, current).preflight;
+  const preflight = () => preflightWorkspaceApply({ root, ...prepared });
   const first = await withWorkspaceHashMemo(new Map(), preflight, metrics);
   expect([...first.applyPaths].toSorted()).toEqual([
     "parent",
@@ -105,6 +107,11 @@ it("reuses local workspace nodes within one preflight but not across fences", as
 
   await withWorkspaceHashMemo(new Map(), preflight, metrics);
   expect(metrics).toMatchObject({ contentHashCount: 2, memoHitCount: 0 });
+
+  await fs.writeFile(path.join(root, "parent"), "local replacement");
+  const conflict = await withWorkspaceHashMemo(new Map(), preflight, metrics);
+  expect([...conflict.applyPaths]).toEqual([]);
+  expect(conflict.conflictPaths).toEqual(["parent"]);
 });
 
 it("bounds a maximum-entry memo envelope", () => {

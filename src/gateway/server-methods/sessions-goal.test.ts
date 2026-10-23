@@ -174,6 +174,8 @@ it.each([
       expectGoal(respond, { status: "complete" });
     } else {
       expectFailure(respond, { code: "INVALID_REQUEST" });
+      expect(readGoal()).toEqual(initialGoal());
+      expect(resumeChat).not.toHaveBeenCalled();
     }
     expect(resolved).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();

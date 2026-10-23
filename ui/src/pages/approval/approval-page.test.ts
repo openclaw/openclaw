@@ -68,6 +68,20 @@ function expiredApproval(): ExpiredApprovalSnapshot {
   } as ExpiredApprovalSnapshot;
 }
 
+function watcherApproval(operation: "add" | "update"): PendingApprovalSnapshot {
+  const approval = pendingApproval();
+  if (approval.presentation.kind !== "exec") {
+    throw new Error("Expected the exec fixture");
+  }
+  return {
+    ...approval,
+    presentation: {
+      ...approval.presentation,
+      streamProposal: { jobId: "watcher/alpha", name: "Build monitor", operation },
+    },
+  };
+}
+
 function pluginApproval(
   severity: NonNullable<PluginApprovalPresentation["severity"]> = "warning",
 ): PendingApprovalSnapshot {
@@ -210,6 +224,80 @@ describe("ApprovalPage", () => {
     ]);
   });
 
+  it.each(["success", "failure"] as const)(
+    "shows a held decision once and settles its %s feedback",
+    async (outcome) => {
+      const held = Promise.withResolvers<ApprovalResolveResult>();
+      const request = vi.fn((method: string): Promise<unknown> =>
+        method === "approval.get"
+          ? Promise.resolve({ approval: pendingApproval() } satisfies ApprovalGetResult)
+          : held.promise,
+      );
+      const { page } = await createPage(request);
+      decision(page).click();
+      decision(page, "deny").click();
+      expect(request.mock.calls.filter(([method]) => method === "approval.resolve")).toHaveLength(
+        1,
+      );
+      await waitForSolid(() => {
+        expect(decision(page).disabled).toBe(true);
+        expect(decision(page).textContent).toContain("Recording");
+        expect(page.querySelector(".approval-page__card")?.getAttribute("aria-busy")).toBe("true");
+      });
+      if (outcome === "success") {
+        held.resolve({ applied: true, approval: allowedApproval() });
+        await waitForSolid(() => expect(text(page, "h1")).toBe("Approved here"));
+      } else {
+        held.reject(new Error("Synthetic resolution failure"));
+        await waitForSolid(() => {
+          expect(page.querySelector('[role="alert"]')).not.toBeNull();
+          expect(decision(page).textContent).not.toContain("Recording");
+        });
+      }
+      expect(page.querySelector(".approval-page__card")?.getAttribute("aria-busy")).toBe("false");
+    },
+  );
+
+  it.each(["id", "connection"] as const)(
+    "retires a held decision when its %s changes",
+    async (change) => {
+      const held = Promise.withResolvers<ApprovalResolveResult>();
+      let current = pendingApproval();
+      const request = vi.fn((method: string): Promise<unknown> =>
+        method === "approval.get"
+          ? Promise.resolve({ approval: current } satisfies ApprovalGetResult)
+          : held.promise,
+      );
+      const { page, source } = await createPage(request);
+      decision(page).click();
+      await waitForSolid(() => expect(decision(page).textContent).toContain("Recording"));
+      const next = pendingApproval({
+        id: change === "id" ? "exec:approval-2" : current.id,
+      });
+      if (next.presentation.kind !== "exec") {
+        throw new Error("Expected the exec fixture");
+      }
+      next.presentation.commandText = "printf replacement";
+      current = next;
+      if (change === "id") {
+        page.approvalId = next.id;
+      } else {
+        source.update({ phase: "stopped" });
+        source.update({ phase: "connected" });
+      }
+      await waitForSolid(() => {
+        expect(text(page, ".approval-page__preview")).toBe("printf replacement");
+        expect(decision(page).disabled).toBe(false);
+        expect(decision(page).textContent).not.toContain("Recording");
+      });
+      held.resolve({ applied: true, approval: allowedApproval() });
+      await settle(page);
+      expect(text(page, ".approval-page__preview")).toBe("printf replacement");
+      expect(decision(page).disabled).toBe(false);
+      expect(text(page, "h1")).not.toBe("Approved here");
+    },
+  );
+
   it.each([
     {
       kind: "exec",
@@ -237,6 +325,66 @@ describe("ApprovalPage", () => {
     const { page } = await createPage(request, { id: pending.id });
     expect(page.textContent).toContain(scenario.expected);
     expect(page.textContent).toContain("Waiting for your decision");
+  });
+
+  it.each([
+    ["add", "Start watching"],
+    ["update", "Save watcher change"],
+  ] as const)(
+    "explains a watcher %s before recording its exact decision",
+    async (operation, label) => {
+      const pending = watcherApproval(operation);
+      const request = vi.fn(async (method: string): Promise<unknown> =>
+        method === "approval.get"
+          ? { approval: pending }
+          : {
+              applied: true,
+              approval: { ...allowedApproval(), presentation: pending.presentation },
+            },
+      );
+      const { page } = await createPage(request);
+      await settle(page);
+
+      expect(page.querySelector("h1")?.textContent).toContain("Build monitor");
+      expect(page.textContent).toContain("after you leave this chat, until stopped");
+      expect(page.textContent).toContain("restart automatically");
+      expect(page.querySelector('[data-decision="deny"]')?.textContent?.trim()).toBe("Cancel");
+      const allowButton = decision(page);
+      expect(allowButton.textContent?.trim()).toBe(label);
+      allowButton.click();
+      await waitForSolid(() => expect(text(page, "h1")).toBe("Approved here"));
+
+      expect(request).toHaveBeenCalledWith("approval.resolve", {
+        id: pending.id,
+        kind: "exec",
+        decision: "allow-once",
+      });
+      expect(page.querySelector(".approval-page__heading p")?.textContent).toContain(
+        "Approval alone does not confirm that the change was saved or the watcher started",
+      );
+    },
+  );
+
+  it("reloads a denied watcher change without claiming that the existing watcher stopped", async () => {
+    const pending = watcherApproval("update");
+    const request = vi.fn(async () => ({
+      approval: {
+        ...pending,
+        status: "denied",
+        decision: "deny",
+        reason: "user",
+        resolvedAtMs: 2_000,
+        resolver: { kind: "device", id: "reviewer-device" },
+      },
+    }));
+    const { page } = await createPage(request);
+    await settle(page);
+
+    expect(page.querySelector(".approval-page__heading p")?.textContent).toContain(
+      "It did not stop or change the existing watcher",
+    );
+    expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("keeps a no-auth approval readable without enabling its decisions", async () => {
@@ -356,8 +504,10 @@ describe("ApprovalPage", () => {
       kind: "exec",
       decision: "allow-once",
     });
-    expect(text(page, "h1")).toBe("Approved here");
-    expect(document.activeElement).toBe(page.querySelector("h1"));
+    await waitForSolid(() => {
+      expect(text(page, "h1")).toBe("Approved here");
+      expect(document.activeElement).toBe(page.querySelector("h1"));
+    });
   });
 
   it.each([["critical", "danger"]] as const)(
@@ -394,9 +544,35 @@ describe("ApprovalPage", () => {
     const { page } = await createPage(request);
     decision(page).click();
     await settle(page);
-    expect(text(page, "h1")).toBe("Resolved elsewhere");
+    await waitForSolid(() => expect(text(page, "h1")).toBe("Resolved elsewhere"));
     expect(page.textContent).toContain("Another surface or an earlier attempt");
   });
+
+  it.each([false, true])(
+    "renders a fail-closed timeout distinctly from another surface's decision (watcher=%s)",
+    async (watcher) => {
+      const pending = watcher ? watcherApproval("add") : pendingApproval();
+      const expired = { ...expiredApproval(), presentation: pending.presentation };
+      const request = vi.fn(async (method: string): Promise<unknown> =>
+        method === "approval.get"
+          ? ({ approval: pending } satisfies ApprovalGetResult)
+          : ({ applied: false, approval: expired } satisfies ApprovalResolveResult),
+      );
+      const { page } = await createPage(request);
+      await settle(page);
+
+      (page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement).click();
+      await settle(page);
+
+      await waitForSolid(() => expect(text(page, "h1")).toBe("Expired"));
+      expect(page.textContent).toContain(
+        watcher
+          ? "This proposal did not create a watcher"
+          : "No decision arrived before the deadline",
+      );
+      expect(page.textContent).not.toContain("Another surface or an earlier attempt");
+    },
+  );
 
   it("fails closed when the Gateway returns a malformed projection", async () => {
     const request = vi.fn(async () => ({ approval: { status: "pending" } }));
@@ -421,7 +597,7 @@ describe("ApprovalPage", () => {
     decision(page, "deny").click();
     await settle(page);
     expect(request).toHaveBeenCalledTimes(3);
-    expect(text(page, "h1")).toBe("Expired");
+    await waitForSolid(() => expect(text(page, "h1")).toBe("Expired"));
     expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
   });
 
@@ -436,11 +612,39 @@ describe("ApprovalPage", () => {
     source.update({ phase: "reconnecting" });
     source.update({ phase: "connected" });
     await settle(page);
+    await waitForSolid(() => expect(text(page, "h1")).toBe("Approved"));
     resolveFirst({ approval: pendingApproval() });
     await settle(page);
     expect(request).toHaveBeenCalledTimes(2);
     expect(text(page, "h1")).toBe("Approved");
     expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
+  });
+
+  it("retains approval context and busy retry feedback during a foreground refresh", async () => {
+    const retry = Promise.withResolvers<ApprovalGetResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ approval: pendingApproval() } satisfies ApprovalGetResult)
+      .mockRejectedValueOnce(new Error("temporary Gateway failure"))
+      .mockReturnValueOnce(retry.promise);
+    const { page } = await createPage(request);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitForSolid(() => expect(page.querySelector(".approval-page__callout")).not.toBeNull());
+    const button = page.querySelector<HTMLButtonElement>(".approval-page__callout button")!;
+    button.click();
+    await waitForSolid(() => {
+      expect(page.querySelector(".approval-page__card")?.getAttribute("aria-busy")).toBe("true");
+      expect(button.disabled).toBe(true);
+      expect(text(page, ".approval-page__preview")).toBe("printf safe");
+      expect(decision(page).disabled).toBe(true);
+    });
+    retry.resolve({ approval: pendingApproval() });
+    await waitForSolid(() => {
+      expect(page.querySelector(".approval-page__card")?.getAttribute("aria-busy")).toBe("false");
+      expect(page.querySelector(".approval-page__callout")).toBeNull();
+      expect(decision(page).disabled).toBe(false);
+    });
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it("polls only while the pending document is visible", async () => {

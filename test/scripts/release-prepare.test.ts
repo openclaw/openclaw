@@ -2,7 +2,6 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   buildReleasePreparationManifest,
@@ -39,23 +38,19 @@ function prepareSteps(overrides: Partial<Parameters<typeof createReleasePrepareS
 
 describe("release preparation", () => {
   it("rejects ambiguous modes and invalid concurrency", () => {
-    expect(() => parseReleasePrepareArgs(["--version", "2026.7.2", "--check", "--write"])).toThrow(
-      "Use only one mode flag",
-    );
-    expect(() => parseReleasePrepareArgs(["--version", "2026.7.2", "--jobs", "17"])).toThrow(
-      "Expected 1 through 16",
-    );
-    expect(() => parseReleasePrepareArgs(["--check", "--check", "--unknown"])).toThrow(
-      "Use only one mode flag; received --check and --check.",
-    );
+    for (const [args, error] of [
+      ["--version 2026.7.2 --check --write", "Use only one mode flag"],
+      ["--version 2026.7.2 --jobs 17", "Expected 1 through 16"],
+      ["--check --check --unknown", "Use only one mode flag; received --check and --check."],
+      ["--help --manifest -h", "Missing value for --manifest."],
+    ] as const) {
+      expect(() => parseReleasePrepareArgs(args.split(" "))).toThrow(error);
+    }
     expect(parseReleasePrepareArgs(["--jobs", "2", "--", "--jobs", "0x4"])).toMatchObject({
       android: false,
       jobs: 4,
       mode: "shadow",
     });
-    expect(() => parseReleasePrepareArgs(["--help", "--manifest", "-h"])).toThrow(
-      "Missing value for --manifest.",
-    );
   });
   it("rejects alpha preparation before constructing write steps", () => {
     expect(() => prepareSteps({ version: "2026.9.24-alpha.1", mode: "write", jobs: 2 })).toThrow(
@@ -67,24 +62,11 @@ describe("release preparation", () => {
     const version = "2026.7.2-beta.1";
     const steps = prepareSteps({ android: true, jobs: 6, mode: "write", version });
 
-    expect(expectDefined(steps[0], "release version preparation step").args).toEqual([
-      "--import",
-      "tsx",
-      "scripts/release-version.ts",
-      "--root",
-      "/repo",
-      "--version",
-      version,
-      "--android",
-      "--write",
-    ]);
-    expect(expectDefined(steps[1], "release preflight preparation step").args).toEqual([
-      "scripts/release-preflight.mjs",
-      "--fix",
-      "--scope",
-      "version",
-      "--jobs",
-      "6",
+    expect(steps.map(({ args }) => args)).toEqual([
+      `--import tsx scripts/release-version.ts --root /repo --version ${version} --android --write`.split(
+        " ",
+      ),
+      "scripts/release-preflight.mjs --fix --scope version --jobs 6".split(" "),
     ]);
   });
 

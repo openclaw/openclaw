@@ -299,6 +299,20 @@ merging a nested value such as voice settings.
     `getCredentialValue`, `setCredentialValue`, and `createTool` are all
     required.
 
+    Provider-native OpenAI Responses search uses the model provider
+    `resolveNativeWebSearch` policy hook instead of registering a managed search
+    tool. Its context includes the selected `api`, `baseUrl`, and secret-free
+    `modelParams`; proxy providers must require both model support and admission
+    for that exact key-scoped route. Missing facts do not establish support.
+    OpenClaw applies the agent and sandbox tool policy before this hook.
+
+    In `wrapStreamFn`, reuse `createOpenAIHostedWebSearchWrapper` from
+    `openclaw/plugin-sdk/provider-stream-shared` with the same eligibility
+    predicate. It replaces a managed `web_search` function with the hosted
+    declaration, admits only that hosted type through Code Mode, and raises
+    `minimal` reasoning to the search-compatible `low`. It does not select
+    credentials, change routes, or retry a rejected request.
+
     Search tools limited to ten results can spread
     `WEB_SEARCH_QUERY_COUNT_PROPERTIES` from
     `openclaw/plugin-sdk/provider-web-search-contract` (or its config-only

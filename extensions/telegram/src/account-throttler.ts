@@ -11,7 +11,6 @@ import {
   waitForAbortSignal,
 } from "openclaw/plugin-sdk/runtime-env";
 import { apiThrottler } from "./bot.runtime.js";
-import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import {
   createOwnedGrammyApiThrottler,
   type OwnedGrammyApiThrottler,
@@ -436,7 +435,6 @@ function createTelegramAccountThrottler(
   const retireController = new AbortController();
   const chatActions = createTelegramSendChatActionHandler({
     logger: (message) => logVerbose(`telegram: ${message}`),
-    minIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
     retirementSignal: retireController.signal,
     retiredError: telegramThrottlerReleasedError,
   });

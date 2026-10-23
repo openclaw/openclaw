@@ -9,9 +9,8 @@ import {
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
-  runInitialFallbackAttempt,
+  createCliFollowupRun as createCliRun,
 } from "./agent-runner-execution.test-support.js";
-import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -50,20 +49,6 @@ function releaseTypingAfterRun(typing: { resolve: () => void }, run: Promise<unk
   };
   onTestFinished(finish);
   return finish;
-}
-
-function createCliRun(provider: string, model: string) {
-  state.isCliProviderMock.mockReturnValue(true);
-  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-    result: await runInitialFallbackAttempt(params, provider, model),
-    provider,
-    model,
-    attempts: [],
-  }));
-  const followupRun = createFollowupRun();
-  followupRun.run.provider = provider;
-  followupRun.run.model = model;
-  return followupRun;
 }
 
 function executeCliTurn(
@@ -140,83 +125,58 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     expect([call?.name, call?.phase, call?.args]).toEqual(["Bash", "start", { command: "ls -la" }]);
   });
 
-  it("starts CLI assistant progress before a later tool while typing is slow", async () => {
-    const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
-    mockCliEvents([
-      ["assistant", { text: "answer before tool", delta: "answer before tool" }],
-      ["assistant", { text: "answer before tool 2", delta: " 2" }],
-      toolEvent("start", "toolu_order", { args: { command: "echo hi" } }),
-    ]);
-
-    const typing = createDeferred();
-    const typingSignals = createMockTypingSignaler();
-    vi.mocked(typingSignals.signalTextDelta).mockReturnValue(typing.promise);
-    const callbackOrder: string[] = [];
-    const toolStarted = createDeferred();
-    const runPromise = executeCliTurn(
-      followupRun,
-      {
-        preserveProgressCallbackStartOrder: true,
-        onPartialReply: (payload) => {
-          callbackOrder.push(`partial:${payload.text}`);
+  it.each(["assistant", "tool"] as const)(
+    "starts %s progress first while typing is slow",
+    async (first) => {
+      const assistantFirst = first === "assistant";
+      const event = (text: string, delta = text): CliEvent => ["assistant", { text, delta }];
+      const tool = (phase: string) =>
+        toolEvent(phase, "toolu_order", { args: { command: "echo hi" } });
+      mockCliEvents(
+        assistantFirst
+          ? [event("answer before tool"), event("answer before tool 2", " 2"), tool("start")]
+          : [tool("start"), tool("update"), event("answer after tool")],
+      );
+      const typing = createDeferred();
+      const typingSignals = createMockTypingSignaler();
+      vi.mocked(
+        assistantFirst ? typingSignals.signalTextDelta : typingSignals.signalToolStart,
+      ).mockReturnValue(typing.promise);
+      const callbackOrder: string[] = [];
+      const lastStarted = createDeferred();
+      const runPromise = executeCliTurn(
+        createCliRun("claude-cli", "claude-opus-4-6"),
+        {
+          preserveProgressCallbackStartOrder: true,
+          onPartialReply: (payload) => {
+            callbackOrder.push(`partial:${payload.text}`);
+            if (!assistantFirst) {
+              lastStarted.resolve();
+            }
+          },
+          onToolStart: (payload) => {
+            callbackOrder.push(assistantFirst ? "tool" : `tool:${payload.phase}`);
+            if (assistantFirst) {
+              lastStarted.resolve();
+            }
+          },
         },
-        onToolStart: () => {
-          callbackOrder.push("tool");
-          toolStarted.resolve();
-        },
-      },
-      typingSignals,
-    );
-    const finish = releaseTypingAfterRun(typing, runPromise);
+        typingSignals,
+      );
+      const finish = releaseTypingAfterRun(typing, runPromise);
 
-    try {
-      await Promise.race([toolStarted.promise, runPromise]);
-      expect(callbackOrder).toEqual([
-        "partial:answer before tool",
-        "partial:answer before tool 2",
-        "tool",
-      ]);
-    } finally {
-      await finish();
-    }
-  });
-
-  it("starts CLI tool progress before later assistant text while typing is slow", async () => {
-    const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
-    mockCliEvents([
-      toolEvent("start", "toolu_inverse_order", { args: { command: "echo hi" } }),
-      toolEvent("update", "toolu_inverse_order", { args: { command: "echo hi" } }),
-      ["assistant", { text: "answer after tool", delta: "answer after tool" }],
-    ]);
-
-    const typing = createDeferred();
-    const typingSignals = createMockTypingSignaler();
-    vi.mocked(typingSignals.signalToolStart).mockReturnValue(typing.promise);
-    const callbackOrder: string[] = [];
-    const partialReplyStarted = createDeferred();
-    const runPromise = executeCliTurn(
-      followupRun,
-      {
-        preserveProgressCallbackStartOrder: true,
-        onPartialReply: (payload) => {
-          callbackOrder.push(`partial:${payload.text}`);
-          partialReplyStarted.resolve();
-        },
-        onToolStart: (payload) => {
-          callbackOrder.push(`tool:${payload.phase}`);
-        },
-      },
-      typingSignals,
-    );
-    const finish = releaseTypingAfterRun(typing, runPromise);
-
-    try {
-      await Promise.race([partialReplyStarted.promise, runPromise]);
-      expect(callbackOrder).toEqual(["tool:start", "tool:update", "partial:answer after tool"]);
-    } finally {
-      await finish();
-    }
-  });
+      try {
+        await Promise.race([lastStarted.promise, runPromise]);
+        expect(callbackOrder).toEqual(
+          assistantFirst
+            ? ["partial:answer before tool", "partial:answer before tool 2", "tool"]
+            : ["tool:start", "tool:update", "partial:answer after tool"],
+        );
+      } finally {
+        await finish();
+      }
+    },
+  );
 
   it("bridges CLI preambles for progress headlines when commentary is disabled", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
@@ -253,36 +213,33 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     ]);
   });
 
-  it("does not bridge CLI tool deltas when silentExpected is set", async () => {
-    const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
-    mockCliEvents([toolEvent("start", "toolu_silent", { args: { command: "echo silent" } })]);
-
-    const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
-    followupRun.run.silentExpected = true;
-
-    await executeCliTurn(followupRun, { onToolStart });
-    await nextImmediate();
-
-    expect(onToolStart).not.toHaveBeenCalled();
-  });
-
-  it("does not bridge CLI assistant deltas when silentExpected is set (#76869)", async () => {
-    const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
-    mockCliEvents([
-      ["assistant", { text: "secret heartbeat output", delta: "secret heartbeat output" }],
-      ["assistant", { text: "NO_REPLY do not preview", delta: " do not preview" }],
-    ]);
-
-    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
-      async (_payload) => undefined,
-    );
-    followupRun.run.silentExpected = true;
-
-    await executeCliTurn(followupRun, { onPartialReply });
-    await nextImmediate();
-
-    expect(onPartialReply).not.toHaveBeenCalled();
-  });
+  it.each(["tool", "assistant", "thinking"] as const)(
+    "does not bridge CLI %s deltas when silentExpected is set (#76869)",
+    async (stream) => {
+      const followupRun = createCliRun("claude-cli", "claude-opus-4-7");
+      followupRun.run.silentExpected = true;
+      mockCliEvents(
+        stream === "tool"
+          ? [toolEvent("start", "toolu_silent", { args: { command: "echo silent" } })]
+          : [
+              [stream, { text: "secret heartbeat output", delta: "secret heartbeat output" }],
+              [stream, { text: "NO_REPLY do not preview", delta: " do not preview" }],
+            ],
+      );
+      const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
+      const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
+        async () => undefined,
+      );
+      const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
+        async () => undefined,
+      );
+      await executeCliTurn(followupRun, { onToolStart, onPartialReply, onReasoningStream });
+      await nextImmediate();
+      expect(onToolStart).not.toHaveBeenCalled();
+      expect(onPartialReply).not.toHaveBeenCalled();
+      expect(onReasoningStream).not.toHaveBeenCalled();
+    },
+  );
 
   it("bridges CLI thinking agent events into onReasoningStream with the reasoning opt-in gate", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-7");
@@ -363,26 +320,5 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       "Private analysis.",
     ]);
     expect(onPartialReply.mock.calls.map(([payload]) => payload.text)).toEqual(["Visible answer."]);
-  });
-
-  it("does not bridge CLI thinking events to onReasoningStream when silentExpected is set", async () => {
-    const followupRun = createCliRun("claude-cli", "claude-opus-4-7");
-    mockCliEvents([
-      ["thinking", { text: "heartbeat scratch text", delta: "heartbeat scratch text" }],
-      [
-        "thinking",
-        { text: "NO_REPLY do not preview reasoning", delta: " do not preview reasoning" },
-      ],
-    ]);
-
-    const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
-      async (_payload) => undefined,
-    );
-    followupRun.run.silentExpected = true;
-
-    await executeCliTurn(followupRun, { onReasoningStream });
-    await nextImmediate();
-
-    expect(onReasoningStream).not.toHaveBeenCalled();
   });
 });

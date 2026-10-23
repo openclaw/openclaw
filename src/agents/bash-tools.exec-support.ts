@@ -1,10 +1,6 @@
-import type { ExecHost } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { EXEC_RETENTION_CAP_NOTE, renderExecOutputText } from "./bash-tools.exec-output.js";
-import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
-import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
-import { resolveRequestedExecTarget } from "./bash-tools.exec-target.js";
 import type {
   ExecProcessOutcome,
   ExecToolApprovalReview,
@@ -74,35 +70,4 @@ export function resolveExecReviewerDefaults(params: {
   const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
   const agentExec = agentId && cfg ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
   return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
-}
-
-// Preparation and execution must interpret elevation identically before host policy runs.
-export function resolveExecElevatedMode(
-  defaults: ExecToolDefaults | undefined,
-  requested: unknown,
-) {
-  const elevated = defaults?.elevated;
-  const defaultMode =
-    elevated?.defaultLevel === "full"
-      ? "full"
-      : elevated?.defaultLevel === "ask" || elevated?.defaultLevel === "on"
-        ? "ask"
-        : "off";
-  if (typeof requested === "boolean") {
-    return requested ? (defaultMode === "full" ? "full" : "ask") : "off";
-  }
-  return elevated?.enabled && elevated.allowed && !defaults?.sandboxRequired ? defaultMode : "off";
-}
-
-export function createExecHostResolver(defaults?: ExecToolDefaults) {
-  return (params: ExecToolArgs): ExecHost => {
-    const elevatedMode = resolveExecElevatedMode(defaults, params.elevated);
-    return resolveExecTarget({
-      configuredTarget: defaults?.host,
-      requestedTarget: resolveRequestedExecTarget(params),
-      elevatedRequested: elevatedMode !== "off",
-      sandboxAvailable: Boolean(defaults?.sandbox),
-      sandboxRequired: defaults?.sandboxRequired,
-    }).effectiveHost;
-  };
 }

@@ -1,20 +1,25 @@
 // @vitest-environment node
 import { expect, it } from "vitest";
+import type { DiffLine } from "./tool-call-diff.ts";
 import { resolveToolCallView } from "./tool-call-view.ts";
 
 const resolve = (name: string, args?: unknown, details?: unknown) =>
   resolveToolCallView({ name, args, details });
 const editArgs = { path: "/repo/a.ts", oldText: "old", newText: "new" };
-const replacementDiff = [
-  { kind: "del", text: "old" },
-  { kind: "add", text: "new" },
-];
+const line = (kind: DiffLine["kind"], text: string, lineNo?: number): DiffLine =>
+  lineNo === undefined ? { kind, text } : { kind, text, lineNo };
+const file = (path: string, operation = "Update"): DiffLine => ({
+  kind: "file",
+  path,
+  text: `${operation} ${path}`,
+});
+const skip = line("skip", "");
+const replacementDiff = [line("del", "old"), line("add", "new")];
 const editor = (args: unknown) => resolve("str_replace_editor", args);
 const patchView = (patch: string) => resolve("apply_patch", { patch });
 
 it.each([
   ["exec", undefined, "command"],
-  ["edit_file", { path: "file.ts" }, "edit"],
   ["apply_patch", { changes: [{ path: "file.ts", kind: "update", diff: "+line" }] }, "edit"],
   ["grep", { pattern: "line" }, "search"],
   ["web_fetch", { url: "https://example.test" }, "fetch"],
@@ -24,8 +29,8 @@ it.each([
   expect(resolve(name, args).kind).toBe(expected);
 });
 
-it.each([{}, { command: "rename" }])("keeps unsupported editor command %o generic", (args) => {
-  expect(editor(args).kind).toBe("generic");
+it("keeps unsupported editor commands generic", () => {
+  expect(editor({ command: "rename" }).kind).toBe("generic");
 });
 it("unwraps shell commands", () => {
   expect(resolve("bash", { command: "sh -lc 'echo hi'" }).command).toBe("echo hi");
@@ -37,12 +42,7 @@ it("resolves editor command-specific views", () => {
     targetDetail: "/repo",
   });
   expect(
-    editor({
-      command: "str_replace",
-      file: "/repo/edit.ts",
-      old_str: "old",
-      new_str: "new",
-    }),
+    editor({ command: "str_replace", file: "/repo/edit.ts", old_str: "old", new_str: "new" }),
   ).toMatchObject({
     kind: "edit",
     target: "edit.ts",
@@ -63,30 +63,19 @@ it("resolves editor command-specific views", () => {
   expect(insertion).toMatchObject({
     kind: "edit",
     target: "insert.ts",
-    diff: [
-      { kind: "add", text: "x" },
-      { kind: "add", text: "y" },
-    ],
+    diff: [line("add", "x"), line("add", "y")],
   });
   expect(insertion.stat).toBeUndefined();
 
   expect(
-    editor({
-      command: "undo_edit",
-      path: "/repo/undo.ts",
-      old_str: "must not",
-      new_str: "render",
-    }),
+    editor({ command: "undo_edit", path: "/repo/undo.ts", old_str: "must not", new_str: "render" }),
   ).toEqual({ kind: "edit", target: "undo.ts", targetDetail: "/repo" });
 });
 
 it("omits exact stats for truncated persisted details diffs", () => {
   const result = resolve("edit", editArgs, { diff: "+12 detail new\n...(truncated)..." });
 
-  expect(result.diff).toEqual([
-    { kind: "add", lineNo: 12, text: "detail new" },
-    { kind: "skip", text: "" },
-  ]);
+  expect(result.diff).toEqual([line("add", "detail new", 12), skip]);
   expect(result.stat).toBeUndefined();
 });
 
@@ -105,14 +94,14 @@ it("keeps multi-file Codex patches separated and counts every target", () => {
   expect(view).toMatchObject({ target: "3 files", stat: { added: 2, removed: 1 } });
   expect(view.targetDetail).toBeUndefined();
   expect(view.diff).toEqual([
-    { kind: "file", path: "src/a.ts", text: "Update src/a.ts" },
-    { kind: "del", text: "old a" },
-    { kind: "add", text: "new a" },
-    { kind: "skip", text: "" },
-    { kind: "file", path: "src/b.ts", text: "Add src/b.ts" },
-    { kind: "add", lineNo: 1, text: "new b" },
-    { kind: "skip", text: "" },
-    { kind: "file", path: "src/c.ts", text: "Delete src/c.ts" },
+    file("src/a.ts"),
+    line("del", "old a"),
+    line("add", "new a"),
+    skip,
+    file("src/b.ts", "Add"),
+    line("add", "new b", 1),
+    skip,
+    file("src/c.ts", "Delete"),
   ]);
 });
 
@@ -133,16 +122,16 @@ it("splits headerless multi-file unified diffs and numbers hunks", () => {
   const view = patchView(patch);
   expect(view).toMatchObject({ target: "2 files", stat: { added: 3, removed: 2 } });
   expect(view.diff).toEqual([
-    { kind: "file", path: "src/a.ts", text: "Update src/a.ts" },
-    { kind: "ctx", lineNo: 10, text: "context" },
-    { kind: "del", lineNo: 11, text: "old" },
-    { kind: "add", lineNo: 11, text: "new" },
-    { kind: "add", lineNo: 12, text: "extra" },
-    { kind: "ctx", lineNo: 13, text: "tail" },
-    { kind: "skip", text: "" },
-    { kind: "file", path: "src/b.ts", text: "Update src/b.ts" },
-    { kind: "del", lineNo: 1, text: "before" },
-    { kind: "add", lineNo: 1, text: "after" },
+    file("src/a.ts"),
+    line("ctx", "context", 10),
+    line("del", "old", 11),
+    line("add", "new", 11),
+    line("add", "extra", 12),
+    line("ctx", "tail", 13),
+    skip,
+    file("src/b.ts"),
+    line("del", "before", 1),
+    line("add", "after", 1),
   ]);
 });
 
@@ -158,8 +147,8 @@ it("renders structured Codex file changes per file", () => {
     { operation: "update", path: "src/a.ts" },
     { operation: "add", path: "src/b.ts" },
   ]);
-  expect(view.diff).toContainEqual({ kind: "file", path: "src/a.ts", text: "Update src/a.ts" });
-  expect(view.diff).toContainEqual({ kind: "file", path: "src/b.ts", text: "Add src/b.ts" });
+  expect(view.diff).toContainEqual(file("src/a.ts"));
+  expect(view.diff).toContainEqual(file("src/b.ts", "Add"));
 });
 
 it("caps apply_patch rows while keeping the full diffstat", () => {
@@ -181,11 +170,13 @@ it("caps the combined preview across multi-edit sections", () => {
     oldText: `old ${section}`,
     newText: Array.from({ length: 300 }, (_, index) => `new ${section}-${index}`).join("\n"),
   }));
+  edits.splice(1, 0, { oldText: "", newText: "" });
 
   const view = resolve("multiedit", { path: "big.ts", edits });
 
   expect(view.diff).toHaveLength(401);
-  expect(view.diff?.at(-1)).toEqual({ kind: "skip", text: "" });
+  expect(view.diff?.at(-1)).toEqual(skip);
+  expect(view.diff?.slice(301, 303)).toEqual([skip, line("del", "old 1")]);
   expect(view.stat).toEqual({ added: 600, removed: 2 });
 });
 
@@ -197,28 +188,34 @@ it("stops processing excess multi-edit pairs and omits a partial diffstat", () =
 
   const view = resolve("multiedit", { path: "many.ts", edits });
 
-  expect(view.diff?.at(-1)).toEqual({ kind: "skip", text: "" });
+  expect(view.diff?.at(-1)).toEqual(skip);
   expect(view.diff?.length).toBeLessThanOrEqual(401);
   expect(view.stat).toBeUndefined();
 });
 
 it("uses authoritative write details for diff and created-flag stats", () => {
-  const args = { path: "/repo/file.ts", content: "line 1\nline 2\n" };
+  const content = Array.from({ length: 81 }, (_, i) => `line ${i + 1}`);
+  const args = { path: "/repo/file.ts", content: content.join("\n") + "\n" };
 
-  expect(resolve("write", args, { created: false, diff: "-4 old\n+4 replacement" })).toMatchObject({
-    diff: [
-      { kind: "del", lineNo: 4, text: "old" },
-      { kind: "add", lineNo: 4, text: "replacement" },
-    ],
-    stat: { added: 1, removed: 1 },
+  const authoritative = resolve("write", args, {
+    created: false,
+    diff: " 455 before\n-456 old line\n+456 new line\n    ...\n 460 after",
   });
+  expect(authoritative.diff).toEqual([
+    line("ctx", "before", 455),
+    line("del", "old line", 456),
+    line("add", "new line", 456),
+    skip,
+    line("ctx", "after", 460),
+  ]);
+  expect(authoritative.stat).toEqual({ added: 1, removed: 1 });
 
-  expect(resolve("write", args, { created: true }).stat).toEqual({ added: 2, removed: 0 });
+  expect(resolve("write", args, { created: true }).stat).toEqual({ added: 81, removed: 0 });
 
   const overwrite = resolve("write", args, { created: false });
   expect(overwrite.diff).toEqual([
-    { kind: "add", lineNo: 1, text: "line 1" },
-    { kind: "add", lineNo: 2, text: "line 2" },
+    ...content.slice(0, 80).map((text, i) => line("add", text, i + 1)),
+    skip,
   ]);
   expect(overwrite.stat).toBeUndefined();
 

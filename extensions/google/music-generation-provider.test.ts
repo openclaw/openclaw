@@ -19,7 +19,7 @@ vi.mock("./google-genai-runtime.js", () => ({
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { GoogleGenerateContentResponse } from "./generate-content-response.js";
-import { buildGoogleMusicGenerationProvider } from "./music-generation-provider.js";
+import { googleMusicGenerationProvider } from "./music-generation-provider.js";
 
 type GoogleGenAIConfig = {
   apiKey?: string;
@@ -52,9 +52,7 @@ function googleMusicAudioResponse(bytes = "mp3-bytes") {
   );
 }
 
-type GenerateMusicRequest = Parameters<
-  ReturnType<typeof buildGoogleMusicGenerationProvider>["generateMusic"]
->[0];
+type GenerateMusicRequest = Parameters<(typeof googleMusicGenerationProvider)["generateMusic"]>[0];
 
 function generateMusic(overrides: Partial<GenerateMusicRequest> = {}) {
   vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
@@ -62,7 +60,7 @@ function generateMusic(overrides: Partial<GenerateMusicRequest> = {}) {
     source: "env",
     mode: "api-key",
   });
-  return buildGoogleMusicGenerationProvider().generateMusic({
+  return googleMusicGenerationProvider.generateMusic({
     provider: "google",
     model: "lyria-3-clip-preview",
     prompt: "upbeat synthpop anthem",
@@ -88,12 +86,12 @@ describe("google music generation provider", () => {
   });
 
   it("declares explicit mode capabilities", () => {
-    expectExplicitMusicGenerationCapabilities(buildGoogleMusicGenerationProvider());
+    expectExplicitMusicGenerationCapabilities(googleMusicGenerationProvider);
   });
 
   it("advertises Gemini music generation with a config-only Google API key", async () => {
     expect(
-      await buildGoogleMusicGenerationProvider().isConfiguredAsync?.({
+      await googleMusicGenerationProvider.isConfiguredAsync?.({
         cfg: googleConfig({
           apiKey: "google-config-only-key",
           baseUrl: "https://generativelanguage.googleapis.com/v1beta",

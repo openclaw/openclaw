@@ -54,6 +54,7 @@ export const deferredSessionImportOperations = {
             })
             .where("source_key", "=", input.receipt.sourceKey),
         );
+        // Session-import source keys use deferred-plugin-session-import:, never deferred-plugin-migration:.
         executeSqliteQuerySync(
           db,
           query

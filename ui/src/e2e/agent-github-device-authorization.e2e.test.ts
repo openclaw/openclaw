@@ -2,6 +2,7 @@ import { expect, type Locator, type Page } from "playwright/test";
 import { it } from "vitest";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 const suite = createControlUiE2eSuite({
   name: "Control UI GitHub connections",
   startServerBeforeBrowser: true,
@@ -88,15 +89,7 @@ const device = {
   pollAfterMs: 1_000,
 } as const;
 const config = { agents: { entries: { main: {} } } };
-const configResponse = {
-  config,
-  sourceConfig: config,
-  runtimeConfig: config,
-  hash: "github-config-hash",
-  issues: [],
-  raw: JSON.stringify(config),
-  valid: true,
-};
+const configResponse = { ...configSnapshot(config, "github-config-hash"), runtimeConfig: config };
 const adminScopes = ["operator.admin", "operator.read", "operator.write"];
 const personalStatus = { personal: disconnected, system: systemOAuth };
 const readerOptions = {

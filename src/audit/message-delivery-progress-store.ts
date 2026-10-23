@@ -6,9 +6,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { ensureColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -69,9 +70,13 @@ function ensureProgressSchema(options: OpenClawStateDatabaseOptions): void {
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      ensureProgressSchemaInDatabase(db);
-      ensureColumn(db, "outbound_message_progress", "context_id TEXT");
-      ensureColumn(db, "outbound_message_progress", "execution_id TEXT");
+      if (isPostgresSqlConnection(db)) {
+        ensureStatePostgresFragment(db, "outbound_message_progress");
+      } else {
+        ensureProgressSchemaInDatabase(db);
+        ensureColumn(db, "outbound_message_progress", "context_id TEXT");
+        ensureColumn(db, "outbound_message_progress", "execution_id TEXT");
+      }
     },
     options,
     { operationLabel: "audit.outbound-message-progress.schema.ensure" },

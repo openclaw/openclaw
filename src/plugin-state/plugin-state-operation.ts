@@ -184,7 +184,6 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
               if (facts.receiptId !== receiptId) {
                 throw new Error("Plugin state operation received another operation's receipt");
               }
-              validUntil = facts.validUntil;
               committed = true;
             },
           },

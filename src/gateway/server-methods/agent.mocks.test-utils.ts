@@ -10,12 +10,12 @@ import type {
 } from "../../agents/prepared-model-runtime.types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type {
-  hasSessionTranscriptEventsSync,
-  readTranscriptMutationStateSync,
+  SessionTranscriptReadScope,
   recordSessionParticipant,
   listSessionParticipantsReadOnly,
 } from "../../config/sessions/session-accessor.js";
 import type { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
+import type { readTranscriptMutationStateInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -33,8 +33,14 @@ const mocks = vi.hoisted(() => ({
   stageSessionPendingInput: vi.fn<typeof stageSessionPendingInput>(),
   recordSessionParticipant: vi.fn<typeof recordSessionParticipant>(async () => "inserted"),
   listSessionParticipantsReadOnly: vi.fn<typeof listSessionParticipantsReadOnly>(() => new Map()),
-  hasSessionTranscriptEventsSync: vi.fn<typeof hasSessionTranscriptEventsSync>(() => false),
-  readTranscriptMutationStateSync: vi.fn<typeof readTranscriptMutationStateSync>(() => ({
+  hasSessionTranscriptEventsSync: vi.fn<(scope: SessionTranscriptReadScope) => boolean>(
+    () => false,
+  ),
+  readTranscriptMutationStateSync: vi.fn<
+    (
+      scope: SessionTranscriptReadScope,
+    ) => ReturnType<typeof readTranscriptMutationStateInTransaction>
+  >(() => ({
     observedAt: null,
     updatedAt: null,
   })),
@@ -198,7 +204,6 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
     // These handler fixtures own an in-memory store; participant access must not reach shared /tmp SQLite.
     recordSessionParticipant: mocks.recordSessionParticipant,
     listSessionParticipantsReadOnly: mocks.listSessionParticipantsReadOnly,
-    hasSessionTranscriptEventsSync: mocks.hasSessionTranscriptEventsSync,
   };
 });
 

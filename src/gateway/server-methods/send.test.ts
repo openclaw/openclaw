@@ -321,7 +321,6 @@ function startDedupeMaintenance(context: GatewayRequestContext) {
   return startGatewayMaintenanceTimers({
     ...createGatewayMaintenanceStateForTest(),
     dedupe: context.dedupe,
-    runWorktreeGc: vi.fn(async () => undefined),
   });
 }
 

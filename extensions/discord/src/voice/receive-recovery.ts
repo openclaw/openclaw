@@ -166,7 +166,7 @@ export function enableDaveReceivePassthrough(params: {
   reason: string;
   expirySeconds: number;
   onWarn: (message: string) => void;
-}): boolean {
+}): void {
   const { target, sdk, reason, expirySeconds, onWarn } = params;
   const networkingState = target.connection.state.networking?.state;
   if (
@@ -175,19 +175,17 @@ export function enableDaveReceivePassthrough(params: {
     (networkingState.code !== sdk.NetworkingStatusCode.Ready &&
       networkingState.code !== sdk.NetworkingStatusCode.Resuming)
   ) {
-    return false;
+    return;
   }
   const daveSession = networkingState.dave?.session;
   if (!daveSession) {
-    return false;
+    return;
   }
   try {
     daveSession.setPassthroughMode(true, expirySeconds);
-    return true;
   } catch {
     onWarn(
       `discord voice: failed to enable DAVE passthrough guild=${target.guildId} channel=${target.channelId} reason=${reason}`,
     );
-    return false;
   }
 }

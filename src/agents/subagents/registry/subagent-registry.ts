@@ -1,7 +1,7 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-import type { GatewayStartupTrace } from "../../../gateway/server-startup-trace.js";
+import { measureStartup, type GatewayStartupTrace } from "../../../gateway/server-startup-trace.js";
 import { registerSystemEventStoreOwner } from "../../../infra/system-event-ownership.js";
 import {
   runWithGatewayDetachedWorkAdmission,
@@ -26,7 +26,6 @@ import {
   createSubagentRegistryGatewayCaller,
   loadSubagentAnnounceModule,
   loadSubagentBrowserCleanupModule,
-  resetSubagentRegistryRuntimeLoadersForTests,
 } from "./subagent-registry-deps.js";
 import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import {
@@ -466,7 +465,12 @@ const subagentRestorer = createSubagentRegistryRestorer({
   ensureListener: () => subagentListener.ensure(),
   startSweeper: () => subagentSweeper.start(),
   scheduleSweep: scheduleSubagentRegistrySweep,
-  recoverInterruptedRuns: (entries) => subagentSweeper.recoverInterruptedRuns(entries),
+  recoverInterruptedRuns: (entries, startupTrace) =>
+    measureStartup(startupTrace, "background.subagent-interrupted", () =>
+      subagentSweeper.recoverInterruptedRuns(entries),
+    ).catch((error: unknown) => {
+      log.warn("interrupted subagent recovery remains pending", { error });
+    }),
   resumeRun: (runId) => resumeSubagentRun(runId, "restore"),
   listSwarmRunsForGroup: (groupId, requesterSessionKey, requesterAgentId) =>
     listSwarmRunsForGroup(groupId, requesterSessionKey, requesterAgentId),
@@ -666,10 +670,7 @@ async function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   completionRetryTimers.clear();
   subagentRuns.clear();
   resumedRuns.clear();
-  resumeReader.reset();
   pendingLifecycle.clearAll();
-  resetSubagentRegistryRuntimeLoadersForTests();
-  contextCleanup.reset();
   clearSubagentRunsReadCacheForTest();
   const sweeperRetirement = subagentSweeper.reset();
   subagentRestorer.reset();
@@ -702,6 +703,8 @@ export const ackPendingAgentSteeringItems = publicApi.ackPendingAgentSteeringIte
 export const releasePendingAgentSteeringItems = publicApi.releasePendingAgentSteeringItems;
 export const getSubagentRunByRunId = publicApi.getSubagentRunByRunId;
 export const prepareSubagentRunsByRunIds = publicApi.prepareSubagentRunsByRunIds;
+export const listCollectorRunsForRequesterIncarnation =
+  publicApi.listCollectorRunsForRequesterIncarnation;
 export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;

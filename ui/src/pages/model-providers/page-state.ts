@@ -15,6 +15,8 @@ export type ModelProvidersState = {
   addProviderKey: string;
   defaultsDraft: DefaultsDraft | null;
   selectedAgentId: string;
+  /** Advances on a forced refresh so each account row re-reads its plan limits. */
+  accountUsageRevision: number;
 };
 
 export function createModelProvidersState(): ModelProvidersState {
@@ -30,5 +32,6 @@ export function createModelProvidersState(): ModelProvidersState {
     addProviderKey: "",
     defaultsDraft: null,
     selectedAgentId: "",
+    accountUsageRevision: 0,
   };
 }

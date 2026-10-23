@@ -17,18 +17,7 @@ import type {
   OperatorApprovalTerminalReason,
   ResolveOperatorApprovalResult,
 } from "./operator-approval-store.js";
-import type {
-  OperatorApprovalConsumptionInput,
-  OperatorApprovalStoreGuard,
-} from "./operator-approval-store.types.js";
-
-/** A live waiter lends consumption to the effect's transaction and observes only its commit. */
-export type ExecApprovalPreparedConsumption = {
-  input: Readonly<OperatorApprovalConsumptionInput>;
-  databasePath: string;
-  assertCurrent: () => void;
-  markCommitted: (record: OperatorApprovalRecord) => void;
-};
+import type { OperatorApprovalStoreGuard } from "./operator-approval-store.types.js";
 
 export type ExecApprovalReadAuthority = {
   assertCurrent: () => void;

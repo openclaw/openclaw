@@ -363,9 +363,9 @@ describe("native completion final-effect authority", () => {
       const { session } = await createTestSession({
         sessionManager,
         settingsManager: createAutoCompactionSettings(),
-        resourceLoader: createResourceLoader(
-          new Map([["session_before_compact", [beforeCompact]]]),
-        ),
+        resourceLoader: await createResourceLoader((api) => {
+          api.on("session_before_compact", beforeCompact);
+        }),
       });
       streamMocks.streamSimple
         .mockImplementation(() =>

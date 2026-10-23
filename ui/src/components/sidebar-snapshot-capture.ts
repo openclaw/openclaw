@@ -9,6 +9,7 @@ import { resolveSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.t
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { hasSidebarListFilter } from "./session-data-events.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import {
   parseSidebarSnapshot,
@@ -35,6 +36,27 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
     const pages = host.navigationCatalog.dashboards;
     return pages?.loading === false && (pages.readSucceeded === true || pages.error !== null);
   }
+  const sessions = context.sessions;
+  const rootsSettled =
+    !sessions.state.loading &&
+    (Boolean(host.sessionData.sessionMutationError ?? sessions.state.error) ||
+      (sessions.canonicalListReady &&
+        Boolean(sessions.presentation.result) &&
+        !sessions.presentation.resultCached));
+  if (host.navigationView === "sessions" && !rootsSettled) {
+    return false;
+  }
+  if (
+    host.sessionData.sessionLineageVisible &&
+    [...host.childSessionParents()].some(
+      (key) =>
+        host.sessionData.loadingChildSessionKeys.has(key) ||
+        (!host.sessionData.loadedChildSessionKeys.has(key) &&
+          !host.sessionData.childSessionErrorsByParent.has(key)),
+    )
+  ) {
+    return false;
+  }
   const people = resolveSidebarOnline(host).users;
   if (
     people.some((person) => person.identity?.type === "profile") &&
@@ -51,11 +73,12 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
       roster.involvingMe === host.sidebarSessionOwnerFilter().involvingMe
     );
   }
-  return (
-    !host.sessionData.sessionsLoading &&
-    (Boolean(host.sessionData.sessionMutationError ?? context.sessions.state.error) ||
-      (Boolean(host.sessionData.sessionsResult) && !context.sessions.presentation.resultCached))
-  );
+  if (hasSidebarListFilter(host)) {
+    const query = host.sessionData.sessionListQuery(host.expandedAgentId());
+    const selected = context.sessions.listSnapshot(query);
+    return !selected.loading && (selected.readSucceeded === true || selected.error !== null);
+  }
+  return rootsSettled && !host.sessionData.sessionsLoading;
 }
 
 export function captureSidebarSnapshotModel(

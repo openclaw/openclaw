@@ -7,7 +7,8 @@ import {
   readDeferredPluginMigrationsAsync,
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
-import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
+import * as sql from "../infra/kysely-sync.js";
+import { loadOpenClawPlugins, loadOpenClawPluginsAsync } from "../plugins/loader.js";
 import {
   createPluginCache,
   retirePluginCache,
@@ -18,6 +19,8 @@ import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
@@ -220,6 +223,42 @@ module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
           records: retained,
           label: "operator label",
         });
+        writeConfigMachineState("fixture.unrelated", true);
+        const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+        const mainQueries = vi.spyOn(sql, "executeSqliteQuerySync");
+        try {
+          for (const loader of [loadOpenClawPluginsAsync, loadOpenClawPlugins]) {
+            const cache = createPluginCache();
+            caches.push(cache);
+            const registry = await withPluginCache(cache, () =>
+              loader({
+                config,
+                metadataSnapshot: ready.lookup,
+                onlyPluginIds: [pluginId],
+                activate: false,
+                cache: false,
+                runtimeSideEffects: true,
+              }),
+            );
+            registries.push(registry);
+            expect(registry.plugins.find((record) => record.id === pluginId)?.status).toBe(
+              "loaded",
+            );
+          }
+          expect(
+            reads.mock.calls.filter(
+              ([, command]) => command.type === "plugins.deferredMigrations.read",
+            ),
+          ).toHaveLength(0);
+          expect(
+            mainQueries.mock.calls.filter(([, query]) =>
+              query.compile().sql.includes('"migration_runs"'),
+            ),
+          ).toHaveLength(0);
+        } finally {
+          reads.mockRestore();
+          mainQueries.mockRestore();
+        }
       } finally {
         for (const registry of registries.toReversed()) {
           await disposePluginRegistryInstances(registry);

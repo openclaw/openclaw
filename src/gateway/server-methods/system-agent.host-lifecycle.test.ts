@@ -43,7 +43,7 @@ vi.mock("../../daemon/hosted-stop.js", () => ({ prepareHostedGatewayStop: vi.fn(
 const {
   systemAgentTempDirs,
   requireVerifiedInferenceFixture,
-  requireVerifiedInferenceDeps,
+  installVerifiedConfigReader,
   seededSession,
 } = useSystemAgentGatewayTestFixture();
 
@@ -112,11 +112,12 @@ it.for([
       await releaseAudit.promise;
       return await appendAudit(entry);
     });
+    installVerifiedConfigReader();
     const engine = new SystemAgentChatEngine({
       operatorApprovalOnly: true,
       surface: "gateway",
       verifiedInference: requireVerifiedInferenceFixture(),
-      deps: { ...requireVerifiedInferenceDeps(), gatewayHostLifecycle },
+      deps: { gatewayHostLifecycle },
     });
     engine.propose({ kind: action === "stop" ? "gateway-stop" : "gateway-restart" });
     const proposalHash = expectDefined(

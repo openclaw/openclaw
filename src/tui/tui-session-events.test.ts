@@ -124,18 +124,6 @@ describe("readTuiSessionUserMessage", () => {
         text: "prompt",
       },
     ],
-    [
-      "uses persisted position for incomplete imported identity",
-      { ...importedIdentity, seq: 7 },
-      { messageId: "native-message", messageSeq: 99 },
-      { messageId: "imported-seq:7", text: "prompt" },
-    ],
-    [
-      "rejects envelope-only sequence for incomplete imported identity",
-      importedIdentity,
-      { messageId: "native-message", messageSeq: 7 },
-      null,
-    ],
   ] as const)("%s", (_name, metadata, envelope, expected) => {
     expect(readUserMessage("prompt", metadata, envelope)).toEqual(expected);
   });

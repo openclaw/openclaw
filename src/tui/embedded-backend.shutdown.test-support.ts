@@ -6,10 +6,7 @@ import type { EmbeddedTuiBackend } from "./embedded-backend.js";
 import { captureBackendEvents } from "./embedded-backend.stream.test-support.js";
 import { deferred, flushMicrotasks, sendMainChat } from "./embedded-backend.test-helpers.js";
 
-type EmbeddedAgentResult = {
-  payloads: Array<{ text: string }>;
-  meta: Record<string, unknown>;
-};
+type EmbeddedAgentResult = { payloads: Array<{ text: string }>; meta: Record<string, unknown> };
 
 export function registerEmbeddedBackendShutdownTests({
   createBackend,
@@ -24,43 +21,44 @@ export function registerEmbeddedBackendShutdownTests({
   originalRuntimeLog: typeof defaultRuntime.log;
   originalRuntimeError: typeof defaultRuntime.error;
 }) {
-  it("waits for local post-turn maintenance before emitting chat final", async () => {
+  async function startMaintenance(withText = true) {
     const pending = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
-
+    const abortListener = vi.fn();
+    agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+      opts.abortSignal?.addEventListener("abort", abortListener);
+      return pending.promise;
+    });
     const backend = createBackend();
     const events = captureBackendEvents(backend);
-
     backend.start();
-    await sendMainChat(backend, "compact after final", "run-local-maintenance");
-
+    expect(isEmbeddedMode()).toBe(true);
+    expect(defaultRuntime.log).not.toBe(originalRuntimeLog);
+    expect(defaultRuntime.error).not.toBe(originalRuntimeError);
+    await sendMainChat(backend, "compact before shutdown", "maintenance");
+    if (withText) {
+      getRegisteredListener()?.({
+        runId: "maintenance",
+        stream: "assistant",
+        data: { text: "done", delta: "done" },
+      });
+    }
     getRegisteredListener()?.({
-      runId: "run-local-maintenance",
-      stream: "assistant",
-      data: { text: "done", delta: "done" },
-    });
-    getRegisteredListener()?.({
-      runId: "run-local-maintenance",
+      runId: "maintenance",
       stream: "lifecycle",
       data: { phase: "end", stopReason: "stop" },
     });
+    const chatStates = () =>
+      events.filter((e) => e.event === "chat").map((e) => (e.payload as { state?: string }).state);
+    return { backend, pending, abortListener, chatStates };
+  }
+
+  it("waits for local post-turn maintenance before emitting chat final", async () => {
+    const { pending, chatStates } = await startMaintenance();
     await flushMicrotasks();
-
-    expect(
-      events.some(
-        (entry) =>
-          entry.event === "chat" && (entry.payload as { state?: string }).state === "final",
-      ),
-    ).toBe(false);
-
+    expect(chatStates()).not.toContain("final");
     pending.resolve({ payloads: [{ text: "done" }], meta: {} });
     await flushMicrotasks();
-
-    expect(
-      events
-        .filter((entry) => entry.event === "chat")
-        .map((entry) => (entry.payload as { state?: string }).state),
-    ).toEqual(["delta", "final"]);
+    expect(chatStates()).toEqual(["delta", "final"]);
   });
 
   it("rejects a send paused in session lookup when shutdown begins", async () => {
@@ -75,7 +73,6 @@ export function registerEmbeddedBackendShutdownTests({
     backend.start();
     await sendMainChat(backend, "first turn", "shutdown-first");
     await firstStarted.promise;
-
     const worker = await import("../gateway/session-utils-store-worker.js");
     const readEntry = worker.loadGatewaySessionEntryReadOnlyInWorker;
     const lookupStarted = deferred<void>();
@@ -100,90 +97,36 @@ export function registerEmbeddedBackendShutdownTests({
     }
   });
 
-  it("waits for local post-turn maintenance during stop", async () => {
-    const pending = deferred<EmbeddedAgentResult>();
-    const abortListener = vi.fn();
-    agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-      opts.abortSignal?.addEventListener("abort", abortListener);
-      return pending.promise;
-    });
-
-    const backend = createBackend();
-    captureBackendEvents(backend);
-    backend.start();
-    expect(isEmbeddedMode()).toBe(true);
-    expect(defaultRuntime.log).not.toBe(originalRuntimeLog);
-    expect(defaultRuntime.error).not.toBe(originalRuntimeError);
-    await sendMainChat(backend, "compact before shutdown", "run-local-stop-maintenance");
-
-    getRegisteredListener()?.({
-      runId: "run-local-stop-maintenance",
-      stream: "assistant",
-      data: { text: "done", delta: "done" },
-    });
-    getRegisteredListener()?.({
-      runId: "run-local-stop-maintenance",
-      stream: "lifecycle",
-      data: { phase: "end", stopReason: "stop" },
-    });
-
-    let stopped = false;
-    const stopPromise = backend.stop().then(() => {
-      stopped = true;
-    });
-    await flushMicrotasks();
-
-    expect(stopped).toBe(false);
-    expect(abortListener).not.toHaveBeenCalled();
-    expect(isEmbeddedMode()).toBe(true);
-
-    pending.resolve({ payloads: [{ text: "done" }], meta: {} });
-    await stopPromise;
-
-    expect(abortListener).not.toHaveBeenCalled();
-    expect(getRegisteredListener()).toBeUndefined();
-    expect(isEmbeddedMode()).toBe(false);
-    expect(defaultRuntime.log).toBe(originalRuntimeLog);
-    expect(defaultRuntime.error).toBe(originalRuntimeError);
-  });
-
-  it("aborts local post-turn maintenance when stop grace elapses", async () => {
-    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
-      const pending = deferred<EmbeddedAgentResult>();
-      const abortListener = vi.fn();
-      agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-        opts.abortSignal?.addEventListener("abort", abortListener);
-        return pending.promise;
-      });
-
-      const backend = createBackend();
-      backend.start();
-      await sendMainChat(backend, "compact before shutdown", "run-local-stop-timeout");
-
-      getRegisteredListener()?.({
-        runId: "run-local-stop-timeout",
-        stream: "lifecycle",
-        data: { phase: "end", stopReason: "stop" },
-      });
-
-      let stopped = false;
-      const stopPromise = backend.stop().then(() => {
-        stopped = true;
-      });
-      await flushMicrotasks();
-      expect(stopped).toBe(false);
-      expect(abortListener).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(5);
-      expect(abortListener).toHaveBeenCalledTimes(1);
-      expect(stopped).toBe(false);
-      expect(isEmbeddedMode()).toBe(true);
-
-      // Cancellation does not own settlement: keep the runtime available for
-      // the aborted turn's final cleanup before releasing embedded ownership.
-      pending.resolve({ payloads: [], meta: { aborted: true } });
-      await stopPromise;
-      expect(isEmbeddedMode()).toBe(false);
-    });
+  it.each([false, true])("joins maintenance during stop (grace expired: %s)", async (expired) => {
+    await withEnvAsync(
+      expired ? { OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" } : {},
+      async () => {
+        const { pending, abortListener, backend } = await startMaintenance(!expired);
+        const stopped = vi.fn();
+        const stopPromise = backend.stop().then(stopped);
+        await flushMicrotasks();
+        expect(stopped).not.toHaveBeenCalled();
+        expect(abortListener).not.toHaveBeenCalled();
+        if (expired) {
+          await vi.advanceTimersByTimeAsync(5);
+          expect(abortListener).toHaveBeenCalledTimes(1);
+          expect(stopped).not.toHaveBeenCalled();
+        }
+        expect(isEmbeddedMode()).toBe(true);
+        // Abort does not settle maintenance or release embedded runtime ownership.
+        pending.resolve({
+          payloads: expired ? [] : [{ text: "done" }],
+          meta: expired ? { aborted: true } : {},
+        });
+        await stopPromise;
+        if (!expired) {
+          expect(abortListener).not.toHaveBeenCalled();
+        }
+        expect(getRegisteredListener()).toBeUndefined();
+        expect(isEmbeddedMode()).toBe(false);
+        expect(defaultRuntime.log).toBe(originalRuntimeLog);
+        expect(defaultRuntime.error).toBe(originalRuntimeError);
+      },
+    );
   });
 }

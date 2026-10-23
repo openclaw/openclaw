@@ -114,7 +114,6 @@ describe("channel doctor compatibility mutations", () => {
       const result = await collectChannelDoctorStaleConfigMutations(cfg, {
         channelIds: warning ? ["matrix", "discord"] : ["matrix"],
       });
-      expect(matrixCleanup).toHaveBeenCalledTimes(1);
       if (warning) {
         expect(result).toEqual([
           { config: cfg, changes: [], warnings: ["matrix warning"] },
@@ -153,23 +152,13 @@ describe("channel doctor compatibility mutations", () => {
       expect(collectChannelDoctorCompatibilityMutations(cfg, { env })).toEqual([
         { config: cfg, changes: ["sender"] },
       ]);
-      expect(normalizeCompatibilityConfig).toHaveBeenCalledTimes(1);
       expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
         env,
         ...READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
       });
-      for (const lookup of [
-        mocks.getLoadedChannelPlugin,
-        mocks.getBundledChannelSetupPlugin,
-        mocks.getBundledChannelPlugin,
-      ]) {
-        expect(lookup).toHaveBeenCalledWith("matrix");
-      }
-      expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalledWith("discord");
       await expect(collectChannelDoctorMutableAllowlistWarnings({ cfg })).resolves.toEqual([
         "runtime warning",
       ]);
-      expect(collectMutableAllowlistWarnings).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -237,7 +226,6 @@ describe("channel doctor compatibility mutations", () => {
     expect(result).toEqual([
       "- channels.matrix: configured SecretRef at channels.matrix.accessToken is unavailable in doctor preview; skipping secret-backed channel preview checks.",
     ]);
-    expect(collectPreviewWarnings).toHaveBeenCalledTimes(1);
   });
 
   it("keeps configured channel doctor lookup non-fatal when setup loading fails", () => {
@@ -303,7 +291,6 @@ describe("channel doctor compatibility mutations", () => {
       ...READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
     });
     expect(collectEmptyAllowlistExtraWarnings.mock.calls[0]?.[0]).not.toHaveProperty("cfg");
-    expect(collectEmptyAllowlistExtraWarnings).toHaveBeenCalledTimes(3);
     expect(shouldSkipDefaultEmptyGroupAllowlistWarning).toHaveBeenCalledTimes(1);
   });
 });

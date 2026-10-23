@@ -136,10 +136,7 @@ beforeEach(() => {
     recentExternalEdit: false,
     auditSequence: 0,
   });
-  greetingMocks.resolveSystemAgentGreeting.mockResolvedValue({
-    text: "I'm OpenClaw. All systems nominal.",
-    source: "model",
-  });
+  greetingMocks.resolveSystemAgentGreeting.mockResolvedValue("I'm OpenClaw. All systems nominal.");
   greetingMocks.buildSystemAgentGreetingQuestion.mockReturnValue(quickActions);
   onboardingWelcomeMocks.buildOnboardingWelcome.mockImplementation(
     async ({ engine }: { engine: { noteAssistantMessage: (text: string) => void } }) => {
@@ -300,10 +297,9 @@ describe("openclaw.chat caretaker welcome", () => {
 
   it("does not plan a greeting when a fresh session is created with a message", async () => {
     const sessions = new Map<string, SystemAgentChatSession>();
-    greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce({
-      text: "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
-      source: "template",
-    });
+    greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce(
+      "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
+    );
 
     const context = makeContext(sessions);
     const call = await callChat(context, { sessionId: "fresh-with-message", message: "status" });
@@ -338,7 +334,7 @@ describe("openclaw.chat caretaker welcome", () => {
         recentExternalEdit: true,
         auditSequence: 42,
       });
-      greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce({ text, source: "model" });
+      greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce(text);
       if (fails) {
         await expect(
           expectDefined(
