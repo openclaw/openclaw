@@ -2,7 +2,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { NodeRuntimeInstallCommand } from "../../../node-runtime-recovery.mjs";
-import { parseNodeReleaseVersion } from "../../../node-version.mjs";
+import { isSupportedOpenClawNodeVersion, parseNodeReleaseVersion } from "../../../node-version.mjs";
 import { readResponseWithLimit } from "../../infra/http-response-body.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
@@ -27,6 +27,7 @@ export async function resolveTargetNodeRuntime(params: {
   const { findUsableNodeRuntime }: typeof import("../../../node-runtime-recovery.mjs") =
     await import(pathToFileURL(path.join(driverRoot, "node-runtime-recovery.mjs")).href);
   const acceptVersion = (version: string) =>
+    isSupportedOpenClawNodeVersion(version) &&
     nodeVersionSatisfiesEngine(version, params.engine) === true;
   const options = { ...params.recovery, acceptVersion };
   const available = await findUsableNodeRuntime(options);

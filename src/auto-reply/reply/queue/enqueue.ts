@@ -158,6 +158,10 @@ export function enqueueFollowupRun(
   if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
     return false;
   }
+  // Real input supersedes queued automatic Goal work and may use its capacity.
+  const supersededGoals = run.goalContinuation
+    ? []
+    : queue.items.filter((item) => item.goalContinuation && !queue.inFlight.has(item));
   // Preserve later prompts while an older steer decides between same-turn
   // delivery and fallback; overflow resumes when the gate resolves.
   if (options.steerCandidate || queue.items.some((item) => item.steerPending)) {
@@ -184,7 +188,7 @@ export function enqueueFollowupRun(
   }
   // drop:new rejects this source without mutating the existing queue. Do not
   // publish an external queued identity for work that will never be admitted.
-  const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
+  const pendingCount = countPendingQueueItems(queue.items, queue.inFlight) - supersededGoals.length;
   if (queue.dropPolicy === "new" && queue.cap > 0 && pendingCount >= queue.cap) {
     run.onQueueDisposition?.("queue-cap-new");
     completeFollowupRunLifecycle(run);
@@ -192,6 +196,13 @@ export function enqueueFollowupRun(
   }
   if (!markFollowupRunEnqueued(run)) {
     return false;
+  }
+  for (const goal of supersededGoals) {
+    const index = queue.items.indexOf(goal);
+    if (index >= 0 && !queue.inFlight.has(goal)) {
+      queue.items.splice(index, 1);
+      completeFollowupRunLifecycle(goal);
+    }
   }
   if (!applyFollowupQueueOverflow(queue, run)) {
     return false;

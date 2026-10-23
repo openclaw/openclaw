@@ -40,6 +40,8 @@ import {
   isStableLatestPublication,
 } from "./lib/release-publish-preflight-interface.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { sleep as wait } from "./lib/sleep.mjs";
+import { readUpgradeSurvivorScenarioCatalog } from "./lib/upgrade-survivor-policy.mjs";
 import {
   downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
@@ -120,6 +122,11 @@ const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
 const RELEASE_CANDIDATE_STATE_VERSION = 2;
 const RELEASE_CANDIDATE_STATE_FILE = "release-candidate-state.json";
 const TRUSTED_TOOLING_SHA_ENV = "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA";
+const UPGRADE_SURVIVOR_CATALOG_PATH = "scripts/lib/upgrade-survivor-scenarios.json";
+// Release tooling (toolingSha and its publishWorkflowRef tag) is not candidate
+// identity: each run re-verifies the current tooling against trusted main, and
+// saved FRV/npm evidence is authenticated against its own producer run. Tooling
+// repaired mid-release can therefore resume the same state.
 const RELEASE_CANDIDATE_STATE_KEYS = [
   "repo",
   "tag",
@@ -944,6 +951,54 @@ export function validateTrustedToolingPin({
     );
   }
   return pinnedToolingSha;
+}
+
+function releaseScenarioCatalog(source: string, owner: string) {
+  const scenarios = readUpgradeSurvivorScenarioCatalog(source, { includeAssertionOnly: false });
+  if (!scenarios) {
+    throw new Error(`${owner} has an invalid ${UPGRADE_SURVIVOR_CATALOG_PATH}`);
+  }
+  return scenarios;
+}
+
+export function validateReleaseScenarioCatalogCompatibility({
+  candidateCatalog,
+  toolingCatalog,
+  latestTrustedToolingCatalog,
+  toolingSha,
+  latestTrustedToolingSha,
+  workflowRef,
+}: {
+  candidateCatalog: string;
+  toolingCatalog: string;
+  latestTrustedToolingCatalog: string;
+  toolingSha: string;
+  latestTrustedToolingSha: string;
+  workflowRef: string;
+}) {
+  const candidateScenarios = releaseScenarioCatalog(candidateCatalog, "release candidate");
+  const toolingScenarios = new Set(releaseScenarioCatalog(toolingCatalog, `tooling ${toolingSha}`));
+  const unsupported = candidateScenarios
+    .filter((scenario) => !toolingScenarios.has(scenario))
+    .toSorted();
+  if (unsupported.length === 0) {
+    return { status: "passed" as const, unsupported };
+  }
+  const latestScenarios = new Set(
+    releaseScenarioCatalog(
+      latestTrustedToolingCatalog,
+      `trusted ${workflowRef} tooling ${latestTrustedToolingSha}`,
+    ),
+  );
+  const replacementSupportsCandidate = candidateScenarios.every((scenario) =>
+    latestScenarios.has(scenario),
+  );
+  const replacement = replacementSupportsCandidate
+    ? ` Trusted ${workflowRef} tooling ${latestTrustedToolingSha} supports this catalogue; rerun with --workflow-sha ${latestTrustedToolingSha}.`
+    : ` Trusted ${workflowRef} tip ${latestTrustedToolingSha} also lacks support; land the catalogue consumer before qualifying this candidate.`;
+  throw new Error(
+    `Pinned release tooling ${toolingSha} cannot consume candidate upgrade-survivor scenarios: ${unsupported.join(", ")}.${replacement}`,
+  );
 }
 
 export async function validateNpmPreflightRunSource(
@@ -2049,6 +2104,7 @@ async function main() {
   });
   // Publication may use repaired tooling while the prepared tarball retains its original producer.
   const statePath = join(options.outputDir, RELEASE_CANDIDATE_STATE_FILE);
+  const hasRetainedRequest = existsSync(join(options.outputDir, "frv-request.json"));
   if (options.workflowSha && !options.publishWorkflowRef) {
     if (options.workflowSha !== toolingSha) {
       throw new Error(
@@ -2150,6 +2206,27 @@ async function main() {
   // A new dispatch is gated by the local check; consuming existing evidence
   // defers it until the SDK acknowledgement has been checked.
   const dispatchesValidation = !options.fullReleaseRunId && !options.skipDispatch;
+  const validatesScenarioCatalog = dispatchesValidation && !hasRetainedRequest;
+  if (validatesScenarioCatalog) {
+    validateReleaseScenarioCatalogCompatibility({
+      candidateCatalog: run("git", ["show", `${targetSha}:${UPGRADE_SURVIVOR_CATALOG_PATH}`], {
+        capture: true,
+        cwd: targetRoot,
+      }),
+      toolingCatalog: run("git", ["show", `${toolingSha}:${UPGRADE_SURVIVOR_CATALOG_PATH}`], {
+        capture: true,
+        cwd: targetRoot,
+      }),
+      latestTrustedToolingCatalog: run(
+        "git",
+        ["show", `${latestTrustedToolingSha}:${UPGRADE_SURVIVOR_CATALOG_PATH}`],
+        { capture: true, cwd: targetRoot },
+      ),
+      toolingSha,
+      latestTrustedToolingSha,
+      workflowRef: options.workflowRef,
+    });
+  }
   let localGeneratedCheck = dispatchesValidation
     ? runLocalGeneratedCheckIfNeeded(options)
     : undefined;
@@ -2310,6 +2387,23 @@ async function main() {
     });
   } catch (error) {
     if (error instanceof PluginSdkApiAcknowledgementError) {
+      const reportPath = join(pluginSdkApiDir, "plugin-sdk-api-release-diff.md");
+      let report = "";
+      if (existsSync(reportPath)) {
+        const bytes = readFileSync(reportPath);
+        if (bytes.length > 2 * 1024 * 1024) {
+          throw new Error("Plugin SDK API diff report exceeds its byte limit", { cause: error });
+        }
+        report = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+        if (
+          !report.startsWith("# Plugin SDK API diff\n") ||
+          !report.includes(`Acknowledgement digest: \`${error.digest}\``)
+        ) {
+          throw new Error("Plugin SDK API diff report does not match its acknowledgement", {
+            cause: error,
+          });
+        }
+      }
       const argv = stripLeadingPackageManagerSeparator(process.argv.slice(2));
       const end = argv.indexOf("--");
       const flag = "--plugin-sdk-api-acknowledgement";
@@ -2324,7 +2418,11 @@ async function main() {
         argv.unshift(flag, error.digest);
       }
       throw new Error(
-        `${error.message}\nReview the Plugin SDK API diff before rerunning.\n${["pnpm", "release:candidate", "--", ...argv].map(shellQuote).join(" ")}`,
+        [
+          error.message,
+          report || "Review the Plugin SDK API diff artifact before rerunning.",
+          ["pnpm", "release:candidate", "--", ...argv].map(shellQuote).join(" "),
+        ].join("\n\n"),
         { cause: error },
       );
     }

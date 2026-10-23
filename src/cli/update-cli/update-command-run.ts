@@ -15,6 +15,7 @@ import {
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import {
   type assertNoPendingPackageActivation,
+  settlePendingPackageActivation,
   settleStalePackageActivation,
 } from "../../infra/package-update-activation.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
@@ -600,6 +601,10 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
         settled = await settleStalePackageActivation(resolveUpdateInstallRoot(root), {
           dryRun: opts.dryRun,
         });
+        settled ??= await settlePendingPackageActivation(resolveUpdateInstallRoot(root), {
+          automatic: true,
+          dryRun: opts.dryRun,
+        });
       } catch (cause) {
         throw new UpdateCommandPendingRecoveryFailure(
           {
@@ -615,7 +620,11 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
         );
       }
       if (settled) {
-        const note = `${opts.dryRun ? "Would settle" : "Settled"} previous package update ${settled.operationId} (${settled.reason}); update can proceed past package recovery admission. Evidence ${opts.dryRun ? "would be retained" : "retained"} at ${settled.retained}.`;
+        const evidence =
+          "retained" in settled
+            ? ` Evidence ${opts.dryRun ? "would be retained" : "retained"} at ${settled.retained}.`
+            : "";
+        const note = `${opts.dryRun ? "Would settle" : "Settled"} previous package update ${settled.operationId} (${settled.reason}); update can proceed past package recovery admission.${evidence}`;
         if (opts.dryRun) {
           packageActivationNotes.push(note);
         } else {

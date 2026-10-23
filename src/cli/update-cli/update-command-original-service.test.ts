@@ -90,7 +90,14 @@ vi.mock("./update-command-service-command.js", async (original) => ({
 vi.mock("../daemon-cli/restart-health.js", async (original) => ({
   ...(await original<typeof import("../daemon-cli/restart-health.js")>()),
   inspectGatewayRestart: mocks.inspect,
-  waitForGatewayHealthyRestart: mocks.health,
+  waitForGatewayHealthyRestart: async (
+    params: Parameters<
+      typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart
+    >[0],
+  ) => {
+    params.onServiceCommand?.((await mocks.state()).command ?? null);
+    return mocks.health(params);
+  },
   waitForGatewayHttpReadiness: mocks.readiness,
 }));
 vi.mock("./progress.js", async (original) => ({

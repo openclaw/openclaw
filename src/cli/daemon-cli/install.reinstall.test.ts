@@ -59,7 +59,7 @@ describe("runDaemonInstall reinstall", () => {
               }),
               stderr: "",
             }
-          : nodeProbeOutput("26.8.1");
+          : nodeProbeOutput("26.12.1");
       });
       service.readCommand.mockResolvedValue({
         programArguments: [recordedPath, "/opt/openclaw/dist/index.js", "gateway"],
@@ -214,7 +214,7 @@ describe("runDaemonInstall reinstall", () => {
           throw new Error("runtime probe timed out");
         }
         return nodeProbeOutput(
-          failure === "sealed-definition" && file !== oldNode ? "26.8.1" : "22.23.1",
+          failure === "sealed-definition" && file !== oldNode ? "26.12.1" : "22.23.1",
         );
       });
       if (failure === "sealed-definition") {

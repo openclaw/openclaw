@@ -1,6 +1,7 @@
 // Restart health probes for gateway service restarts and port listener recovery.
 import type { ChildProcess } from "node:child_process";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
@@ -113,6 +114,7 @@ type GatewayRestartWaitOptions = {
   probeContext?: GatewayRestartProbeContext;
   onProgress?: (phase: string) => void;
   onObservation?: (snapshot: GatewayRestartSnapshot) => void;
+  onServiceCommand?: (command: GatewayServiceCommandConfig | null) => void;
   signal?: AbortSignal;
 };
 
@@ -259,6 +261,7 @@ export async function waitForGatewayHealthyRestart(
             return null;
           }),
         );
+        params.onServiceCommand?.(command);
         return resolveGatewayServiceProbeHosts({ env: params.env, command });
       }));
 

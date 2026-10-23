@@ -339,8 +339,10 @@ describe("physical session disk usage", () => {
           await Promise.all([firstDrain, secondDrain]);
           await expect(measurement).resolves.toMatchObject({ totalBytes: 321 });
           expect(retirement).toHaveBeenCalledTimes(1);
-          expect(workers).toHaveLength(2);
-          expect(workers[1]?.threadId).toBeGreaterThan(0);
+          const retiredWorkers = workers.filter((worker) => worker.threadId === -1).length;
+          expect(retiredWorkers).toBeGreaterThan(0);
+          expect(workers).toHaveLength(retiredWorkers + 1);
+          expect(workers.at(-1)?.threadId).toBeGreaterThan(0);
         } finally {
           release.resolve();
           await Promise.allSettled([firstDrain, secondDrain, measurement]);

@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { wasCodexAppServerThreadClosed } from "./client-thread-closure.js";
 import type { CodexAppServerClient } from "./client.js";
 import { createClientHarness } from "./test-support.js";
 
@@ -104,9 +105,9 @@ describe("Codex app-server client runtime", () => {
     ensureCodexAppServerClientRuntime(harness.client, context);
     ensureCodexAppServerClientRuntime(harness.client, updatedContext);
 
-    expect(addNotificationHandler).toHaveBeenCalledTimes(1);
+    expect(addNotificationHandler).toHaveBeenCalledTimes(2);
     expect(addRequestHandler).toHaveBeenCalledTimes(1);
-    expect(addCloseHandler).toHaveBeenCalledTimes(1);
+    expect(addCloseHandler).toHaveBeenCalledTimes(2);
     harness.send({
       method: "account/rateLimits/updated",
       params: { rateLimits: { primary: { usedPercent: 12 } } },
@@ -954,12 +955,17 @@ describe("Codex app-server client runtime", () => {
       harness.send({ method, params: { threadId: "thread-a" } });
       await notificationObserved;
       expect(invalidated).toHaveBeenCalledOnce();
+      expect(wasCodexAppServerThreadClosed(harness.client, "thread-a")).toBe(
+        method === "thread/closed",
+      );
       await expect(
         consumeCodexAppServerLiveThread(harness.client, "thread-a"),
       ).resolves.toBeUndefined();
       await expect(consumeCodexAppServerLiveThread(harness.client, "thread-b")).resolves.toEqual(
         expect.objectContaining({ release: expect.any(Function) }),
       );
+      await expect(retainCodexAppServerLiveThread(harness.client, "thread-a")).resolves.toBe(true);
+      expect(wasCodexAppServerThreadClosed(harness.client, "thread-a")).toBe(false);
     },
   );
 

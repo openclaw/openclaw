@@ -167,7 +167,7 @@ describe("runNodeDaemonInstall", () => {
     vi.stubEnv("OPENCLAW_WRAPPER", undefined);
     mocks.runExec.mockReset().mockResolvedValue({
       stdout: JSON.stringify({
-        nodeVersion: "26.8.1",
+        nodeVersion: "26.12.1",
         bunVersion: "1.4.2",
         sqliteVersion: "3.53.4",
         sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },

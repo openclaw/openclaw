@@ -83,7 +83,7 @@ export async function recoverRestartAbortedMainSessions(params: {
 
   for (const target of await discoverRestartRecoveryStoreTargets({
     ...params,
-    statuses: ["running"],
+    statuses: ["running", "interrupted"],
   })) {
     if (params.shouldContinue?.() === false) {
       return result;

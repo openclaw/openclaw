@@ -330,12 +330,13 @@ export async function readManagedGatewayServiceForUpdate(
   env: NodeJS.ProcessEnv,
   root?: string,
   allowInstallRootChange = false,
+  control?: { timeoutMs?: number; signal?: AbortSignal },
 ) {
   return await withCommandProcessScope(async () => {
     let service: ReturnType<typeof resolveGatewayService> | undefined;
     try {
       service = resolveGatewayService();
-      const state = await readGatewayServiceStateForUpdate(service, env);
+      const state = await readGatewayServiceStateForUpdate(service, env, control?.timeoutMs);
       if (!state.command) {
         return null;
       }
@@ -353,7 +354,7 @@ export async function readManagedGatewayServiceForUpdate(
       }
       if (error instanceof GatewayServiceUpdateOwnershipError && service) {
         // Probe only the invoker's manager; rejected record selectors must not route it.
-        const available = await service.isLoaded({ env }).then(
+        const available = await service.isLoaded({ env, timeoutMs: control?.timeoutMs }).then(
           () => true,
           (probeError: unknown) => {
             if (hasCommandProcessCleanupError(probeError)) {
@@ -368,7 +369,7 @@ export async function readManagedGatewayServiceForUpdate(
       }
       return null;
     }
-  });
+  }, control?.signal);
 }
 
 export async function resolvePackageRuntimePreflight(params: {
@@ -680,6 +681,8 @@ export async function gatewayServiceCommandUsesRoot(params: {
   root: string | undefined;
   env?: NodeJS.ProcessEnv;
   command?: GatewayServiceCommandConfig | null;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<boolean | null> {
   const expectedRoot = normalizeOptionalString(params.root);
   if (!expectedRoot) {
@@ -688,7 +691,12 @@ export async function gatewayServiceCommandUsesRoot(params: {
   const command =
     params.command === undefined
       ? isGatewayServiceManagementAllowedForUpdate(params.env ?? process.env)
-        ? ((await readManagedGatewayServiceForUpdate(params.env ?? process.env))?.command ?? null)
+        ? ((
+            await readManagedGatewayServiceForUpdate(params.env ?? process.env, undefined, false, {
+              timeoutMs: params.timeoutMs,
+              signal: params.signal,
+            })
+          )?.command ?? null)
         : null
       : params.command;
   return await gatewayServiceCommandMatchesRoot(expectedRoot, command);

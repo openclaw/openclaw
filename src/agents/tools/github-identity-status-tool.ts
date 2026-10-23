@@ -6,14 +6,16 @@ import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
 
 export function createGitHubIdentityStatusTool(
-  options: { callGateway?: InProcessGatewayCaller } = {},
+  options: {
+    callGateway?: InProcessGatewayCaller;
+    githubIdentitySettingsAvailable?: boolean;
+  } = {},
 ): AnyAgentTool {
   const callGateway = options.callGateway ?? callInProcessGatewayTool;
   return {
     label: "GitHub Identity Status",
     name: "github_identity_status",
-    description:
-      "Inspect the secret-free effective GitHub account, credential health, Git author, expiry, and scopes for this agent. If setup or reconnection is needed, ask the operator to connect GitHub in Agent Settings.",
+    description: `Inspect the secret-free effective GitHub account, credential health, Git author, expiry, and scopes for this agent.${options.githubIdentitySettingsAvailable ? " If setup or reconnection is needed, open github_identity_settings so the operator can reconnect in the masked Control UI flow." : ""}`,
     parameters: Type.Object({}, { additionalProperties: false }),
     execute: async () => {
       const caller = getGatewayToolCallerIdentity();
@@ -31,8 +33,9 @@ export function createGitHubIdentityStatusTool(
         ...status,
         ...(reconnect
           ? {
-              nextAction:
-                "Ask the operator to connect or reconnect GitHub under Settings → Agents → Tools.",
+              nextAction: options.githubIdentitySettingsAvailable
+                ? "Use screen action github_identity_settings to open the masked operator reconnect flow, then check github_identity_status again."
+                : "Ask the operator to open Settings → Agents → Tools, reconnect GitHub, then check github_identity_status again.",
             }
           : {}),
       });

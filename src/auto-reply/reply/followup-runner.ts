@@ -24,11 +24,13 @@ import {
   type FollowupRunnerParams,
 } from "./followup-turn-admission.js";
 import { executeFollowupTurn } from "./followup-turn-execution.js";
+import { enqueueGoalContinuation } from "./goal-continuation.js";
 import {
   completeFollowupRunLifecycle,
   FollowupRunDeferredError,
   type FollowupRun,
 } from "./queue.js";
+import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -154,6 +156,7 @@ export function createFollowupRunner(
       admittedRunId = turn.runId;
       operation = turn.operation;
       queuedFollowupAdmitted = true;
+      const initialGoalId = turn.session.current()?.goal?.id;
       const execution = await executeFollowupTurn({
         turn,
         defaults,
@@ -251,6 +254,31 @@ export function createFollowupRunner(
       });
       // Source recovery has its own queued callback; this execution still closes once.
       terminalPayloads = delivery.kind === "completed" ? delivery.payloads : [];
+      if (
+        completion.kind === "completed" &&
+        accounting &&
+        accounting.activeSessionEntry?.goal?.status === "active" &&
+        turn.session.kind === "session" &&
+        turn.session.storePath
+      ) {
+        await enqueueGoalContinuation({
+          base: turn.queued,
+          result: accounting.runResult,
+          initialGoalId: turn.queued.goalContinuation?.goalId ?? initialGoalId,
+          expectedSession: accounting.expectedSession,
+          sessionKey: turn.session.key,
+          storePath: turn.session.storePath,
+          queueKey: turn.queued.run.sessionKey ?? turn.session.key,
+          settings: resolveQueueSettings({
+            cfg: turn.config,
+            sessionEntry: turn.session.current(),
+            channel: turn.queued.originatingChannel,
+          }),
+          sourceRunId: turn.runId,
+          operation: turn.operation,
+          runFollowup,
+        });
+      }
     } catch (error) {
       let operatorAuthorityLost = false;
       try {

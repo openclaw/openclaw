@@ -93,7 +93,14 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
     [record.descriptor.previous.identity, record.descriptor.candidate.identity].includes(
       packageActivationIdentity(installKey, true),
     ) &&
-    packageActivationLeaseChanged(record.descriptor.authority)
+    (packageActivationLeaseChanged(record.descriptor.authority) ||
+      (record.phase === "prepared" &&
+        packageActivationIdentity(installKey, true) === record.descriptor.candidate.identity) ||
+      (packageActivationIdentity(installKey, true) === record.descriptor.previous.identity &&
+        ((record.phase === "prepared" &&
+          record.intent === null &&
+          record.publications.length === 0) ||
+          record.phase === "aborted")))
   ) {
     return undefined;
   }
@@ -223,15 +230,18 @@ export async function settleStalePackageActivation(
 }
 
 /** Explicit repair retires untouched preparation or a verified externally published candidate. */
-export async function settlePendingPackageActivation(installKey: string) {
+export async function settlePendingPackageActivation(
+  installKey: string,
+  options?: { automatic?: boolean; dryRun?: boolean },
+) {
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!fs.lstatSync(resolvePackageActivationJournalPath(anchor), { throwIfNoEntry: false })) {
     readPackageActivationContinuation(installKey);
     return undefined;
   }
   const journal = openPackageActivationJournal(anchor);
-  const admission = await journal.readForRecovery();
-  const initial = admission.record;
+  const admission = options?.dryRun ? undefined : await journal.readForRecovery();
+  const initial = admission?.record ?? journal.read();
   const liveIdentity = packageActivationIdentity(installKey, true);
   const publicationNotStarted =
     initial.descriptor.authority.installKey === installKey &&
@@ -245,6 +255,9 @@ export async function settlePendingPackageActivation(installKey: string) {
     liveIdentity === initial.descriptor.candidate.identity &&
     initial.phase === "prepared";
   if (!publicationNotStarted && !externalPublication) {
+    if (options?.automatic) {
+      return undefined;
+    }
     // Preserve the shipped pending-publication refusal and completed-operation behavior.
     assertNoPendingPackageActivation(installKey);
     return undefined;
@@ -262,14 +275,23 @@ export async function settlePendingPackageActivation(installKey: string) {
     journal,
     assertSelected,
     initial,
-    admission.assertUnchanged,
+    admission?.assertUnchanged ?? (() => journal.assertCurrent(initial)),
   ).preflight(initial.phase === "prepared" ? "repair" : "retire");
+  const settlement = {
+    operationId: initial.descriptor.operationId,
+    reason: externalPublication
+      ? ("publication-settled-external-change" as const)
+      : ("publication-not-started" as const),
+  };
+  if (options?.dryRun) {
+    return settlement;
+  }
   return withUpdateCommandExecutor(
     randomUUID(),
     async (executor) => {
       const fence = await executor.enter(initial.descriptor.authority.installKey);
       assertSelected();
-      admission.admit(fence.assertCurrent);
+      admission!.admit(fence.assertCurrent);
       journal.assertCurrent(initial);
       const owner = createPublicationOwner(
         anchor,
@@ -287,12 +309,7 @@ export async function settlePendingPackageActivation(installKey: string) {
         await owner.disarmRollback();
       }
       await owner.retire();
-      return {
-        operationId: initial.descriptor.operationId,
-        reason: externalPublication
-          ? "publication-settled-external-change"
-          : "publication-not-started",
-      };
+      return settlement;
     },
     { existingAuthority: initial.descriptor.authority },
   );

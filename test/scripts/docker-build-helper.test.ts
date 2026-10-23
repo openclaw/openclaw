@@ -142,6 +142,7 @@ const PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH =
   "scripts/e2e/plugin-binding-command-escape-docker.sh";
 const PLUGIN_BINDING_COMMAND_ESCAPE_DOCKERFILE_PATH =
   "scripts/e2e/plugin-binding-command-escape.Dockerfile";
+const SHARED_DOCKER_E2E_DOCKERFILE_PATH = "scripts/e2e/Dockerfile";
 const MULTI_NODE_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/multi-node-update-docker.sh";
 const AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH = "scripts/e2e/agent-bundle-mcp-tools-docker.sh";
 const CLEANUP_SMOKE_DOCKERFILE_PATH = "scripts/docker/cleanup-smoke/Dockerfile";
@@ -708,6 +709,11 @@ function expectInvalidDockerEnv(
 }
 
 describe("docker build helper", () => {
+  it("keeps a downloader in the shared image for private Node recovery", () => {
+    const dockerfile = readFileSync(SHARED_DOCKER_E2E_DOCKERFILE_PATH, "utf8");
+    expect(dockerfile).toMatch(/apt-get install -y --no-install-recommends[^\n]*\bcurl\b/u);
+  });
+
   it.each(["0", "1"])("isolates helper snippets from shell hooks at SHLVL=%s", (shellLevel) => {
     const home = tempDirs.make("openclaw-docker-shell-hooks-");
     const marker = join(home, "hook-ran");

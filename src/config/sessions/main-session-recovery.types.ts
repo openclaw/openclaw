@@ -5,6 +5,8 @@ export type MainRestartRecoveryState = {
   revision: number;
   /** Attempts charged when their reservation is persisted, before dispatch. */
   chargedAttempts: number;
+  /** Tool execution timed out with unknown effects; full access must not restore unsafe tools. */
+  safeToolsRequired?: true;
   /** Last attempt observed starting a backend turn; later startup failures get a fresh budget. */
   startedAttempt?: number;
   /** Private safe token for one recovered outer turn; raw identity refs never enter session state. */

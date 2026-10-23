@@ -293,17 +293,113 @@ let runLedger;
 let runOutcome;
 let terminalRuntimePath = params.recoveryModulePath;
 let serviceStoppedAtMs, serviceDowntimeMs;
+let closedUpdateResult;
+let recoveryObservation;
+
+async function observeUnrecordedRecovery() {
+  if (!triageFailure || typeof triageFailure.restored === "boolean" || !ownsManagedUpdateLease()) return;
+  const previous = closedUpdateResult?.steps?.findLast((step) => step.name === "gateway recovery verification");
+  if (previous) {
+    triageFailure.restored = previous.exitCode === 0 && !previous.failureFacts?.length;
+    return;
+  }
+  const startedAt = Date.now();
+  let verified = false;
+  let code = "gateway-probe-failed";
+  let detail = !params.serviceRecovery ? (params.foregroundOrigin
+    ? "Foreground Gateway serving health remains unverified by its current owner."
+    : "Gateway serving health remains unverified by its external service owner.")
+    : closedUpdateResult?.recovery?.reason || "Recovery runtime identity is unavailable.";
+  let verification;
+  // A pre-activation refusal leaves the original service untouched. Observe that
+  // generation without granting restart authority or claiming candidate activation.
+  if (params.serviceRecovery && !restorationArmed && params.recovery?.version) {
+    try {
+      const { waitForGatewayUpdateRecovery } = await import(pathToFileURL(params.recoveryModulePath).href);
+      if (!ownsManagedUpdateLease()) return;
+      const health = await waitForGatewayUpdateRecovery(params.recovery.version, params.recovery.buildId, Math.min(params.recoveryTimeoutMs, 3000));
+      if (!ownsManagedUpdateLease()) return;
+      const running = health.runtime?.status === "running";
+      const versionMatch = health.gatewayVersion === params.recovery.version &&
+        (!params.recovery.buildId || health.gatewayBuildId === params.recovery.buildId);
+      verified = running && versionMatch && health.healthy === true;
+      verification = {
+        serviceRunning: running ? true : health.runtime?.status === "stopped" ? false : undefined,
+        pid: typeof health.runtime?.pid === "number" ? health.runtime.pid : undefined,
+        runningVersion: health.gatewayVersion ?? undefined,
+        runningBuildId: health.gatewayBuildId ?? undefined,
+        versionMatch, settled: health.healthy === true, coreReady: health.healthy === true,
+      };
+      code = health.runtime?.status === "stopped" ? "service-not-running"
+        : !running ? "gateway-probe-failed" : !versionMatch ? "version-mismatch" : "gateway-readiness-unverified";
+      detail = verified ? "Original Gateway is verified serving." : "Original Gateway serving health was not verified: " + code;
+    } catch (error) {
+      detail = "Original Gateway recovery probe failed.";
+      appendLog(detail + " " + String(error));
+    }
+  }
+  triageFailure.restored = verified;
+  triageFailure.recoveryReason = verified ? undefined : detail;
+  recoveryObservation = {
+    verification,
+    step: {
+      name: "gateway recovery verification", command: "gateway verification", cwd: params.updateLeaseKey,
+      durationMs: Math.max(0, Date.now() - startedAt), exitCode: verified ? 0 : 1,
+      ...(!verified ? { failureFacts: [{ check: "gateway-recovery", code, message: detail }] } : {}),
+    },
+  };
+}
 
 async function finishManagedUpdateRun() {
+  try { await observeUnrecordedRecovery(); }
+  catch (error) {
+    appendLog("Gateway recovery observation could not complete: " + String(error));
+  }
   if (!runLedger || !runOutcome) return;
   if (foregroundParked && runOutcome.status === "succeeded") return;
   if (!ownsManagedUpdateLease()) throw new Error("managed update terminal writer lost its current claim");
-  const terminalResult = { ...runOutcome, ...(serviceDowntimeMs !== undefined ? { downtimeMs: serviceDowntimeMs } : {}) };
+  const compactTerminalValue = (value) => value === undefined ? undefined
+    : JSON.parse(JSON.stringify(value, (_key, nested) =>
+      typeof nested === "string" ? nested.slice(-512) : Array.isArray(nested) ? nested.slice(-8) : nested));
+  const compactDiagnosticStep = (step) => {
+    const compact = compactTerminalValue(step);
+    if (Buffer.byteLength(JSON.stringify(compact)) <= 4096) return compact;
+    return {
+      name: typeof step.name === "string" ? step.name.slice(-256) : "update-step",
+      command: typeof step.command === "string" ? step.command.slice(-512) : "",
+      cwd: typeof step.cwd === "string" ? step.cwd.slice(-512) : "",
+      durationMs: step.durationMs, exitCode: step.exitCode,
+      ...(step.signal ? { signal: step.signal } : {}),
+      ...(step.termination ? { termination: step.termination } : {}),
+    };
+  };
+  const diagnosticSteps = [...(closedUpdateResult?.steps ?? []), ...(recoveryObservation ? [recoveryObservation.step] : [])]
+    .slice(-8).map(compactDiagnosticStep);
+  const terminalWarnings = [...runWarnings].slice(-8).map(([step, detail]) => [
+    typeof step === "string" ? step.slice(-256) : "update-warning",
+    typeof detail === "string" ? detail.slice(-512) : String(detail).slice(-512),
+  ]);
+  const helperRecordedRecovery = typeof triageFailure?.restored === "boolean";
+  const terminalResult = {
+    ...runOutcome,
+    ...(closedUpdateResult ? {
+      reason: runOutcome.reason ?? closedUpdateResult.reason,
+      after: closedUpdateResult.after ?? runOutcome.after,
+    } : {}),
+    diagnostics: {
+      steps: diagnosticSteps,
+      recovery: closedUpdateResult?.recovery
+        ? compactTerminalValue(closedUpdateResult.recovery) : undefined,
+      verification: compactTerminalValue(recoveryObservation?.verification ??
+        (helperRecordedRecovery ? undefined : closedUpdateResult?.verification)),
+    },
+    ...(serviceDowntimeMs !== undefined ? { downtimeMs: serviceDowntimeMs } : {}),
+  };
   if (!updaterStarted) { recordRunWarnings(runLedger); await runLedger.finishUpdateRun(params.runId, terminalResult); }
   else {
     // Doctor may have advanced the schema. A new process loads the candidate's
     // entire module graph; a cache-busted import would retain old DB readers.
-    const payload = JSON.stringify([terminalRuntimePath, params.runId, terminalResult, [...runWarnings],
+    const payload = JSON.stringify([terminalRuntimePath, params.runId, terminalResult, terminalWarnings,
       path.join(params.cwd, "runtime", ${JSON.stringify(MANAGED_HANDOFF_RUNTIME_ENTRY)}),
       params.updateLeaseDatabaseIdentity, params.updateLeaseKey, params.handoffId, managedUpdateLease.helper]);
     if (Buffer.byteLength(payload) > 64 * 1024) throw new Error("managed update terminal result exceeds the command payload limit");
@@ -1045,7 +1141,7 @@ async function collectUpdateFailureTriage() {
     const recovery = typeof triageFailure.restored === "boolean"
       ? "Service recovery " + (triageFailure.restored ? "succeeded." : "failed.")
       : "Service recovery outcome was not recorded; inspect the handoff log before restarting.";
-    failure.error = [failure.error, recovery].filter(Boolean).join("\n");
+    failure.error = [failure.error, recovery, triageFailure.recoveryReason].filter(Boolean).join("\n");
     // Keep the canonical export intact even when installed triage cannot start.
     // Only this private annotated input is removed with the helper's other files.
     fs.writeFileSync(params.triageInputPath, JSON.stringify(failure), { mode: 0o600, flag: "wx" });
@@ -1286,6 +1382,7 @@ let automaticRequested = false;
     // Sentinels and diagnostic exports never authorize activation.
     let result = null;
     try { if (!outputOverflow) result = JSON.parse(updaterOutput); } catch {}
+    closedUpdateResult = result;
     if (!exit.signal && ownsManagedUpdateLease() && result?.status === "skipped" &&
       result.reason === "update-ledger-busy" && result.root === undefined && result.runId === undefined &&
       ((result.mode === "unknown" && exit.code === 0) || (result.mode === "finalize" && exit.code === 1))) {

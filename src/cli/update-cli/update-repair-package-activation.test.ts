@@ -15,6 +15,7 @@ import { createPackageActivationLifetimeFixture } from "../../infra/package-upda
 import {
   assertNoPendingPackageActivation,
   readPackageActivationReceipt,
+  settlePendingPackageActivation,
   settleStalePackageActivation,
 } from "../../infra/package-update-activation.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -184,6 +185,61 @@ describe.skipIf(process.platform === "win32")(
         const nextRecord = openPackageActivationJournal(next.anchor).read();
         expect(nextRecord.phase).toBe("prepared");
         expect(nextRecord.descriptor.operationId).not.toBe(f.operationId);
+      },
+    );
+
+    it.each(["prepared", "aborted"] as const)(
+      "automatically previews and settles safe %s preparation",
+      async (phase) => {
+        const f = await fixtures.prepare();
+        if (phase === "aborted") {
+          changeJournal(f.anchor, phase);
+        }
+        const packageBytes = fs.readFileSync(path.join(f.packageRoot, "package.json"));
+        const preview = await settlePendingPackageActivation(f.packageRoot, {
+          automatic: true,
+          dryRun: true,
+        });
+
+        expect(preview).toEqual({
+          operationId: f.operationId,
+          reason: "publication-not-started",
+        });
+        expect(fs.existsSync(f.anchor)).toBe(true);
+        expect(() =>
+          assertNoPendingPackageActivation(f.packageRoot, { dryRun: true }),
+        ).not.toThrow();
+        expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow();
+
+        await expect(
+          settlePendingPackageActivation(f.packageRoot, { automatic: true }),
+        ).resolves.toEqual(preview);
+        expect(fs.readFileSync(path.join(f.packageRoot, "package.json"))).toEqual(packageBytes);
+        expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({ phase: "complete" });
+      },
+    );
+
+    it("does not automatically settle an unsafe live publication", async () => {
+      const f = await fixtures.prepare();
+      changeJournal(f.anchor, "publishing", JSON.stringify({ kind: "displace" }));
+      const before = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
+
+      await expect(
+        settlePendingPackageActivation(f.packageRoot, { automatic: true }),
+      ).resolves.toBeUndefined();
+
+      expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(before);
+    });
+
+    it.each(["publishing", "publication-complete", "aborted"] as const)(
+      "keeps dry-run admission blocked for a candidate in %s phase",
+      async (phase) => {
+        const f = await fixtures.prepare();
+        fs.renameSync(f.packageRoot, path.join(f.anchor, "previous"));
+        fs.renameSync(path.join(f.anchor, "candidate"), f.packageRoot);
+        changeJournal(f.anchor, phase);
+
+        expect(() => assertNoPendingPackageActivation(f.packageRoot, { dryRun: true })).toThrow();
       },
     );
 

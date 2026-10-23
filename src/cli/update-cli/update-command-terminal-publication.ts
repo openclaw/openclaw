@@ -1,3 +1,4 @@
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { collectUpdateDoctorFailureFacts } from "../../infra/update-doctor-result.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
@@ -5,6 +6,8 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { UPDATE_ACTIVATION_TIMEOUT_REASON } from "../../shared/update-outcome.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
+import { GatewayRestartHealthError } from "./update-command-service-command.js";
 import type { UpdateCommandTerminalRecord } from "./update-command-terminal-record.js";
 import {
   publishUpdateCommandTerminalResult,
@@ -94,12 +97,50 @@ export async function publishSettledUpdateCommandResult(
   );
 }
 
-export function createPostUpdateFailureResult(
+export function createPostUpdateExceptionResult(
   params: Pick<FinishUpdateParams, "result" | "root" | "startedAt">,
   error: unknown,
+  activationVerified = false,
 ): { result: UpdateRunResult; message: string } {
   const message = formatErrorMessage(error);
   const failureFacts = collectUpdateDoctorFailureFacts(error);
+  if (
+    activationVerified &&
+    collectNestedErrorCandidates(error).every(
+      (cause) =>
+        cause instanceof GatewayRestartHealthError ||
+        (cause instanceof UpdateCommandFailure &&
+          cause.result.reason === "wrapper-retirement-failed" &&
+          cause.result.recovery?.serviceRestartSafe !== false),
+    ) &&
+    error instanceof Error &&
+    params.result.recovery?.serviceRestartSafe !== false
+  ) {
+    const warning =
+      `Gateway activation verified; post-update maintenance needs attention: ${message} ` +
+      "Inspect the reported launcher path and remove or replace the stale launcher, then run " +
+      "`command -v openclaw` (or `Get-Command openclaw` on Windows) and `openclaw --version` " +
+      "to confirm which installation is active.";
+    return {
+      message: warning,
+      result: {
+        ...params.result,
+        status: "ok",
+        reason: undefined,
+        steps: [
+          ...params.result.steps,
+          {
+            name: "post-update maintenance",
+            command: "openclaw update",
+            cwd: params.result.root ?? params.root,
+            durationMs: Math.max(0, Date.now() - params.startedAt),
+            exitCode: 0,
+            advisory: { kind: "recoverable-maintenance", message: warning },
+          },
+        ],
+      },
+    };
+  }
   return {
     message,
     result: {

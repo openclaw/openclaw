@@ -129,8 +129,10 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
 import * as postCoreModule from "./update-command-post-core.js";
 import { registerBoundaryFinalizationControls } from "./update-command-post-update-boundary.test-support.js";
 import { finishUpdate } from "./update-command-post-update.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
 import * as rollbackModule from "./update-command-rollback.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
+import { createPostUpdateExceptionResult } from "./update-command-terminal-publication.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -454,6 +456,85 @@ describe("successful update finalization ordering", () => {
       expect(mocks.checkCompletionStatus).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps verified activation successful when restart finalization reports unhealthy", async () => {
+    mocks.restartService.mockImplementationOnce(async (params) => {
+      params.onVerified?.(Date.now());
+      return "restart-health-failed";
+    });
+
+    await finishSuccessfulPackageSwitch();
+
+    expect(mocks.printResult).toHaveBeenCalledOnce();
+    expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
+      status: "ok",
+      steps: [
+        expect.objectContaining({
+          name: "post-update maintenance",
+          exitCode: 0,
+          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
+        }),
+      ],
+    });
+    expect(mocks.markSentinelFailure).not.toHaveBeenCalled();
+  });
+
+  it("preserves generic authority failures after verified activation", () => {
+    const failure = createPostUpdateExceptionResult(
+      {
+        root: "/tmp/openclaw-update",
+        startedAt: Date.now(),
+        result: {
+          status: "ok",
+          mode: "npm",
+          root: "/tmp/openclaw-update",
+          steps: [],
+          durationMs: 1,
+        },
+      },
+      new Error("completion authority revoked"),
+      true,
+    );
+
+    expect(failure.result).toMatchObject({ status: "error", reason: "post-update-failed" });
+    expect(failure.message).toContain("completion authority revoked");
+  });
+
+  it("keeps verified activation successful after wrapper retirement fails", () => {
+    const result = {
+      status: "skipped" as const,
+      reason: "already-current" as const,
+      mode: "npm" as const,
+      root: "/tmp/openclaw-update",
+      steps: [],
+      durationMs: 1,
+    };
+    const failure = createPostUpdateExceptionResult(
+      { root: result.root, startedAt: Date.now(), result },
+      new UpdateCommandFailure(
+        { ...result, status: "error", reason: "wrapper-retirement-failed" },
+        1,
+        "unlink denied",
+      ),
+      true,
+    );
+
+    expect(failure.result).toMatchObject({
+      status: "ok",
+      steps: [
+        expect.objectContaining({
+          name: "post-update maintenance",
+          advisory: expect.objectContaining({
+            kind: "recoverable-maintenance",
+            message: expect.stringContaining("command -v openclaw"),
+          }),
+        }),
+      ],
+    });
+    expect(failure.message).toContain("Get-Command openclaw");
+    expect(failure.message).toContain("openclaw --version");
+    expect(failure.result.reason).toBeUndefined();
+  });
 
   it("reports elapsed time through restart and shell completion refresh", async () => {
     let now = Date.now();

@@ -19,6 +19,7 @@ import {
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
+import { resolveOpenClawGitHubTools } from "./openclaw-tools.github.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
   mergeFactoryPolicyList,
@@ -51,8 +52,6 @@ import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createDecisionTool } from "./tools/decision-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
-import { createGitHubIdentityStatusTool } from "./tools/github-identity-status-tool.js";
-import { createGitHubPublishTool } from "./tools/github-publish-tool.js";
 import {
   createCreateGoalTool,
   createGetGoalTool,
@@ -125,6 +124,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
   const widgetPresentation = resolveWidgetPresentationForRun(options);
   const inlineWidgetClientAvailable = options?.clientCaps?.includes("inline-widgets") === true;
+  const githubTools = resolveOpenClawGitHubTools(options);
   const sessionKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
@@ -427,6 +427,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           createScreenTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
+            githubIdentitySettingsAvailable: githubTools.identitySettingsAvailable,
           }),
           createThemeTool(),
           ...(options?.sandboxed
@@ -476,10 +477,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       agentId: sessionAgentId,
       agentAccountId: options?.agentAccountId,
     }),
-    ...(options?.githubPublicationAvailable !== undefined
-      ? [createGitHubIdentityStatusTool()]
-      : []),
-    ...(options?.githubPublicationAvailable === true ? [createGitHubPublishTool()] : []),
+    ...githubTools.tools,
     ...collectPresentOpenClawTools([transcriptsTool]),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...createHostedGatewayTools(embedded, sessionAgentId, options),

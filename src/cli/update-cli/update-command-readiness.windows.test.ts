@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
   createUpdateRun,
@@ -10,13 +11,16 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { toPublicUpdateRun } from "../../infra/update-run-record.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { resolveCommandProcessSignal } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
 
 const native = vi.hoisted(() => ({
   runtime: vi.fn<GatewayService["readRuntime"]>(),
+  serviceCommand: vi.fn<GatewayService["readCommand"]>(),
   command: vi.fn(),
+  ownership: vi.fn(),
   reachable: vi.fn(),
   http: vi.fn<typeof import("../daemon-cli/restart-health-probe.js").waitForGatewayHttpReadiness>(),
 }));
@@ -24,7 +28,7 @@ const native = vi.hoisted(() => ({
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => ({
     isLoaded: async () => false,
-    readCommand: async () => null,
+    readCommand: native.serviceCommand,
     readRuntime: native.runtime,
   }),
 }));
@@ -68,7 +72,7 @@ vi.mock("../daemon-cli/restart-health-probe.js", () => ({
 }));
 vi.mock("./update-command-service-plan.js", () => ({
   resolveUpdatedGatewayRestartPort: async () => 18789,
-  gatewayServiceCommandUsesRoot: async () => true,
+  gatewayServiceCommandUsesRoot: native.ownership,
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -88,6 +92,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(startedAt);
   native.runtime.mockReset().mockResolvedValue(serviceRuntime);
+  native.serviceCommand.mockReset().mockResolvedValue(null);
   native.reachable.mockReset().mockResolvedValue(unreachable);
   native.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
   native.command.mockReset().mockImplementation(async (argv: string[]) => {
@@ -108,6 +113,7 @@ beforeEach(() => {
     }
     return { stdout, stderr: "", code: 0 };
   });
+  native.ownership.mockReset().mockResolvedValue(true);
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
@@ -161,6 +167,27 @@ async function awaitProbe<T>(entered: Promise<T>, verification: Promise<boolean>
 }
 
 describe("managed Windows update after the startup canary", () => {
+  it("reuses captured service command evidence without inspecting the service again", async () => {
+    const f = fixture();
+    const serviceCommand: GatewayServiceCommandConfig = {
+      programArguments: ["C:\\node.exe", "C:\\openclaw\\dist\\index.js", "gateway", "run"],
+    };
+    native.reachable.mockResolvedValueOnce({
+      ...unreachable,
+      reachable: true,
+      gatewayVersion: "2026.9.5",
+      gatewayBootId: "previous-gateway-boot",
+      probeError: undefined,
+    });
+
+    await verifyPreviousGatewayForUpdate({ ...f.params, serviceCommand });
+
+    expect(native.serviceCommand).not.toHaveBeenCalled();
+    expect(native.ownership).toHaveBeenCalledWith(
+      expect.objectContaining({ command: serviceCommand }),
+    );
+  });
+
   it.each([false, true])(
     "records the active readiness budget and refreshes its wait reason (json=%s)",
     async (json) => {
@@ -306,6 +333,53 @@ describe("managed Windows update after the startup canary", () => {
     expect(warning?.detail).toMatch(/openclaw gateway status/);
     expect(f.read().status).toBe("running");
     expect(renderUpdateRunReport(f.read()).markdown).toContain(warning?.detail);
+  });
+
+  it("stops and joins a held service ownership probe when the readiness budget expires", async () => {
+    const f = fixture();
+    let observedSignal: AbortSignal | undefined;
+    let markEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    native.reachable.mockResolvedValueOnce({
+      ...unreachable,
+      reachable: true,
+      gatewayVersion: "2026.9.5",
+      gatewayBootId: "previous-gateway-boot",
+      probeError: undefined,
+    });
+    native.ownership.mockImplementationOnce(async () => {
+      observedSignal = resolveCommandProcessSignal();
+      if (!observedSignal) {
+        throw new Error("service ownership probe did not inherit the readiness deadline");
+      }
+      markEntered();
+      await new Promise<void>((resolve) => {
+        observedSignal!.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return true;
+    });
+
+    const pending = verifyPreviousGatewayForUpdate({ ...f.params, timeoutMs: 1_000 });
+    await entered;
+    await Promise.all([expect(pending).resolves.toBe(false), vi.advanceTimersByTimeAsync(1_000)]);
+
+    expect(observedSignal?.aborted).toBe(true);
+    expect(native.ownership).toHaveBeenCalledTimes(1);
+    expect(native.ownership).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: null,
+        timeoutMs: 1_000,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(f.read().steps).toContainEqual(
+      expect.objectContaining({
+        step: "warning:previous gateway verification",
+        status: "completed",
+      }),
+    );
   });
 
   it.each(["cancellation", "execution ownership loss"])(

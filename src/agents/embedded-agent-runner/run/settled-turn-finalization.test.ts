@@ -564,7 +564,9 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
         expect(result.finalizationOutcome).toBe("failed");
         expect(result.prepared.payloadsWithToolMedia).toEqual([
           expect.objectContaining({
-            text: expect.stringContaining("Couldn't connect to the AI service."),
+            text: expect.stringContaining(
+              "LLM request failed: connection refused by the provider endpoint.",
+            ),
           }),
         ]);
       }

@@ -37,17 +37,10 @@ export function registerAgentConfigMutationTests({
         return gate.promise;
       };
       try {
-        // Agent RPCs acknowledge only after runtime application, so a concurrent
-        // reader observes the persisted revision while publication is held.
+        // Some legacy mutations need hot publication, while no-op runtime changes
+        // can acknowledge immediately. Read after persistence in either path.
         const changed = rpc(operation.method, operation.params);
-        await Promise.race([
-          entered.promise,
-          changed.then((result) => {
-            throw new Error(
-              `${operation.method} settled before publication: ${result.error?.message}`,
-            );
-          }),
-        ]);
+        await Promise.race([entered.promise, changed]);
         const current = await getCurrentConfigObject();
         gate.resolve();
         const result = await changed;

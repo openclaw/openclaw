@@ -89,16 +89,15 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       const badge = page.locator(
         '[data-provider-id="fixture"] .model-providers__head .settings-status',
       );
-      await expect.poll(() => badge.textContent()).toBe("Ready");
+      await expect.poll(async () => (await badge.textContent())?.trim()).toBe("Ready");
       expect((await gateway.getRequests("models.list")).length).toBe(reads + 1);
       await page.locator('a[href="/settings/appearance"]').first().click();
       await waitForControlUiRoute(page, { routeId: "appearance" });
       await page.locator('a[href="/settings/model-providers"]').first().click();
       await waitForControlUiRoute(page, { routeId: "model-providers" });
-      expect(await badge.textContent()).toBe("Ready");
+      expect((await badge.textContent())?.trim()).toBe("Ready");
       expect((await gateway.getRequests("models.list")).map((request) => request.params)).toEqual([
         { view: "configured", agentId: "main" },
-        { view: "configured", preparedOnly: true, agentId: "main" },
       ]);
     } finally {
       await context.close();

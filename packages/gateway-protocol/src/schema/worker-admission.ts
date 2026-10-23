@@ -596,6 +596,7 @@ const WorkerLiveLifecycleTerminalCommonProperties = {
       Type.Literal("queue"),
       Type.Literal("preflight"),
       Type.Literal("provider"),
+      Type.Literal("tool_execution"),
       Type.Literal("post_turn"),
       Type.Literal("gateway_draining"),
     ]),

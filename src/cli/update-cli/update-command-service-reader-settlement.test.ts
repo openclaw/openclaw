@@ -133,6 +133,24 @@ it.each(["inspection", "fallback"] as const)(
   },
 );
 
+it("bounds both the primary read and ownership fallback with caller control", async () => {
+  const abort = new AbortController();
+  boundary.read.mockRejectedValue(
+    new GatewayServiceUpdateOwnershipError("recorded selector changed", undefined),
+  );
+  vi.mocked(service.isLoaded).mockRejectedValue(new Error("manager unavailable"));
+
+  await expect(
+    readManagedGatewayServiceForUpdate({}, undefined, false, {
+      timeoutMs: 731,
+      signal: abort.signal,
+    }),
+  ).resolves.toBeNull();
+
+  expect(boundary.read).toHaveBeenCalledWith(service, expect.objectContaining({ timeoutMs: 731 }));
+  expect(service.isLoaded).toHaveBeenCalledWith({ env: {}, timeoutMs: 731 });
+});
+
 it("returns the verified command and ownership verdict only after confirmed cleanup", async () => {
   const installRoot = await fs.realpath(dirs.make("service-reader-owned-package-"));
   const entrypoint = path.join(installRoot, "dist", "index.js");

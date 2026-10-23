@@ -2,7 +2,10 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
-import { markControlPlaneUpdateRestartSentinelFailureBestEffort } from "./update-command-result.js";
+import {
+  markControlPlaneUpdateRestartSentinelFailureBestEffort,
+  UpdateCommandFailure,
+} from "./update-command-result.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import { tryInstallShellCompletion } from "./update-command-service.js";
@@ -14,6 +17,7 @@ export async function completePostUpdateMaintenance(
   assertCurrent: () => void,
   context: {
     root: string;
+    activationVerified: boolean;
     sentinel: Omit<
       Parameters<typeof markControlPlaneUpdateRestartSentinelFailureBestEffort>[0],
       "reason"
@@ -36,6 +40,13 @@ export async function completePostUpdateMaintenance(
     return undefined;
   }
   defaultRuntime.error(retirement.error);
+  if (context.activationVerified) {
+    throw new UpdateCommandFailure(
+      { ...result, status: "error", reason: "wrapper-retirement-failed" },
+      1,
+      retirement.error,
+    );
+  }
   await markControlPlaneUpdateRestartSentinelFailureBestEffort({
     ...context.sentinel,
     reason: "wrapper-retirement-failed",

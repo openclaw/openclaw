@@ -720,11 +720,12 @@ it.each([
   },
 );
 
-it("preserves the existing malformed continuation writer refusal before stopping the service", async () => {
-  await expect(runDoctorFinishForStoppedUnit("retained", "own", "exact")).rejects.toThrow(
-    "schema migration required",
-  );
-  expect(mocks.stops).toBe(0);
+it("reuses an existing continuation receipt without reopening the malformed writer", async () => {
+  const result = await runDoctorFinishForStoppedUnit("retained", "own", "exact");
+  expect(result.finishError).toBeUndefined();
+  expect(mocks.stops).toBe(1);
+  expect(result.restartCalls).toBe(1);
+  expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
 });
 
 it("refuses a foreign lifecycle holder before stopping the service", async () => {

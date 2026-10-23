@@ -26,9 +26,14 @@ import {
 } from "./compaction-notice.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import {
+  isGoalContinuationCurrent,
+  isGoalContinuationPlacementCurrent,
+} from "./goal-continuation.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import {
   admitFollowupRunLifecycle,
+  getFollowupQueueDepth,
   isFollowupRunAborted,
   resolveFollowupAbortSignal,
   type FollowupRun,
@@ -78,7 +83,7 @@ type FollowupAdmissionResult =
   | { kind: "deferred"; reason: "active-run" }
   | {
       kind: "skipped";
-      reason: "aborted" | "lifecycle-invalidated";
+      reason: "aborted" | "goal-inactive" | "lifecycle-invalidated";
       operation?: ReplyOperation;
     };
 
@@ -218,6 +223,21 @@ export async function admitFollowupTurn(params: {
       (admittedEntry === undefined && initialEntry?.sessionId === operation.sessionId
         ? initialEntry
         : undefined);
+    const goalContinuation = params.queued.goalContinuation;
+    if (
+      goalContinuation &&
+      (!isGoalContinuationCurrent(goalContinuation, activeEntry) ||
+        !isGoalContinuationPlacementCurrent({
+          continuation: goalContinuation,
+          agentId: params.queued.run.agentId,
+          sessionKey: replySessionKey ?? "",
+          hasOperatorAuthority: Boolean(params.queued.operatorAuthority),
+          requiresWorker: false,
+        }) ||
+        getFollowupQueueDepth(replySessionKey ?? "") > 0)
+    ) {
+      return { kind: "skipped", reason: "goal-inactive", operation };
+    }
     const lifecycleRevisionChanged =
       operation.sessionId === params.queued.run.sessionId &&
       activeEntry?.sessionId === operation.sessionId &&

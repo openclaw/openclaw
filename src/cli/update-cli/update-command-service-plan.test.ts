@@ -411,7 +411,7 @@ describe("package runtime compatibility guidance", () => {
     async (fallback) => {
       vi.mocked(resolveNodeRuntimeInfo).mockImplementation(async (nodePath) => ({
         status: nodePath === "/old/node" ? "unsupported" : "supported",
-        version: nodePath === "/old/node" ? "22.23.1" : "26.8.1",
+        version: nodePath === "/old/node" ? "22.23.1" : "26.12.1",
         sqliteVersion: "3.51.3",
         nodeSharedSqlite: false,
         sqliteProbe: {
@@ -494,9 +494,9 @@ describe("package runtime compatibility guidance", () => {
 
   it.each([
     [">=22.19.0", "24.22.1"],
-    [">=24.18.0 <25", "24.18.0"],
+    [">=24.18.0 <25", "24.22.1"],
     ["^22 || >=25 <27", "26.12.1"],
-    [">=26.2.0-rc.1 <27", "26.2.0"],
+    [">=26.2.0-rc.1 <27", "26.12.1"],
   ])("recommends a release usable by the updater and candidate %s", async (engine, minimum) => {
     const node = "22.23.2";
     vi.stubGlobal("process", {
@@ -570,7 +570,7 @@ describe("package runtime compatibility guidance", () => {
   it.each([
     ["24.22.1", false, "nodejs/node#61954"],
     ["24.15.0+vendor.1", true, "requires Node >=24.22.1 <25 || >=26.12.1"],
-    ["24.19.0", true, null],
+    ["24.19.0", true, "requires Node >=24.22.1 <25 || >=26.12.1"],
   ] as const)(
     "requires target engines and SQLite capabilities for Node %s",
     async (node, text, error) => {
@@ -618,7 +618,7 @@ describe("package runtime compatibility guidance", () => {
           ? { status: "probe-failed", error: new Error("runtime startup timed out") }
           : {
               status: "supported",
-              version: "24.19.0",
+              version: "24.22.1",
               sqliteVersion: "3.51.3",
               nodeSharedSqlite: false,
               sqliteProbe: {
@@ -667,7 +667,7 @@ describe("package runtime compatibility guidance", () => {
 
   it.each([
     ["24.15.0+vendor.1", false],
-    ["24.19.0", true],
+    ["24.22.1", true],
   ] as const)(
     "requires target engines for a lossless fallback Node %s",
     async (version, admitted) => {

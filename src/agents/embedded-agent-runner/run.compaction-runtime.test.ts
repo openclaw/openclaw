@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   type RecoveryFixture,
   waitForCompactionAbort,
   withRecoveryFixture,
 } from "./run.compaction-runtime.test-support.js";
+import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 
 type Snapshot = Awaited<ReturnType<RecoveryFixture["snapshot"]>>;
 
@@ -39,6 +42,43 @@ function expectStoppedBeforePublication(fixture: RecoveryFixture) {
 describe("embedded compaction recovery authority", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("forwards the admitted request identity into recovery compaction", async () => {
+    await withRecoveryFixture({ oversized: false }, async (fixture) => {
+      const writer = fixture.openWriter();
+      const request = {
+        role: "user" as const,
+        content: "Review this patch; do not publish it.",
+        timestamp: 10,
+        idempotencyKey: `${fixture.runId}:user`,
+      };
+      const appended = await writer.appendMessageWithTranscriptAnchorAsync(request);
+      const recorder = createUserTurnTranscriptRecorder({
+        target: { ...fixture.target, sessionEntry: fixture.loadEntry() },
+        message: request,
+      });
+      recorder.markRuntimePersisted(
+        request,
+        expectDefined(appended.anchor, "Fixture requires a durable input admission"),
+        { appended: false },
+      );
+      await recorder.waitForRuntimePersistence();
+      fixture.runParams.userTurnTranscriptRecorder = recorder;
+
+      const compact = expectDefined(
+        fixture.compact.getMockImplementation(),
+        "Fixture requires its default compaction implementation",
+      );
+      fixture.compact.mockImplementation(async (params) => {
+        expect(readCompactionAccountingRecorder(params.runtimeContext)?.requestFromEntryId).toBe(
+          appended.entryId,
+        );
+        return await compact(params);
+      });
+
+      await expect(fixture.recover("overflow")).resolves.toEqual({ action: "retry" });
+    });
   });
 
   recoveryTest(
@@ -417,8 +457,6 @@ describe("embedded compaction recovery authority", () => {
   ] as const)(
     "retries $kind from committed context after an active backend $failure",
     async ({ kind, failure }) => {
-      const { readCompactionAccountingRecorder } =
-        await import("./run/compaction-accounting-bridge.js");
       const compactionHooks = await import("./compaction-hooks.js");
       const postEffects = vi.spyOn(compactionHooks, "runPostCompactionSideEffects");
       await withRecoveryFixture({ oversized: true }, async (fixture) => {

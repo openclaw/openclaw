@@ -247,6 +247,23 @@ describe("restart health", () => {
     });
   });
 
+  it("publishes the service command captured for probe-host selection", async () => {
+    const service = makeGatewayService({ status: "running", pid: 7000 });
+    const command = { programArguments: ["/opt/openclaw/node", "/opt/openclaw/dist/index.js"] };
+    vi.mocked(service.readCommand).mockResolvedValue(command);
+    const onServiceCommand = vi.fn();
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      attempts: 1,
+      onServiceCommand,
+    });
+
+    expect(onServiceCommand).toHaveBeenCalledWith(command);
+  });
+
   it("marks non-owned gateway listener pids as stale while runtime is running", async () => {
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "running", pid: 8000 },

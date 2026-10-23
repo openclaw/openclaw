@@ -36,6 +36,7 @@ import {
 } from "./main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery-owner-release.js";
 import {
+  isMainSessionRecoveryInterrupted,
   isMainSessionRecoveryPending,
   type MainSessionRecoveryObservation,
   type MainSessionRecoveryReservation,
@@ -58,8 +59,9 @@ import {
 import { mainSessionRecoveryLog as log } from "./main-session-restart-recovery-shared.js";
 
 const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
-  "Your previous turn was interrupted by a gateway restart while " +
-    "OpenClaw was waiting on tool/model work. The restart did not cancel the user's task. " +
+  "Your previous turn was interrupted while OpenClaw was waiting on tool/model work. " +
+    "This can happen after a Gateway restart or a tool execution timeout. " +
+    "The interruption did not cancel the user's task. " +
     "Continue from the existing transcript: check the current state, recover interrupted work, " +
     "and finish the task without asking the user to repeat the request. " +
     `${SUBAGENT_RESTART_RECOVERY_INSTRUCTION} Treat a tool result ` +
@@ -374,8 +376,7 @@ async function resumeMainSessionWithinAdmission(
           (harnessCompletion &&
             (entry.lifecycleRevision !== harnessCompletion.lifecycleRevision ||
               entry.restartRecoveryHarnessCompletion?.taskId !== harnessCompletion.taskId)) ||
-          entry.status !== "running" ||
-          entry.abortedLastRun !== true ||
+          !isMainSessionRecoveryInterrupted(entry) ||
           normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== claimedRunId ||
           normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
             claimedSourceRunId ||
@@ -404,8 +405,7 @@ async function resumeMainSessionWithinAdmission(
       }
       const current = rollback?.entry;
       return current?.sessionId === params.entry.sessionId &&
-        current.status === "running" &&
-        current.abortedLastRun === true &&
+        isMainSessionRecoveryInterrupted(current) &&
         !current.mainRestartRecovery?.reservation &&
         !current.mainRestartRecovery?.tombstone
         ? "failed"

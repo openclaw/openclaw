@@ -9,11 +9,12 @@ ARG OPENCLAW_NODE_ALPINE_IMAGE="docker.io/library/node:24-alpine@sha256:ebfe2f90
 FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS e2e-runner
 
 # openssl provisions short-lived fixture certificates for HTTPS-only provider
-# routes. python3 covers package/plugin install paths that execute helper scripts.
+# routes. curl lets update survivors provision the target-owned private Node runtime.
+# python3 covers package/plugin install paths that execute helper scripts.
 # procps provides pgrep for E2E watchdogs that assert no package-manager work is
 # still running after Gateway readiness.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git openssl procps python3 \
+ && apt-get install -y --no-install-recommends ca-certificates curl git openssl procps python3 \
  && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable

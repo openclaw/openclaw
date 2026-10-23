@@ -134,7 +134,7 @@ export function registerParentRestartRecoveryCases(harness: ParentRestartRecover
     expect(gatewayParams()).toMatchObject({
       sessionKey: fixture.sessionKey,
       expectedExistingSessionId: fixture.sessionId,
-      message: expect.stringContaining("The restart did not cancel the user's task"),
+      message: expect.stringContaining("The interruption did not cancel the user's task"),
     });
     const recovered = loadSessionEntry({ sessionKey: fixture.sessionKey, storePath });
     expect(recovered).toMatchObject({ status: "running" });

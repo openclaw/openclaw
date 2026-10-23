@@ -212,12 +212,7 @@ export function renderAgentFiles(params: {
                               </button>
                               <button
                                 class="btn btn--sm"
-                                ?disabled=${
-                                  !params.canWrite ||
-                                  params.agentFilesLoading ||
-                                  !hasBase ||
-                                  !isDirty
-                                }
+                                ?disabled=${!params.canWrite || !hasBase || !isDirty}
                                 @click=${() => params.onFileReset(activeEntry.name)}
                               >
                                 ${t("common.reset")}
@@ -226,7 +221,6 @@ export function renderAgentFiles(params: {
                                 class="btn btn--sm primary"
                                 ?disabled=${
                                   !params.canWrite ||
-                                  params.agentFilesLoading ||
                                   !hasContent ||
                                   params.agentFileSaving ||
                                   !isDirty

@@ -342,28 +342,29 @@ describe("update status Node runtime findings", () => {
   );
 
   it.each(["cli", "service"])(
-    "renders admitted %s runtime information without a missing hint",
+    "omits recovery guidance for a supported %s runtime",
     async (source) => {
-      if (source === "cli") {
-        vi.spyOn(runtimeGuard, "detectRuntime").mockResolvedValue({
-          kind: "node",
-          version: "24.15.0",
-          execPath: "/fixture/node",
-          pathEnv: "/fixture",
-          hasNodeSqlite: true,
-          sqliteVersion: "3.53.4",
-          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-        });
-      } else {
+      vi.spyOn(runtimeGuard, "detectRuntime").mockResolvedValue({
+        kind: "node",
+        version: "24.22.1",
+        execPath: "/fixture/node",
+        pathEnv: "/fixture",
+        hasNodeSqlite: true,
+        sqliteVersion: "3.53.4",
+        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      });
+      if (source === "service") {
         service.readCommand.mockResolvedValue({ programArguments: ["/fixture/node", "gateway"] });
         service.resolveNodeRuntimeInfo.mockResolvedValue({
           status: "supported",
-          version: "24.15.0",
-          note: "Node 24.15.0: unsupported version, capability probe passed.",
+          version: "24.22.1",
         });
       }
       await updateStatusCommand({});
-      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("capability probe passed"));
+      const output = runtime.log.mock.calls.flat().join("\n");
+      expect(output).toContain("OpenClaw update status");
+      expect(output).not.toContain("is unsupported");
+      expect(output).not.toContain("nvm install 26");
       expect(runtime.log).not.toHaveBeenCalledWith(undefined);
     },
   );
@@ -378,7 +379,7 @@ describe("update status Node runtime findings", () => {
     async ({ version, source }) => {
       vi.stubGlobal("process", {
         ...process,
-        versions: { ...process.versions, node: source === "cli" ? version : "26.8.1" },
+        versions: { ...process.versions, node: source === "cli" ? version : "26.12.1" },
       });
       if (source === "cli") {
         vi.spyOn(runtimeGuard, "detectRuntime").mockResolvedValue({
@@ -392,6 +393,15 @@ describe("update status Node runtime findings", () => {
         });
       }
       if (source === "gateway-service") {
+        vi.spyOn(runtimeGuard, "detectRuntime").mockResolvedValue({
+          kind: "node",
+          version: "26.12.1",
+          execPath: "/fixture/cli-node",
+          pathEnv: "/fixture",
+          hasNodeSqlite: true,
+          sqliteVersion: "3.53.4",
+          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+        });
         service.readCommand.mockResolvedValue({
           programArguments: ["/fixture/node", "openclaw.mjs", "gateway"],
         });
@@ -426,13 +436,22 @@ describe("update status Node runtime findings", () => {
   );
 
   it("does not report a supported CLI or recorded service Node", async () => {
-    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node: "26.8.1" } });
+    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node: "26.12.1" } });
+    vi.spyOn(runtimeGuard, "detectRuntime").mockResolvedValue({
+      kind: "node",
+      version: "26.12.1",
+      execPath: "/fixture/cli-node",
+      pathEnv: "/fixture",
+      hasNodeSqlite: true,
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+    });
     service.readCommand.mockResolvedValue({
       programArguments: ["/fixture/node", "openclaw.mjs", "gateway"],
     });
     service.resolveNodeRuntimeInfo.mockResolvedValue({
       status: "supported",
-      version: "26.8.1",
+      version: "26.12.1",
       sqliteVersion: "3.53.0",
       nodeSharedSqlite: false,
     });

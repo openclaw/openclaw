@@ -43,9 +43,32 @@ it("selects an exact compatible even release from unordered upstream metadata", 
     await resolveTargetNodeRuntime({ engine: ">=26.12.1", recovery: { env: {}, installCommand } }),
   ).toBe("/owned/private-node");
   const selected = vi.mocked(findUsableNodeRuntime).mock.calls[1]?.[0];
-  expect(selected).toMatchObject({ allowInstall: true, nodeVersion: "26.8.1", installCommand });
+  expect(selected).toMatchObject({ allowInstall: true, nodeVersion: "26.12.1", installCommand });
   expect(selected?.acceptVersion?.("24.20.0")).toBe(false);
-  expect(selected?.acceptVersion?.("26.8.1")).toBe(true);
+  expect(selected?.acceptVersion?.("26.8.1")).toBe(false);
+  expect(selected?.acceptVersion?.("26.12.1")).toBe(true);
+});
+
+it("intersects an older target engine with the updater's supported runtime floor", async () => {
+  const installCommand = vi.fn();
+  vi.mocked(findUsableNodeRuntime)
+    .mockResolvedValueOnce(null)
+    .mockResolvedValueOnce({ nodePath: "/owned/private-node", reason: "private runtime" });
+  fetchMock.mockResolvedValue(
+    new Response(
+      JSON.stringify([{ version: "v24.20.0" }, { version: "v24.22.1" }, { version: "v26.12.1" }]),
+    ),
+  );
+  expect(
+    await resolveTargetNodeRuntime({
+      engine: ">=24.16.0 <25 || >=26.1.0",
+      recovery: { env: {}, installCommand },
+    }),
+  ).toBe("/owned/private-node");
+  const selected = vi.mocked(findUsableNodeRuntime).mock.calls[1]?.[0];
+  expect(selected).toMatchObject({ allowInstall: true, nodeVersion: "24.22.1", installCommand });
+  expect(selected?.acceptVersion?.("24.20.0")).toBe(false);
+  expect(selected?.acceptVersion?.("24.22.1")).toBe(true);
 });
 
 it.each(["no compatible release", "upstream unavailable", "oversized response"] as const)(

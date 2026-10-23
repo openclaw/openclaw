@@ -13,7 +13,7 @@ import {
   createFileOps,
   extractFileOpsFromMessage,
   formatFileOperations,
-  formatPersistedSenderSuffix,
+  formatCompactionUserLabel,
   getCompactionContent,
   MAX_FILE_OPS_SECTION_CHARS,
   mergeSummaryFileOperations,
@@ -284,7 +284,7 @@ describe("serializeConversation", () => {
             ? { ...common, role, customType: "test", display: true }
             : { ...common, role };
       expect(serializeConversation(convertToLlm([message]))).toBe(
-        `[${role === "toolResult" ? "Tool result" : "User"}]: alpha\nend`,
+        `[${role === "toolResult" ? "Tool result" : role === "custom" ? "Synthetic input" : "User"}]: alpha\nend`,
       );
       expect(estimateTokens(message)).toBe(3);
       expect(message.content).toEqual([
@@ -443,7 +443,8 @@ describe("serializeConversation", () => {
     expect(estimateTokens(attributed)).toBe(
       Math.ceil(
         (estimateStringChars(content) +
-          estimateStringChars(formatPersistedSenderSuffix(attributed))) /
+          estimateStringChars(formatCompactionUserLabel(attributed)) -
+          "User".length) /
           CHARS_PER_TOKEN_ESTIMATE,
       ),
     );

@@ -26,6 +26,7 @@ import { runDoctorHealthFlow } from "./doctor-health.js";
 const { mocks } = await import("./doctor-health.test-support.js");
 const candidateVersion = "2026.9.4";
 const candidateBuildId = "2026.9.4-synthetic-candidate";
+const legacyGatewayPid = 2_147_483_647;
 
 function managedService(
   state: OpenClawTestState,
@@ -33,7 +34,7 @@ function managedService(
   events: string[] = [],
 ) {
   let running = initiallyRunning;
-  let pid = 4200;
+  let pid = legacyGatewayPid;
   mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
   const stop = vi.fn(async () => {
     events.push("stop");
@@ -77,7 +78,7 @@ function managedService(
 function inspectStaleBuild() {
   mocks.inspectGatewayRestart.mockImplementation(async (params) => {
     const runtime = await params.service.readRuntime(params.env ?? process.env);
-    const stale = runtime.pid === 4200;
+    const stale = runtime.pid === legacyGatewayPid;
     return {
       runtime,
       portUsage: { port: params.port, status: "busy", listeners: [], hints: [] },
@@ -123,6 +124,13 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
     mocks.outro.mockClear();
     mocks.runContributions.mockReset().mockResolvedValue(undefined);
     mocks.writeUpdatePostInstallDoctorResult.mockClear();
+    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockResolvedValue({
+      status: "supported",
+      version: "26.12.1",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+    });
     vi.spyOn(packageJson, "readPackageVersion").mockResolvedValue(candidateVersion);
     vi.spyOn(builtRuntime, "readBuiltGatewayBuildId").mockResolvedValue(candidateBuildId);
   });
@@ -240,8 +248,8 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
       const service = managedService(state, true, events);
       vi.spyOn(legacyGatewayLock, "readLegacyGatewayLockIdentity").mockImplementation(async () => {
         const runtime = await service.readRuntime();
-        return runtime.pid === 4200
-          ? { pid: 4200, state: "alive", path: state.path("legacy-gateway.lock") }
+        return runtime.pid === legacyGatewayPid
+          ? { pid: legacyGatewayPid, state: "alive", path: state.path("legacy-gateway.lock") }
           : undefined;
       });
       mocks.inspectGatewayRestart.mockImplementation(async () => {
@@ -384,13 +392,6 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
 
   it("records restoration verification failure after offline repair without publishing success", async () => {
     // This case refuses Gateway readiness after repair, not runtime capability admission.
-    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockResolvedValue({
-      status: "supported",
-      version: "26.8.1",
-      sqliteVersion: "3.53.4",
-      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-      nodeSharedSqlite: false,
-    });
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       await state.writeConfig({});
       const resultPath = state.path("doctor-result.json");

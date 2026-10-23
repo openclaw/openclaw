@@ -50,7 +50,7 @@ function expectCronInvocationContext(runParams: {
     sessionId: runParams.sessionId,
     sessionKey: runParams.sessionKey,
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    cronRunsByJobId: new Map([["message-tool-policy", { pacingEnabled: false }]]),
+    cronRunsByJobId: new Map([["message-tool-policy", { nextCheckEnabled: false }]]),
   });
   return runParams.runId;
 }

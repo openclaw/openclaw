@@ -25,11 +25,20 @@ afterEach(() => {
 });
 
 describe("unsupported CLI Node update admission", () => {
-  it("admits a capability-passing Node build outside the release table", async () => {
-    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node: "24.15.0" } });
-    await expect(updateCommand({ json: true })).rejects.toThrow("state admission reached");
-    expect(mocks.stateAdmission).toHaveBeenCalledOnce();
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  it("refuses a capability-passing Node below the security floor before stateful preparation", async () => {
+    vi.stubGlobal("process", {
+      ...process,
+      versions: { ...process.versions, bun: undefined, node: "24.15.0" },
+    });
+    await expect(updateCommand({ json: true })).rejects.toEqual(new ExitError(1));
+    expect(mocks.stateAdmission).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "error",
+        reason: "node-runtime-preflight",
+        error: expect.stringContaining("openclaw requires Node >=24.22.1 <25, or >=26.12.1"),
+      }),
+    );
   });
 
   it("refuses a failed SQLite capability probe before stateful preparation", async () => {

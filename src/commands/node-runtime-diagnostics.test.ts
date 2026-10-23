@@ -61,7 +61,7 @@ beforeEach(() => {
     sqliteVersion: "3.50.2",
     nodeSharedSqlite: false,
   });
-  mockCliRuntime("26.8.1");
+  mockCliRuntime("26.12.1");
 });
 
 afterEach(() => {
@@ -162,7 +162,7 @@ describe("Node runtime diagnostics command surfaces", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it.each(["cli", "service"])("renders a below-floor %s runtime as a warning", async (source) => {
+  it.each(["cli", "service"])("renders a below-floor %s runtime diagnostic", async (source) => {
     mocks.readCommand.mockResolvedValue(null);
     if (source === "cli") {
       mockCliRuntime("24.15.0");
@@ -175,7 +175,13 @@ describe("Node runtime diagnostics command surfaces", () => {
       });
     }
     await statusCommand({ json: true }, runtime);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("[warning] Node 24.15.0:"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        source === "cli"
+          ? "[error] Node 24.15.0:"
+          : "[warning] Gateway service Node 24.15.0 is unsupported.",
+      ),
+    );
     expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("undefined"));
   });
 

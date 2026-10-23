@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 
 const boundary = vi.hoisted(() => ({
@@ -55,7 +57,7 @@ afterEach(() => vi.restoreAllMocks());
 it("repairs an admitted legacy config when the core is current without an explicit channel", async () => {
   const root = "/target/install";
   const configSnapshot = {
-    path: "/operator/openclaw.json",
+    ...createTestConfigSnapshot({}, {}, "/operator/openclaw.json"),
     raw: '{"agents":{"list":[]}}',
     parsed: { agents: { list: [] } },
     sourceConfig: { agents: { list: [] } },
@@ -72,7 +74,7 @@ it("repairs an admitted legacy config when the core is current without an explic
     valid: true,
     issues: [],
   };
-  const plan = {
+  const plan: LegacyConfigUpdatePlan = {
     snapshot: configSnapshot,
     config: { update: { channel: "beta" } },
     nextConfig: { agents: { entries: {} }, update: { channel: "beta" } },
@@ -102,6 +104,7 @@ it("repairs an admitted legacy config when the core is current without an explic
       steps: [],
       durationMs: 0,
     },
+    legacyConfigPlan: plan,
     requestedChannel: null,
     storedChannel: "beta",
     channel: "beta",

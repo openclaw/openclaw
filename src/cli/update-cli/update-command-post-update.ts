@@ -38,6 +38,7 @@ import {
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
+import { GatewayRestartHealthError } from "./update-command-service-command.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
@@ -53,7 +54,7 @@ import {
 } from "./update-command-service.js";
 import {
   completeUpdateCommandResult,
-  createPostUpdateFailureResult,
+  createPostUpdateExceptionResult,
   publishSettledUpdateCommandResult,
 } from "./update-command-terminal-publication.js";
 import {
@@ -134,6 +135,8 @@ export async function finishUpdate(
   recordUpdateResultNextAction(params, params.result);
 
   let pendingResult = params.result;
+  let resultWithPostUpdate = params.result;
+  let activationVerified = false;
   let terminalRecord: UpdateCommandTerminalRecord | undefined;
   let pendingNotify = true;
   const writeRestartSentinel = (result: UpdateRunResult) =>
@@ -487,7 +490,6 @@ export async function finishUpdate(
         params.preManagedServiceStop?.serviceMutationAllowed !== false &&
         params.coreAlreadyCurrent === true &&
         params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
-      let resultWithPostUpdate = params.result;
       let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
       if (!deferPluginConvergence) {
         ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins());
@@ -581,11 +583,17 @@ export async function finishUpdate(
             onPluginWarnings: (warnings) => {
               resultWithPostUpdate = appendPluginUpdateWarnings(resultWithPostUpdate, warnings);
             },
-            onVerified: recordVerifiedDowntime,
+            onVerified: (verifiedAtMs) => {
+              activationVerified = true;
+              recordVerifiedDowntime(verifiedAtMs);
+            },
           }),
         );
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
           return restarted === "ok";
+        }
+        if (activationVerified && restarted === "restart-health-failed") {
+          throw new GatewayRestartHealthError(`Restart finalization: ${verificationFailure}.`);
         }
         triageAllowed = restartContext.serviceMutationAllowed;
         if (
@@ -698,7 +706,7 @@ export async function finishUpdate(
         params,
         resultWithPostUpdate,
         assertCurrent,
-        { root: postUpdateRoot, sentinel: sentinelOptions },
+        { root: postUpdateRoot, sentinel: sentinelOptions, activationVerified },
       );
       if (maintenanceFailure) {
         const reported = await reportResult(maintenanceFailure.result, false, undefined, false);
@@ -715,11 +723,24 @@ export async function finishUpdate(
           cause: error,
         });
       }
-      if (error instanceof UpdateCommandFailure || hasCommandProcessCleanupError(error)) {
+      if (
+        (error instanceof UpdateCommandFailure &&
+          (!activationVerified || error.result.reason !== "wrapper-retirement-failed")) ||
+        hasCommandProcessCleanupError(error)
+      ) {
         // Unsettled commands may still change files. Keep intent/material for fenced reconciliation.
         throw error;
       }
-      const { result, message } = createPostUpdateFailureResult(params, error);
+      const { result, message } = createPostUpdateExceptionResult(
+        { ...params, result: resultWithPostUpdate },
+        error,
+        activationVerified,
+      );
+      if (result.status === "ok") {
+        assertCurrent();
+        defaultRuntime.error(message);
+        return result;
+      }
       defaultRuntime.error(`Post-update verification failed: ${message}`);
       const reported = await reportResult(result);
       throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported), message, {
