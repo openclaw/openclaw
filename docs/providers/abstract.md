@@ -1,5 +1,5 @@
 ---
-summary: "Use Abstract's hosted GLM-5.3, DeepSeek-V4-Flash and Kimi-K3 models in OpenClaw through the Responses API"
+summary: "Use Abstract's hosted GLM-5.3, DeepSeek-V4-Flash and Kimi-K3 models in OpenClaw through the Chat Completions API"
 title: "Abstract"
 read_when:
   - You want to run OpenClaw on GLM-5.3, DeepSeek-V4-Flash or Kimi-K3 through Abstract
@@ -7,15 +7,15 @@ read_when:
 ---
 
 [Abstract](https://abstract.inc) serves open-weight LLMs through an OpenAI-compatible API at
-`https://api.abstract.inc/v1`. Its `:superfast` models stream over the OpenAI Responses API, so
-OpenClaw talks to Abstract over the `openai-responses` transport.
+`https://api.abstract.inc/v1`. Its `:superfast` models stream over the OpenAI Chat Completions
+API, so OpenClaw talks to Abstract over the `openai-completions` transport.
 
 | Property    | Value                                                            |
 | ----------- | ---------------------------------------------------------------- |
 | Provider id | `abstract` (custom; configure under `models.providers.abstract`) |
 | Plugin      | none; not a bundled OpenClaw provider plugin                     |
 | Auth        | Abstract API key, sent as a bearer token                         |
-| API         | `openai-responses`                                               |
+| API         | `openai-completions`                                             |
 | Base URL    | `https://api.abstract.inc/v1`                                    |
 
 <Note>
@@ -66,7 +66,7 @@ OpenClaw talks to Abstract over the `openai-responses` transport.
       abstract: {
         baseUrl: "https://api.abstract.inc/v1",
         apiKey: "${ABSTRACT_API_KEY}",
-        api: "openai-responses",
+        api: "openai-completions",
         models: [
           {
             id: "glm-5.3:superfast",
@@ -118,9 +118,9 @@ Because `api.abstract.inc` is a public HTTPS endpoint, you do not need a private
 | `kimi-k3:superfast`           | 3.00               | 0.30                      | 12.75               |
 
 OpenClaw reads `cost` in USD per million tokens, so these rates drop into the config as written.
-Abstract reports `input_tokens`, `input_tokens_details.cached_tokens` and `output_tokens` on every
-finished response, and OpenClaw maps cached tokens to `cacheRead`, so the cost OpenClaw records
-matches the per-model rates above. Abstract fixes a request's rates when you submit it.
+Abstract reports `prompt_tokens`, `prompt_tokens_details.cached_tokens` and `completion_tokens`
+in the final chunk of every streamed completion, and OpenClaw maps cached tokens to `cacheRead`, so
+the cost OpenClaw records matches the per-model rates above. Abstract fixes a request's rates when you submit it.
 
 To list the model IDs your key can reach:
 
@@ -150,10 +150,11 @@ curl https://api.abstract.inc/v1/models \
     to turns that use these models.
   </Accordion>
 
-  <Accordion title="Unsupported Responses fields">
-    Abstract refuses `store: true`, `background: true` and `previous_response_id` on these models with
-    HTTP 422 `invalid_request`, before it reserves any cost. The configuration above works within these
-    limits; do not set `compat.supportsStore` on these models.
+  <Accordion title="Chat Completions only">
+    Abstract serves these models on `/v1/chat/completions` only; it does not serve the OpenAI
+    Responses API, so keep `api: "openai-completions"`. Abstract refuses `store: true` with
+    `invalid_request` before it reserves any cost, so do not set `compat.supportsStore` on these
+    models.
   </Accordion>
 
   <Accordion title="Common errors">
@@ -176,8 +177,8 @@ For general provider configuration and failover behavior, see [Model Providers](
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Abstract Responses API" href="https://abstract.inc/docs/llm/responses" icon="book">
-    Official Abstract documentation for the models, streaming and usage.
+  <Card title="Abstract API" href="https://abstract.inc/docs" icon="book">
+    Official Abstract documentation for the models, keys and errors.
   </Card>
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Overview of all providers, model refs and failover behavior.
