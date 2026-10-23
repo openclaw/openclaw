@@ -405,7 +405,7 @@ export async function maybeRepairGatewayServiceConfig(
       : expectedPlan;
   if (installationDrift && expectedRoot) {
     note(
-      formatGatewayServiceInstallationDrift(installationDrift, undefined, serviceInstallEnv),
+      formatGatewayServiceInstallationDrift(installationDrift, serviceInstallEnv),
       "Gateway service installation",
     );
     if (!serviceRepairDeferred) {
