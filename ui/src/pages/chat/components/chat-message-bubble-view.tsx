@@ -27,6 +27,7 @@ import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import "../../../components/solid/person-reference.tsx";
@@ -428,7 +429,11 @@ function MessageAvatar(props: { render?: () => JSX.Element }) {
 }
 
 function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | undefined> }) {
-  const presented = usePanePresentation(() => props.options.transcriptVisible ?? true);
+  const parentPresented = useContext(ContentPresentation);
+  // Retained rows can resume with equal props; the parent owns that presentation transition.
+  const presented = usePanePresentation(
+    () => parentPresented() && (props.options.transcriptVisible ?? true),
+  );
   return (
     <div class="chat-image-frame chat-video-preview">
       <Show when={props.item()}>

@@ -319,14 +319,6 @@
   min-width: 0;
 }
 
-.cron-table__name-text,
-.cron-table__cell-value {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .cron-table__description {
   flex: 0 1 auto;
   min-width: 0;
@@ -507,13 +499,6 @@
 .cron-detail-description__label {
   color: var(--muted);
   font-weight: 600;
-}
-
-.cron-detail-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
 }
 
 .cron-detail-sub {

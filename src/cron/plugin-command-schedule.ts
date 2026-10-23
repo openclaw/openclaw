@@ -99,7 +99,8 @@ export function resolvePluginCommandScheduleBinding(
 
 /**
  * The loaded instance runs the same code that accepted the schedule: the same plugin location
- * and metadata, the exact captured source digest, and the target command still registered.
+ * and metadata, the exact code identity (captured source digest or bundled build), and the target
+ * command still registered.
  * Metadata alone is not code identity; a reload with the same metadata can run different code.
  */
 function servesPluginCommandSchedule(

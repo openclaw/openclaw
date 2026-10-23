@@ -221,8 +221,12 @@ it("keeps untracked scroll state until the next layout observation", () => {
   expect(element.dataset.atEnd).toBe("true");
 });
 
-it("resamples loaded font metrics only for the current presented element", async () => {
+it("resamples loaded font metrics only for the current presented element", () => {
+  const readiness = vi.fn(() => Promise.resolve());
   const fonts = new EventTarget();
+  Object.defineProperty(fonts, "ready", {
+    get: readiness,
+  });
   const originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
   Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
   cleanup.push(() => {
@@ -269,7 +273,6 @@ it("resamples loaded font metrics only for the current presented element", async
 
   setPresented(true);
   flush();
-  await Promise.resolve();
   vi.advanceTimersToNextFrame();
   expect(second.dataset.scrollable).toBe("true");
   secondGeometry.extent = 50;
@@ -286,6 +289,7 @@ it("resamples loaded font metrics only for the current presented element", async
   fonts.dispatchEvent(new Event("loadingdone"));
   vi.advanceTimersToNextFrame();
   expect(publish).not.toHaveBeenCalled();
+  expect(readiness).not.toHaveBeenCalled();
 });
 
 it("restores a destination after readiness without overwriting subsequent reader scroll", () => {
