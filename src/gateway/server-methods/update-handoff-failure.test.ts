@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -112,6 +113,73 @@ describe("update.run handoff refusal diagnostics", () => {
       coordinator.mockRestore();
     }
   });
+
+  it.each([
+    [
+      "engine incompatibility",
+      "Node 24.21.0 is unsupported; OpenClaw requires >=24.22.1 <25 || >=26.12.1.\nnpm can finish installing without its preinstall check.\nRe-run the installer.\nOn Windows, use the PowerShell installer.\nOr with nvm: nvm install 26 && nvm use 26.\nThen retry openclaw update.",
+      "Node 24.21.0 is unsupported",
+    ],
+    [
+      "oversized crash output",
+      `${"discarded startup noise".repeat(500)}\nError: helper startup failed: EACCES token=fixture-private-token\nRetry after correcting file permissions.`,
+      "helper startup failed: EACCES",
+    ],
+  ])(
+    "retains bounded, redacted diagnostics from a real helper's %s",
+    async (_kind, output, expected) => {
+      const root = tempDirs.make("openclaw-handoff-startup-failure-");
+      const tmp = await import("../../infra/tmp-openclaw-dir.js");
+      const runtime = await import("../../infra/update-managed-service-handoff-runtime.js");
+      const stage = runtime.stageManagedHandoffRuntime;
+      const coordinator = vi.spyOn(tmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+      const runtimeFixture = vi
+        .spyOn(runtime, "stageManagedHandoffRuntime")
+        .mockImplementation((directory) => {
+          const files = stage(directory);
+          writeFileSync(
+            expectDefined(files[0], "staged handoff runtime"),
+            `process.stderr.write(${JSON.stringify(output)}); process.exit(1);`,
+          );
+          return files;
+        });
+      const handoff = await vi.importActual<
+        typeof import("../../infra/update-managed-service-handoff.js")
+      >("../../infra/update-managed-service-handoff.js");
+      startHandoff.mockImplementationOnce((params) =>
+        handoff.startManagedServiceUpdateHandoff({
+          ...params,
+          root,
+          env: { ...process.env },
+          execPath: process.execPath,
+          argv1: path.join(root, "openclaw.cjs"),
+          supervisor: "launchd",
+        }),
+      );
+      try {
+        const payload = expectDefined(await captureUpdateRunPayload(), "update response");
+        const run = readRun(payload);
+        const localReport = renderUpdateRunReport(run).markdown;
+        expect(payload.ok).toBe(false);
+        expect(localReport).toContain(expected);
+        expect(localReport).not.toContain("fixture-private-token");
+        expect(localReport).not.toContain("discarded startup noise");
+        expect(JSON.stringify(run.steps)).not.toContain("fixture-private-token");
+        expect(
+          run.steps
+            .flatMap((step) => step.failureFacts ?? [])
+            .every((fact) => (fact.message?.length ?? 0) <= 200),
+        ).toBe(true);
+        const report = await failureReport(run);
+        expect(report.body).toContain("handoff-helper-exited");
+        expect(report.body).not.toContain("fixture-private-token");
+        expectServing();
+      } finally {
+        runtimeFixture.mockRestore();
+        coordinator.mockRestore();
+      }
+    },
+  );
 
   it.each([
     ["helper-start-failed", Object.assign(new Error("spawn node EAGAIN"), { code: "EAGAIN" })],

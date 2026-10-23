@@ -63,6 +63,7 @@ import {
   assertManagedUpdateLeaseDatabaseIdentity,
   prepareManagedHandoffLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
+import { readHandoffStartupFailure } from "./update-managed-service-handoff-diagnostics.js";
 import { MANAGED_HANDOFF_LEASE_SOURCE } from "./update-managed-service-handoff-lease-source.js";
 import {
   prepareManagedHandoffLeaseStore,
@@ -1231,6 +1232,7 @@ async function spawnManagedServiceUpdateHandoff(
   };
 
   let child!: HandoffChild;
+  let helperLog: fs.FileHandle | undefined;
   let readiness!: string;
   const onExit = () => {
     // Keep exact ownership until cancellation proves the durable lease was released.
@@ -1243,6 +1245,7 @@ async function spawnManagedServiceUpdateHandoff(
     await fs.writeFile(paramsPath, `${JSON.stringify(helperParams, null, 2)}\n`, { mode: 0o600 });
     await fs.writeFile(metaPath, `${JSON.stringify(metaFile, null, 2)}\n`, { mode: 0o600 });
 
+    helperLog = await fs.open(logPath, "a", 0o600).catch(() => undefined);
     assertManagedUpdateLeaseDatabaseIdentity(updateLeaseDatabaseIdentity);
     owner.requesterAuthority?.assertCurrent();
     owner.requesterAuthority?.signal?.throwIfAborted();
@@ -1255,8 +1258,8 @@ async function spawnManagedServiceUpdateHandoff(
       detached: true,
       stdio:
         helperParams.stateEngine === "postgres"
-          ? ["pipe", "pipe", "ignore", "ipc"]
-          : ["pipe", "pipe", "ignore"],
+          ? ["pipe", "pipe", helperLog?.fd ?? "ignore", "ipc"]
+          : ["pipe", "pipe", helperLog?.fd ?? "ignore"],
     });
     const { stdin, stdout } = spawned;
     if (!stdin || !stdout) {
@@ -1357,8 +1360,13 @@ async function spawnManagedServiceUpdateHandoff(
     child?.removeListener("exit", onExit);
     child?.stdin.destroy();
     child?.stdout.destroy();
+    const failure = await readHandoffStartupFailure(err, logPath, serviceEnv);
+    await helperLog?.close().catch(() => {});
+    helperLog = undefined;
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-    throw err;
+    throw failure;
+  } finally {
+    await helperLog?.close().catch(() => {});
   }
   if (params.beforePark) {
     let noticePending = false;
