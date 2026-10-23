@@ -4,6 +4,7 @@ read_when:
   - You want to know how your agent saves and updates its own skills
   - You want to undo, archive, or restore a learned skill
   - You are turning Skill Workshop learning on or off
+  - You want to review learned changes before they apply
 title: "Skill Workshop"
 sidebarTitle: "Skill Workshop"
 ---
@@ -36,7 +37,8 @@ Gateway, see [Personal library authoring](/tools/skill-workshop/personal-library
   multi-step work you are likely to repeat, it saves the working procedure,
   patching the skill that covers that kind of task or creating one when none does.
 - **Background review:** after 10 accumulated model iterations in a conversation,
-  a background run reviews it and saves anything worth keeping.
+  a background run reviews it and saves anything worth keeping. In `propose`
+  mode it saves a [draft](#drafts) for you to review instead.
   See [Self-learning](/tools/self-learning).
 - **`/learn [request]`:** asks the agent to save a skill now, from the current
   conversation or from sources you name. See [`/learn`](#learn).
@@ -91,6 +93,24 @@ openclaw skills workshop restore deploy-staging --version <version-id>
 Restore saves the current copy before replacing it, so an undo can itself be
 undone. A skill that was just created has no earlier version; archive it instead.
 
+## Drafts
+
+Set `skills.workshop.autonomous.mode` to `"propose"` to review background
+learning before it applies. Background reviews then change no skills. A review
+that finds a lesson saves a draft: the complete proposed `SKILL.md` for the skill
+it would create or replace, with its reason. Drafts are not announced and never
+load as skills.
+
+Review them with `/learn drafts`. The agent reads every waiting draft and the
+live skills they would change, and judges them together. It saves only the
+lessons worth keeping, merging related drafts, with normal `create` or `patch`
+calls, so each saved change is versioned and undoable. Then it discards every
+draft it reviewed. You can also name drafts or a focus in a normal `/learn`
+request.
+
+Up to 50 drafts wait per agent. While 50 are waiting, reviews save nothing new.
+Unused-skill cleanup runs only in `auto` mode.
+
 <a id="collection-review" />
 <a id="weekly-curator" />
 
@@ -120,6 +140,7 @@ cron rows on upgrade and creates no replacement.
 ```text
 /learn
 /learn docs/runbook.md; focus on recovery
+/learn drafts
 ```
 
 `/learn` is a normal foreground turn. With no request, the agent saves the
@@ -130,9 +151,10 @@ patches the one that covers the task, and creates a new skill only when none
 does. Related skills that cover the same class of task get merged into one
 umbrella skill: it patches the survivor and archives the rest with
 `absorbed_into`. Then it tells you which skill changed. If there is nothing
-durable to learn, it changes nothing.
+durable to learn, it changes nothing. `/learn drafts` reviews the waiting
+[drafts](#drafts).
 
-`/learn` works in both learning modes. It replies with an explanation instead
+`/learn` works in every learning mode. It replies with an explanation instead
 when `skill_workshop` is unavailable, for example in a sandboxed session or
 when tool policy hides the tool.
 
@@ -148,7 +170,7 @@ It is part of `tools.profile: "coding"`; with a stricter policy, add it to
 
 | Action        | Parameters                                           | Effect                                                                   |
 | ------------- | ---------------------------------------------------- | ------------------------------------------------------------------------ |
-| `list`        | —                                                    | Lists live skills and archived skills                                    |
+| `list`        | —                                                    | Lists live skills, archived skills, and waiting drafts                   |
 | `view`        | `name`, optional `file_path`, `version`              | Reads a file, current or from a saved version                            |
 | `create`      | `name`, `content` (full `SKILL.md`)                  | Creates a new skill                                                      |
 | `patch`       | `name`, `old_text`, `new_text`, optional `file_path` | Replaces one exact, unique span                                          |
@@ -156,6 +178,9 @@ It is part of `tools.profile: "coding"`; with a stricter policy, add it to
 | `remove_file` | `name`, `file_path`                                  | Deletes one support file; `SKILL.md` goes only through `archive`         |
 | `archive`     | `name`, optional `absorbed_into`, `reason`           | Hides the skill; `absorbed_into` names the live skill that now covers it |
 | `restore`     | `name`, optional `version`                           | Restores the newest saved version, or the one named                      |
+| `draft`       | `name`, `content` (full `SKILL.md`)                  | Saves a [draft](#drafts) for review; changes no skill                    |
+| `view`        | `draft`, optional `file_path`                        | Reads a waiting draft                                                    |
+| `discard`     | `draft`                                              | Deletes a reviewed draft; background reviews cannot discard              |
 
 Every mutating action accepts `reason`, one short line that appears in the
 change feed and the chat notice. Every change saves the previous version first.
@@ -173,7 +198,8 @@ Writes are validated before they land:
 
 The background review must `view` an existing skill before it can `patch`,
 `write_file`, `remove_file`, or `archive` it, and its archives need
-`absorbed_into` or `reason`. A foreground `view` counts as using the skill.
+`absorbed_into` or `reason`. In `propose` mode it can only `list`, `view`, and
+`draft`. A foreground `view` counts as using the skill.
 
 A successful `create`, `patch`, or `write_file` of `SKILL.md` may end with up to
 three `Advisory (not blocking)` lines: authoring issues the write introduced (a
@@ -196,18 +222,19 @@ one and should be merged.
 }
 ```
 
-| Setting                                     | Default  | Effect                                                                                  |
-| ------------------------------------------- | -------- | --------------------------------------------------------------------------------------- |
-| `skills.workshop.autonomous.mode`           | `"auto"` | `"auto"` enables the background review and unused-skill cleanup. `"off"` disables both. |
-| `skills.workshop.autonomous.channelNotices` | `false`  | Also post background review notices to channel conversations, except Slack.             |
-| `skills.workshop.maxSkillBytes`             | `40000`  | Maximum `SKILL.md` size in bytes (1024-200000).                                         |
+| Setting                                     | Default  | Effect                                                                                                                                       |
+| ------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `skills.workshop.autonomous.mode`           | `"auto"` | `"auto"` enables the background review and unused-skill cleanup. `"propose"` makes the review save [drafts](#drafts). `"off"` disables both. |
+| `skills.workshop.autonomous.channelNotices` | `false`  | Also post background review notices to channel conversations, except Slack.                                                                  |
+| `skills.workshop.maxSkillBytes`             | `40000`  | Maximum `SKILL.md` size in bytes (1024-200000).                                                                                              |
 
 ```bash
 openclaw config set skills.workshop.autonomous.mode off
+openclaw config set skills.workshop.autonomous.mode propose
 openclaw config set skills.workshop.autonomous.mode auto
 ```
 
-With `off`, the agent can still create and update learned skills when you ask,
+With `off` or `propose`, the agent can still create and update learned skills when you ask,
 through `/learn`, or in a **Learn from past conversations** session. See
 [Skills config](/tools/skills-config#workshop-skills-workshop) for the schema.
 
@@ -220,6 +247,8 @@ through `/learn`, or in a **Learn from past conversations** session. See
     references/  templates/  scripts/  assets/
   .archive/
     <name>/<versionId>/     # full copy of the skill before each change
+  .drafts/
+    <draftId>/SKILL.md      # proposed skill waiting for /learn drafts
 ```
 
 `<agentDir>` defaults to `<state-dir>/agents/<agentId>/agent`, or
@@ -266,11 +295,12 @@ recorded as `user` changes.
 
 ## Upgrading from earlier releases
 
-Earlier releases staged learned skills as drafts for review. `openclaw doctor
---fix` exports any pending drafts and removes the old settings; see
-[State migrations](/cli/doctor/state-migrations) and
-[Skills config](/tools/skills-config#workshop-skills-workshop). Exported drafts
-are not loaded. Ask the agent to save one with `/learn` if you still want it.
+Earlier releases staged learned skills as proposals for review. `openclaw doctor
+--fix` exports any pending proposals to the [drafts](#drafts) directory and
+removes the old settings; see [State migrations](/cli/doctor/state-migrations)
+and [Skills config](/tools/skills-config#workshop-skills-workshop). Review them
+with `/learn drafts`. Proposals that an earlier Doctor exported to
+`.archive/.retired-proposals/` move to `.drafts/` on the next Doctor run.
 
 The earlier `skills.proposals.*` and `skills.curator.*` Gateway methods stay
 registered but return an error that points to the methods above. The
@@ -283,15 +313,15 @@ files you need from them by hand; OpenClaw does not restore them.
 
 ## Troubleshooting
 
-| Problem                            | Check                                                                                                                                                                          |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Nothing is ever learned            | `skills.workshop.autonomous.mode` is `auto`, the conversation is eligible, and tool policy allows `skill_workshop`. See [Self-learning](/tools/self-learning#troubleshooting). |
-| Agent cannot call `skill_workshop` | Sandboxed runs do not get the tool. Use a non-sandboxed session or the CLI. Otherwise add the tool to `tools.allow` or `tools.alsoAllow`.                                      |
-| A write is refused                 | The error names the fix: rename the skill, correct the frontmatter, shorten the description or `SKILL.md`, or remove the flagged line.                                         |
-| An unwanted change was made        | Press **Undo** on the notice, say "undo", send `/learn undo <id>`, or run `openclaw skills workshop restore <name>`.                                                           |
-| A skill was archived unexpectedly  | Unused-skill cleanup archives skills with no activity for 30 days. Run `openclaw skills workshop restore <name>`.                                                              |
+| Problem                            | Check                                                                                                                                                                                                                     |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Nothing is ever learned            | `skills.workshop.autonomous.mode` is `auto` (or `propose`, then check `/learn drafts`), the conversation is eligible, and tool policy allows `skill_workshop`. See [Self-learning](/tools/self-learning#troubleshooting). |
+| Agent cannot call `skill_workshop` | Sandboxed runs do not get the tool. Use a non-sandboxed session or the CLI. Otherwise add the tool to `tools.allow` or `tools.alsoAllow`.                                                                                 |
+| A write is refused                 | The error names the fix: rename the skill, correct the frontmatter, shorten the description or `SKILL.md`, or remove the flagged line.                                                                                    |
+| An unwanted change was made        | Press **Undo** on the notice, say "undo", send `/learn undo <id>`, or run `openclaw skills workshop restore <name>`.                                                                                                      |
+| A skill was archived unexpectedly  | Unused-skill cleanup archives skills with no activity for 30 days. Run `openclaw skills workshop restore <name>`.                                                                                                         |
 
-In `auto` mode, `openclaw doctor` runs the `core/doctor/skill-workshop-tool-policy`
+In `auto` and `propose` modes, `openclaw doctor` runs the `core/doctor/skill-workshop-tool-policy`
 check for each agent. It names the sandbox setting or the config layer that
 hides `skill_workshop` and the exact `allow` or `alsoAllow` change to make.
 

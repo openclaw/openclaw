@@ -35,6 +35,10 @@
   background: var(--muted);
 }
 
+.sw-learning__dot--propose {
+  background: var(--warn, var(--accent));
+}
+
 .sw-learning__dot--auto {
   background: var(--ok, var(--accent-2));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok, var(--accent-2)) 20%, transparent);

@@ -9,8 +9,11 @@ const enSkillWorkshop = {
       label: "Learning",
       aria: "Skill Workshop learning mode",
       off: "Off",
+      propose: "Propose",
       auto: "Auto",
       offTitle: "The agent does not save or update skills on its own.",
+      proposeTitle:
+        "The agent saves skill changes it would make as drafts. Review them together with /learn drafts.",
       autoTitle:
         "The agent saves and improves skills as it works, announces each change, and every change can be undone.",
       updateError: "Could not update the learning mode.",

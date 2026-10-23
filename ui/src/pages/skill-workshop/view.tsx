@@ -46,7 +46,7 @@ export type {
 } from "./view-shared.tsx";
 
 registerEnglishCatalog(registerSkillWorkshopEnglish);
-const MODES: readonly SkillWorkshopMode[] = ["off", "auto"];
+const MODES: readonly SkillWorkshopMode[] = ["off", "propose", "auto"];
 const SORTS: readonly WorkshopSort[] = ["uses", "recent", "name"];
 export function sortWorkshopSkills(
   skills: readonly SkillWorkshopSkillSummary[],

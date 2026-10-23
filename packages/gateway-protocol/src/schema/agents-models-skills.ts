@@ -481,7 +481,7 @@ export const SkillsWorkshopListParamsSchema = closedObject({
 
 export const SkillsWorkshopListResultSchema = closedObject({
   agentId: NonEmptyString,
-  mode: Type.Union([Type.Literal("off"), Type.Literal("auto")]),
+  mode: Type.Union([Type.Literal("off"), Type.Literal("propose"), Type.Literal("auto")]),
   root: NonEmptyString,
   skills: Type.Array(SkillWorkshopSkillSummarySchema),
   archived: Type.Array(SkillWorkshopArchivedSkillSchema),

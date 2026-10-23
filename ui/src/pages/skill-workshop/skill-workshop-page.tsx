@@ -530,7 +530,7 @@ export function SkillWorkshopPage() {
         affects(list);
       } else if (kind === "mode") {
         captured.setModeBusy(true);
-        captured.setExpectedMode(expected === "auto" ? "auto" : "off");
+        captured.setExpectedMode(expected === "auto" || expected === "propose" ? expected : "off");
       } else {
         captured.setLearningBusy(true);
       }

@@ -66,7 +66,7 @@ export class WorkshopWriteError extends Error {
   override name = "WorkshopWriteError";
 }
 
-const SKILL_FILE = "SKILL.md";
+export const SKILL_FILE = "SKILL.md";
 const ARCHIVE_DIR = ".archive";
 // The Agent Skills limit. Authoring guidance asks for ~160 bytes, but a hard 160 cap forced
 // lossy description rewrites whenever a review patched an older skill, and blocked restores.
@@ -75,7 +75,7 @@ const MAX_DESCRIPTION_BYTES = 1024;
 // normalizeSkillIndexName and no length cap, so existing skills are matched by charset and
 // the filesystem's 255-byte name limit only; otherwise they stay loaded but unmanageable.
 const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
-const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
+export const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
 const skillLocks = new KeyedAsyncQueue();
 const log = createSubsystemLogger("skills/workshop");
 
@@ -93,7 +93,7 @@ function resolveSkillPaths(config: OpenClawConfig, agentId: string, name: string
   };
 }
 
-function normalizeSkillFilePath(filePath: string | undefined): string {
+export function normalizeSkillFilePath(filePath: string | undefined): string {
   const trimmed = filePath?.trim();
   if (!trimmed || trimmed === SKILL_FILE) {
     return SKILL_FILE;
@@ -107,14 +107,14 @@ function normalizeSkillFilePath(filePath: string | undefined): string {
   }
 }
 
-async function readSkillFile(skillDir: string, filePath: string): Promise<string | null> {
+export async function readSkillFile(skillDir: string, filePath: string): Promise<string | null> {
   return filePath === SKILL_FILE
     ? await readWorkspaceSkillFile(path.join(skillDir, SKILL_FILE))
     : await readWorkspaceSupportFile({ skillDir, relativePath: filePath });
 }
 
 /** Regular files below one skill directory, SKILL.md first; links and dot entries are skipped. */
-async function listSkillFiles(
+export async function listSkillFiles(
   skillDir: string,
 ): Promise<{ files: string[]; sizeBytes: number; updatedAtMs: number }> {
   const entries = await fs.readdir(skillDir, { recursive: true, withFileTypes: true });
@@ -185,7 +185,7 @@ function assertSafeContent(name: string, filePath: string, content: string): voi
 }
 
 /** Validates one file's next content: path, SKILL.md shape or support size, then the security scan. */
-function validateSkillFile(
+export function validateSkillFile(
   config: OpenClawConfig,
   name: string,
   filePath: string,

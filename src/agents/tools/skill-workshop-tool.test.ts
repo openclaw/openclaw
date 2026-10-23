@@ -122,6 +122,43 @@ describe("skill_workshop", () => {
       "write_file",
     ]);
   });
+  it("saves a background review's change as a draft in propose mode and leaves skills unchanged", async () => {
+    setRuntimeConfigSnapshot({ skills: { workshop: { autonomous: { mode: "propose" } } } });
+    const review = workshop({ runId: "propose-run", reviewOf: "agent:main:main" });
+    await review("view");
+    await expect(review("patch", patch)).rejects.toThrow(
+      "Learning is in propose mode; save this change with action=draft instead.",
+    );
+    const drafted = await review("draft", {
+      content: "---\nname: deploy\ndescription: Deploy staging\n---\n\n1. Run make ship.\n",
+      reason: "target was renamed",
+    });
+    const id = /Saved draft (\S+) for "deploy"/.exec(drafted)?.[1];
+    expect(id).toBeDefined();
+    await expect(review("discard", { draft: id })).rejects.toThrow(
+      "Background reviews may not discard drafts.",
+    );
+    expect(await review("view")).toContain("1. Run make deploy.");
+    expect(await listWorkshopChanges("main", { runId: "propose-run" })).toEqual([]);
+
+    // A foreground /learn drafts turn finds, reads, and clears the draft.
+    const foreground = workshop();
+    expect(await foreground("list")).toContain(`- ${id} (deploy): target was renamed`);
+    expect(await foreground("view", { draft: id })).toContain("1. Run make ship.");
+    expect(await foreground("discard", { draft: id })).toBe(`Discarded draft ${id}.`);
+    expect(await foreground("list")).not.toContain("Drafts waiting");
+  });
+
+  it("keeps a draft when the discarding run was aborted", async () => {
+    const drafted = await workshop()("draft", {
+      content: "---\nname: deploy\ndescription: Deploy staging\n---\n\n1. Run make ship.\n",
+    });
+    const id = /Saved draft (\S+) for/.exec(drafted)?.[1];
+    const aborted = AbortSignal.abort(new Error("run aborted"));
+    await expect(workshop()("discard", { draft: id }, aborted)).rejects.toThrow("run aborted");
+    expect(await workshop()("list")).toContain(`- ${id} (deploy)`);
+  });
+
   it("shows the other learned skills on create so the agent can merge duplicates", async () => {
     const result = await workshop()("create", {
       name: "staging-deploy",

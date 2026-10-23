@@ -265,11 +265,11 @@ it("switches the learning mode through the config key", async () => {
   });
   const page = await mount(workshopGateway(), { methods: ["config.patch"], runtimeConfig });
   expect(button(page, "Auto")?.getAttribute("aria-pressed")).toBe("true");
-  button(page, "Off")?.click();
+  button(page, "Propose")?.click();
   await vi.waitFor(() => expect(runtimeConfig.refresh).toHaveBeenCalled());
   expect(runtimeConfig.patch).toHaveBeenCalledExactlyOnceWith({
-    raw: { skills: { workshop: { autonomous: { mode: "off" } } } },
-    note: "Disable Skill Workshop learning",
+    raw: { skills: { workshop: { autonomous: { mode: "propose" } } } },
+    note: "Have Skill Workshop propose drafts",
   });
 });
 

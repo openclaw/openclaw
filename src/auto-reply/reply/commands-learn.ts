@@ -35,6 +35,9 @@ import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const DEFAULT_LEARN_REQUEST = "Save the reusable workflow from what we just did as a skill.";
+// Background reviews in propose mode leave drafts; "/learn drafts" reviews them together.
+const DRAFTS_REQUEST =
+  "Review my Skill Workshop drafts. Call skill_workshop action=list, then view each waiting draft and the live skill it would change. Judge the drafts together: most are local fixes, so save only lessons that change what you do next time across tasks, merging related drafts into one change. Save with create or patch, then discard every draft you reviewed, saved or not. Report which skills changed and which drafts you dropped and why.";
 
 /** Builds one foreground /learn turn that writes Workshop skills directly. */
 function buildLearnPrompt(request: string): string {
@@ -69,9 +72,13 @@ function parseLearnCommand(raw: string): LearnCommand | null {
     return null;
   }
   const reviewId = UNDO_PATTERN.exec(request)?.[1];
-  return reviewId
-    ? { kind: "undo", reviewId: reviewId.toLowerCase() }
-    : { kind: "learn", request: request || DEFAULT_LEARN_REQUEST };
+  if (reviewId) {
+    return { kind: "undo", reviewId: reviewId.toLowerCase() };
+  }
+  return {
+    kind: "learn",
+    request: request.toLowerCase() === "drafts" ? DRAFTS_REQUEST : request || DEFAULT_LEARN_REQUEST,
+  };
 }
 
 /** /learn needs a harness that exposes OpenClaw tools and a policy that allows skill_workshop. */
