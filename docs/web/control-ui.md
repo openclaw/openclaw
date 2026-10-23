@@ -184,6 +184,11 @@ Provider speed observations are tracked separately for each requested tier. Repe
 
 Metadata refreshes wait for an in-progress model-runtime replacement to publish. An agent whose model runtime is unavailable does not interrupt commands or model choices for healthy agents; its metadata becomes available when its owner publishes.
 
+The model picker searches across the full catalog, including models under collapsed
+providers and **All models**. Use the Up and Down arrow keys in the search field to
+move through results and Enter to select one. Large catalogs keep the same search
+and keyboard behavior while rendering only the visible portion of the list.
+
 New Session keeps previously fetched model choices selectable while their catalog
 refreshes in the background. Before the first catalog arrives, it does not turn a
 configured default into a model option. Command palette model results use the same

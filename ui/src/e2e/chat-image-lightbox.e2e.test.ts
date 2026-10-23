@@ -333,13 +333,21 @@ suite.define(() => {
     ).map((dataUrl) => dataUrl.split(",")[1]!);
     const sources = names.map((name) => "media://inbound/" + name + ".png");
     const mediaRequests: { source: string; variant: string | null; width: string | null }[] = [];
-    const renditionSources = () =>
-      mediaRequests.filter((request) => request.width === "1920").map((request) => request.source);
+    const metadataSources: string[] = [];
+    // Routing disables HTTP caching, so revisiting a decoded URL may refetch it.
+    const renditionSources = () => [
+      ...new Set(
+        mediaRequests
+          .filter((request) => request.width === "1920")
+          .map((request) => request.source),
+      ),
+    ];
     await page.route("**/__openclaw__/assistant-media?**", async (route) => {
       const url = new URL(route.request().url());
       const index = sources.indexOf(url.searchParams.get("source") ?? "");
       expect(index).toBeGreaterThanOrEqual(0);
       if (url.searchParams.get("meta") === "1") {
+        metadataSources.push(sources[index]!);
         await route.fulfill({
           json: {
             available: true,
@@ -400,6 +408,7 @@ suite.define(() => {
       await page.keyboard.press("ArrowLeft");
       await polledAttribute(image, "alt").toBe("after.png");
       expect(renditionSources()).toEqual(sources);
+      expect(metadataSources.toSorted()).toEqual(sources.toSorted());
       expect(mediaRequests.every((request) => request.variant === "thumbnail")).toBe(true);
       const requestedDownload = page.waitForEvent("download");
       await exactButton(lightbox, "Download image").click();
@@ -408,6 +417,7 @@ suite.define(() => {
         { source: sources[1], variant: null, width: null },
       ]);
       mediaRequests.length = 0;
+      metadataSources.length = 0;
       await page.keyboard.press("Escape");
       await expect.poll(() => lightbox.count()).toBe(0);
       await expectFocused(trigger);
