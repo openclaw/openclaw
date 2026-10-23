@@ -642,6 +642,24 @@ describe("system events (session routing)", () => {
     ]);
   });
 
+  it("preserves deferred occurrences when consuming through the SDK", () => {
+    enqueueSdkSystemEvent("Deferred", { sessionKey: key });
+    enqueueSdkSystemEvent("Consumed", { sessionKey: key });
+    const captured = peekSdkSystemEventEntries(key);
+    const deferredId = expectDefined(captured[0]?.id, "deferred event ID");
+    enqueueSdkSystemEvent("Late arrival", { sessionKey: key });
+
+    expect(
+      consumeSdkSystemEventEntries(key, captured, { deferredEventIds: [deferredId] }).map(
+        (event) => event.text,
+      ),
+    ).toEqual(["Deferred", "Consumed"]);
+    expect(peekSdkSystemEventEntries(key).map((event) => event.text)).toEqual([
+      "Deferred",
+      "Late arrival",
+    ]);
+  });
+
   it.each([
     { run: () => enqueueSystemEvent("Unbound", { sessionKey: " " }), error: "sessionKey" },
     {
