@@ -219,7 +219,6 @@ export async function initializeGitBackupRepository(params: {
 async function commitGitBackup(params: {
   repositoryPath: string;
   head?: string;
-  now?: Date;
   paths: string[];
   env?: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
@@ -258,10 +257,6 @@ async function commitGitBackup(params: {
     if (changed.code !== 1) {
       requireGitCommandOutput("git diff --cached", changed);
     }
-    const now = params.now ?? new Date();
-    if (!Number.isFinite(now.getTime())) {
-      throw new Error("Git backup timestamp is invalid.");
-    }
     const email = await runGit(params.repositoryPath, ["config", "--get", "user.email"], {
       env: params.env,
     });
@@ -271,7 +266,7 @@ async function commitGitBackup(params: {
         : ["-c", "user.name=OpenClaw", "-c", "user.email=backup@openclaw.local"];
     await requireGit(
       params.repositoryPath,
-      [...identityArgs, "commit", "-m", `openclaw backup ${now.toISOString()}`],
+      [...identityArgs, "commit", "-m", `openclaw backup ${new Date().toISOString()}`],
       { env },
     );
     // Converge only the managed entries in the ordinary index; preserved extras
@@ -295,7 +290,6 @@ export async function createGitBackup(params: {
   all?: boolean;
   excludeSecrets?: boolean;
   push?: boolean;
-  now?: Date;
   gitEnv?: NodeJS.ProcessEnv;
 }): Promise<GitBackupCreateResult> {
   const databases = [...params.databases];
@@ -423,7 +417,6 @@ export async function createGitBackup(params: {
   const commit = await commitGitBackup({
     repositoryPath,
     head: repositoryState.head,
-    now: params.now,
     paths: [
       ...new Set(
         updates.flatMap(({ relative, previousFiles, files }) =>
