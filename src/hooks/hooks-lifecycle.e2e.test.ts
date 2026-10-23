@@ -4,9 +4,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import JSON5 from "json5";
 import * as tar from "tar";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pinConfigDir } from "../utils.js";
 import { writeHookFixture } from "./hook-fixture.test-support.js";
 import { installHooksFromPath } from "./install.js";
 import {
@@ -22,7 +23,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const hookName = "qa-lifecycle-recorder";
 const hookMarker = "QA_HOOK_LIFECYCLE_OK";
 
-afterEach(clearInternalHooks);
+afterEach(() => {
+  clearInternalHooks();
+  vi.unstubAllEnvs();
+  pinConfigDir();
+});
 
 async function runHooksCli(args: string[], env: NodeJS.ProcessEnv) {
   try {
@@ -95,7 +100,8 @@ it("installs, discovers, toggles, and dispatches an authored hook pack", async (
     VITEST: "",
   };
 
-  const options = { bundledHooksDir, managedHooksDir };
+  pinConfigDir(env);
+  vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", bundledHooksDir);
   const install = await installHooksFromPath({
     config: initialConfig,
     hooksDir: managedHooksDir,
@@ -116,7 +122,6 @@ it("installs, discovers, toggles, and dispatches an authored hook pack", async (
   ).resolves.toContain("gateway:startup");
 
   const discovered = loadWorkspaceHookEntries(workspaceDir, {
-    ...options,
     config: initialConfig,
   });
   expect(discovered).toEqual([
@@ -132,7 +137,7 @@ it("installs, discovers, toggles, and dispatches an authored hook pack", async (
     const config: OpenClawConfig = JSON5.parse(await fs.readFile(configPath, "utf8"));
     expect(config.hooks?.internal?.entries?.[hookName]?.enabled).toBe(enabled);
     clearInternalHooks();
-    const prepared = await prepareInternalHooks(config, workspaceDir, options);
+    const prepared = await prepareInternalHooks(config, workspaceDir);
     expect(prepared.loadedCount).toBe(enabled ? 1 : 0);
     prepared.commit();
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup", {

@@ -1178,6 +1178,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-sessions {
   position: relative;
+  margin-top: var(--sidebar-session-link-padding-block);
 }
 
 .sidebar-session-root-drop {

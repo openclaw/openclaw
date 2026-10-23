@@ -126,7 +126,7 @@ export async function maybeRepairCronInferenceBindings(params: {
           workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId),
           agentConfigOverride: resolveAgentConfig(params.cfg, agentId),
           sessionEntry: session.sessionEntry,
-          payload: job.payload,
+          payloadModel: job.payload.model,
           isGmailHook: job.payload.externalContentSource === "gmail",
         });
         if (!selected.ok) {
