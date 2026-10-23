@@ -63,23 +63,27 @@ function padToExactBytes(content: string, targetBytes: number): string {
   return padding > 0 ? content + " ".repeat(padding) : content;
 }
 
-function exactSizeHookPackageManifest(targetBytes: number): string {
-  const base = { name: "pkg", [MANIFEST_KEY]: { hooks: ["./nested"] }, pad: "" };
-  const baseBytes = Buffer.byteLength(JSON.stringify(base), "utf8");
-  return JSON.stringify({ ...base, pad: "x".repeat(targetBytes - baseBytes) });
-}
-
 describe("hooks workspace", () => {
   beforeEach(() => warnMock.mockClear());
 
-  it("rejects package traversal without scanning unlisted children", () => {
-    const { root, hooksRoot } = makeHooksWorkspace();
-    const pkgDir = path.join(hooksRoot, "pkg");
-    writePlainHook(root, "outside");
-    writePlainHook(pkgDir, "unlisted");
-    writeHookPackageManifest(pkgDir, ["../../outside"]);
-    expect(hookNames(loadWorkspaceEntriesFromHooksRoot(hooksRoot))).toEqual([]);
-  });
+  it.each(["traversal", "symlink"])(
+    "rejects package %s escapes without scanning unlisted children",
+    (escape) => {
+      const { root, hooksRoot } = makeHooksWorkspace();
+      const pkgDir = path.join(hooksRoot, "pkg");
+      const outsideDir = writePlainHook(root, "outside");
+      writePlainHook(pkgDir, "unlisted");
+      if (escape === "symlink") {
+        fs.symlinkSync(
+          outsideDir,
+          path.join(pkgDir, "linked"),
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
+      writeHookPackageManifest(pkgDir, [escape === "symlink" ? "./linked" : "../../outside"]);
+      expect(hookNames(loadWorkspaceEntriesFromHooksRoot(hooksRoot))).toEqual([]);
+    },
+  );
 
   it("warns, skips oversized metadata, and continues discovering other hooks", () => {
     const { hooksRoot } = makeHooksWorkspace();
@@ -109,7 +113,10 @@ describe("hooks workspace", () => {
     );
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
-      exactSizeHookPackageManifest(METADATA_MAX_BYTES),
+      padToExactBytes(
+        JSON.stringify({ name: "pkg", [MANIFEST_KEY]: { hooks: ["./nested"] } }),
+        METADATA_MAX_BYTES,
+      ),
     );
 
     expect(hookNames(loadWorkspaceEntriesFromHooksRoot(hooksRoot))).toContain("exact-limit");
@@ -138,17 +145,6 @@ describe("hooks workspace", () => {
       read.mockRestore();
     }
     expect(hookNames(loadWorkspaceEntriesFromHooksRoot(hooksRoot))).toEqual(["unreadable-hook"]);
-  });
-
-  it("rejects package symlink escapes without scanning unlisted children", () => {
-    const { root, hooksRoot } = makeHooksWorkspace();
-    const pkgDir = path.join(hooksRoot, "pkg");
-    const outsideDir = writePlainHook(root, "outside");
-    const linkedDir = path.join(pkgDir, "linked");
-    writePlainHook(pkgDir, "unlisted");
-    fs.symlinkSync(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
-    writeHookPackageManifest(pkgDir, ["./linked"]);
-    expect(hookNames(loadWorkspaceEntriesFromHooksRoot(hooksRoot))).toEqual([]);
   });
 
   it.each(["HOOK.md", "handler.js"])("ignores hooks with hardlinked %s aliases", (file) => {

@@ -260,9 +260,11 @@ async function runConnectCommand(
     config: await captureRuntimeConfigAsyncReader()(),
     env: process.env,
   });
+  // Providers replay setup codes on restart. The node runtime may use an expired
+  // code only to reconnect with a saved device token for the same Gateway.
   const payload = joinTarget
     ? await fetchJoinPayload(joinTarget, joinCredentials)
-    : decodePairingSetupCode(resolvedTarget);
+    : decodePairingSetupCode(resolvedTarget, { allowExpired: opts.ephemeral === true });
   const pair = resolveNodePairGatewayPayload(payload);
   const cloudflareAccess =
     initialCloudflareAccess ??
@@ -288,6 +290,9 @@ async function runConnectCommand(
       : {}),
     gatewayCandidates,
     gatewayBootstrapToken: pair.bootstrapToken,
+    ...(opts.ephemeral === true && pair.expiresAtMs !== undefined
+      ? { gatewayBootstrapExpiresAtMs: pair.expiresAtMs }
+      : {}),
     // Environment-managed nodes reuse their persisted device token when a provider
     // replays setup after the one-shot bootstrap credential has been consumed.
     preferGatewayBootstrapToken: opts.ephemeral !== true,

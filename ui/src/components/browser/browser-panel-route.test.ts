@@ -342,8 +342,8 @@ it("leaves a stopped browser on its Start affordance instead of focusing a histo
   const paths = () => requests(gateway).map((request) => request.path);
   expect(paths()).toEqual(["/tabs"]);
   expect(panel.querySelector('[role="alert"]')).toBeNull();
-  const start = panel.querySelector<HTMLButtonElement>(".bp-btn");
-  expect(start?.textContent?.trim()).toBe("Start browser");
+  const start = () => panel.querySelector<HTMLButtonElement>(".bp-btn")!;
+  expect(start().textContent?.trim()).toBe("Start browser");
   const reload = reloadButton(panel);
   expect(reload?.disabled).toBe(true);
 
@@ -357,7 +357,8 @@ it("leaves a stopped browser on its Start affordance instead of focusing a histo
   }
   await flush();
 
-  start?.click();
+  await waitForSolid(() => expect(start()?.textContent?.trim()).toBe("Start browser"));
+  start().click();
   await waitForTitle(panel, "managed");
   expect(paths()).toEqual(expect.arrayContaining(["/start", "/screenshot"]));
   expect(paths()).not.toContain("/tabs/focus");
@@ -499,7 +500,9 @@ it("prefers a usable default but keeps an explicitly selected blocked tab closab
   const beforeBlocked = gateway.request.mock.calls.length;
   panel.selectHostedTab("t1");
   await panel.updateComplete;
-  expect(panel.querySelector(".bp-status")?.textContent).toContain("Select another tab");
+  expect(panel.querySelector('.bp-viewport [role="status"]')?.textContent).toContain(
+    "Select another tab",
+  );
   expect(gateway.request).toHaveBeenCalledTimes(beforeBlocked);
   await panel.closeHostedTab("t1");
   await waitForTitle(panel, "Allowed");
@@ -522,9 +525,13 @@ it.each(["/screenshot", "/act"])(
       return await respond(method, envelope);
     });
     reloadButton(panel)!.click();
-    await waitForSolid(() => expect(panel.querySelector(".bp-status")).not.toBeNull());
+    await waitForSolid(() =>
+      expect(panel.querySelector('.bp-viewport [role="status"]')).not.toBeNull(),
+    );
     expect(panel.querySelector(".bp-shot")).toBeNull();
-    expect(panel.querySelector(".bp-status")?.textContent).toContain("Select another tab");
+    expect(panel.querySelector('.bp-viewport [role="status"]')?.textContent).toContain(
+      "Select another tab",
+    );
     expect(panel.querySelector<HTMLInputElement>(".bp-url")?.value).toBe("");
     expect(panel.hostedTabs[0]?.url).toBe("");
   },
@@ -558,7 +565,9 @@ it("shows navigation_check_failed without capture and recovers after refresh", a
   });
   const panel = await mountPanel(gateway.client);
   await waitForSolid(() =>
-    expect(panel.querySelector(".bp-status")?.textContent).toContain("Refresh to try again."),
+    expect(panel.querySelector('.bp-viewport [role="status"]')?.textContent).toContain(
+      "Refresh to try again.",
+    ),
   );
   expect(panel?.textContent).toContain("Kept title");
   expect(panel.querySelector(".bp-shot")).toBeNull();
@@ -570,5 +579,5 @@ it("shows navigation_check_failed without capture and recovers after refresh", a
   blocked = false;
   reloadButton(panel)?.click();
   await waitForTitle(panel, "Recovered");
-  expect(panel.querySelector(".bp-status")).toBeNull();
+  expect(panel.querySelector('.bp-viewport [role="status"]')).toBeNull();
 });

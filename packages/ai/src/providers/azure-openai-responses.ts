@@ -51,6 +51,7 @@ export const streamAzureOpenAIResponses: StreamFunction<
     stream,
     model,
     output,
+    context,
     options,
     resolveRequestModel: (requestModel) => {
       const { baseUrl } = resolveAzureConfig(requestModel, options);

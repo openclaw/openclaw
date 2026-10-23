@@ -33,7 +33,6 @@ function publicationPragmas(db: DatabaseSync): MemoryShadowConnection["pragmas"]
     return value;
   };
   return {
-    busy_timeout: read("busy_timeout"),
     foreign_keys: read("foreign_keys"),
   };
 }

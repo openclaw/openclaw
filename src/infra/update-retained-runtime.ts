@@ -69,6 +69,7 @@ async function runWithRetainedUpdateRuntime<T>(
 ): Promise<T> {
   let directory: string | undefined;
   let prepared = false;
+  let unusable = false;
   let closing = false;
   let preparation: ReturnType<RetainUpdateRuntime> | undefined;
   let unregister: (() => void) | undefined;
@@ -88,7 +89,7 @@ async function runWithRetainedUpdateRuntime<T>(
             params.assertCurrent();
           };
           assertCurrent();
-          if (prepared) {
+          if (prepared || unusable) {
             return undefined;
           }
           const root = await resolveOpenClawPackageRoot({ moduleUrl });
@@ -221,11 +222,18 @@ async function runWithRetainedUpdateRuntime<T>(
             onProgress: ({ phase }) => log.info(phase),
           });
           assertCurrent();
-          const {
-            relocations: retainedRelocations,
-            files,
-            ...metrics
-          } = parseUpdateStateInspectionWorker(retainedFiles, RetainedRuntimeFilesSchema);
+          const retained = parseUpdateStateInspectionWorker(
+            retainedFiles,
+            RetainedRuntimeFilesSchema,
+          );
+          if ("unusableReason" in retained) {
+            unusable = true;
+            log.warn(
+              `${retained.unusableReason}; continuing update without a verified retained rollback runtime`,
+            );
+            return undefined;
+          }
+          const { relocations: retainedRelocations, files, ...metrics } = retained;
           const relocations = prepareRuntimeRelocations(
             [
               ...retainedRelocations,

@@ -1,6 +1,6 @@
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
-import type { registerYieldedRequesterBatchCase } from "./subagent-spawn.production-boundary.test-support.js";
+import type { registerYieldedRequesterBatchCase } from "./subagent-spawn.requester-yield.test-support.js";
 
 type BoundaryOptions = Parameters<typeof registerYieldedRequesterBatchCase>[0];
 export type BoundaryHarness = Pick<

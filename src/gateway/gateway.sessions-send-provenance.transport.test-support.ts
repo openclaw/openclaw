@@ -56,6 +56,11 @@ export async function writeSinkPlugin(workspace: string, sinkUrl: string) {
     `module.exports = {
       id: "provenance-sink",
       register(api) {
+        const post = async (url, body, failure) => {
+          const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+          if (!response.ok) throw new Error(failure);
+          return response;
+        };
         api.registerChannel({ plugin: {
           id: "telegram",
           meta: { id: "telegram", label: "Proof sink", selectionLabel: "Proof sink", docsPath: "/proof", blurb: "Isolated proof transport" },
@@ -64,18 +69,12 @@ export async function writeSinkPlugin(workspace: string, sinkUrl: string) {
           config: {
             listAccountIds: () => ["default"],
             resolveAccount: () => ({ accountId: "default", enabled: true, configured: true }),
-            isEnabled: () => true,
-            isConfigured: () => true,
           },
           actions: {
             describeMessageTool: () => ({ actions: ["send"], capabilities: [] }),
             async prepareSendPayload({ to, payload }) {
               if (!to.startsWith("provenance-linked-")) return;
-              const response = await fetch(${JSON.stringify(sinkUrl.replace(/\/sink$/, "/prepare-send"))}, {
-                method: "POST", headers: { "content-type": "application/json" },
-                body: JSON.stringify({ to }),
-              });
-              if (!response.ok) throw new Error("Proof send preparation failed");
+              await post(${JSON.stringify(sinkUrl.replace(/\/sink$/, "/prepare-send"))}, { to }, "Proof send preparation failed");
               return payload;
             },
           },
@@ -90,11 +89,7 @@ export async function writeSinkPlugin(workspace: string, sinkUrl: string) {
             deliveryMode: "direct",
             resolveTarget: ({ to }) => to ? { ok: true, to } : { ok: false, error: new Error("Missing sink target") },
             async sendText({ to, text, accountId }) {
-              const response = await fetch(${JSON.stringify(sinkUrl)}, {
-                method: "POST", headers: { "content-type": "application/json" },
-                body: JSON.stringify({ to, text, accountId }),
-              });
-              if (!response.ok) throw new Error("Proof sink rejected delivery");
+              const response = await post(${JSON.stringify(sinkUrl)}, { to, text, accountId }, "Proof sink rejected delivery");
               return await response.json();
             },
           },

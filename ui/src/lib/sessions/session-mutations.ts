@@ -147,15 +147,25 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return result;
     } catch (error) {
-      if (!options.signal?.aborted) {
-        reportError(scope, error);
+      if (options.signal?.aborted || !host.connection.isCurrent(scope)) {
+        return null;
       }
-      return null;
+      reportError(scope, error);
+      throw error;
     }
   };
 
-  const create = async (params: SessionCreateParams = {}, options?: SessionCreateRequestOptions) =>
-    (await createResult(params, options))?.key ?? null;
+  const create = async (
+    params: SessionCreateParams = {},
+    options?: SessionCreateRequestOptions,
+  ) => {
+    try {
+      return (await createResult(params, options))?.key ?? null;
+    } catch {
+      // Key-only callers consume the owner's published error; result callers retain its cause.
+      return null;
+    }
+  };
 
   const patchNow = async (
     key: string,
@@ -592,8 +602,11 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return result.owner;
     } catch (error) {
+      if (!host.connection.isCurrent(scope)) {
+        return null;
+      }
       reportError(scope, error);
-      return null;
+      throw error;
     }
   };
 

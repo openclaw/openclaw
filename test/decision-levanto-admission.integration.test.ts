@@ -7,11 +7,7 @@ import { removeAuthProfilesAcrossOwnerStores } from "../src/agents/auth-profiles
 import { upsertAuthProfileWithLockOrThrow } from "../src/agents/auth-profiles/upsert-with-lock.js";
 import * as modelAuthProvider from "../src/agents/model-auth-provider.js";
 import { acquireAgentRunPreparedModelRuntime } from "../src/agents/prepared-model-runtime.js";
-import { resetPreparedModelRuntimeSnapshotsForTest } from "../src/agents/prepared-model-runtime.test-support.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../src/config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import {
   evaluateDecisionV2InRegistry,
@@ -22,15 +18,13 @@ import { DecisionContractError } from "../src/decisions/validation.js";
 import { getImageMetadata } from "../src/media/media-services.js";
 import { createPluginRuntimeMock } from "../src/plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { runPluginRegisterSyncInRegistry } from "../src/plugins/loader-module-runtime.js";
-import { createPluginRecord } from "../src/plugins/loader-records.js";
-import { resetPluginLoaderTestStateForTest } from "../src/plugins/loader.test-fixtures.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
-import { clearPluginMetadataLifecycleCaches } from "../src/plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataSnapshot } from "../src/plugins/plugin-metadata-snapshot.js";
 import { createTestPluginRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
 import {
+  admissionPlugin,
   createAdmissionBarrier,
+  resetAdmissionState,
   withAdmissionFixture,
   type AdmissionFixture,
 } from "./decision-admission.test-support.js";
@@ -92,21 +86,10 @@ async function runScenario(
   );
   const agentDir = state.agentDir(agentId);
   setRuntimeConfigSnapshot(cfg);
-  const metadata = resolvePluginMetadataSnapshot({
-    config: cfg,
-    env: process.env,
-    workspaceDir: state.workspaceDir,
-  });
-  const manifest = metadata.byPluginId.get("levanto");
-  assert(manifest);
+  const { metadata, record } = admissionPlugin("levanto", cfg, state.workspaceDir);
   const builder = createTestPluginRegistry(
     createPluginRuntimeMock({ config: { current: () => cfg } }),
   );
-  const record = createPluginRecord({
-    ...manifest,
-    enabled: true,
-    configSchema: Boolean(manifest.configSchema),
-  });
   const api = builder.createApi(record, { config: cfg });
   runPluginRegisterSyncInRegistry(levanto.register, api, builder.registry, record.id);
   builder.registry.plugins.push(record);
@@ -249,9 +232,6 @@ async function runScenario(
   } finally {
     prepareDecisionProviderReload(builder.registry, new Set([record.id]));
     await getPluginInstance(record)?.dispose();
-    await resetPreparedModelRuntimeSnapshotsForTest();
-    clearPluginMetadataLifecycleCaches();
-    resetPluginLoaderTestStateForTest();
-    clearRuntimeConfigSnapshot();
+    await resetAdmissionState(true);
   }
 }

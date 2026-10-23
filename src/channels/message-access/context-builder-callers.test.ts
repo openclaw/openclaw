@@ -27,7 +27,7 @@ const SINKS: ReadonlyArray<readonly [string, string, string, string?]> = [
   ["irc/src/monitor", "channelIngress: access", coreBuilder],
   [
     "line/src/bot-message-context",
-    "channelIngress: params.channelIngress",
+    "channelIngress,",
     injected,
     "getLineRuntime().channel.inbound.buildContext",
   ],
@@ -70,7 +70,7 @@ const SINKS: ReadonlyArray<readonly [string, string, string, string?]> = [
   ["zalouser/src/monitor", "channelIngress: accessDecision", coreBuilder],
   [
     "src/channels/direct-dm",
-    "channelIngress: params.channelIngress",
+    "channelIngress: boundParams.channelIngress",
     "const injectedBuilder = params.channelRuntime?.inbound?.buildContext",
   ],
   [
@@ -107,7 +107,10 @@ const CONTEXT_BINDING_PRODUCERS = [
 ] as const;
 const SCOPED_BUILDER_HANDOFFS = [
   ["buzz/src/gateway", "const buildContext = channelRuntime?.inbound.buildContext"],
-  ["clickclack/src/gateway", "buildContext: params.buildContext"],
+  [
+    "clickclack/src/gateway",
+    'const buildContext = (ctx.channelRuntime as PluginRuntime["channel"]',
+  ],
   ["discord/src/monitor/provider", "buildContext: pluginChannelRuntime?.inbound.buildContext"],
   [
     "imessage/src/monitor/monitor-provider",

@@ -452,26 +452,37 @@ it("keeps the later deadline when overlapping 429s carry different retry_after",
   await expect(Promise.all([first, second])).resolves.toHaveLength(2);
 });
 
-it("uses edited message ids as lanes when Telegram omits topic ids", async () => {
+it.each(["edited-message", "string-topic"])("uses %s ids for fair group lanes", async (kind) => {
+  const edited = kind === "edited-message";
+  const expected = edited
+    ? ["101:first", "202:other", "101:second"]
+    : ["+10:first", "0x20:other", "+10:second"];
   const { firstGate, entered, throttler, prev } = laneProbe(
-    "edited-message",
-    (request) => `${request.message_id}:${request.text}`,
+    kind,
+    (request) => `${edited ? request.message_id : request.message_thread_id}:${request.text}`,
   );
-
-  const edit = (message_id: number, text: string) =>
-    throttler(prev, "editMessageText", { chat_id: -100123, message_id, text }, undefined);
-  const first = edit(101, "first-edit");
-  await vi.waitFor(() => expect(entered).toEqual(["101:first-edit"]));
-
-  const secondSameMessage = edit(101, "second-edit");
-  const otherMessage = edit(202, "other-edit");
-
+  const send = (other: boolean, text: string) =>
+    edited
+      ? throttler(
+          prev,
+          "editMessageText",
+          { chat_id: -100123, message_id: other ? 202 : 101, text },
+          undefined,
+        )
+      : callLooseSendMessage(throttler, prev, {
+          chat_id: "-100123",
+          message_thread_id: other ? "0x20" : "+10",
+          text,
+        });
+  const first = send(false, "first");
+  await vi.waitFor(() => expect(entered).toEqual([expected[0]]));
+  const sameLane = send(false, "second");
+  const otherLane = send(true, "other");
   firstGate.resolve();
   await vi.waitFor(() => expect(entered.length).toBeGreaterThanOrEqual(2));
-  expect(entered[1]).toBe("202:other-edit");
-  await Promise.all([first, secondSameMessage, otherMessage]);
-
-  expect(entered).toEqual(["101:first-edit", "202:other-edit", "101:second-edit"]);
+  expect(entered[1]).toBe(expected[1]);
+  await Promise.all([first, sameLane, otherLane]);
+  expect(entered).toEqual(expected);
 });
 
 it("does not group-throttle fractional chat ids", async () => {
@@ -490,26 +501,4 @@ it("does not group-throttle fractional chat ids", async () => {
 
   firstGate.resolve();
   await Promise.all([first, second]);
-});
-
-it("uses strict decimal string ids for fair group lanes", async () => {
-  const { firstGate, entered, throttler, prev } = laneProbe(
-    "private-chat",
-    (request) => `${request.message_thread_id}:${request.text}`,
-  );
-
-  const send = (message_thread_id: string, text: string) =>
-    callLooseSendMessage(throttler, prev, { chat_id: "-100123", message_thread_id, text });
-  const first = send("+10", "first");
-  await vi.waitFor(() => expect(entered).toEqual(["+10:first"]));
-
-  const sameTopic = send("+10", "second");
-  const otherTopic = send("0x20", "hex");
-
-  firstGate.resolve();
-  await vi.waitFor(() => expect(entered.length).toBeGreaterThanOrEqual(2));
-  expect(entered[1]).toBe("0x20:hex");
-  await Promise.all([first, sameTopic, otherTopic]);
-
-  expect(entered).toEqual(["+10:first", "0x20:hex", "+10:second"]);
 });

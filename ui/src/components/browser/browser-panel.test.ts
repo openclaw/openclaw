@@ -10,6 +10,7 @@ import {
   createBrowserPanelTestMetrics,
   createBrowserPanelTestTab,
   stubScreenshotMedia,
+  openBrowserActions,
 } from "./browser-panel-controller-test-support.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 import { createBrowserPageClient } from "./test-helpers/browser-page.ts";
@@ -299,7 +300,9 @@ describe("normalizeBrowserUrlDraft", () => {
       panel.client = createBrowserPageClient("target-1").client;
       mountSolid(() => panel);
       await waitForSolid(() => expect(panel.querySelector(".bp-shot")).not.toBeNull());
-      panel.querySelector<HTMLButtonElement>('[aria-label="Annotate page"]')!.click();
+      (await openBrowserActions(panel))
+        .querySelector<HTMLElement>('[role="menuitem"][aria-label="Annotate page"]')!
+        .click();
       await panel.updateComplete;
       const { capturedPointers, dispatchPointer } = attachAnnotationOverlay(panel);
       dispatchPointer("pointerdown", 10, 20);

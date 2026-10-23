@@ -107,6 +107,10 @@ the current run's latest stop and restarts the installed package after Doctor's
 writers settle. It records the observed recovery outcome while preserving the
 failed update result. Earlier runs' stop receipts never authorize that restart;
 operator-stopped services and explicit data-risk refusals remain stopped.
+Normal Doctor exits do not require a separate process-settlement receipt. On
+Windows, recovery restores the suspended Scheduled Task before restarting the
+Gateway, while preserving the failed Doctor check IDs in the update report.
+This recovery behavior requires the installed updater to contain the fix.
 
 After activation succeeds, a failure to read or publish update reporting leaves
 the updated installation in place. Reporting failures do not trigger package
@@ -184,14 +188,14 @@ capture as incomplete evidence. A remaining `manifest.json.partial` prevents
 reuse or automatic retirement even when `manifest.json` contains complete JSON.
 Keep both names for manual inspection; their presence does not authorize restoration.
 
-These captures are evidence for manual recovery. Active writers can change state
-during capture; an observed change leaves the capture incomplete and produces a
-warning. For databases, the warning names each database that changed after its
-snapshot or had no stable generation during it, followed by the backup's
-database warnings. A running Gateway that writes during capture is enough to
-cause this. Capture is best effort: when it fails, the update warns that it
-continues without the original-state capture, names the step and source paths
-that failed (for example, database generation verification), and proceeds.
+These captures are evidence for manual recovery. A verified database image may be
+older than its live source by the time the capture is sealed; later writes do not
+invalidate those chosen bytes or authorize restoring them over current data.
+The backup's existing database warnings remain available when a stable source
+generation could not be recorded. Unsafe source acquisition or file changes during
+copying can still leave a capture incomplete. Capture is best effort: when it fails,
+the update warns that it continues without the original-state capture, names the
+step and source paths that failed, and proceeds.
 Database rollback uses the pre-migration snapshots the update takes after the
 Gateway stops, described in
 [Recovery limits](/cli/update/how-updates-run#recovery-limits).
@@ -604,6 +608,10 @@ the installation repair command. These maintenance warnings also appear in
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
 | `--no-restart`                                   | Accepted for parity; repair does not request update activation. The repair parent restores a Gateway it stopped for maintenance.                                                                                                                                                                 |
 
+An invalid `--channel` exits with status 1 without changing the configured channel.
+With `--json`, stdout contains a JSON error object (`ok: false`, `error.type: "cli_error"`)
+and stderr retains the diagnostic. You can place `--json` before or after `repair`.
+
 Untouched, identityless 2026.9.2-era update admissions heal automatically after
 more than 24 hours. Gateway startup, `openclaw update status`, and `openclaw status`
 retain the row as an abandoned failure with reason `legacy-driver-expired` and an
@@ -722,6 +730,16 @@ It does not install a new core package or request update activation. The repair
 parent restores a service it stopped for maintenance, as described above.
 Human output ends with a finalization result that distinguishes completion,
 completion with warnings, and failure.
+
+Repair JSON reports `coreUpdate: "completed"` only after required finalization,
+service restoration, and recovery reconciliation finish. Nonfatal advisories
+can still produce `status: "warning"` with completed core work. Deferred
+maintenance or retained recovery reports `coreUpdate: "pending"`, including
+when an inherited update driver requires a successful process exit.
+The Mac app uses this completion fact to settle its repair receipt before
+reconnecting, so advisories or a failed reconnect do not repeat completed repair
+on the next launch. Failed processes and results without completion proof leave
+the repair pending.
 
 When repair finds a configured npm plugin payload but cannot recover its install
 record, it reinstalls from the selected registry source, using the active channel
@@ -1027,9 +1045,12 @@ captures through their sealed manifests; it never reads the captured payload:
   is always retained.
 - `protected` / `retained-doctor-capture`: a standalone Doctor copy kept by that
   retention rule. Active recovery references remain `pending-update-recovery`.
-- `protected` / `unmanifested-update-capture`: an incomplete or unreadable Doctor
-  capture, a directory without the capture marker or without a matching update run
-  or standalone manifest, and any other file in the capture directory. `unreadable-update-history` also
+- `protected` / `orphan-update-capture`: a sealed update capture with no matching
+  update run, outside the Doctor namespace. Its creation time appears in the
+  detail. No supported command retires these unattributed captures.
+- `protected` / `unmanifested-update-capture`: an incomplete or unreadable capture,
+  a directory without the capture marker or a matching manifest, and any other
+  file in the capture directory. `unreadable-update-history` also
   keeps every capture protected.
 
 Older `doctor-*` directories classified as `candidate` are also safe to delete by

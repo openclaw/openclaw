@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, it, expect } from "vitest";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -16,32 +17,6 @@ import {
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-node-loss-transcript-");
 
-function appendTranscriptMessage(params: {
-  sessionId: string;
-  storePath: string;
-  idempotencyKey: string;
-  message: object;
-}) {
-  const result = appendTranscriptMessageSync(
-    {
-      agentId: "main",
-      sessionKey: "main",
-      sessionId: params.sessionId,
-      storePath: params.storePath,
-    },
-    {
-      idempotencyLookup: "caller-checked",
-      message: { ...params.message, idempotencyKey: params.idempotencyKey },
-      now: 1,
-    },
-  );
-  expect(result.ok).toBe(true);
-  if (!result.ok || !result.value?.anchor) {
-    throw new Error("Expected committed transcript anchor");
-  }
-  return result.value.anchor;
-}
-
 it.each(["", "Partial reply"])(
   "saves outcome-unknown results for each unfinished tool with partial text %j",
   async (text) => {
@@ -49,21 +24,20 @@ it.each(["", "Partial reply"])(
     const storePath = path.join(sessionDirs.make(), "sessions.json");
     const scope = { agentId: "main", sessionKey: "main", sessionId, storePath };
     const runId = "node-lost-run";
-    await replaceSessionEntry(
-      { agentId: "main", storePath, sessionKey: "main" },
-      { sessionId, updatedAt: 1, activeWriterRunId: runId },
-    );
-    const originalInput = appendTranscriptMessage({
-      sessionId,
-      storePath,
-      idempotencyKey: "original-request",
-      message: { role: "user", content: "run the command", timestamp: 0 },
-    });
-    appendTranscriptMessage({
-      sessionId,
-      storePath,
-      idempotencyKey: "tool-request",
-      message: makeAgentAssistantMessage({
+    const entry = { sessionId, updatedAt: 1, activeWriterRunId: runId };
+    await replaceSessionEntry(scope, entry);
+    const append = (idempotencyKey: string, message: object) => {
+      const result = appendTranscriptMessageSync(scope, {
+        idempotencyLookup: "caller-checked",
+        message: { ...message, idempotencyKey },
+        now: 1,
+      });
+      return expectDefined(result.ok ? result.value?.anchor : undefined, "committed anchor");
+    };
+    const originalInput = append("input", { role: "user", content: "run", timestamp: 0 });
+    append(
+      "tool-request",
+      makeAgentAssistantMessage({
         stopReason: "toolUse",
         content: ["done", "lost-a", "lost-b"].map((id) => ({
           type: "toolCall",
@@ -72,30 +46,19 @@ it.each(["", "Partial reply"])(
           arguments: { command: id },
         })),
       }),
-    });
-    appendTranscriptMessage({
-      sessionId,
-      storePath,
-      idempotencyKey: "done-result",
-      message: {
-        role: "toolResult",
-        toolCallId: "done",
-        toolName: "exec",
-        content: [{ type: "text", text: "Completed" }],
-        isError: false,
-        timestamp: 1,
-      },
+    );
+    append("done-result", {
+      role: "toolResult",
+      toolCallId: "done",
+      toolName: "exec",
+      content: [{ type: "text", text: "Completed" }],
+      isError: false,
+      timestamp: 1,
     });
     const snapshot = captureAbortedPartial({
       session: {
         ok: true,
-        value: {
-          cfg: {},
-          storePath,
-          canonicalKey: "main",
-          agentId: "main",
-          entry: { sessionId, updatedAt: 1, activeWriterRunId: runId },
-        },
+        value: { cfg: {}, storePath, canonicalKey: "main", agentId: "main", entry },
       },
       sessionKey: "main",
       sessionId,
@@ -117,8 +80,7 @@ it.each(["", "Partial reply"])(
       );
     await persist();
     await persist();
-    const lines = await loadTranscriptEvents(scope);
-    const messages = lines.flatMap((line) =>
+    const messages = (await loadTranscriptEvents(scope)).flatMap((line) =>
       isRecord(line) && line.type === "message" && isRecord(line.message) ? [line.message] : [],
     );
     const results = messages.filter((message) => message.role === "toolResult");
@@ -127,7 +89,6 @@ it.each(["", "Partial reply"])(
       { toolCallId: "lost-a", isError: true, content: [{ text: missingToolResultText }] },
       { toolCallId: "lost-b", isError: true, content: [{ text: missingToolResultText }] },
     ]);
-    expect(results).toHaveLength(3);
     expect(
       messages.filter(
         (message) => message.role === "assistant" && JSON.stringify(message).includes('"text":'),

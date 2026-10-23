@@ -36,6 +36,7 @@ import { createNonExitingRuntime, defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
 import { formatCliCommand } from "../command-format.js";
+import { throwExpectedCliError } from "../failure-output.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import { refuseHostOwnedUpdate, reportHostOwnedUpdate } from "./host-owned.js";
@@ -90,6 +91,8 @@ import {
   type RetainedUpdateCustodyReport,
 } from "./update-retained-custody.js";
 
+export type UpdateCoreCompletion = "completed" | "pending";
+
 export async function updateFinalizeCommand(
   opts: UpdateFinalizeOptions,
   recoveryRunIds?: readonly string[],
@@ -107,11 +110,9 @@ export async function updateFinalizeCommand(
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel !== undefined && !requestedChannel) {
-    defaultRuntime.error(
+    throwExpectedCliError(
       `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
     );
-    defaultRuntime.exit(1);
-    return;
   }
 
   let exitCode: number | undefined;
@@ -230,6 +231,7 @@ export async function updateFinalizeCommand(
                 if (opts.json) {
                   defaultRuntime.writeJson({
                     status: "warning",
+                    coreUpdate: "pending" satisfies UpdateCoreCompletion,
                     nextAction: reportedNextAction,
                     mode: "finalize",
                     root,
@@ -557,9 +559,12 @@ async function updateFinalizeCommandInternal(
         if (!failure) {
           lifecycle.handoff?.complete(invokingRunId);
         }
+        // Exit status and advisories do not distinguish completed core work from deferred maintenance.
+        const coreUpdate: UpdateCoreCompletion = failure || retained ? "pending" : "completed";
         if (opts.json) {
           defaultRuntime.writeJson({
             ...result,
+            coreUpdate,
             ...(observed
               ? { recovery: observed.recovery, verification: observed.verification }
               : {}),

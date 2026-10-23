@@ -45,15 +45,10 @@ const catalog = useProfileState(undefined, () => {
   stop = () => {};
 });
 const bytes = avatarPng();
-const adopt = (id: string) =>
-  adoptTailscaleProfileAvatar(
-    id,
-    "https://avatars.example.test/p",
-    {},
-    {
-      fetchImpl: vi.fn(async () => avatarResponse(bytes)),
-    },
-  );
+const adopt = (id: string) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => avatarResponse(bytes));
+  return adoptTailscaleProfileAvatar(id, "https://avatars.example.test/p");
+};
 
 it("publishes the known avatar commit even when ordinary result delivery fails", async () => {
   const profile = ensureProfileForEmail("receipt@example.test");

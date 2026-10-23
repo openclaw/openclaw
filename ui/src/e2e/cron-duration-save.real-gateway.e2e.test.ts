@@ -243,8 +243,7 @@ catalogSuite.define(() => {
           const error = page.locator(".cron-error-banner");
           await error.waitFor({ state: "visible" });
           expect(await error.textContent()).toContain("Catalog transport unavailable");
-          await openPicker(picker);
-          expect(await modelOption("published").count()).toBe(1);
+          await waitForModel("published");
           await screenshot("read-failure");
 
           rejectCatalogReplies = false;
@@ -589,12 +588,16 @@ suite.define(() => {
             loadedStagger: "1.001",
             submitted: {
               id: jobId,
-              patch: { enabled: false, schedule: { expr: "*/5 * * * *", staggerMs: 1_001 } },
+              expectedConfigRevision: job.configRevision,
+              patch: {
+                enabled: false,
+                schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC", staggerMs: 1_001 },
+              },
             },
             stored: {
               id: jobId,
               enabled: false,
-              schedule: { expr: "*/5 * * * *", staggerMs: 1_001 },
+              schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC", staggerMs: 1_001 },
             },
             reloadedStagger: "1.001",
           },

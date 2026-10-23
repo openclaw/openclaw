@@ -30,8 +30,9 @@ type Resolution = {
 };
 
 function resolveResult(params: Resolution): ApprovalResolveResult {
+  const { approvalId, approvalKind = "exec", applied, decision = "allow-once" } = params;
   const presentation =
-    (params.approvalKind ?? "exec") === "exec"
+    approvalKind === "exec"
       ? {
           kind: "exec" as const,
           commandText: `<tag> & &amp; "double" 'single'`,
@@ -46,22 +47,22 @@ function resolveResult(params: Resolution): ApprovalResolveResult {
           allowedDecisions: ["allow-once" as const, "deny" as const],
         };
   const common = {
-    id: params.approvalId,
-    urlPath: `/approve/${encodeURIComponent(params.approvalId)}`,
+    id: approvalId,
+    urlPath: `/approve/${encodeURIComponent(approvalId)}`,
     createdAtMs: 1,
     expiresAtMs: 10_000,
     resolvedAtMs: 2,
     reason: "user" as const,
     presentation,
   };
-  return params.decision === "deny"
+  return decision === "deny"
     ? {
-        applied: params.applied,
+        applied,
         approval: { ...common, status: "denied", decision: "deny" },
       }
     : {
-        applied: params.applied,
-        approval: { ...common, status: "allowed", decision: params.decision ?? "allow-once" },
+        applied,
+        approval: { ...common, status: "allowed", decision },
       };
 }
 
@@ -118,27 +119,12 @@ function registerCardBinding(
 }
 
 it.each([
-  {
-    outcome: { status: "allowed", decision: "allow-once", reason: "user" },
-    title: "Exec Approval: Allowed once",
-  },
-  {
-    outcome: { status: "allowed", decision: "allow-always", reason: "user" },
-    title: "Exec Approval: Allowed always",
-  },
-  {
-    outcome: { status: "denied", decision: "deny", reason: "user" },
-    title: "Exec Approval: Denied",
-  },
-  {
-    outcome: { status: "expired", reason: "timeout" },
-    title: "Exec Approval: Expired",
-  },
-  {
-    outcome: { status: "cancelled", reason: "run-aborted" },
-    title: "Exec Approval: Cancelled",
-  },
-] as const)("renders $title from the canonical result", ({ outcome, title }) => {
+  [{ status: "allowed", decision: "allow-once", reason: "user" }, "Allowed once"],
+  [{ status: "allowed", decision: "allow-always", reason: "user" }, "Allowed always"],
+  [{ status: "denied", decision: "deny", reason: "user" }, "Denied"],
+  [{ status: "expired", reason: "timeout" }, "Expired"],
+  [{ status: "cancelled", reason: "run-aborted" }, "Cancelled"],
+] as const)("renders canonical result %j as %s", (outcome, title) => {
   const cards = buildGoogleChatCanonicalApprovalTerminalCards({
     applied: false,
     approval: {
@@ -156,7 +142,7 @@ it.each([
     },
   });
 
-  expect(cards[0]?.card.header?.title).toBe(title);
+  expect(cards[0]?.card.header?.title).toBe(`Exec Approval: ${title}`);
 });
 
 function click(event: GoogleChatEvent | string, target = createTarget()) {

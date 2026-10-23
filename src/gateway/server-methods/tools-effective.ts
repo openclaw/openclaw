@@ -24,15 +24,15 @@ import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runne
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { readToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
 import { buildEffectiveToolInventoryGroups } from "../../agents/tools-effective-inventory-groups.js";
+import { buildEffectiveToolInventory } from "../../agents/tools-effective-inventory-shared.js";
 import {
   resolveEffectiveToolInventory,
   acquireEffectiveToolInventoryRuntimeModelContext,
 } from "../../agents/tools-effective-inventory.js";
-import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
-import {
-  buildMcpCatalogNotices,
-  buildRuntimeCompatibleMcpToolInventory,
-} from "../../agents/tools-effective-mcp-inventory.js";
+import type {
+  EffectiveToolInventoryNotice,
+  EffectiveToolInventoryResult,
+} from "../../agents/tools-effective-inventory.types.js";
 import { resolveReplyToMode } from "../../auto-reply/reply/reply-threading.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/config.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
@@ -44,6 +44,7 @@ import {
   getActivePluginChannelRegistryVersion,
   getActivePluginRegistryVersion,
 } from "../../plugins/runtime.js";
+import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
@@ -65,6 +66,7 @@ const TOOLS_EFFECTIVE_STALE_TTL_MS = 120_000;
 const TOOLS_EFFECTIVE_SLOW_LOG_MS = 250;
 const TOOLS_EFFECTIVE_CACHE_LIMIT = 128;
 const MCP_CONFIG_SUMMARY_CACHE_LIMIT = 128;
+const BUNDLE_MCP_PLUGIN_ID = "bundle-mcp";
 
 type ToolsEffectiveCacheEntry = {
   value: EffectiveToolInventoryResult;
@@ -379,7 +381,14 @@ async function projectMcpCatalog(params: {
   context: TrustedToolsEffectiveContext;
   workspaceDir: string;
 }): Promise<EffectiveToolInventoryResult> {
-  const catalogNotices = buildMcpCatalogNotices(params.catalog);
+  const catalogNotices = (params.catalog.diagnostics ?? []).map(
+    (diagnostic): EffectiveToolInventoryNotice => ({
+      id: `mcp-server-diagnostic:${diagnostic.serverName}`,
+      severity: "warning",
+      message: `MCP server "${diagnostic.serverName}": ${diagnostic.message}`,
+      servers: [diagnostic.serverName],
+    }),
+  );
   const base =
     catalogNotices.length > 0
       ? { ...params.base, notices: [...(params.base.notices ?? []), ...catalogNotices] }
@@ -405,15 +414,36 @@ async function projectMcpCatalog(params: {
   });
   try {
     return acquired.run((runtimeModelContext) => {
-      const mcpInventory = buildRuntimeCompatibleMcpToolInventory({
-        tools: filteredMcpTools,
-        cfg: params.context.cfg,
-        workspaceDir: params.workspaceDir,
-        modelProvider: params.context.modelProvider,
-        modelId: params.context.modelId,
-        modelApi: runtimeModelContext.modelApi,
-        runtimeModel: runtimeModelContext.runtimeModel,
-      });
+      const mcpInventory = buildEffectiveToolInventory(
+        {
+          tools: filteredMcpTools,
+          cfg: params.context.cfg,
+          workspaceDir: params.workspaceDir,
+          modelProvider: params.context.modelProvider,
+          modelId: params.context.modelId,
+          modelApi: runtimeModelContext.modelApi,
+          runtimeModel: runtimeModelContext.runtimeModel,
+        },
+        {
+          allowProviderRuntimePluginLoad: false,
+          rawDescriptionFallback: "summary",
+          diagnosticOwner: () => ` from plugin "${BUNDLE_MCP_PLUGIN_ID}"`,
+          createToolProjection: () => (tool) => {
+            const mcp = getPluginToolMeta(tool)?.mcp;
+            return {
+              source: "mcp",
+              pluginId: BUNDLE_MCP_PLUGIN_ID,
+              ...(mcp
+                ? {
+                    mcpServer: mcp.serverName,
+                    mcpToolName: mcp.toolName,
+                    ...(mcp.deniedBySession ? { deniedBySession: true } : {}),
+                  }
+                : {}),
+            };
+          },
+        },
+      );
       const notices = [...(base.notices ?? []), ...mcpInventory.notices];
       if (mcpInventory.entries.length === 0) {
         return notices.length > 0 ? { ...base, notices } : base;

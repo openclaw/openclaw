@@ -15,17 +15,17 @@ import { createDirectPendingFinalCustody } from "../../channels/turn/direct-deli
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { inspectOpenClawAgentDatabaseOwner } from "../../state/openclaw-agent-db.js";
 import { settlePendingFinalDelivery } from "./delivery-completion.js";
+import { installRecoveryHooks } from "./delivery-completion.shard-test-support.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
 import {
   createRecoveryLog,
   createPendingFinalFixture,
   loadPendingDeliveries,
-  installDeliveryCompletionHooks,
 } from "./delivery-queue.test-helpers.js";
 
 describe("pending-final durable delivery completion", () => {
-  const { tmpDir, deliver: deliverOutboundPayloads } = installDeliveryCompletionHooks(true);
+  const { tmpDir, deliver: deliverOutboundPayloads } = installRecoveryHooks();
   const destination = { channel: "matrix", to: "!room:example" } as const;
 
   function pendingFinal(

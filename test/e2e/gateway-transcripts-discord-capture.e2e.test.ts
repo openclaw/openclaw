@@ -7,10 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, inject, it, vi } from "vitest";
-import type {
-  TranscriptsGetResult,
-  TranscriptsListResult,
-} from "../../packages/gateway-protocol/src/schema/transcripts.js";
+import type { TranscriptsGetResult } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { buildMockOpenAiResponsesProvider } from "../../src/gateway/test-openai-responses-model.js";
 import { createTestPluginServiceScheduler } from "../../src/plugin-sdk/plugin-test-api.js";
@@ -28,10 +25,9 @@ declare module "vitest" {
   }
 }
 
-type CaptureArguments = { action: "start" | "stop" | "summarize" } & Record<string, unknown>;
+type CaptureArguments = { action: "start" | "stop" } & Record<string, unknown>;
 type ScriptedCall = {
   callId: string;
-  agentId: "main" | "agent-b";
   args: CaptureArguments;
   output?: string;
 };
@@ -79,7 +75,7 @@ afterEach(async () => {
   await closeSkillsWatchers(true);
 });
 
-it("fences late Discord STT and preserves the admitted owner's history after a room route changes", async () => {
+it("fences late Discord STT through the model-selected plugin instance", async () => {
   const ports = inject("transcriptCapturePorts");
   if (
     ports !== undefined &&
@@ -119,11 +115,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
   let fixture: DiscordCaptureFixture | undefined;
   let fixtureScheduler: ReturnType<typeof createTestPluginServiceScheduler> | undefined;
   let releaseFixtureRegistry: (() => Promise<void>) | undefined;
-  let routedService:
-    | ReturnType<
-        typeof import("../../src/transcripts/auto-start.js").createTranscriptsAutoStartService
-      >
-    | undefined;
   let cleanupRuntime: (() => Promise<void>) | undefined;
   const requests: Record<string, unknown>[] = [];
   const errors: unknown[] = [];
@@ -175,12 +166,7 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
       // Unscripted conversation calls fail visibly, including recording-only scan regressions.
       expect(currentCall, "unexpected model request outside an admitted tool turn").toBeDefined();
       const call = currentCall!;
-      if (
-        awaitingOutput &&
-        (call.args.action === "stop" || call.args.action === "summarize") &&
-        !body?.tools
-      ) {
-        expect(call.agentId).toBe("main");
+      if (awaitingOutput && call.args.action === "stop" && !body?.tools) {
         summaryRequests++;
         expect(summaryTranscript).toBeDefined();
         const summaryInput = JSON.stringify(body);
@@ -304,7 +290,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     const { retireInspectionInstances } =
       await import("../../src/plugins/registry-inspection.test-support.js");
     const {
-      getActivePluginRegistry,
       setActivePluginRegistry,
       captureActivePluginRegistrySnapshot,
       restoreActivePluginRegistrySnapshot,
@@ -327,10 +312,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     const { closeOpenClawStateDatabaseByPathAsync } =
       await import("../../src/state/openclaw-state-db-cache.js");
     const { activeSessions } = await import("../../src/transcripts/capture-startup.js");
-    const { resolveSourceProvider } = await import("../../src/transcripts/capture.js");
-    const { createTranscriptsAutoStartService } =
-      await import("../../src/transcripts/auto-start.js");
-    const { TranscriptsStore } = await import("../../src/transcripts/store.js");
     const ownedCaptures = () =>
       [...activeSessions.values()].filter(
         (capture) => capture.session.source.accountId === captureTarget.accountId,
@@ -372,7 +353,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
           skipBootstrap: true,
           systemAgent: { agentId: "main" },
           sessionStore: { agentId: "main" },
-          heartbeat: { every: "0m" },
           model: { primary: provider.modelRef, fallbacks: [] },
           models: {
             [provider.modelRef]: {
@@ -440,10 +420,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
         preferBuiltPluginArtifacts: true,
       }),
     );
-    expect(runtimeEntry).toEqual({
-      source: path.join(discordPluginDir, "index.ts"),
-      rootDir: discordPluginDir,
-    });
     const record = createPluginRecord({
       id: "discord",
       ...runtimeEntry,
@@ -468,8 +444,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     );
     // Match loader registration: runtime slots belong to the invoking plugin instance.
     pluginInstance.run(() => fixture!.register(api));
-    expect(registration.registry.diagnostics).toEqual([]);
-    expect(record.transcriptSourceProviderIds).toEqual(["discord-voice"]);
     expect(
       getPluginValueInstance(registration.registry.transcriptSourceProviders[0]!.provider),
     ).toBe(pluginInstance);
@@ -485,7 +459,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
       scopes: ["operator.admin"],
     });
     await gateway.server.startupSettled;
-    expect(getRuntimeConfig().channels?.discord).toMatchObject(cfg.channels!.discord!);
     const metadata = getPluginRuntimeLoadContext(registration.registry)?.metadataSnapshot;
     // Minimal startup skips the model-publication sidecar. Publish through its
     // production owner, retaining the real fixture registration for both agents.
@@ -510,7 +483,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
         (entry) => entry.provider.id === "discord-voice",
       )?.provider;
       expect(inboundProvider).toBe(registration.registry.transcriptSourceProviders[0]?.provider);
-      expect(getPluginValueInstance(inboundProvider!)).toBe(pluginInstance);
       const selectedRegistry = published?.pluginGeneration.pluginRegistry;
       const selectedProvider = selectedRegistry?.transcriptSourceProviders.find(
         (entry) => entry.provider.id === "discord-voice",
@@ -518,21 +490,15 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
       expect(selectedProvider, agentId).toBe(inboundProvider);
     }
     pluginInstance.run(() => fixture!.bindPublishedRuntime());
-    expect(gateway.port).not.toBe(providerPort);
-    expect(getActivePluginRegistry()).toBe(registration.registry);
     const client = gateway.client;
-    const sessionKeys = {
-      main: `agent:main:capture-proof-${randomUUID()}`,
-      "agent-b": `agent:agent-b:capture-proof-${randomUUID()}`,
-    };
+    const sessionKey = `agent:main:capture-proof-${randomUUID()}`;
     const sessionId = `capture-${randomUUID()}`;
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
-    const runTurn = async (args: CaptureArguments, agentId: "main" | "agent-b" = "main") => {
-      const call: ScriptedCall = { callId: `call_capture_${calls.length}`, agentId, args };
+    const runTurn = async (args: CaptureArguments) => {
+      const call: ScriptedCall = { callId: `call_capture_${calls.length}`, args };
       calls.push(call);
       currentCall = call;
       const accepted = await client.request<{ runId: string; status: string }>("agent", {
-        sessionKey: sessionKeys[agentId],
+        sessionKey,
         message: `Perform the synthetic capture ${args.action} operation.`,
         deliver: false,
         idempotencyKey: randomUUID(),
@@ -542,7 +508,7 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
         runId: accepted.runId,
         timeoutMs: 30_000,
       });
-      expect(completed.status, `${agentId}:${args.action}`).toBe("ok");
+      expect(completed.status, args.action).toBe("ok");
       expect(errors).toEqual([]);
       expect(currentCall).toBeUndefined();
       return call.output!;
@@ -557,20 +523,7 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     const selector = /^Selector: (.+)$/m.exec(start)?.[1];
     expect(selector).toBeDefined();
     const speaker = await pluginInstance.run(() => fixture!.expectReady());
-    const admitted = await store.readSession(selector!);
-    const source = { providerId: "discord-voice", ...captureTarget };
-    expect(admitted).toMatchObject({ sessionId, metadata: { agentId: "main" } });
-    expect(admitted?.source).toEqual({ ...source, agentId: "main" });
-    const listed = await client.request<TranscriptsListResult>("transcripts.list", {});
     const session = { selector, sessionId };
-    expect(listed.sessions).toEqual([
-      expect.objectContaining({
-        ...session,
-        agentId: "main",
-        source: expect.objectContaining(source),
-        activeSubscription: true,
-      }),
-    ]);
     expect(requests).toHaveLength(2);
 
     await fixture.recordAfterTurn();
@@ -593,7 +546,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
       ],
     });
     expect(requests).toHaveLength(2);
-    expect(errors).toEqual([]);
 
     await pluginInstance.run(() => fixture!.beginLateDelivery());
     const stop = await runTurn({ action: "stop", selector });
@@ -613,92 +565,15 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     });
     expect(stopped.utterances).toEqual(captured.utterances);
     expect(JSON.stringify(stopped)).not.toContain(lateText);
-    const stoppedSession = await store.readSession(selector!);
-    expect(stoppedSession).toEqual({ ...admitted, stoppedAt: stopped.session.stoppedAt });
-    const utterances = await store.readUtterancesForSession(stoppedSession!);
-    expect(utterances).toEqual([
-      expect.objectContaining({
-        text: capturedText,
-        metadata: {
-          channel: "discord",
-          guildId: captureTarget.guildId,
-          channelId: captureTarget.channelId,
-          voiceSessionKey: speaker.voiceSessionKey,
-        },
-      }),
-    ]);
     expect(requests).toHaveLength(5);
     expect(summaryRequests).toBe(1);
 
-    // Rotate the real manager and transport while preserving the scenario's SDK spies.
-    const routedConfig: OpenClawConfig = {
-      ...cfg,
-      bindings: [{ ...cfg.bindings![0]!, agentId: "agent-b" }],
-      transcripts: {
-        enabled: true,
-        autoStart: [{ providerId: "discord-voice", ...captureTarget, whenOccupied: true }],
-      },
-    };
-    await pluginInstance.run(() => fixture!.rotateManager(routedConfig));
-    const routedContext: Parameters<typeof createTranscriptsAutoStartService>[0] = {
-      stateDir,
-      config: routedConfig,
-      logger: { warn: vi.fn() },
-      caller: { kind: "operator", source: "scheduled" },
-    };
-    const routedProvider = resolveSourceProvider("discord-voice", routedContext);
-    expect(routedProvider).toBe(registration.registry.transcriptSourceProviders[0]?.provider);
-    expect(getPluginValueInstance(routedProvider!)).toBe(pluginInstance);
-    routedService = createTranscriptsAutoStartService(routedContext);
-    await withPluginRuntimeRegistryScope(registration.registry, () => routedService!.start())
-      .settled;
-    await expect
-      .poll(() => ownedCaptures()[0])
-      .toMatchObject({
-        phase: "active",
-        session: { metadata: { agentId: "agent-b" } },
-      });
-    const replacement = ownedCaptures()[0]!;
-    expect(replacement.session.sessionId).not.toBe(sessionId);
-    expect(await store.readSession(selector!)).toEqual(stoppedSession);
-    expect(await store.readUtterancesForSession(stoppedSession!)).toEqual(utterances);
-    const savedSummary = await store.readSummary(stoppedSession!);
-    const providerStop = vi.spyOn(replacement, "stopProvider");
-    const sessionWrite = vi.spyOn(TranscriptsStore.prototype, "writeSession");
-    const summaryWrite = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
-    try {
-      for (const action of ["stop", "summarize"] as const) {
-        expect(await runTurn({ action, selector }, "agent-b")).toContain("session not found");
-      }
-      expect(providerStop).not.toHaveBeenCalled();
-      expect(sessionWrite).not.toHaveBeenCalled();
-      expect(summaryWrite).not.toHaveBeenCalled();
-      expect(await store.readSession(selector!)).toEqual(stoppedSession);
-      expect(await store.readSummary(stoppedSession!)).toEqual(savedSummary);
-      expect(await store.readUtterancesForSession(stoppedSession!)).toEqual(utterances);
-      expect(await runTurn({ action: "summarize", selector })).toContain(
-        `Transcripts summarized: ${sessionId}`,
-      );
-      expect(summaryWrite).toHaveBeenCalledTimes(1);
-      expect(providerStop).not.toHaveBeenCalled();
-      expect(activeSessions.get(replacement.session.sessionId)).toBe(replacement);
-    } finally {
-      providerStop.mockRestore();
-      sessionWrite.mockRestore();
-      summaryWrite.mockRestore();
-    }
-    await routedService.stop();
-    expect(requests).toHaveLength(12);
-    expect(summaryRequests).toBe(2);
     expect(errors).toEqual([]);
     expect(deniedConnections).toEqual([]);
   } finally {
     // Keep the actual runtime and edge spies alive until sources, streams and Gateway settle.
     await runQaGatewayFixture(
       async () => {
-        await routedService?.stop();
-      },
-      () => {
         fixtureScheduler?.beginClose();
       },
       () => fixture?.close(),

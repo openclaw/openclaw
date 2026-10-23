@@ -1,5 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
@@ -595,6 +596,31 @@ function mockDarwinBatch(lsof: { status: number | null; stdout: string; error?: 
   );
   darwinCommand.mockImplementation((pid: number) => ({ argv: rows.get(pid)!.argv }));
 }
+
+it.each([peer, launcher, self])(
+  "continues after an incomplete Darwin environment for PID %s",
+  (incompletePid) => {
+    rows.set(peer, { ppid: 1, argv: ["/bin/sleep", "60"] });
+    rows.set(peer + 1, { ppid: 1, argv: ["node", "/app/dist/index.js"] });
+    mockDarwinBatch({ status: 0, stdout: "" });
+    darwinCommand.mockImplementation((pid: number) => {
+      if (pid === incompletePid) {
+        throw new ProcSafeError("incomplete", "unterminated Darwin environment: private fixture");
+      }
+      return { argv: rows.get(pid)!.argv };
+    });
+    expect(inspectOtherOpenClawProcesses()).toEqual({
+      pids: incompletePid === self ? [peer + 1] : [incompletePid, peer + 1],
+      ...(incompletePid === self
+        ? {}
+        : {
+            warnings: [
+              `Could not verify runtime custody for PID ${incompletePid}: process command is unavailable`,
+            ],
+          }),
+    });
+  },
+);
 
 it("retains Darwin cwd holders from one partial batch without trusting other PID records", () => {
   rows.set(peer, { ppid: 1, argv: ["node", "/vendor/worker.js"] });

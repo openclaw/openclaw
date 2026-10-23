@@ -6,13 +6,10 @@ import { join } from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
-import { ensureCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
   collectNotifications,
-  createClient,
   createSandboxContext,
-  execServerUrlFromClient,
-  openSocket,
+  openSandboxSocket,
   rpc,
   waitForHttpBodyDeltas,
 } from "./sandbox-exec-server.test-helpers.js";
@@ -23,23 +20,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await sandboxExecServerRegistry.closeAll();
 });
-
-async function openSandboxHttpSocket(
-  sandbox: ReturnType<typeof createSandboxContext>,
-  initialized = true,
-) {
-  const client = createClient();
-  await ensureCodexSandboxExecServerEnvironment({
-    client: client as never,
-    sandbox,
-  });
-  const socket = await openSocket(execServerUrlFromClient(client));
-  await rpc(socket, "initialize", { clientName: "test" });
-  if (initialized) {
-    socket.send(JSON.stringify({ method: "initialized" }));
-  }
-  return socket;
-}
 
 function httpRpc(socket: Parameters<typeof rpc>[0], params: Record<string, unknown>) {
   return rpc(socket, "http/request", {
@@ -54,7 +34,7 @@ function openScriptHttpSocket(
   script: string,
   finalizeExec?: Parameters<typeof createSandboxContext>[0]["finalizeExec"],
 ) {
-  return openSandboxHttpSocket(
+  return openSandboxSocket(
     createSandboxContext({
       buildExecSpec: async () => ({
         argv: [process.execPath, "-e", script],
@@ -178,7 +158,7 @@ socket.socket.connect = connect`,
   }
   const port = address.port;
   const url = `http://source.test:${port}/redirect`;
-  const socket = await openSandboxHttpSocket(sandbox, !holdFinalResponse);
+  const socket = await openSandboxSocket(sandbox, !holdFinalResponse);
   return {
     socket,
     request: (params: Record<string, unknown> = {}) => httpRpc(socket, { url, ...params }),
@@ -231,7 +211,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       stdinMode: "pipe-closed" as const,
     }));
     const sandbox = createSandboxContext({ buildExecSpec });
-    const socket = await openSandboxHttpSocket(sandbox);
+    const socket = await openSandboxSocket(sandbox);
 
     await expect(
       httpRpc(socket, {

@@ -1,7 +1,6 @@
 import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionProgressCardRefreshAction } from "../../components/session-progress-card.ts";
 import { t } from "../../i18n/index.ts";
 import { boardProviderCacheKey } from "../../lib/board/provider.ts";
@@ -17,6 +16,11 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
+import {
+  createDetailsOutputsBinding,
+  projectDetailsOutputs,
+  type DetailsOutputsBinding,
+} from "./chat-details-outputs-binding.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import {
   chatHistoryRequests,
@@ -30,6 +34,7 @@ import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-session
 import { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import type { PaneSessionHandoff } from "./chat-pane-handoff-lifecycle.ts";
+import { captureProgressActions } from "./chat-pane-progress-actions.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
@@ -42,7 +47,10 @@ import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.t
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation-view.tsx";
-import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
+import {
+  clearSessionWorkspacePreviews,
+  getSessionWorkspace,
+} from "./components/chat-session-workspace-state.ts";
 import {
   dismissThreadPortals,
   isThreadPresentationFocused,
@@ -57,6 +65,59 @@ const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   readonly activeSessionResources = new ChatPaneActiveResources();
+
+  private detailsOutputsBinding?: DetailsOutputsBinding;
+
+  /** The Details host consumes this binding; native workspace/board projections already subscribe the pane. */
+  protected captureDetailsOutputs() {
+    const state = this.state;
+    if (!state || !this.presented || !this.isConnected) {
+      this.detailsOutputsBinding?.stop();
+      this.detailsOutputsBinding = undefined;
+      return {};
+    }
+    const workspace = getSessionWorkspace(state);
+    const board = this.resolveBoardView();
+    const scope = gatewayPresentationScope(this.context.gateway);
+    const boardReady =
+      this.boardProvider !== undefined || this.boardProviderLease?.provider === board.provider;
+    let binding = this.detailsOutputsBinding;
+    if (
+      !binding ||
+      binding.state !== state ||
+      binding.workspace !== workspace ||
+      binding.provider !== board.provider ||
+      binding.boardReady !== boardReady ||
+      binding.client !== state.client ||
+      binding.connected !== state.connected ||
+      binding.sessionId !== state.currentSessionId ||
+      binding.scope !== scope
+    ) {
+      binding?.stop();
+      binding = this.detailsOutputsBinding = createDetailsOutputsBinding(
+        {
+          state: () => this.state,
+          gateway: () => this.context.gateway,
+          isConnected: () => this.isConnected,
+          presented: () => this.presented,
+          presentation: () => this.sessionPresentation,
+          readBoard: () => this.resolveBoardView(),
+          showDashboard: () => this.showDashboard(false),
+        },
+        state,
+        workspace,
+        board.provider,
+        boardReady,
+      );
+    }
+    return projectDetailsOutputs(binding, workspace, board);
+  }
+
+  override dispose(): void {
+    this.detailsOutputsBinding?.stop();
+    this.detailsOutputsBinding = undefined;
+    super.dispose();
+  }
 
   readProgressCardScope() {
     const gateway = this.context.gateway;
@@ -127,59 +188,18 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   }
 
   protected captureProgressCardActions(canWrite: boolean) {
-    const state = this.state;
-    if (!state) {
-      return {};
-    }
-    const { sessionKey, currentSessionId } = state;
-    const agentId = resolveChatAgentId(state);
-    const gatewayUrl = state.settings.gatewayUrl;
-    const scope = gatewayPresentationScope(this.context.gateway);
-    const current = () =>
-      this.isConnected &&
-      this.presented &&
-      this.state === state &&
-      state.sessionKey === sessionKey &&
-      state.currentSessionId === currentSessionId &&
-      resolveChatAgentId(state) === agentId &&
-      gatewayPresentationScope(this.context.gateway) === scope;
-    return {
-      onHideTaskProgress: () => {
-        if (!current()) {
-          return;
-        }
-        state.settings = patchSettings({ chatShowTaskProgress: false });
-        showToast({
-          message: t("chat.sessionDetails.progressHidden"),
-          actionLabel: t("common.undo"),
-          onAction: () => {
-            if (
-              loadSettings().gatewayUrl === gatewayUrl &&
-              gatewayPresentationScope(this.context.gateway) === scope
-            ) {
-              patchSettings({ chatShowTaskProgress: true });
-            }
-          },
-        });
+    return captureProgressActions(
+      {
+        state: () => this.state,
+        isConnected: () => this.isConnected,
+        presented: () => this.presented,
+        gateway: () => this.context.gateway,
+        currentCard: () => this.detailsProgressCardPresentation?.card,
+        clearSaved: (card) => this.clearSavedProgressCard(card),
+        openSettings: () => this.context.navigate("appearance"),
       },
-      onCollapseTaskProgressChange: (collapsed: boolean) => {
-        if (current()) {
-          state.settings = patchSettings({ chatCollapseTaskProgress: collapsed });
-        }
-      },
-      onOpenTaskProgressSettings: () => {
-        if (current()) {
-          this.context.navigate("appearance");
-        }
-      },
-      onClearSavedProgressCard: canWrite
-        ? (card: ProgressCard) => {
-            if (current() && this.progressCardPresentation?.card === card) {
-              this.clearSavedProgressCard(card);
-            }
-          }
-        : undefined,
-    };
+      canWrite,
+    );
   }
 
   private currentSessionArchived: boolean | undefined;
@@ -274,7 +294,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       }
     | undefined;
 
-  protected get progressCardPresentation(): {
+  protected get detailsProgressCardPresentation(): {
     card: ProgressCard;
     lifetime: object | undefined;
     identity: string;
@@ -282,7 +302,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const state = this.state;
     if (
       !state ||
-      state.settings.chatShowTaskProgress === false ||
       !this.presented ||
       this.isCurrentSessionArchived(state) ||
       parseCatalogSessionKey(state.sessionKey)
@@ -311,7 +330,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const progress = this.progressCardSnapshot;
     const card = progress.card;
     const target = this.resolveChatReadTarget();
-    if (card && target) {
+    if (card && target && (card.markdown?.trim() || card.steps?.length)) {
       this.retainedProgressCard = {
         gatewayScope,
         client: state.client,
@@ -326,9 +345,24 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     } else if (!progress.loading) {
       this.retainedProgressCard = undefined;
     }
-    // The X only hides this presentation. The Gateway card remains available to
-    // other clients and read-only surfaces; a new card lifetime restores this view.
-    const presented = this.retainedProgressCard;
+    return this.retainedProgressCard ?? null;
+  }
+
+  protected get showTaskProgress(): boolean {
+    return this.state?.settings.chatShowTaskProgress !== false;
+  }
+
+  protected get detailsProgressCardError() {
+    return this.progressCardSnapshot.error;
+  }
+
+  protected get progressCardPresentation() {
+    const presented = this.detailsProgressCardPresentation;
+    if (!this.showTaskProgress) {
+      return null;
+    }
+    // The X only hides the chat presentation. Details still reads the saved plan.
+    // A new card lifetime can restore this local dismissal, never the preference.
     if (!presented) {
       return null;
     }
@@ -380,14 +414,17 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     ) {
       return undefined;
     }
-    // Unlike secondary metadata, the progress card determines transcript geometry.
-    // Consult preferences only after the pane and its history owner are ready.
-    return state.settings.chatShowTaskProgress === false ? undefined : this.resolveChatReadTarget();
+    // Details remains available when the user hides progress from the chat.
+    return this.resolveChatReadTarget();
   }
 
   protected get progressCardInitialLoading(): boolean {
+    return this.showTaskProgress && this.detailsProgressCardInitialLoading;
+  }
+
+  protected get detailsProgressCardInitialLoading(): boolean {
     const state = this.state;
-    if (!state || state.settings.chatShowTaskProgress === false) {
+    if (!state) {
       return false;
     }
     if (this.progressPresentationSessionKey !== state.sessionKey) {
@@ -504,6 +541,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   protected override presentedChanged(presented: boolean): void {
     if (!presented) {
+      // The hidden frame is parked; retire feedback without releasing its admitted publication.
+      this.publication.binding?.sync(null);
+      this.detailsOutputsBinding?.stop();
+      this.detailsOutputsBinding = undefined;
       this.retireHeaderSessionMutations();
       this.dashboardPresentationActivation = undefined;
       this.retainedProgressCard = undefined;

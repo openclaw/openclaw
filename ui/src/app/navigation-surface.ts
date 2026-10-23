@@ -15,6 +15,7 @@ export const NAV_DRAWER_TOGGLE_REGISTRATION = "nav-drawer-toggle";
 export type ShellNavigationElements = {
   shellElement?: HTMLElement;
   navDrawerElement?: HTMLElement;
+  navBackdropElement?: HTMLElement;
   contentElement?: HTMLElement;
   toastElement?: HTMLElement;
 };

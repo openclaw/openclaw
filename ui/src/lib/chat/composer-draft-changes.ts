@@ -6,6 +6,7 @@ type ComposerDraftSnapshot = {
   mentions: readonly HumanMention[];
   attachments: ChatAttachment[];
   pendingAttachmentReads: number;
+  attachmentReadRevision?: number;
   goalDraftMode?: ChatGoalDraftMode | null;
 };
 

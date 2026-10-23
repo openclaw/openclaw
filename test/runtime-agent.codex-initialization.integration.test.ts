@@ -11,7 +11,7 @@ import {
 } from "../src/config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
-import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
+import { callGatewayHandler } from "../src/gateway/server-methods/skills.test-helpers.js";
 import * as sqliteAdmission from "../src/infra/sqlite-worker-operation-admission.js";
 import {
   createPluginStateKeyedStoreV2,
@@ -193,35 +193,24 @@ it.each([
           upstreamRef: params.upstream.ref,
           marker: null,
         });
-        let result: { status: string; message?: string } | undefined;
-        const request = { sessionKey: params.source.sessionKey, entryId: params.source.entryId };
-        await expectDefined(
-          sessionRewindHandlers["sessions.fork"],
-          "fork handler",
-        )({
-          req: {
-            type: "req",
-            id: "initialization-owner",
-            method: "sessions.fork",
-            params: request,
+        const result = await callGatewayHandler(
+          sessionRewindHandlers,
+          "sessions.fork",
+          { sessionKey: params.source.sessionKey, entryId: params.source.entryId },
+          {
+            context: {
+              getRuntimeConfig: () => ({}),
+              getSessionEventSubscriberConnIds: () => new Set(),
+              broadcastToConnIds: vi.fn(),
+            },
           },
-          params: request,
-          client: null,
-          isWebchatConnect: () => false,
-          context: {
-            getRuntimeConfig: () => ({}),
-            rpcSources: new Map(),
-            getSessionEventSubscriberConnIds: () => new Set(),
-            broadcastToConnIds: vi.fn(),
-          } as unknown as GatewayRequestContext,
-          respond: (ok, _payload, error) => {
-            result = {
-              status: ok ? "created" : "failed",
-              ...(error ? { message: error.message } : {}),
-            };
-          },
-        });
-        return expectDefined(result, "fork response");
+        );
+        expect(result.ok).not.toBeNull();
+        const message = isRecord(result.error) ? result.error.message : undefined;
+        return {
+          status: result.ok ? "created" : "failed",
+          ...(typeof message === "string" ? { message } : {}),
+        };
       };
       const deletion = vi.spyOn(harness, "withSessionDeletion");
       const mutate = bindingStore.mutate.bind(bindingStore);

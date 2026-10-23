@@ -1,9 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 /** Collects property names and descriptions from a JSON-Schema-shaped value. */
-export function readParameterText(parameters: unknown, depth = 0): string {
+export function readParameterText(parameters: unknown): string {
   const parts: string[] = [];
-  collectParameterText(parameters, depth, parts);
+  collectParameterText(parameters, 0, parts);
   return parts.join(" ");
 }
 

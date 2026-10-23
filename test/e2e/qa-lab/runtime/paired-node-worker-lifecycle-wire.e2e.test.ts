@@ -598,7 +598,6 @@ describe("paired node worker lifecycle wire", () => {
           operator,
           root,
           capacity: 2,
-          capacityWaitMs: 750,
           bundlePrewarm: true,
           bundleRetention: true,
           bundleStatus: true,

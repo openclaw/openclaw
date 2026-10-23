@@ -9,7 +9,7 @@ import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.
 import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
 import { renderCmdRestartLogSetup } from "../daemon/restart-logs.js";
-import { resolveTaskScriptPath } from "../daemon/schtasks.js";
+import { resolveTaskScriptPath } from "../daemon/schtasks-layout.js";
 import { formatErrorMessage } from "./errors.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "./tcp-port.js";

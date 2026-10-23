@@ -100,7 +100,7 @@ export async function resolveReplyDirectives(params: {
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;
-  hasResolvedHeartbeatModelOverride: boolean;
+  hasResolvedTurnModelOverride?: boolean;
   typing: TypingController;
   opts?: InternalGetReplyOptions;
   skillFilter?: string[];
@@ -126,7 +126,7 @@ export async function resolveReplyDirectives(params: {
     defaultModel,
     primaryProvider,
     primaryModel,
-    hasResolvedHeartbeatModelOverride,
+    hasResolvedTurnModelOverride,
     typing,
     opts,
     skillFilter,
@@ -481,6 +481,7 @@ export async function resolveReplyDirectives(params: {
   const resolvedVerboseLevel =
     directives.verboseLevel ??
     (targetSessionEntry?.verboseLevel as VerboseLevel | undefined) ??
+    agentEntry?.verboseDefault ??
     agentCfg?.verboseDefault;
   const configuredReasoningDefault = agentEntry?.reasoningDefault ?? agentCfg?.reasoningDefault;
   const canUseReasoningState =
@@ -538,8 +539,7 @@ export async function resolveReplyDirectives(params: {
       provider,
       model,
       hasModelDirective: directives.hasModelDirective,
-      hasResolvedHeartbeatModelOverride,
-      isHeartbeat: opts?.isHeartbeat === true,
+      hasResolvedTurnModelOverride,
       preparedModelCatalog: params.preparedModelCatalog,
       operatorAuthority: opts?.operatorAuthority,
     });

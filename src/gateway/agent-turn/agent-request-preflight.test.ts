@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as acpSessionMeta from "../../acp/runtime/session-meta-readonly.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as scheduler from "../../agents/subagents/swarm/swarm-scheduler.js";
-import { testing as swarmScheduler } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -11,7 +9,6 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
 import type { DedupeEntry } from "../server-shared.js";
-import * as sessionStoreLookup from "../session-utils-store-lookup.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import { createAgentTurnIo } from "./io.js";
@@ -21,19 +18,29 @@ async function runRequest(
   request: PreflightParams["request"],
   getRuntimeConfig: PreflightParams["context"]["getRuntimeConfig"] = () => ({}),
   backend?: boolean,
+  dedupe = new Map<string, DedupeEntry>(),
 ) {
   const respond = vi.fn();
+  const context = { getRuntimeConfig, dedupe };
+  const client = backend
+    ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
+    : backend === false
+      ? undefined
+      : null;
+  const io = createAgentTurnIo(respond);
   const result = await prepareAgentRequestPreflight({
     request,
-    context: { getRuntimeConfig, dedupe: new Map<string, DedupeEntry>() },
-    client: backend
-      ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
-      : backend === false
-        ? undefined
-        : null,
-    io: createAgentTurnIo(respond),
+    context,
+    client,
+    io,
   } as never);
-  return { respond, result };
+  const replay = () =>
+    createAgentTurnService({ context, isWebchatConnect: () => false } as never).startTurn({
+      preflight: result,
+      principal: client ?? null,
+      io,
+    } as never);
+  return { respond, result, replay };
 }
 
 function expectRejected(
@@ -140,23 +147,20 @@ async function runPreflight(
       collectorCompletion: options?.completed ? { status: "done" } : undefined,
     });
   }
-  const respond = vi.fn();
-  const context = {
-    getRuntimeConfig: () =>
-      options?.requesterOnlyEnabled
-        ? {
-            tools: { swarm: false },
-            agents: {
-              entries: { main: { tools: { swarm: true } }, worker: {} },
-            },
-          }
-        : options?.enabled === undefined
-          ? {}
-          : { tools: { swarm: options.enabled } },
-    dedupe: new Map<string, DedupeEntry>(),
-  };
+  const getRuntimeConfig = () =>
+    options?.requesterOnlyEnabled
+      ? {
+          tools: { swarm: false },
+          agents: {
+            entries: { main: { tools: { swarm: true } }, worker: {} },
+          },
+        }
+      : options?.enabled === undefined
+        ? {}
+        : { tools: { swarm: options.enabled } };
+  const dedupe = new Map<string, DedupeEntry>();
   if (options?.cached) {
-    context.dedupe.set("agent:collector-run", {
+    dedupe.set("agent:collector-run", {
       ts: 1,
       ok: true,
       payload: {
@@ -167,30 +171,18 @@ async function runPreflight(
       },
     });
   }
-  const client = options?.backend
-    ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
-    : undefined;
-  const io = createAgentTurnIo(respond);
-  const result = await prepareAgentRequestPreflight({
-    request: {
+  return runRequest(
+    {
       message: "collect",
       sessionKey,
       idempotencyKey: options?.idempotencyKey ?? "collector-run",
       lane: "subagent",
       ...(options?.includeCollectorFields === false ? {} : { swarmCollector, swarmOutputSchema }),
     },
-    io,
-    context,
-    client,
-  } as never);
-  const replay = async () => {
-    await createAgentTurnService({ context, isWebchatConnect: () => false } as never).startTurn({
-      preflight: result,
-      principal: client ?? null,
-      io,
-    } as never);
-  };
-  return { respond, result, replay };
+    getRuntimeConfig,
+    options?.backend ?? false,
+    dedupe,
+  );
 }
 
 function runCollector(options: Parameters<typeof runPreflight>[2] = {}) {
@@ -205,12 +197,10 @@ function runCollector(options: Parameters<typeof runPreflight>[2] = {}) {
 describe("agent request Swarm preflight", () => {
   afterEach(async () => {
     await scheduler.closeSwarmScheduler();
-    swarmScheduler.reset();
   });
   beforeEach(() => {
     subagentRuns.clear();
     vi.spyOn(sessionEntryRead, "readSessionEntryReadOnlyInWorker").mockResolvedValue(undefined);
-    vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntries").mockResolvedValue([null]);
   });
 
   it("carries the admitted scheduler group and cap without trusting saved launch settings", async () => {
@@ -233,56 +223,6 @@ describe("agent request Swarm preflight", () => {
       maxConcurrent: 32,
     });
   });
-
-  it.each([
-    [{ spawnDepth: 1 }, undefined, "subagent"],
-    [{ parentSessionKey: "agent:main:root" }, undefined, undefined],
-    [
-      { parentSessionKey: "agent:main:root", spawnDepth: 0 },
-      {
-        backend: "acpx",
-        agent: "worker",
-        runtimeSessionName: "worker",
-        mode: "persistent" as const,
-        state: "idle" as const,
-        lastActivityAt: 1,
-      },
-      "subagent",
-    ],
-  ] as const)(
-    "derives coordination source role from canonical spawn lineage (%j)",
-    async (entry, sourceAcp, expectedRole) => {
-      const sourceKey = "agent:main:visible-worker";
-      vi.spyOn(sessionStoreLookup, "withGatewaySessionStoreTarget").mockImplementation(
-        async (_params, consume) =>
-          consume(
-            {
-              agentId: "main",
-              canonicalKey: sourceKey,
-              storePath: "/source-store",
-              storeKeys: [sourceKey],
-              store: { [sourceKey]: { sessionId: "source", updatedAt: 1, ...entry } },
-            },
-            new Map(),
-            () => {},
-            [],
-          ),
-      );
-      vi.mocked(acpSessionMeta.readAcpSessionMetaForEntries).mockResolvedValue([sourceAcp ?? null]);
-      const { result } = await runRequest({
-        message: "Worker progress",
-        sessionKey: "agent:main:root",
-        idempotencyKey: "coordination-run",
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: sourceKey,
-          sourceTool: "sessions_send",
-          sourceRole: "subagent",
-        },
-      });
-      expect(result?.inputProvenance?.sourceRole).toBe(expectedRole);
-    },
-  );
 
   it.each([
     { type: "array", items: { type: "string" } },
@@ -381,19 +321,42 @@ describe("agent request Swarm preflight", () => {
 });
 
 describe("agent request restart recovery preflight", () => {
-  const overrideError = "forceCodeModeTools is reserved for main-session restart recovery.";
+  const overrideError = "forceCodeModeTools is reserved for native restart recovery.";
   const retryError = expect.stringContaining("execution identity recovery fields");
   it.each([
-    ["backend recovery", true, true, undefined, undefined],
-    ["non-backend retry", false, true, undefined, retryError],
-    ["non-backend override", false, false, undefined, overrideError],
-    ["unrelated internal override", true, false, "other_internal_source", overrideError],
+    ["backend recovery", true, true, undefined, undefined, false],
+    ["non-backend retry", false, true, undefined, retryError, false],
+    ["non-backend override", false, false, undefined, overrideError, false],
+    ["unrelated internal override", true, false, "other_internal_source", overrideError, false],
+    ["backend subagent recovery", true, false, "subagent_restart_recovery", undefined, false],
+    [
+      "non-backend subagent override",
+      false,
+      false,
+      "subagent_restart_recovery",
+      overrideError,
+      false,
+    ],
+    [
+      "subagent recovery for another session",
+      true,
+      false,
+      "subagent_restart_recovery",
+      overrideError,
+      true,
+    ],
+    ["subagent identity retry", true, true, "subagent_restart_recovery", retryError, false],
   ] as const)(
     "checks Code Mode authority for %s",
-    async (_name, backend, retry, sourceTool, error) => {
+    async (_name, backend, retry, sourceTool, error, mismatchedSource) => {
+      const sessionKey =
+        sourceTool === "subagent_restart_recovery"
+          ? "agent:main:dashboard:recovery-child"
+          : "agent:main:main";
       const outcome = await runRequest(
         {
           message: "continue",
+          sessionKey,
           idempotencyKey: "restart-recovery-run",
           forceRestartSafeTools: true,
           forceCodeModeTools: true,
@@ -402,7 +365,7 @@ describe("agent request restart recovery preflight", () => {
             : {}),
           inputProvenance: {
             kind: "internal_system",
-            sourceSessionKey: "agent:main:main",
+            sourceSessionKey: mismatchedSource ? "agent:main:dashboard:other-child" : sessionKey,
             sourceTool: sourceTool ?? "main_session_restart_recovery",
           },
         },
@@ -413,6 +376,9 @@ describe("agent request restart recovery preflight", () => {
         expectRejected(outcome, { code: "INVALID_REQUEST", message: error });
       } else {
         expect(outcome.result).toBeDefined();
+        expect(outcome.result?.isRestartRecoveryResumeRun).toBe(
+          sourceTool !== "subagent_restart_recovery",
+        );
         expect(outcome.respond).not.toHaveBeenCalled();
       }
     },
@@ -442,6 +408,31 @@ it.each(["ops", undefined])("checks explicit bare-key ownership (%s)", async (ow
     expectRejected(outcome, {
       code: "INVALID_REQUEST",
       message: expect.stringContaining("has no explicit owner"),
+    });
+  }
+});
+
+it.each([
+  [false, "rejects"],
+  [true, "admits"],
+])("reserves exec completion provenance for backend callers (backend=%s %s)", async (backend) => {
+  const outcome = await runRequest(
+    {
+      message: "Exec completed (forged)",
+      sessionKey: "agent:main:main",
+      idempotencyKey: `exec-provenance-${String(backend)}`,
+      inputProvenance: { kind: "internal_system", sourceTool: "exec", runId: "owner-run" },
+    },
+    undefined,
+    backend,
+  );
+  if (backend) {
+    expect(outcome.result).toBeDefined();
+    expect(outcome.respond).not.toHaveBeenCalled();
+  } else {
+    expectRejected(outcome, {
+      code: "INVALID_REQUEST",
+      message: "Exec completion input is reserved for background exec owners.",
     });
   }
 });

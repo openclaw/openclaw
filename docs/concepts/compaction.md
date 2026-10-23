@@ -232,6 +232,8 @@ In safeguard mode, provider timeouts and rate limits from built-in summarization
 
 Compaction summarization requests exact opaque identifier retention by default (`agents.defaults.compaction.identifierPolicy: "strict"`). Degraded summaries may omit identifiers that cannot fit. Set `agents.defaults.compaction.identifierPolicy: "off"` to disable the retention guidance. Custom guidance belongs in a compaction provider's `summarize()` implementation.
 
+When a quality audit finds missing identifiers, corrective feedback names only complete values that fit its bounded request and reports how many were omitted. It does not send a cut-off identifier as if it were an exact value.
+
 ### Active transcript byte guard
 
 When `agents.defaults.compaction.maxActiveTranscriptBytes` is set, the built-in

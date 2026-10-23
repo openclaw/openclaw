@@ -15,7 +15,7 @@ import {
 import { createSessionOwnerMenuHarness } from "../test-helpers/session-owner-menu.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { EMPTY_SESSION_MENU_DATA } from "./session-menu-actions.ts";
+import { EMPTY_SESSION_MENU_DATA } from "./session-menu-data.ts";
 import { SessionMenu, type SessionMenuAction } from "./session-menu-solid.tsx";
 
 function press(target: EventTarget, key: string, composed = false) {
@@ -118,7 +118,7 @@ it("preserves focus and owner search with the Solid application provider", async
   await waitForSolid(() => expect(menuItemLabels(owner)).toEqual(["Research"]));
   search.focus();
   host.session = { ...host.session, unread: true };
-  host.work = { loading: false, pullRequestUrl: "https://example.test/pull/1", worktreePath: null };
+  host.work = { pullRequestUrl: "https://example.test/pull/1", worktreePath: null };
   await settleSessionMenu(host);
   await waitForSolid(() => expect(menuItemLabels(host)).toContain("Open PR"));
   expect(menuItem(host, "Assign to…")).toBe(owner);

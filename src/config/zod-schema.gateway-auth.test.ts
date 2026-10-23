@@ -4,6 +4,8 @@ import { ModelsConfigSchema } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { SessionSchema } from "./zod-schema.session.js";
 
+const accepts = (raw: unknown) => OpenClawSchema.safeParse(raw).success;
+
 function expectSchemaIssue(raw: unknown, path: string[], message?: string) {
   const result = OpenClawSchema.safeParse(raw);
   expect(result.success).toBe(false);
@@ -36,19 +38,14 @@ test.each([
   ["blank claim", { ...trusted, githubAccountIdClaim: " " }],
   ["incomplete mapping", { issuer: trusted.issuer }],
 ])("rejects %s", (_name, mapping) => {
-  expect(
-    OpenClawSchema.safeParse({
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "cf-access-authenticated-user-email",
-            cloudflareAccessOidc: mapping,
-          },
-        },
-      },
-    }).success,
-  ).toBe(false);
+  const auth = {
+    mode: "trusted-proxy",
+    trustedProxy: {
+      userHeader: "cf-access-authenticated-user-email",
+      cloudflareAccessOidc: mapping,
+    },
+  };
+  expect(accepts({ gateway: { auth } })).toBe(false);
 });
 
 const validRole = {
@@ -114,15 +111,15 @@ test.each([
 });
 
 test.each([
-  { name: "unknown session permission", role: { ...validRole, sessions: { others: "edit" } } },
-  { name: "unknown sandbox policy", role: { ...validRole, sandbox: "optional" } },
-  { name: "unknown operator scope", role: { ...validRole, scopes: ["operator.superuser"] } },
-  { name: "wildcard in an agent allowlist", role: { ...validRole, agents: ["*"] } },
-  { name: "blank access-policy plugin", role: { ...validRole, accessPolicyPlugin: " " } },
-  { name: "missing session policy", role: { agents: "*", scopes: ["operator.read"] } },
-  { name: "freeform capability", role: { ...validRole, capability: "sessions.delete" } },
-])("rejects $name", ({ role }) => {
-  expect(OpenClawSchema.safeParse(withRole(role)).success).toBe(false);
+  ["unknown session permission", { sessions: { others: "edit" } }],
+  ["unknown sandbox policy", { sandbox: "optional" }],
+  ["unknown operator scope", { scopes: ["operator.superuser"] }],
+  ["wildcard in an agent allowlist", { agents: ["*"] }],
+  ["blank access-policy plugin", { accessPolicyPlugin: " " }],
+  ["missing session policy", { sessions: undefined, agents: "*", scopes: ["operator.read"] }],
+  ["freeform capability", { capability: "sessions.delete" }],
+] as const)("rejects %s", (_name, overrides) => {
+  expect(accepts(withRole({ ...validRole, ...overrides }))).toBe(false);
 });
 
 test("rejects a default role that has no definition", () => {
@@ -138,7 +135,7 @@ test.each([
 
 test("accepts a matching GitHub cloud endpoint", () => {
   const github = { host: "tenant.ghe.com", apiBaseUrl: "https://api.tenant.ghe.com" };
-  expect(OpenClawSchema.safeParse({ gateway: { github } }).success).toBe(true);
+  expect(accepts({ gateway: { github } })).toBe(true);
 });
 
 test.each([
@@ -147,12 +144,12 @@ test.each([
   { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/other" },
   { host: "ghe.example.test" },
 ])("rejects a GitHub endpoint that could send credentials away from $host", (github) => {
-  expect(OpenClawSchema.safeParse({ gateway: { github } }).success).toBe(false);
+  expect(accepts({ gateway: { github } })).toBe(false);
 });
 
 test("accepts a provider neutral repository default", () => {
   expect(
-    OpenClawSchema.safeParse({
+    accepts({
       gateway: {
         projects: {
           defaultRepository: { url: "https://ghe.example.test/acme/private-repo.git", ref: "main" },
@@ -161,7 +158,7 @@ test("accepts a provider neutral repository default", () => {
       cloudWorkers: {
         projectProfiles: { "ghe.example.test/acme/private-repo": "example-worker" },
       },
-    }).success,
+    }),
   ).toBe(true);
 });
 
@@ -172,13 +169,13 @@ it("preserves a SecretRef-only bundled overlay without custom provider fields", 
 });
 
 it("requires the legacy bailian-token-plan owner to remain an exact custom provider", () => {
-  const accepts = (provider: unknown) =>
+  const acceptsProvider = (provider: unknown) =>
     ModelsConfigSchema.safeParse({
       providers: { "bailian-token-plan": provider },
     }).success;
-  expect(accepts({ timeoutSeconds: 600 })).toBe(false);
+  expect(acceptsProvider({ timeoutSeconds: 600 })).toBe(false);
   expect(
-    accepts({
+    acceptsProvider({
       api: "anthropic-messages",
       baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
       models: [{ id: "qwen3.7-plus", name: "qwen3.7-plus" }],
@@ -197,13 +194,8 @@ it.each([
 });
 
 it("rejects inherited realtime provider keys", () => {
-  const talk = {
-    realtime: {
-      provider: "constructor",
-      providers: { elevenlabs: { voiceId: "voice-123" } },
-    },
-  };
-  const result = OpenClawSchema.safeParse({ talk });
+  const realtime = { provider: "constructor", providers: { elevenlabs: { voiceId: "voice-123" } } };
+  const result = OpenClawSchema.safeParse({ talk: { realtime } });
   expect(result.success).toBe(false);
   expect(result.error?.issues[0]?.path).toEqual(["talk", "realtime", "provider"]);
 });
@@ -253,5 +245,5 @@ it.each([
 });
 
 it("rejects a relative worktreeRoot", () => {
-  expect(OpenClawSchema.safeParse({ worktreeRoot: "worktrees" }).success).toBe(false);
+  expect(accepts({ worktreeRoot: "worktrees" })).toBe(false);
 });

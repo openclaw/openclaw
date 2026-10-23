@@ -91,7 +91,10 @@ suite.define(() => {
       await expectMessagesNotToOverlap(page);
 
       await openChatSidePanelType(page, "Files");
-      await page.locator(".chat-workspace-rail").waitFor({ state: "visible" });
+      await page
+        .locator(".workspace-desktop")
+        .getByRole("button", { name: "/workspace/AGENTS.md", exact: true })
+        .waitFor({ state: "visible" });
       await expectMessagesNotToOverlap(page);
 
       await activateChatHeaderPanelAction(page, "Show session changes");

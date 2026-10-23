@@ -5,10 +5,10 @@ import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
+import { googleImageGenerationProvider } from "./image-generation-provider.js";
 
 function generateImage(overrides: Partial<ImageGenerationRequest> = {}) {
-  return buildGoogleImageGenerationProvider().generateImage({
+  return googleImageGenerationProvider.generateImage({
     provider: "google",
     model: "gemini-3.1-flash-image",
     prompt: "draw a cat",
@@ -241,7 +241,7 @@ describe("Google image-generation provider", () => {
   it("still reports not configured with a custom endpoint and no credentials", async () => {
     vi.spyOn(providerAuth, "isProviderApiKeyConfiguredAsync").mockResolvedValue(false);
 
-    const provider = buildGoogleImageGenerationProvider();
+    const provider = googleImageGenerationProvider;
     expect(
       await provider.isConfiguredAsync?.({
         agentDir: "/tmp/agent",

@@ -295,7 +295,7 @@ it("shares selection revisions with events, ignoring activity", async (f) => {
       preparedRepositoryWorkspace: null,
       activeModel: null,
     });
-    expect(buildGatewaySessionSnapshot({ sessionRow: row, includeSession: true })).toMatchObject({
+    expect(buildGatewaySessionSnapshot({ sessionRow: row })).toMatchObject({
       session: { sessionModelRevision: revision },
     });
   }

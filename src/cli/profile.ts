@@ -66,11 +66,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     return { kind: "pass" };
   });
 
-  if (!scanned.ok) {
-    return scanned;
-  }
-
-  return { ok: true, profile, argv: scanned.argv };
+  return scanned.ok ? { ok: true, profile, argv: scanned.argv } : scanned;
 }
 
 export function applyCliProfileEnv(params: {

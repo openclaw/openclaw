@@ -102,14 +102,42 @@ describe("persisted implicit-main roster migration", () => {
     );
   });
 
-  it("keeps an unrelated ancestor include from owning a locally authored roster", async () => {
+  it.each([
+    {
+      name: "unrelated ancestor",
+      owned: false,
+      config: { $include: "./included.json", agents: { entries: {} } },
+      included: { channels: { telegram: { enabled: true } } },
+    },
+    {
+      name: "identical ancestor roster contribution",
+      owned: true,
+      config: { $include: "./included.json", agents: { entries: { main: {} } } },
+      included: { agents: { entries: { main: {} } } },
+    },
+    {
+      name: "entry-internal identity",
+      owned: false,
+      config: { agents: { entries: { main: { identity: { $include: "./included.json" } } } } },
+      included: { name: "Main" },
+    },
+    {
+      name: "legacy list id",
+      owned: true,
+      config: { agents: { list: [{ id: { $include: "./included.json" }, default: true }] } },
+      included: "10",
+    },
+  ])("tracks roster ownership for $name includes", async ({ config, included, owned }) => {
     await withConfig(
-      { $include: "./channels.json", agents: { entries: {} } },
+      config,
       (snapshot) => {
-        expect(snapshot.agentRosterIncludeOwned).toBe(false);
-        expect(configIncludeOwnsAgentRoster(snapshot)).toBe(false);
+        expect(snapshot.agentRosterIncludeOwned).toBe(owned);
+        expect(configIncludeOwnsAgentRoster(snapshot)).toBe(owned);
+        if (typeof included === "string") {
+          expect(snapshot.sourceConfigBeforeMigrations).toHaveProperty("agents.list.0.id", "10");
+        }
       },
-      { "channels.json": { channels: { telegram: { enabled: true } } } },
+      { "included.json": included },
     );
   });
 
@@ -124,41 +152,6 @@ describe("persisted implicit-main roster migration", () => {
         "delegating.json": { $include: "./entries.json" },
         "entries.json": { entries: { main: {} } },
       },
-    );
-  });
-
-  it("records an identical ancestor roster contribution as include-owned", async () => {
-    const entries = { main: {} };
-    await withConfig(
-      { $include: "./base.json", agents: { entries } },
-      (snapshot) => {
-        expect(snapshot.agentRosterIncludeOwned).toBe(true);
-        expect(configIncludeOwnsAgentRoster(snapshot)).toBe(true);
-      },
-      { "base.json": { agents: { entries } } },
-    );
-  });
-
-  it("keeps an entry-internal identity include locally roster-owned", async () => {
-    await withConfig(
-      { agents: { entries: { main: { identity: { $include: "./identity.json" } } } } },
-      (snapshot) => {
-        expect(snapshot.agentRosterIncludeOwned).toBe(false);
-        expect(configIncludeOwnsAgentRoster(snapshot)).toBe(false);
-      },
-      { "identity.json": { name: "Main" } },
-    );
-  });
-
-  it("records a legacy list id include as roster-owned", async () => {
-    await withConfig(
-      { agents: { list: [{ id: { $include: "./agent-id.json" }, default: true }] } },
-      (snapshot) => {
-        expect(snapshot.sourceConfigBeforeMigrations).toHaveProperty("agents.list.0.id", "10");
-        expect(snapshot.agentRosterIncludeOwned).toBe(true);
-        expect(configIncludeOwnsAgentRoster(snapshot)).toBe(true);
-      },
-      { "agent-id.json": "10" },
     );
   });
 

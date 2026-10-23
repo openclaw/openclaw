@@ -8,7 +8,7 @@ export const DIFF_IMAGE_QUALITY_PRESETS = ["standard", "hq", "print"] as const;
 export const DIFF_OUTPUT_FORMATS = ["png", "pdf"] as const;
 
 export type DiffLayout = (typeof DIFF_LAYOUTS)[number];
-export type DiffMode = (typeof DIFF_MODES)[number];
+type DiffMode = (typeof DIFF_MODES)[number];
 export type DiffTheme = (typeof DIFF_THEMES)[number];
 type DiffIndicators = (typeof DIFF_INDICATORS)[number];
 export type DiffImageQualityPreset = (typeof DIFF_IMAGE_QUALITY_PRESETS)[number];
@@ -100,7 +100,6 @@ export type RenderedDiffDocument = {
   title: string;
   fileCount: number;
   inputKind: DiffInput["kind"];
-  viewerRuntime: "base" | "language-pack";
 };
 
 export type DiffArtifactContext = {

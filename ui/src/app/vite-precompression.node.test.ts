@@ -4,7 +4,7 @@ import { gzip } from "pako";
 import { expect, it } from "vitest";
 import { createControlUiPrecompressedAssetVariants } from "../../vite.config.ts";
 
-it("ships smaller deflate blocks without changing the decoded JavaScript or Brotli bytes", async () => {
+it("ships smaller deflate blocks and high-quality Brotli without changing decoded JavaScript", async () => {
   const source = Array.from(
     { length: 3000 },
     (_, index) =>
@@ -18,7 +18,7 @@ it("ships smaller deflate blocks without changing the decoded JavaScript or Brot
   expect(gunzipSync(compressed)).toEqual(Buffer.from(source));
   expect(variants.find((variant) => variant.fileName.endsWith(".br"))!.source).toEqual(
     brotliCompressSync(Buffer.from(source), {
-      params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 9 },
+      params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 10 },
     }),
   );
 });

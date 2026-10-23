@@ -34,6 +34,15 @@ async function uploadFixture() {
   return { uploadRoot, metadataPath, env: { OPENCLAW_STATE_DIR: root } };
 }
 
+const missing = (file: string) => expect(fs.lstat(file)).rejects.toMatchObject({ code: "ENOENT" });
+const contents = (file: string, expected: string) =>
+  expect(fs.readFile(file, "utf8")).resolves.toBe(expected);
+const noted = (message: string | RegExp, title: string) =>
+  expect(note).toHaveBeenCalledWith(
+    typeof message === "string" ? expect.stringContaining(message) : expect.stringMatching(message),
+    title,
+  );
+
 describe("legacy usage-cost cache cleanup", () => {
   it("reports the obsolete Control UI cache and removes only that cache on repair, recording failures", async () => {
     const stateDir = tempDirs.make("openclaw-control-ui-cache-doctor-");
@@ -45,51 +54,40 @@ describe("legacy usage-cost cache cleanup", () => {
     await fs.writeFile(unrelatedCache, "keep");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     await maybeRepairLegacyRuntimeFiles(false, env);
-    await expect(fs.readFile(cachedAsset, "utf8")).resolves.toBe("old build");
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(`Obsolete Control UI asset cache remains at ${cacheRoot}`),
-      "Control UI assets",
-    );
+    await contents(cachedAsset, "old build");
+    noted(`Obsolete Control UI asset cache remains at ${cacheRoot}`, "Control UI assets");
     const rm = vi.spyOn(fs, "rm").mockRejectedValueOnce(fsError("EACCES"));
     await expect(maybeRepairLegacyRuntimeFiles(true, env)).resolves.toEqual([
       expect.stringMatching(/Could not remove obsolete Control UI asset cache.*EACCES/u),
     ]);
-    expect(note).toHaveBeenCalledWith(
-      expect.stringMatching(/Could not remove obsolete Control UI asset cache.*EACCES/u),
-      "Doctor warnings",
-    );
-    await expect(fs.readFile(cachedAsset, "utf8")).resolves.toBe("old build");
+    noted(/Could not remove obsolete Control UI asset cache.*EACCES/u, "Doctor warnings");
+    await contents(cachedAsset, "old build");
     rm.mockRestore();
     await expect(maybeRepairLegacyRuntimeFiles(true, env)).resolves.toEqual([]);
-    await expect(fs.lstat(cacheRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.readFile(unrelatedCache, "utf8")).resolves.toBe("keep");
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(`Removed obsolete Control UI asset cache at ${cacheRoot}`),
-      "Control UI assets",
-    );
+    await missing(cacheRoot);
+    await contents(unrelatedCache, "keep");
+    noted(`Removed obsolete Control UI asset cache at ${cacheRoot}`, "Control UI assets");
     await expect(maybeRepairLegacyRuntimeFiles(true, env)).resolves.toEqual([]);
   });
   it("removes only rebuildable usage-cost cache sidecars", async () => {
     const root = tempDirs.make("openclaw-usage-cost-doctor-");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
-    const cacheFiles = [
-      path.join(sessionsDir, ".usage-cost-cache.json"),
-      path.join(sessionsDir, ".usage-cost-cache.json.lock"),
-    ];
-    const staleTempFiles = [
-      path.join(sessionsDir, ".usage-cost-cache.123.3b241101-e2bb-4255-8caf-4136c566a962.tmp"),
-      path.join(sessionsDir, ".usage-cost-cache.json.lock.123.456.tmp"),
-      path.join(sessionsDir, ".usage-cost-cache.json.123.tmp"),
-      path.join(sessionsDir, ".usage-cost-cache.123.tmp"),
-      path.join(sessionsDir, ".usage-cost-cache.json.lock.123.tmp"),
-    ];
+    const paths = (...names: string[]) => names.map((name) => path.join(sessionsDir, name));
+    const cacheFiles = paths(".usage-cost-cache.json", ".usage-cost-cache.json.lock");
+    const staleTempFiles = paths(
+      ".usage-cost-cache.123.3b241101-e2bb-4255-8caf-4136c566a962.tmp",
+      ".usage-cost-cache.json.lock.123.456.tmp",
+      ".usage-cost-cache.json.123.tmp",
+      ".usage-cost-cache.123.tmp",
+      ".usage-cost-cache.json.lock.123.tmp",
+    );
     const recentTemp = path.join(sessionsDir, ".usage-cost-cache.456.tmp");
-    const unrelatedFiles = [
-      path.join(sessionsDir, "session.jsonl"),
-      path.join(sessionsDir, ".usage-cost-cache.backup"),
-      path.join(sessionsDir, ".usage-cost-cache.notes"),
-    ];
+    const unrelatedFiles = paths(
+      "session.jsonl",
+      ".usage-cost-cache.backup",
+      ".usage-cost-cache.notes",
+    );
     await Promise.all(
       [...cacheFiles, ...staleTempFiles, recentTemp, ...unrelatedFiles].map((filePath) =>
         fs.writeFile(filePath, "x"),
@@ -100,28 +98,25 @@ describe("legacy usage-cost cache cleanup", () => {
     const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
     await maybeRepairLegacyRuntimeFiles(true, env);
     for (const filePath of [...cacheFiles, ...staleTempFiles]) {
-      await expect(fs.readFile(filePath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
+      await missing(filePath);
     }
     for (const filePath of [recentTemp, ...unrelatedFiles]) {
-      await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("x");
+      await contents(filePath, "x");
     }
   });
   it("reports legacy skill-upload staging without deleting it unless repair is enabled", async () => {
     const { uploadRoot, metadataPath, env } = await uploadFixture();
     await maybeRepairLegacyRuntimeFiles(false, env);
-    await expect(fs.readFile(metadataPath, "utf8")).resolves.toBe("{}\n");
+    await contents(metadataPath, "{}\n");
     await maybeRepairLegacyRuntimeFiles(true, env);
-    await expect(fs.stat(uploadRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await missing(uploadRoot);
   });
   it.each([false, true])("reports skill-upload inspection failures (repair=%s)", async (repair) => {
     const { metadataPath, env } = await uploadFixture();
     vi.spyOn(fs, "lstat").mockRejectedValueOnce(fsError("EACCES"));
     await maybeRepairLegacyRuntimeFiles(repair, env);
-    expect(note).toHaveBeenCalledWith(
-      expect.stringMatching(/Failed (?:removing|inspecting) legacy skill-upload staging:.*EACCES/u),
-      "Skill uploads",
-    );
-    await expect(fs.readFile(metadataPath, "utf8")).resolves.toBe("{}\n");
+    noted(/Failed (?:removing|inspecting) legacy skill-upload staging:.*EACCES/u, "Skill uploads");
+    await contents(metadataPath, "{}\n");
   });
   const symlinkTest = process.platform === "win32" ? it.skip : it;
   symlinkTest("removes a legacy staging symlink without touching its target", async () => {
@@ -132,11 +127,9 @@ describe("legacy usage-cost cache cleanup", () => {
     await fs.mkdir(external);
     await fs.writeFile(path.join(external, "keep.txt"), "keep", "utf8");
     await fs.symlink(external, uploadRoot, "dir");
-    await maybeRepairLegacyRuntimeFiles(true, {
-      OPENCLAW_STATE_DIR: root,
-    } as NodeJS.ProcessEnv);
-    await expect(fs.lstat(uploadRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.readFile(path.join(external, "keep.txt"), "utf8")).resolves.toBe("keep");
+    await maybeRepairLegacyRuntimeFiles(true, { OPENCLAW_STATE_DIR: root });
+    await missing(uploadRoot);
+    await contents(path.join(external, "keep.txt"), "keep");
   });
   it.each(["none", "write", "inspection"] as const)(
     "continues retired-row cleanup after an agent failure (failure=%s)",
@@ -221,9 +214,7 @@ describe("legacy usage-cost cache cleanup", () => {
     } else {
       vi.spyOn(fs, "stat").mockRejectedValueOnce(error);
     }
-    await maybeRepairLegacyRuntimeFiles(shouldRepair, {
-      OPENCLAW_STATE_DIR: root,
-    } as NodeJS.ProcessEnv);
+    await maybeRepairLegacyRuntimeFiles(shouldRepair, { OPENCLAW_STATE_DIR: root });
     if (diagnostic) {
       const action = shouldRepair ? "scan and cleanup" : "scan";
       expect(note).toHaveBeenCalledOnce();
@@ -238,14 +229,11 @@ describe("legacy usage-cost cache cleanup", () => {
       expect(message).toContain(code);
       expect(message).toContain(shouldRepair ? "openclaw doctor --fix" : "openclaw doctor");
       expect(message).not.toContain("Removed");
-      await expect(fs.readFile(cacheFile, "utf8")).resolves.toBe("x");
+      await contents(cacheFile, "x");
       return;
     }
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Removed 1 rebuildable legacy usage-cost cache file"),
-      "Usage cost cache",
-    );
-    await expect(fs.stat(cacheFile)).rejects.toMatchObject({ code: "ENOENT" });
+    noted("Removed 1 rebuildable legacy usage-cost cache file", "Usage cost cache");
+    await missing(cacheFile);
   });
 });
 

@@ -506,6 +506,20 @@ export function projectCatalogUserProfileIdentity(
   );
 }
 
+/** Verified GitHub identity facts of one catalog row; a row without them exposes neither field. */
+export function projectUserProfileGitHubFacts(
+  row: Pick<ProfileDisplayRow, "githubAccountIds" | "enterpriseGitHubAccounts"> | undefined,
+) {
+  return {
+    ...(row?.githubAccountIds ? { githubAccountIds: [...row.githubAccountIds] } : {}),
+    ...(row?.enterpriseGitHubAccounts
+      ? {
+          enterpriseGitHubAccounts: row.enterpriseGitHubAccounts.map((account) => ({ ...account })),
+        }
+      : {}),
+  };
+}
+
 /** Bind a canonical account and its original email lifetimes to the retained catalog owner. */
 export function bindPreparedUserProfileIdentity(
   profileId: string,
@@ -570,7 +584,6 @@ export function bindPreparedUserProfileIdentity(
     },
     readCurrentFacts(this: void, requiredEmailBindingIds) {
       const profile = readCurrentProfile(requiredEmailBindingIds);
-      const githubAccountIds = rows.get(profileId)?.githubAccountIds;
       const aliases = new Set([profileId]);
       for (const row of rows.values()) {
         if (row.merged_into === profileId) {
@@ -581,7 +594,7 @@ export function bindPreparedUserProfileIdentity(
         profile: {
           profileId: profile.profileId,
           emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
-          ...(githubAccountIds ? { githubAccountIds: [...githubAccountIds] } : {}),
+          ...projectUserProfileGitHubFacts(rows.get(profileId)),
           assignedRole: profile.assignedRole,
           githubLogin: profile.githubLogin,
         },

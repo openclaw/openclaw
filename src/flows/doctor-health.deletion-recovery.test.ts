@@ -1,7 +1,7 @@
 import "./doctor-health.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { prepareDoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -20,37 +20,31 @@ import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
-const { mocks } = await import("./doctor-health.test-support.js");
+const { mocks, createDoctorRuntime, createDoctorConfig } =
+  await import("./doctor-health.test-support.js");
+const repairOptions = { repair: true, nonInteractive: true };
+function execState(sql: string, env: NodeJS.ProcessEnv) {
+  runOpenClawStateWriteTransaction((database) => database.db.exec(sql), { env });
+}
 
 it("refreshes supplied missing-history discovery after maintenance admits a newer configured store", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const before: OpenClawConfig = { agents: { entries: { main: {} } } };
     await state.writeConfig(before);
-    const mainPath = createLegacyDatabaseFixture({
-      env: state.env,
-      eventsBySession: {},
-      schemaVersion: 19,
-    });
+    const legacy = { env: state.env, eventsBySession: {}, schemaVersion: 19 };
+    const mainPath = createLegacyDatabaseFixture(legacy);
     const lateDir = state.path("external-agent");
     const latePath = createLegacyDatabaseFixture({
       agentId: "late",
-      env: state.env,
-      eventsBySession: {},
-      schemaVersion: 19,
+      ...legacy,
       path: path.join(lateDir, "openclaw-agent.sqlite"),
     });
     unregisterOpenClawAgentDatabase({ agentId: "late", path: latePath, env: state.env });
-    runOpenClawStateWriteTransaction(
-      (database) => database.db.exec("DROP TABLE agent_deletion_journal"),
-      { env: state.env },
-    );
+    execState("DROP TABLE agent_deletion_journal", state.env);
     closeOpenClawStateDatabaseForTest();
     const prepared = await prepareDoctorDatabasePreflight({ cfg: before });
-    expect(
-      prepared.agentDatabaseMigrationDiscovery?.discovery.unverifiedTargets.map(
-        (target) => target.path,
-      ),
-    ).toEqual([mainPath]);
+    const targets = prepared.agentDatabaseMigrationDiscovery?.discovery.unverifiedTargets;
+    expect(targets?.map((target) => target.path)).toEqual([mainPath]);
 
     const after: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { main: {}, late: { agentDir: lateDir } } },
@@ -61,14 +55,9 @@ it("refreshes supplied missing-history discovery after maintenance admits a newe
     mocks.packageRoot.mockReturnValue(undefined);
     mocks.runContributions.mockReset();
     mocks.emulateNativeInstall = false;
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createDoctorRuntime();
     try {
-      await runDoctorHealthFlow(
-        runtime,
-        { repair: true, nonInteractive: true },
-        undefined,
-        prepared,
-      );
+      await runDoctorHealthFlow(runtime, repairOptions, undefined, prepared);
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(
         readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env: state.env }))
@@ -87,20 +76,15 @@ it("keeps a newly quarantined pending deletion out of update reclamation", async
   await withOpenClawTestState(
     { scenario: "external-service", env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" } },
     async (state) => {
-      const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
-        gateway: { mode: "local" },
-      };
+      const cfg = createDoctorConfig(state);
       await state.writeConfig(cfg);
       const agentPath = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).path;
       await closeOpenClawAgentDatabasesAsync(state.stateDir);
       await closeOpenClawStateDatabaseAsync();
-      const agent = openNodeSqliteDatabase(agentPath);
-      try {
+      {
+        using agent = openNodeSqliteDatabase(agentPath);
         agent.exec("PRAGMA auto_vacuum=NONE; VACUUM;");
         expect(agent.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum).toBe(0);
-      } finally {
-        agent.close();
       }
       beginAgentDeletionJournal(
         {
@@ -114,22 +98,19 @@ it("keeps a newly quarantined pending deletion out of update reclamation", async
         },
         { env: state.env },
       );
-      runOpenClawStateWriteTransaction(
-        (database) =>
-          database.db.exec(
-            "UPDATE agent_deletion_journal SET cleanup_paths_json = '[' WHERE agent_id = 'main'",
-          ),
-        { env: state.env },
+      execState(
+        "UPDATE agent_deletion_journal SET cleanup_paths_json = '[' WHERE agent_id = 'main'",
+        state.env,
       );
       await closeOpenClawStateDatabaseAsync();
       const bytes = fs.readFileSync(agentPath);
       const inode = fs.statSync(agentPath).ino;
       mocks.config.mockReturnValue(cfg);
-      mocks.packageRoot.mockReturnValue(undefined);
+      mocks.packageRoot.mockReturnValue(process.cwd());
       mocks.runContributions.mockReset();
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createDoctorRuntime();
 
-      await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+      await runDoctorHealthFlow(runtime, repairOptions);
 
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env: state.env }))).toEqual(

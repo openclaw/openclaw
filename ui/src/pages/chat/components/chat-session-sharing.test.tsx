@@ -1,8 +1,10 @@
 import { createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { ChatSessionSharing, type ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
+import type { ChatSessionSharingProps } from "./chat-session-sharing-shared.tsx";
+import { ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
 
 function renderSharing(props: Partial<ChatSessionSharingProps>) {
   return {
@@ -99,13 +101,49 @@ async function openMenu(root: HTMLElement) {
   const trigger = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger");
   if (panel && trigger && !trigger.disabled && !panel.matches(":popover-open")) {
     trigger.click();
-    await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(true));
+    await waitForSolid(() => {
+      expect(panel.matches(":popover-open")).toBe(true);
+      expect(panel.querySelector('[data-value="access"]')).not.toBeNull();
+    });
   }
   return panel;
 }
 
+async function openAccess(root: HTMLElement) {
+  const panel = root.querySelector<HTMLElement>(".chat-pane__sharing-panel")!;
+  if (!panel.querySelector('[data-value="access:back"]')) {
+    const trigger = panel.querySelector<HTMLButtonElement>('[data-value="access"]');
+    expect(trigger).not.toBeNull();
+    trigger!.click();
+  }
+  await waitForSolid(() => {
+    expect(panel.matches(":popover-open")).toBe(true);
+    expect(panel.querySelector('[data-value="access:back"]')?.textContent).toBe("Back");
+    expect(panel.querySelectorAll('[data-value^="visibility:"]')).toHaveLength(4);
+    expect(panel.querySelector('[data-value="access"]')).toBeNull();
+    expect(panel.querySelector(".chat-pane__sharing-permissions")).toBeNull();
+  });
+}
+
+async function backToOverview(root: HTMLElement) {
+  const panel = root.querySelector<HTMLElement>(".chat-pane__sharing-panel")!;
+  const back = panel.querySelector<HTMLButtonElement>('[data-value="access:back"]');
+  expect(back).not.toBeNull();
+  back!.click();
+  await waitForSolid(() => {
+    expect(panel.matches(":popover-open")).toBe(true);
+    expect(panel.querySelector('[data-value="access"]')).not.toBeNull();
+    expect(panel.querySelector('[data-value="access:back"]')).toBeNull();
+    expect(panel.querySelectorAll('[data-value^="visibility:"]')).toHaveLength(0);
+    expect(document.activeElement).toBe(panel.querySelector('[data-value="access"]'));
+  });
+}
+
 async function select(root: HTMLElement, value: string) {
   await openMenu(root);
+  if (value.startsWith("visibility:")) {
+    await openAccess(root);
+  }
   const selected = item(root, value);
   if (!selected) {
     throw new Error(`Expected sharing item: ${value}`);
@@ -155,7 +193,7 @@ describe("chat session sharing menu", () => {
     expect(panel.matches(":popover-open")).toBe(true);
     expect(onOpen).toHaveBeenCalledOnce();
     expect(readAvatar).toHaveBeenCalled();
-    expect(root.querySelectorAll(".chat-pane__sharing-member")).toHaveLength(101);
+    expect(root.querySelectorAll(".chat-pane__sharing-person")).toHaveLength(101);
     const member = item(root, "member:person-100");
     const avatar = member?.querySelector("openclaw-session-owner-chip");
     expect(avatar).not.toBeNull();
@@ -170,14 +208,16 @@ describe("chat session sharing menu", () => {
     expect(panel.matches(":popover-open")).toBe(false);
     await openMenu(root);
     expect(item(root, "member:person-100")).toBe(member);
+    root.querySelector<HTMLButtonElement>('[aria-label="Search people…"]')!.click();
+    flush();
     const search = root.querySelector<HTMLInputElement>("input[data-search]")!;
-    search.focus();
+    expect(document.activeElement).toBe(search);
     search.value = "Person 101";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
     expect(root.querySelector("input[data-search]")).toBe(search);
     expect(document.activeElement).toBe(search);
-    expect(root.querySelectorAll(".chat-pane__sharing-member")).toHaveLength(1);
+    expect(root.querySelectorAll(".chat-pane__sharing-person")).toHaveLength(1);
   });
 
   it("keeps a world-readable draft session visibly public after its menu closes", async () => {
@@ -198,12 +238,12 @@ describe("chat session sharing menu", () => {
     panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     flush();
     expect(panel.matches(":popover-open")).toBe(false);
-    const indicator = part(root, "public-share-indicator");
+    const indicator = root.querySelector('.chat-pane__sharing-trigger[data-public="true"]');
     expect(indicator?.textContent?.trim()).toBe("Public");
-    expect(indicator?.getAttribute("aria-label")).toContain("anyone can read");
+    expect(indicator?.getAttribute("title")).toContain("anyone can read");
 
     render(renderIndicator(false), root);
-    expect(part(root, "public-share-indicator")).toBeNull();
+    expect(root.querySelector('.chat-pane__sharing-trigger[data-public="true"]')).toBeNull();
   });
 
   it("keeps disabling public access separate from team visibility", async () => {
@@ -220,13 +260,67 @@ describe("chat session sharing menu", () => {
       onPublicShareChange,
       onCopyPublicLink,
     });
-    expect(root.textContent).toContain("Public access");
-    expect(root.textContent).toContain("anyone can read without signing in");
+    expect(root.textContent).toContain("Link sharing");
+    expect(root.textContent).toContain("The public link stays readable in Draft.");
     await select(root, "public:disable");
     expect(onPublicShareChange).toHaveBeenCalledWith(false);
     expect(onVisibilityChange).not.toHaveBeenCalled();
     await select(root, "public:copy");
     expect(onCopyPublicLink).toHaveBeenCalledOnce();
+    expect(part(root, "sharing-panel")?.matches(":popover-open")).toBe(true);
+  });
+
+  it("keeps the empty permissions status on command failure and clears it during retry", async () => {
+    const retry = createDeferred<{ status: "success" }>();
+    const onPublicShareChange = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Sharing command failed"))
+      .mockReturnValueOnce(retry.promise);
+    const root = await mount({ state: sharingState(), onPublicShareChange });
+    const toggle = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-public-toggle")!;
+    expect(part(root, "sharing-permissions")).toBeNull();
+    toggle.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain("Sharing command failed");
+      expect(part(root, "sharing-permissions")).not.toBeNull();
+      expect(part(root, "sharing-empty")).not.toBeNull();
+    });
+    toggle.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(part(root, "sharing-permissions")).toBeNull();
+      expect(toggle.disabled).toBe(true);
+    });
+    retry.resolve({ status: "success" });
+    await waitForSolid(() => expect(toggle.disabled).toBe(false));
+  });
+
+  it("retains the copy control and clears its failure while a retry is pending", async () => {
+    const retry = createDeferred<{ status: "success" }>();
+    const onCopyPublicLink = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "failed", error: "Clipboard unavailable" })
+      .mockReturnValueOnce(retry.promise);
+    const root = await mount({
+      state: { ...sharingState({ publicShare }), publicUrl: "https://example.test/shared" },
+      onCopyPublicLink,
+    });
+    const copy = item(root, "public:copy")!;
+    copy.click();
+    await waitForSolid(() =>
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain("Clipboard unavailable"),
+    );
+    expect(item(root, "public:copy")).toBe(copy);
+    copy.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(copy.disabled).toBe(true);
+    });
+    retry.resolve({ status: "success" });
+    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
+    expect(item(root, "public:copy")).toBe(copy);
+    expect(copy.disabled).toBe(false);
+    expect(part(root, "sharing-panel")?.matches(":popover-open")).toBe(true);
   });
 
   it.each(["loading", "read-only", "member"] as const)(
@@ -250,6 +344,45 @@ describe("chat session sharing menu", () => {
     },
   );
 
+  it("uses read readiness and retains the roster and search through a failed refresh", async () => {
+    const initialRead = createDeferred();
+    const props = renderSharing({ state: { loading: false, read: initialRead.promise } });
+    const root = await mount(props);
+    expect(root.querySelector('[role="status"][aria-label="Loading…"]')).not.toBeNull();
+    expect(item(root, "member:alice")).toBeNull();
+    const ready = renderSharing({ state: sharingState({ identities: [human("alice", "Alice")] }) });
+    render(ready, root);
+    initialRead.resolve();
+    await waitForSolid(() => expect(item(root, "member:alice")).not.toBeNull());
+    const person = item(root, "member:alice");
+    root.querySelector<HTMLButtonElement>('[aria-label="Search people…"]')!.click();
+    await waitForSolid(() => expect(root.querySelector("input[type=search]")).not.toBeNull());
+    const search = root.querySelector<HTMLInputElement>("input[type=search]")!;
+    search.value = "Ali";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    const refresh = createDeferred();
+    render({ ...ready, state: { ...ready.state!, loading: true, read: refresh.promise } }, root);
+    expect(item(root, "member:alice")).toBe(person);
+    expect(root.querySelector("input[type=search]")).toBe(search);
+    expect(search.value).toBe("Ali");
+    render({ ...ready, state: { ...ready.state!, error: "Membership refresh failed" } }, root);
+    refresh.resolve();
+    await waitForSolid(() =>
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain(
+        "Membership refresh failed",
+      ),
+    );
+    expect(item(root, "member:alice")).toBe(person);
+    expect(root.querySelector("input[type=search]")).toBe(search);
+    const retry = createDeferred();
+    render({ ...ready, state: { ...ready.state!, loading: true, read: retry.promise } }, root);
+    render(ready, root);
+    retry.resolve();
+    await waitForSolid(() => expect(root.querySelector('[role="alert"]')).toBeNull());
+    expect(item(root, "member:alice")).toBe(person);
+    expect(search.value).toBe("Ali");
+  });
+
   it("shows the owner picker with policy-gated modes and known identities", async () => {
     const onVisibilityChange = vi.fn();
     const onMemberChange = vi.fn();
@@ -267,14 +400,15 @@ describe("chat session sharing menu", () => {
       onMemberChange,
     });
     expect(part(root, "sharing-panel")).not.toBeNull();
+    await openAccess(root);
     expect(root.textContent).toContain("Shared");
     expect(root.textContent).toContain("Read-only");
-    expect(root.textContent).not.toContain("Suggest");
+    expect(item(root, "visibility:suggest")?.disabled).toBe(true);
+    await backToOverview(root);
     expect(root.textContent).toContain("Alice");
     expect(item(root, "member:owner")).toBeNull();
-    expect(part(root, "sharing-owner-title")?.textContent?.trim()).toBe("Owner");
-    const ownerRow = part(root, "sharing-owner")!;
-    expect(ownerRow.querySelector(".session-menu__text")?.textContent?.trim()).toBe("Owner");
+    const ownerRow = part(root, "sharing-person--creator")!;
+    expect(ownerRow.textContent).toContain("Owner");
     expect(ownerRow.querySelector("openclaw-session-owner-chip")).not.toBeNull();
     const ownerLink = ownerRow.querySelector<HTMLAnchorElement>("a.person-activity-link");
     expect(ownerLink?.getAttribute("href")).toBe("/activity/owner");
@@ -287,9 +421,19 @@ describe("chat session sharing menu", () => {
     expect(navigate).toHaveBeenCalledWith("owner", "Owner");
 
     await select(root, "visibility:shared");
-    await select(root, "member:alice");
+    await backToOverview(root);
+    const access = item(root, "access")!;
+    const member = item(root, "member:alice")!;
+    access.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+    );
+    await waitForSolid(() => expect(document.activeElement).toBe(member));
+    member.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    );
+    await waitForSolid(() => expect(onMemberChange).toHaveBeenCalledExactlyOnceWith("alice", true));
     expect(onVisibilityChange).toHaveBeenCalledWith("shared");
-    expect(onMemberChange).toHaveBeenCalledWith("alice", true);
+    expect(part(root, "sharing-panel")?.matches(":popover-open")).toBe(true);
   });
 
   it("renders member presentation from identity.type, not from ID spelling", async () => {
@@ -363,7 +507,9 @@ describe("chat session sharing menu", () => {
       onMemberChange,
     });
     expect(part(root, "sharing-panel")).not.toBeNull();
+    await openAccess(root);
     expect(item(root, "visibility:read-only")).toMatchObject({ title: "Requires write" });
+    await backToOverview(root);
     for (const identityId of ["alice", "bob"]) {
       const member = item(root, `member:${identityId}`)!;
       expect(member).toMatchObject({ disabled: true, title: "Requires write" });
@@ -371,6 +517,7 @@ describe("chat session sharing menu", () => {
     }
 
     await select(root, "visibility:read-only");
+    await backToOverview(root);
     await select(root, "member:alice");
     await select(root, "member:bob");
 
@@ -406,13 +553,47 @@ describe("chat session sharing menu", () => {
     expect(root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled).toBe(
       false,
     );
+    expect(part(root, "sharing-permissions")).toBeNull();
+    expect(root.textContent).not.toContain("Session members");
+    await openAccess(root);
     expect(item(root, "visibility:read-only")).not.toBeNull();
-    expect(root.textContent).not.toContain("People");
 
     await select(root, "visibility:read-only");
+    await backToOverview(root);
+    expect(part(root, "sharing-permissions")).toBeNull();
+    expect(root.textContent).not.toContain("Session members");
 
     expect(onOpen).toHaveBeenCalledOnce();
     expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
+  });
+
+  it("retains the access controls through a rejected command and held retry", async () => {
+    const failed = createDeferred();
+    const retry = createDeferred();
+    const change = vi.fn().mockReturnValueOnce(failed.promise).mockReturnValueOnce(retry.promise);
+    const root = await mount({
+      allowedVisibilities: ["shared", "read-only"],
+      onVisibilityChange: change,
+    });
+    await select(root, "visibility:read-only");
+    const button = item(root, "visibility:read-only");
+    expect(button?.disabled).toBe(true);
+    failed.reject(new Error("Sharing command rejected"));
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain(
+        "Sharing command rejected",
+      );
+      expect(button?.disabled).toBe(false);
+    });
+    button!.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(item(root, "visibility:read-only")).toBe(button);
+      expect(button?.disabled).toBe(true);
+    });
+    retry.resolve();
+    await waitForSolid(() => expect(button?.disabled).toBe(false));
+    expect(item(root, "visibility:read-only")).toBe(button);
   });
 
   it("shows rejected sharing changes for visibility-only Gateways", async () => {
@@ -425,6 +606,6 @@ describe("chat session sharing menu", () => {
     const error = part(root, "sharing-status--error");
     expect(error?.textContent).toContain("Visibility update rejected");
     expect(error?.getAttribute("role")).toBe("alert");
-    expect(root.querySelectorAll(".chat-pane__sharing-title")).toHaveLength(1);
+    expect(root.textContent).toContain("Session access");
   });
 });

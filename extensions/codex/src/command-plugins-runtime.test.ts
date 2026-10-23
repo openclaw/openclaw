@@ -131,9 +131,9 @@ async function inspectPending(
 }
 
 describe("Codex plugin command context", () => {
-  it("can inspect a runtime without plugin management configuration", async () => {
+  it("can inspect a runtime with empty plugin management configuration", async () => {
     const test = await fixture();
-    test.deps.codexPluginsManagementIo = undefined;
+    test.deps.codexPluginsManagementIo.readConfig = async () => ({});
     const current = await test.run(async (context) => {
       await context.validateCurrent();
       return context.current;

@@ -42,7 +42,6 @@ export function createZalouserGroupMessage(
     wasExplicitlyMentioned: false,
     canResolveExplicitMention: true,
     implicitMention: false,
-    raw: { source: "test" },
     ...overrides,
   };
 }
@@ -59,7 +58,6 @@ export function createZalouserDmMessage(
     content: "hello",
     timestampMs: Date.now(),
     msgId: "dm-1",
-    raw: { source: "test" },
     ...overrides,
   };
 }

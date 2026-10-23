@@ -6,6 +6,7 @@ import { createAgentCleanupScope } from "../../agents/run-cleanup-timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as embeddedStateLock from "../../infra/embedded-state-lock.js";
 import { captureNativeSignalBridge } from "../../infra/embedded-state-lock.test-support.js";
+import * as gatewayLockProcessModule from "../../infra/gateway-lock-process.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabaseDisposal from "../../state/openclaw-agent-db-disposal.js";
@@ -46,11 +47,13 @@ beforeEach(async () => {
   vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
     signals.create,
   );
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+    () => 123456,
+  );
   const options = {
     allowInTests: true,
     env: state.env,
     lockDir: state.path("locks"),
-    readProcessStartTime: () => 123456,
     timeoutMs: 100,
   };
   vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>

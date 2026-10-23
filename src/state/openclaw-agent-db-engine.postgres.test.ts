@@ -78,14 +78,14 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
   const extensions = () =>
     String(get("SELECT search_extensions FROM openclaw_schema_meta")?.search_extensions);
   const opened: PostgresSqlConnection[] = [];
-  const open = () =>
+  const open = (selectedAnchor = anchor) =>
     withDatabaseEngineSelection(
       {
         effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
         postgres: { connection: connection!, schemaPrefix: "memory_admission_test" },
       },
       () => {
-        const result = openAgentEngineStore(anchor, "main", databasePath);
+        const result = openAgentEngineStore(selectedAnchor, "main", databasePath);
         if (!isPostgresSqlConnection(result)) {
           throw new Error("Expected PostgreSQL agent store");
         }
@@ -172,6 +172,27 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
           getPostgresPhysicalFacts(db)!.namespace,
         ),
       ).toBeUndefined();
+    });
+  });
+
+  it("admits a first-use search extension on a new handle sharing physical admission", () => {
+    withEngineStoreAdmission(() => {
+      using nextAnchor = openNodeSqliteDatabase(databasePath);
+      const next = open(nextAnchor);
+      try {
+        expect(getPostgresPhysicalFacts(next)).toBe(getPostgresPhysicalFacts(db));
+        const paths = { "memory.paths": textSchema("paths", "memory_index_sources", "path", "id") };
+        admitAgentEngineSearchExtensions(next, paths, () => {});
+        // A second publication must consume the committed definition without reinstalling DDL.
+        admitAgentEngineSearchExtensions(next, paths, () => {});
+        expect(JSON.parse(extensions())).toEqual({
+          "memory.text": text,
+          "memory.vector": vector,
+          "memory.paths": textSchema("paths", "memory_index_sources", "path", "id"),
+        });
+      } finally {
+        next.close();
+      }
     });
   });
 });

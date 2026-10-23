@@ -27,7 +27,6 @@ import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
-import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-store.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
@@ -69,14 +68,16 @@ import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
 import {
   CLI_AUTH_EPOCH_VERSION,
   resolveCliAuthBindingFingerprint,
   resolveCliAuthEpoch,
 } from "../cli-auth-epoch.js";
-import { resolveCliBackendConfig } from "../cli-backends.js";
+import {
+  cliBackendSupportsExactToolAvailability,
+  resolveCliBackendConfig,
+} from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import {
   claudeCliSessionTranscriptHasContent,
@@ -131,7 +132,7 @@ import {
   unsupportedIsolatedCompletionError,
 } from "./execution-target.js";
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
-import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import { replayableTarget, prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
 import { prepareCliLoopbackBundleMcp } from "./loopback-bundle-mcp.js";
 import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
@@ -143,7 +144,6 @@ import { runWithCliPreparationSource } from "./prepare-source.js";
 import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import {
   buildCliVisibleReplyGuidance,
-  composeCliPromptContext,
   createCliCurrentPromptRenderer,
   prepareCliSystemPrompt,
   prepareCliTurnPromptContext,
@@ -286,12 +286,7 @@ async function prepareCliRunContextWithinReadFence(
   }
   params = prepareCliRunModelAuthority(params);
   const backendAuthPolicy = resolveBundledCliBackendAuthPolicy(backendResolved.id);
-  const canEnforceExactToolAvailability =
-    backendResolved.nativeToolMode === "selectable" &&
-    ((backendResolved.toolAvailabilityEnforcement === "execution-args" &&
-      backendResolved.resolveExecutionArgs !== undefined) ||
-      (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
-        backendResolved.prepareExecution !== undefined));
+  const canEnforceExactToolAvailability = cliBackendSupportsExactToolAvailability(backendResolved);
   using callerToolAuthorityResources = new DisposableStack();
   const callerToolAuthority = callerToolAuthorityResources.use(
     captureCliRunToolAuthority(params, {
@@ -710,12 +705,13 @@ async function prepareCliRunContextWithinReadFence(
       "Bundled MCP is enabled, but the OpenClaw MCP loopback server did not publish a runtime after startup.",
     );
   }
-  const { nodeWorkshopEnabled, hostOwnedTools } = mcp.resolveCliMcpToolOwnership(params, {
-    backend: backendResolved,
-    enabled: bundleMcpEnabled,
-    nodePlacement: nodeClaudePlacement,
-    skipPreparation: skipsTurnPreparation,
-  });
+  const { nodeWorkshopEnabled, hostOwnedTools, bridgeConfiguredMcp } =
+    mcp.resolveCliMcpToolOwnership(params, {
+      backend: backendResolved,
+      enabled: bundleMcpEnabled,
+      nodePlacement: nodeClaudePlacement,
+      skipPreparation: skipsTurnPreparation,
+    });
   const shouldMaterializeRuntimePolicy =
     runtimeToolsAllowPolicy !== undefined && canUseGatewayTools && params.disableTools !== true;
   const skillLibraryAuthoring: RunCliAgentParams["skillLibraryAuthoring"] =
@@ -747,12 +743,24 @@ async function prepareCliRunContextWithinReadFence(
       }
     : undefined;
   params.assertCurrent?.();
-  // Exclusive runs cannot hand configured MCP servers to the CLI. Serve them
-  // through the loopback bridge so every turn lists the same tools.
+  const resolveNativeMcpCapabilityProfile = () =>
+    mcp.resolveCliNativeMcpPolicy(params, {
+      config: runConfig,
+      policySessionKey,
+      policyAgentId,
+      modelProvider,
+      modelId,
+      workspaceDir,
+      cwd,
+      runtimeToolsAllowPolicy,
+    });
+  // Keep configured MCP on the bridge even when local Claude retains native
+  // tools for node exec. Exact tool selection remains a separate policy.
   await using loopbackBundleMcp =
     mcpLoopbackRuntime &&
     mcpContextBase &&
-    (params.cliToolAvailability !== undefined ||
+    (bridgeConfiguredMcp ||
+      params.cliToolAvailability !== undefined ||
       shouldMaterializeRuntimePolicy ||
       promptBuildRestrictsTools)
       ? await prepareCliLoopbackBundleMcp({
@@ -761,17 +769,7 @@ async function prepareCliRunContextWithinReadFence(
           workspaceDir,
           agentId: sessionAgentId,
           agentDir,
-          resolveCapabilityProfile: () =>
-            mcp.resolveCliNativeMcpPolicy(params, {
-              config: runConfig,
-              policySessionKey,
-              policyAgentId,
-              modelProvider,
-              modelId,
-              workspaceDir,
-              cwd,
-              runtimeToolsAllowPolicy,
-            }),
+          resolveCapabilityProfile: resolveNativeMcpCapabilityProfile,
           runtimeToolsAllow: runtimeToolsAllowPolicy,
         })
       : undefined;
@@ -885,19 +883,14 @@ async function prepareCliRunContextWithinReadFence(
     bootstrapFiles: bootstrapFilesForInjectionStats,
     injectedFiles: contextFiles,
   });
-  const {
-    bootstrapAnalysis,
-    bootstrapMaxChars,
-    bootstrapPromptWarning,
-    bootstrapPromptWarningMode,
-    bootstrapTotalMaxChars,
-  } = buildBootstrapBudgetState({
-    config: params.config,
-    agentId: sessionAgentId,
-    files: bootstrapInjectionStats,
-    seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
-    previousSignature: params.bootstrapPromptWarningSignature,
-  });
+  const { bootstrapAnalysis, bootstrapMaxChars, bootstrapPromptWarning, bootstrapTotalMaxChars } =
+    buildBootstrapBudgetState({
+      config: params.config,
+      agentId: sessionAgentId,
+      files: bootstrapInjectionStats,
+      seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
+      previousSignature: params.bootstrapPromptWarningSignature,
+    });
   const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(bootstrapPromptWarning.lines);
   const nodeSkillWorkshop = nodeWorkshopEnabled
     ? projectedTools.find((tool) => tool.name === "skill_workshop")
@@ -1102,32 +1095,27 @@ async function prepareCliRunContextWithinReadFence(
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
         ? applyClaudeManagedMcpTimeout(rawLoopbackServerConfig)
         : rawLoopbackServerConfig;
-    const nativeMcpCapabilityProfile = await mcp.resolveCliNativeMcpPolicy(params, {
-      config: runConfig,
-      policySessionKey,
-      policyAgentId,
-      modelProvider,
-      modelId,
-      workspaceDir,
-      cwd,
-      runtimeToolsAllowPolicy,
-    });
+    const exclusiveMcp = exclusiveTools || bridgeConfiguredMcp;
+    const nativeMcpCapabilityProfile = await resolveNativeMcpCapabilityProfile();
     const preparedBackend = await prepareCliBundleMcpConfig({
       enabled: bundleMcpEnabled || systemAgentMcpConfig !== undefined,
       mode: backendResolved.bundleMcpMode,
       backend: backendResolved.config,
       workspaceDir,
       config: params.config,
-      toolOverrides: params.toolOverrides,
+      // The bridged catalog already applies configured-server overrides.
+      toolOverrides:
+        exclusiveMcp && !systemAgentMcpConfig
+          ? { ...params.toolOverrides, mcpServers: undefined, mcpToolsDeny: undefined }
+          : params.toolOverrides,
       agentDir,
-      // Restricted runs serve only the loopback server; merging user/plugin
-      // MCP servers would let the run reach tools outside its allowlist.
+      // Bridged and restricted runs exclude native servers outside their catalog.
       ...(systemAgentMcpConfig
         ? { exclusiveConfig: systemAgentMcpConfig }
-        : exclusiveTools && loopbackServerConfig
+        : exclusiveMcp && loopbackServerConfig
           ? { exclusiveConfig: loopbackServerConfig }
           : {}),
-      additionalConfig: exclusiveTools ? undefined : loopbackServerConfig,
+      additionalConfig: exclusiveMcp ? undefined : loopbackServerConfig,
       env:
         mcpLoopbackRuntime && mcpClientGrant
           ? {
@@ -1136,18 +1124,15 @@ async function prepareCliRunContextWithinReadFence(
             }
           : undefined,
       warn: (message) => cliBackendLog.warn(message),
-      ...(!systemAgentMcpConfig && !exclusiveTools
-        ? {
-            nativeMcpPolicy: {
+      nativeMcpPolicy:
+        !systemAgentMcpConfig && !exclusiveMcp
+          ? {
               sessionId: params.sessionId,
-              ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+              sessionKey: params.sessionKey,
               capabilityProfile: nativeMcpCapabilityProfile,
-              ...(runtimeToolsAllowPolicy !== undefined
-                ? { runtimeToolsAllow: runtimeToolsAllowPolicy }
-                : {}),
-            },
-          }
-        : {}),
+              runtimeToolsAllow: runtimeToolsAllowPolicy,
+            }
+          : undefined,
     });
     const cleanupPreparedBackend = sequenceCliCleanups(
       preparedBackend.cleanup && (() => preparedBackend.cleanup?.()),
@@ -1504,15 +1489,15 @@ async function prepareCliRunContextWithinReadFence(
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const historyParams = (params = await admitCliRunParams(params, workspaceResolution.agentId));
+    const historyIdentity = { credential: authCredential, preparedBackend: preparedBackendFinal };
     const cliHistoryWriter = !isSideQuestion
-      ? await prepareCliHistoryBoundary(historyParams, { credential: authCredential })
+      ? await prepareCliHistoryBoundary(historyParams, historyIdentity)
       : undefined;
     // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
-    const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter !== undefined;
     // Native compatibility and transcript account ownership are independent gates.
     // A session-less backend starts every turn fresh, so the account-owned transcript is
     // its only continuity; the backend's raw-reseed opt-in still decides delivery.
-    const rawTranscriptReseedReason = !historyAllowed
+    const rawTranscriptReseedReason = !(params.sessionManager || replayableTarget(cliHistoryWriter))
       ? "auth-unknown"
       : reusableCliSessionId
         ? "session-expired"
@@ -1585,7 +1570,7 @@ async function prepareCliRunContextWithinReadFence(
         thinkLevel: params.thinkLevel,
         runtimeContextFragments: params.runtimeContextFragments,
         // Caller-owned memory cannot grant access to persisted interrupted inputs.
-        sessionTarget: params.isolatedCompletion ? undefined : cliHistoryWriter?.target,
+        sessionTarget: params.isolatedCompletion ? undefined : replayableTarget(cliHistoryWriter),
         context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
       }));
       params.assertCurrent?.();
@@ -1604,7 +1589,7 @@ async function prepareCliRunContextWithinReadFence(
     // CLI sessions still receive prior conversation context via stdin.
     const shouldPrepareOpenClawHistoryPrompt =
       !skipsTurnPreparation && (!reusableCliSessionId || allowRawTranscriptReseed);
-    let openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
+    const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
       ? buildCliSessionHistoryPrompt({
           messages: sessionPromptContext?.reseedMessages ?? [],
           prompt: historyPromptCurrentTurn,
@@ -1640,7 +1625,6 @@ async function prepareCliRunContextWithinReadFence(
       bootstrapTotalMaxChars,
       bootstrapTruncation: buildBootstrapTruncationReportMeta({
         analysis: bootstrapAnalysis,
-        warningMode: bootstrapPromptWarningMode,
         warning: bootstrapPromptWarning,
       }),
       sandbox: { mode: "off", sandboxed: false },
@@ -1751,7 +1735,6 @@ async function prepareCliRunContextWithinReadFence(
         lease: params.contextEngineLogicalTurnLease,
         host: contextEngineHostSupport,
         recorder: params.userTurnTranscriptRecorder,
-        isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
         sessionTarget: params.sessionTarget,
       });
       resolvedContextEngine = effective.engine;
@@ -1795,34 +1778,7 @@ async function prepareCliRunContextWithinReadFence(
       });
     }
     const hadSessionFile = await hasCliSessionTranscript(params);
-    let preparedParams = await admitFinalParams();
-
-    const note = await claimHeartbeatContextForUserRun({
-      ...preparedParams,
-      agentId: sessionAgentId,
-      storePath: params.sessionTarget?.storePath ?? params.storePath,
-      detached: Boolean(params.sessionManager || params.isolatedCompletion),
-      assertCurrent: createCliRunCurrentAssertion(preparedParams),
-    });
-    if (note) {
-      preparedParams = {
-        ...preparedParams,
-        transcriptPrompt: finalizedTranscriptPrompt ?? params.prompt,
-      };
-      const append = (text: string) => composeCliPromptContext(text, { appendContext: note });
-      if (executionTarget.kind === "plugin") {
-        promptContext = {
-          ...promptContext,
-          appendContext: append(promptContext?.appendContext ?? ""),
-        };
-        promptForHooks = append(promptForHooks ?? preparedParams.prompt);
-      } else {
-        preparedParams.prompt = append(preparedParams.prompt);
-        if (openClawHistoryPrompt) {
-          openClawHistoryPrompt = append(openClawHistoryPrompt);
-        }
-      }
-    }
+    const preparedParams = await admitFinalParams();
     return finishPreparation({
       ...buildPreparedContext(preparedParams),
       ...(managedClaudeLiveSessionGeneration

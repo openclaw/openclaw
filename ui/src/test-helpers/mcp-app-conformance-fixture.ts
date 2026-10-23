@@ -180,7 +180,7 @@ export async function mountControlUiHost(
 import { createApplicationGateway } from "/src/app/gateway-store.ts";
 import { waitForGatewayClient } from "/src/app/gateway-readiness.ts";
 import { loadSettings } from "/src/app/settings.ts";
-import "/src/components/mcp-app-view-registration.ts";
+import "/src/components/mcp-app-view.tsx";
 import { applicationContext } from "/src/app/context.ts";
 window.mcpConformanceApplicationContext = applicationContext;
 import { MCP_APP_MESSAGE_EVENT } from "/src/components/mcp-app-security.ts";
@@ -190,7 +190,6 @@ window.mcpConformanceConnect = async ({ gatewayUrl, authValue, sessionKey }) => 
     { ...loadSettings(), gatewayUrl, token: authValue, sessionKey },
     "",
     "",
-    undefined,
     { persistDefaultConnectionSettings: false, ownsWarmBoot: false },
   );
   gateway.start();

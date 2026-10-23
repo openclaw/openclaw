@@ -102,6 +102,8 @@ async function runConfigMutation(
         ...opts.localStateOwner,
         params: {},
         onForeignOwner: "refuse",
+        onlineAlternative:
+          "For online config changes, use openclaw gateway call config.patch with a raw patch and baseHash from openclaw gateway call config.get.",
         ...(databaseOnly ? { databaseAccess: "none" } : { databaseEngine: "configured" }),
         runLocal,
       });

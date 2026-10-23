@@ -315,7 +315,8 @@ describe("user profiles", () => {
     const fetchImpl = vi.fn(
       async () => new Response("not an image", { headers: { "content-type": "text/plain" } }),
     );
-    const profile = await adoptAvatar(initial.id, avatarUrl, options, { fetchImpl });
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
+    const profile = await adoptAvatar(initial.id, avatarUrl, options);
     expect(fetchImpl).toHaveBeenCalled();
     expect(profile).toMatchObject({ displayName: "Still Authenticated", avatarMime: null });
     expect(avatar(profile.id)).toBeUndefined();
@@ -325,12 +326,11 @@ describe("user profiles", () => {
     const entered = createDeferredCore();
     const response = createDeferredCore<Response>();
     const profile = ensureProvider("avatar-race@github", "Race User");
-    const pending = adoptAvatar(profile.id, avatarUrl, options, {
-      fetchImpl: vi.fn(async () => {
-        entered.resolve();
-        return response.promise;
-      }),
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      entered.resolve();
+      return response.promise;
     });
+    const pending = adoptAvatar(profile.id, avatarUrl, options);
     try {
       await Promise.race([
         entered.promise,
@@ -398,17 +398,11 @@ describe("avatar database lifetime", () => {
       const originalOptions = { path: original.path };
       const entered = createDeferredCore();
       const response = createDeferredCore<Response>();
-      const pending = adoptAvatar(
-        profile.id,
-        "https://avatars.example.test/profile",
-        sourceOptions,
-        {
-          fetchImpl: vi.fn(async () => {
-            entered.resolve();
-            return response.promise;
-          }),
-        },
-      );
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        entered.resolve();
+        return response.promise;
+      });
+      const pending = adoptAvatar(profile.id, avatarUrl, sourceOptions);
       try {
         await entered.promise;
         closeOpenClawStateDatabaseForTest();

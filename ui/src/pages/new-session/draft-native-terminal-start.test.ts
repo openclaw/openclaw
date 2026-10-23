@@ -11,18 +11,12 @@ import {
 import {
   createDraftFixture,
   registerTextPayload,
+  resetSubmissionMocks,
   stubObjectUrls,
 } from "./draft-submission-flow.test-support.ts";
 import { loadNewSessionPreference, replaceBrowserPreference } from "./preferences.ts";
 
-afterEach(() => {
-  document.body.replaceChildren();
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  sessionStorage.clear();
-  localStorage.clear();
-});
+afterEach(resetSubmissionMocks);
 
 const nativeTerminalController = vi.fn(async () => createTerminalController());
 const nativeTerminalElement = defineTestTerminalPanelElement(nativeTerminalController);

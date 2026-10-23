@@ -1,50 +1,30 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateActionAuthority,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getXApi } from "./client.js";
 import type { XAccountConfig } from "./config-schema.js";
+import { setXRuntime } from "./runtime.js";
+import { setXTestFetch } from "./test-support/fetch.js";
 
 const fixture = vi.hoisted(() => {
-  const rows = new Map<string, unknown>();
-  const store = {
-    lookup: async (key: string) => rows.get(key),
-    entries: async () => [...rows].map(([key, value]) => ({ key, value, createdAt: 0 })),
-    delete: async (key: string) => rows.delete(key),
-    register: async (key: string, value: unknown, options?: { assertCurrent?: () => void }) => {
-      options?.assertCurrent?.();
-      rows.set(key, structuredClone(value));
-    },
-  };
-  let generation = 0;
-  let stateDir = "synthetic-x-client:0";
-  const state = { openKeyedStore: () => store, resolveStateDir: () => stateDir };
-  const logging = { getChildLogger: () => ({ warn: vi.fn() }) };
-  return {
-    logging,
-    nextTest: () => {
-      stateDir = `synthetic-x-client:${++generation}`;
-    },
-    state,
-    rows,
-    store,
-    runtime: { state, logging },
-    fetch: vi.fn<(input: string, init?: RequestInit) => Promise<Response>>(),
-  };
+  return { fetch: vi.fn<(input: string, init?: RequestInit) => Promise<Response>>() };
 });
-
-vi.mock("./runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./runtime.js")>()),
-  getXRuntime: () => fixture.runtime,
-}));
-vi.mock("./api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api.js")>();
-  return {
-    ...actual,
-    createXApiClient(options: Parameters<typeof actual.createXApiClient>[0]) {
-      options.fetch = fixture.fetch;
-      return actual.createXApiClient(options);
-    },
-  };
-});
+let current: OpenClawConfig;
+let stateDir: string;
+let failTokenCommit: "before" | "after" | undefined;
 
 function config(overrides: Partial<XAccountConfig> = {}): OpenClawConfig {
   return {
@@ -63,7 +43,53 @@ function config(overrides: Partial<XAccountConfig> = {}): OpenClawConfig {
 }
 
 function restartRuntime() {
-  fixture.runtime = { state: fixture.state, logging: fixture.logging };
+  const base = createPluginRuntimeMock();
+  setXRuntime({
+    ...base,
+    config: { ...base.config, current: () => current },
+    state: {
+      ...base.state,
+      resolveStateDir: () => stateDir,
+      openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
+        if (options.maxEntries === undefined) {
+          throw new Error("Spend fixture requires bounded state");
+        }
+        return createPluginStateKeyedStoreForTests<T>("x", {
+          ...options,
+          maxEntries: options.maxEntries,
+        });
+      },
+      openKeyedStoreV2: <T>(
+        options: OpenAsyncKeyedStoreOptions,
+        authority?: PluginStateActionAuthority,
+      ) => {
+        if (options.maxEntries === undefined || !authority) {
+          throw new Error("OAuth fixture requires bounded state and current authority");
+        }
+        const store = createPluginStateKeyedStoreV2ForTests<T>("x", options, authority);
+        return {
+          ...store,
+          compareAndApply: async (...args: Parameters<typeof store.compareAndApply>) => {
+            const change = args[2];
+            const tokenCommit =
+              change.action === "set" &&
+              typeof change.value === "object" &&
+              change.value !== null &&
+              "settledClaim" in change.value;
+            if (tokenCommit && failTokenCommit === "before") {
+              throw new Error("synthetic persistence failure");
+            }
+            const result = await store.compareAndApply(...args);
+            if (tokenCommit && failTokenCommit === "after") {
+              failTokenCommit = undefined;
+              throw new Error("synthetic lost commit response");
+            }
+            return result;
+          },
+        };
+      },
+    },
+  });
 }
 
 function requestBody(init?: RequestInit): string {
@@ -73,15 +99,24 @@ function requestBody(init?: RequestInit): string {
   return init.body;
 }
 
-beforeEach(() => {
-  fixture.rows.clear();
-  fixture.nextTest();
+beforeEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginStateStoreForTests();
+  stateDir = mkdtempSync(path.join(os.tmpdir(), "x-oauth-owner-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  current = config();
+  failTokenCommit = undefined;
   fixture.fetch.mockReset();
+  setXTestFetch("api.x.com", fixture.fetch);
   restartRuntime();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginStateStoreForTests();
+  vi.unstubAllEnvs();
+  rmSync(stateDir, { recursive: true, force: true });
 });
 
 describe("X OAuth client ownership", () => {
@@ -120,6 +155,7 @@ describe("X OAuth client ownership", () => {
     const first = initial.getMentions({ userId: "9" });
     await refreshStarted.promise;
     const rotatedConfig = config({ bearerToken: "bearer-new", clientSecret: "secret-new" });
+    current = rotatedConfig;
     const updated = await getXApi("default", rotatedConfig);
     const concurrent = updated.getMentions({ userId: "9" });
     releaseRefresh.resolve();
@@ -137,9 +173,8 @@ describe("X OAuth client ownership", () => {
     restartRuntime();
     await (await getXApi("default", rotatedConfig)).getMentions({ userId: "9" });
     expect(refreshes.at(-1)?.token).toBe("rotated-2");
-    await (
-      await getXApi("default", config({ refreshToken: "seed-new" }))
-    ).getMentions({ userId: "9" });
+    current = config({ refreshToken: "seed-new" });
+    await (await getXApi("default", current)).getMentions({ userId: "9" });
     expect(refreshes.at(-1)?.token).toBe("seed-new");
   });
 
@@ -166,6 +201,7 @@ describe("X OAuth client ownership", () => {
     const rejected = expect(stale).rejects.toThrow("X token refresh failed");
     await staleStarted.promise;
     const replacement = config({ refreshToken: "seed-new" });
+    current = replacement;
     await (await getXApi("default", replacement)).getMentions({ userId: "9" });
     releaseStale.resolve();
     await rejected;
@@ -173,4 +209,121 @@ describe("X OAuth client ownership", () => {
     await (await getXApi("default", replacement)).getMentions({ userId: "9" });
     expect(refreshes).toEqual(["seed-initial", "seed-new", "rotated-current"]);
   });
+});
+
+it.each(["lost-response", "http-429", "http-503", "nested-200", "invalid-rotation"] as const)(
+  "fences %s across retry and SQLite/runtime reopen",
+  async (mode) => {
+    const posts: string[] = [];
+    fixture.fetch.mockImplementation(async (input, init) => {
+      if (!input.endsWith("/oauth2/token")) {
+        return Response.json({ data: [] });
+      }
+      posts.push(new URLSearchParams(requestBody(init)).get("refresh_token")!);
+      if (mode === "lost-response") {
+        throw new Error("synthetic network loss");
+      }
+      if (mode === "http-429" || mode === "http-503") {
+        return Response.json({}, { status: mode === "http-429" ? 429 : 503 });
+      }
+      if (mode === "nested-200") {
+        return Response.json({
+          error: { code: "invalid_grant" },
+          access_token: "must-not-publish",
+        });
+      }
+      return Response.json({ access_token: "must-not-publish", refresh_token: 7 });
+    });
+    const api = await getXApi("default", current);
+    await expect(api.getMentions({ userId: "9" })).rejects.toThrow();
+    await expect(api.getMentions({ userId: "9" })).rejects.toThrow();
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+    restartRuntime();
+    await expect(
+      (await getXApi("default", current)).getMentions({ userId: "9" }),
+    ).rejects.toThrow();
+    expect(posts).toEqual(["seed-initial"]);
+  },
+);
+it("rechecks current account configuration after a held provider response without requiring a new client lookup", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const requests: string[] = [];
+  fixture.fetch.mockImplementation(async (input) => {
+    requests.push(input);
+    if (input.endsWith("/oauth2/token")) {
+      entered.resolve();
+      await release.promise;
+      return Response.json({ access_token: "access", refresh_token: "rotated" });
+    }
+    return Response.json({ data: [] });
+  });
+  const result = (await getXApi("default", current)).getMentions({ userId: "9" });
+  const rejected = expect(result).rejects.toThrow();
+  await entered.promise;
+  current = config({ refreshToken: "new-login" });
+  release.resolve();
+  await rejected;
+  expect(requests).toHaveLength(1);
+});
+
+it.each(["before", "after"] as const)(
+  "recovers a %s-commit failure without exchanging the completed rotation twice",
+  async (mode) => {
+    const posts: string[] = [];
+    let uses = 0;
+    fixture.fetch.mockImplementation(async (input, init) => {
+      if (!input.endsWith("/oauth2/token")) {
+        uses++;
+        return Response.json({ data: [] });
+      }
+      posts.push(new URLSearchParams(requestBody(init)).get("refresh_token")!);
+      if (posts.length === 1) {
+        failTokenCommit = mode;
+      }
+      return Response.json({ access_token: "access", refresh_token: "rotated-" + posts.length });
+    });
+    const api = await getXApi("default", current);
+    await expect(api.getMentions({ userId: "9" })).rejects.toThrow();
+    expect(uses).toBe(0);
+    failTokenCommit = undefined;
+    await api.getMentions({ userId: "9" });
+    expect(posts).toEqual(["seed-initial"]);
+    expect(uses).toBe(1);
+    restartRuntime();
+    await (await getXApi("default", current)).getMentions({ userId: "9" });
+    expect(posts).toEqual(["seed-initial", "rotated-1"]);
+  },
+);
+
+it("detaches an aborted caller while a joined owner persists its late rotation", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const posts: string[] = [];
+  fixture.fetch.mockImplementation(async (input, init) => {
+    if (!input.endsWith("/oauth2/token")) {
+      return Response.json({ data: [] });
+    }
+    posts.push(new URLSearchParams(requestBody(init)).get("refresh_token")!);
+    if (posts.length === 1) {
+      entered.resolve();
+      await release.promise;
+    }
+    return Response.json({ access_token: "access", refresh_token: "rotated" });
+  });
+  const api = await getXApi("default", current);
+  const controller = new AbortController();
+  const first = api.getMentions({ userId: "9", signal: controller.signal });
+  const rejected = expect(first).rejects.toMatchObject({ name: "AbortError" });
+  await entered.promise;
+  const second = api.getMentions({ userId: "9" });
+  controller.abort();
+  await rejected;
+  expect(posts).toEqual(["seed-initial"]);
+  release.resolve();
+  await second;
+  restartRuntime();
+  await (await getXApi("default", current)).getMentions({ userId: "9" });
+  expect(posts).toEqual(["seed-initial", "rotated"]);
 });

@@ -95,78 +95,6 @@ function createScanResult() {
   };
 }
 
-function createExpectedStatusPayload() {
-  return {
-    ok: true,
-    configuredChannels: [],
-    os: { platform: "linux" },
-    update: { installKind: "npm", git: { tag: null, branch: null } },
-    updateChannel: "stable",
-    updateChannelSource: "config",
-    memory: null,
-    memoryPlugin: null,
-    databaseEngines: {
-      source: "unavailable",
-      experimental: false,
-      families: [
-        ["state", "Shared state", false],
-        ["agent", "Agent data", false],
-        ["workboard", "Workboard", false],
-        ["logbook", "Logbook", false],
-        ["team-reports", "Team Reports", false],
-        ["quarantine", "Database quarantine", true],
-        ["managed-update", "Managed update handoffs", true],
-        ["package-activation", "Package activation journal", true],
-      ].map(([id, label, fixedLocal]) => ({
-        id,
-        label,
-        default: "sqlite",
-        override: null,
-        fixedLocal,
-        effective: "sqlite",
-      })),
-      stores: [],
-      reason:
-        "Physical stores unknown: admitted facts unavailable. Run openclaw doctor for recovery steps.",
-    },
-    gateway: {
-      mode: "local",
-      url: "ws://127.0.0.1:18789",
-      urlSource: "config",
-      misconfigured: false,
-      reachable: false,
-      connectLatencyMs: null,
-      self: null,
-      error: null,
-      authWarning: null,
-    },
-    gatewayService: {
-      label: "LaunchAgent",
-      installed: false,
-      loadState: { status: "not-loaded" },
-      managedByOpenClaw: false,
-      externallyManaged: false,
-      loadedText: "not loaded",
-      runtime: { status: "stopped" },
-      loaded: false,
-      runtimeShort: "stopped",
-    },
-    nodeService: {
-      label: "LaunchAgent",
-      installed: false,
-      loadState: { status: "not-loaded" },
-      managedByOpenClaw: false,
-      externallyManaged: false,
-      loadedText: "not loaded",
-      runtime: { status: "stopped" },
-      loaded: false,
-      runtimeShort: "stopped",
-    },
-    agents: [],
-    secretDiagnostics: [],
-  };
-}
-
 describe("statusJsonCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -187,10 +115,44 @@ describe("statusJsonCommand", () => {
     await statusJsonCommand({}, runtime);
 
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
+    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(logs).toStrictEqual([expect.any(String)]);
     const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
-    expect(payload).toEqual(createExpectedStatusPayload());
+    // The complete schema is owned by status-json-runtime; this boundary covers
+    // the absent-probe defaults and real service-summary composition.
+    expect(payload).toMatchObject({
+      configuredChannels: [],
+      memoryPlugin: null,
+      agents: [],
+      update: { installKind: "npm", git: { tag: null, branch: null } },
+    });
+    expect(payload.gateway).toEqual({
+      mode: "local",
+      url: "ws://127.0.0.1:18789",
+      urlSource: "config",
+      misconfigured: false,
+      reachable: false,
+      connectLatencyMs: null,
+      self: null,
+      error: null,
+      authWarning: null,
+    });
+    for (const field of ["gatewayService", "nodeService"]) {
+      expect(payload[field]).toEqual({
+        label: "LaunchAgent",
+        installed: false,
+        loadState: { status: "not-loaded" },
+        managedByOpenClaw: false,
+        externallyManaged: false,
+        loadedText: "not loaded",
+        runtime: { status: "stopped" },
+        loaded: false,
+        runtimeShort: "stopped",
+      });
+    }
     expect(payload).not.toHaveProperty("securityAudit");
+    expect(payload).not.toHaveProperty("pluginCompatibility");
   });
 
   it.each([
@@ -236,13 +198,14 @@ describe("statusJsonCommand", () => {
       sourceConfig: {},
       deep: false,
       includeFilesystem: true,
-      includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
     });
     expect(logs).toStrictEqual([expect.any(String)]);
     const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
-    expect(payload).toEqual({
-      ...createExpectedStatusPayload(),
+    expect({
+      securityAudit: payload.securityAudit,
+      pluginCompatibility: payload.pluginCompatibility,
+    }).toEqual({
       securityAudit: {
         summary: { critical: 1, warn: 0, info: 0 },
         findings: [],

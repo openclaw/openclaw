@@ -70,7 +70,6 @@ type StatusScanDepsRuntimeModuleMock = Pick<
   typeof import("./status.scan.deps.runtime.js"),
   "getMemoryProvider" | "isMemoryProviderNative"
 > & {
-  getTailnetHostname: UnknownMock;
   getMemorySearchManager: StatusScanSharedMocks["getMemorySearchManager"];
 };
 
@@ -78,7 +77,6 @@ function createStatusScanDepsRuntimeModuleMock(
   mocks: Pick<StatusScanSharedMocks, "getMemorySearchManager">,
 ): StatusScanDepsRuntimeModuleMock {
   return {
-    getTailnetHostname: vi.fn(),
     getMemoryProvider: vi.fn<StatusScanDepsRuntimeModuleMock["getMemoryProvider"]>(async () => ({
       provider: null,
     })),

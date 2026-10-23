@@ -16,8 +16,6 @@ import {
   createAcpGatewayAgent,
 } from "./translator.test-helpers.js";
 
-vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
-
 type RequestHandler = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 const sessionKey = "agent:main:work";
 const cwd = "/tmp/openclaw";

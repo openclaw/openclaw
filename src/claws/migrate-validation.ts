@@ -107,7 +107,6 @@ export function resolveMigrationAgentSettings(
     throw new ClawMigrationError(
       "agent_default_setting_unsupported",
       `Inherited agent settings cannot be represented by Claw v1: ${unsupportedDefaults.toSorted().join(", ")}. Keep this agent unmanaged or remove those defaults before migrating.`,
-      "$.agents.defaults",
     );
   }
 

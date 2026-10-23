@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, onCleanup, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { CompactAttachmentFile } from "./chat-attachment-file.tsx";
@@ -18,7 +18,6 @@ type PastedTextProps = {
 };
 
 export function ChatPastedText(props: PastedTextProps) {
-  const [excerpt, setExcerpt] = createSignal("");
   const source = createMemo(
     () => ({ src: props.src, sizeBytes: props.sizeBytes, scope: props.scope }),
     {
@@ -28,39 +27,35 @@ export function ChatPastedText(props: PastedTextProps) {
         before.scope === next.scope,
     },
   );
-  const readExcerpt = (value: ReturnType<typeof source>) => {
-    onSettled(() => {
-      setExcerpt("");
-      const src = value.src;
-      if (!src) {
-        return undefined;
-      }
-      const controller = new AbortController();
-      void (async () => {
+  const excerpt = createMemo(() => {
+    const { src, sizeBytes } = source();
+    if (!src) {
+      return () => "";
+    }
+    const controller = new AbortController();
+    onCleanup(() => controller.abort());
+    // Each source starts with a generic label without replacing the interactive chip.
+    return createMemo(
+      async () => {
         try {
-          const text = await readAttachmentText(src, value.sizeBytes, controller.signal, "excerpt");
+          const text = await readAttachmentText(src, sizeBytes, controller.signal, "excerpt");
           if (controller.signal.aborted) {
-            return;
+            return "";
           }
           const { derivePastedTextExcerpt } =
             await import("../../../lib/chat/pasted-text-excerpt.ts");
-          if (!controller.signal.aborted) {
-            setExcerpt(derivePastedTextExcerpt(text));
-          }
+          return controller.signal.aborted ? "" : derivePastedTextExcerpt(text);
         } catch {
           // The side panel owns loading errors, retry and the original-file download.
+          return "";
         }
-      })();
-      return () => controller.abort();
-    });
-    return null;
-  };
-  const label = () => excerpt() || t("chat.attachments.pastedText");
+      },
+      { loadingValue: "" },
+    );
+  });
+  const label = () => excerpt()() || t("chat.attachments.pastedText");
   return (
     <openclaw-chat-pasted-text style={{ display: "contents" }}>
-      <Show when={source()} keyed>
-        {readExcerpt}
-      </Show>
       <Show
         when={props.composerAction}
         fallback={

@@ -74,7 +74,6 @@ export async function buildActiveSubagentRuntimeContext(params: {
   controllerSessionKey?: string;
   controllerAgentId?: string;
   runId?: string;
-  recentMinutes?: number;
   includeSpawnContext?: boolean;
 }): Promise<string | undefined> {
   const rawControllerSessionKey = params.controllerSessionKey?.trim();
@@ -147,7 +146,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
       if (runs.length === 0 && pending.length === 0) {
         return undefined;
       }
-      const recentMinutes = params.recentMinutes ?? 30;
+      const recentMinutes = 30;
       const context = captureSubagentListReadContext(runs, index, snapshot, recentMinutes);
       const list = buildSubagentList({
         context,

@@ -175,6 +175,47 @@ describe("captured session history", () => {
 });
 
 it.skipIf(process.platform === "win32")(
+  "briefly reuses missing checkout results and observes a recreated checkout after expiry",
+  async () => {
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+    await drainGlobalSingletonLifecycleState("restart");
+    const parent = await fs.realpath(tempDirs.make("openclaw-missing-diff-"));
+    const cwd = path.join(parent, "checkout");
+    const timing: DiffReadTiming = { durations: {} };
+    const stopDiagnostics = onTrustedInternalDiagnosticEvent(() => undefined, {
+      includeTrusted: ["diagnostic.phase.completed"],
+    });
+    const read = () => {
+      timing.durations = {};
+      return loadCheckoutDiff({ cwd, sessionKey: "fixture" }, timing);
+    };
+    try {
+      expect(await read()).toMatchObject({ files: [], unavailableReason: "not_git" });
+      expect(timing.missReason).toBe("no-revision-missing");
+      expect(await read()).toMatchObject({ files: [], unavailableReason: "not_git" });
+      expect(timing.outcome).toBe("cache-hit");
+      expect(timing.durations["worker-queue"]).toBe(0);
+      await fs.mkdir(cwd);
+      await promisify(execFile)("git", ["-C", cwd, "init", "-b", "main"]);
+      await fs.writeFile(path.join(cwd, "created.txt"), "created\n");
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now + 1_001);
+      const recreated = await read();
+      expect(recreated.unavailableReason).toBeUndefined();
+      expect(recreated.files).toEqual([
+        expect.objectContaining({ path: "created.txt", additions: 1, status: "added" }),
+      ]);
+    } finally {
+      stopDiagnostics();
+      await drainGlobalSingletonLifecycleState("restart");
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
   "reuses diffs from nested and aliased linked worktrees while an index writer holds its lock",
   async () => {
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");

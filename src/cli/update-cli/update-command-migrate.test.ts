@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import * as terminalNote from "../../../packages/terminal-core/src/note.js";
+import * as doctorUi from "../../commands/doctor-ui.js";
 import * as doctor from "../../flows/doctor-health.js";
 import * as jsonFiles from "../../infra/json-files.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -20,6 +23,108 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 const readText = (file: string) => fs.readFile(file, "utf8");
+
+it("migrates retired heartbeat config with its backed-up state only once", async () => {
+  await withOpenClawTestState(
+    {
+      scenario: "minimal",
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SUPERVISOR_MODE: "external" },
+    },
+    async (state) => {
+      vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
+      await state.writeConfig({
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "17m",
+              target: "none",
+              prompt: "Check the synthetic checklist.",
+              activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
+            },
+          },
+          entries: { main: { workspace: state.workspaceDir } },
+        },
+        plugins: { enabled: false },
+        gateway: { mode: "local", controlUi: { enabled: false }, auth: { mode: "none" } },
+      });
+      const original = await readText(state.configPath);
+      const databasePath = openOpenClawStateDatabase().path;
+      await closeOpenClawStateDatabaseAsync();
+      {
+        using db = new DatabaseSync(databasePath);
+        // Schema 30 changed the scheduler contract, not the schema 29 table layout.
+        db.exec(`
+          PRAGMA user_version=29;
+          UPDATE schema_meta SET schema_version=29 WHERE meta_key='primary';
+          UPDATE config_machine_state SET value_json='29'
+            WHERE state_key='state.schema.contentVersion';
+        `);
+      }
+      const note = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+      const backupRoot = state.path("heartbeat-recovery", "native");
+      await updateMigrateCommand(backupRoot);
+      const receipt = JSON.parse(await readText(`${backupRoot}.receipt.json`));
+      expect(receipt.status).toBe("migrated");
+      expect(receipt.configFiles).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: state.configPath, raw: original }),
+        ]),
+      );
+      const saved = JSON.parse(await readText(state.configPath));
+      expect(saved.agents.defaults).not.toHaveProperty("heartbeat");
+      const readJobs = () => {
+        using db = new DatabaseSync(databasePath, { readOnly: true });
+        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_STATE_SCHEMA_VERSION,
+        );
+        return db
+          .prepare("SELECT job_json FROM cron_jobs ORDER BY job_id")
+          .all()
+          .map((row) => JSON.parse(String(row.job_json)));
+      };
+      const jobs = readJobs();
+      expect(jobs).toEqual([
+        expect.objectContaining({
+          agentId: "main",
+          enabled: true,
+          schedule: expect.objectContaining({ kind: "every", everyMs: 1_020_000 }),
+          activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
+          payload: expect.objectContaining({
+            kind: "agentTurn",
+            message: "Check the synthetic checklist.",
+          }),
+          delivery: { mode: "none" },
+        }),
+      ]);
+      await updateMigrateCommand(state.path("second-recovery", "native"));
+      expect(readJobs()).toEqual(jobs);
+      expect(
+        note.mock.calls.filter(([, title]) => title === "Heartbeat delivery changed"),
+      ).toHaveLength(1);
+      await updateRestoreCommand(backupRoot);
+      expect(await readText(state.configPath)).toBe(original);
+      using restored = new DatabaseSync(databasePath, { readOnly: true });
+      expect(restored.prepare("PRAGMA user_version").get()?.user_version).toBe(29);
+      expect(restored.prepare("SELECT count(*) AS count FROM cron_jobs").get()?.count).toBe(0);
+    },
+  );
+});
+
+it.each([
+  { heartbeat: { every: "not-an-interval" } },
+  { heartbeat: { every: "30m" }, unknownSetting: true },
+])("refuses invalid heartbeat migration input before backup: %j", async (defaults) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await state.writeConfig({ agents: { defaults } });
+    const original = await readText(state.configPath);
+    const backupRoot = state.path("invalid-recovery", "native");
+    await expect(updateMigrateCommand(backupRoot)).rejects.toMatchObject({
+      reason: "invalid-config",
+    });
+    expect(await readText(state.configPath)).toBe(original);
+    await expect(fs.stat(`${backupRoot}.receipt.json`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
 
 it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unchanged"] as const)(
   "settles native migration recovery as %s",

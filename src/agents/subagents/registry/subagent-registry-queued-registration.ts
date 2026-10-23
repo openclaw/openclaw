@@ -5,6 +5,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { assertionSucceeds } from "../../../shared/assertion.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import {
@@ -86,14 +87,7 @@ export function registerRequiredQueuedSubagent(params: {
       throw new Error("Queued registration lost its original registry owner");
     }
   };
-  const registryCurrent = () => {
-    try {
-      assertRegistryCurrent();
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const registryCurrent = () => assertionSucceeds(assertRegistryCurrent);
   const confirmedTakeover = () =>
     Boolean(currentEntry()?.killReconciliation) ||
     (currentEntry()?.execution.status !== "queued" &&

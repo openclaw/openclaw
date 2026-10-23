@@ -38,13 +38,7 @@ describe("resolveMainSessionDelegationMode", () => {
   ] satisfies [string, "prefer" | "suggest", OpenClawConfig?, string?][])(
     "resolves %s to %s",
     (sessionKey, expected, config = {}, agentId = "main") => {
-      expect(
-        resolveMainSessionDelegationMode({
-          config,
-          agentId,
-          sessionKey,
-        }),
-      ).toBe(expected);
+      expect(resolveMainSessionDelegationMode({ config, agentId, sessionKey })).toBe(expected);
     },
   );
 });
@@ -71,30 +65,27 @@ describe("buildDelegationGuidanceSection", () => {
   });
 
   it.each([
-    { flag: "hasVisibleSessionSpawn", marker: "`sessions_spawn` with `visible=true`" },
-    { flag: "hasSessionsSend", marker: "`sessions_send`" },
-    { flag: "hasSessionsYield", marker: "`sessions_yield`" },
-    { flag: "hasSubagentsList", marker: "`subagents(action=list)`" },
-  ] as const)("mentions $marker only when $flag", ({ flag, marker }) => {
+    ["hasVisibleSessionSpawn", "`sessions_spawn` with `visible=true`"],
+    ["hasSessionsSend", "`sessions_send`"],
+    ["hasSessionsYield", "`sessions_yield`"],
+    ["hasSubagentsList", "`subagents(action=list)`"],
+  ] as const)("mentions %s only when enabled", (flag, marker) => {
     expect(buildSection().join("\n")).toContain(marker);
     expect(buildSection({ [flag]: false }).join("\n")).not.toContain(marker);
   });
 
   it.each([
-    {
-      name: "minimal prompts, even with session creation",
-      overrides: {
+    [
+      "minimal prompts, even with session creation",
+      {
         isMinimal: true,
         sessionsCreateToolName: "sessions_create",
         suggestTaskToolName: "suggest_task",
       },
-    },
-    { name: "suggest mode without session routing tools", overrides: { mode: "suggest" as const } },
-    {
-      name: "no usable delegation tool",
-      overrides: { hiddenDelegationTool: "", hasVisibleSessionSpawn: false },
-    },
-  ])("omits the section for $name", ({ overrides }) => {
+    ],
+    ["suggest mode without session routing tools", { mode: "suggest" }],
+    ["no usable delegation tool", { hiddenDelegationTool: "", hasVisibleSessionSpawn: false }],
+  ] as const)("omits the section for %s", (_name, overrides) => {
     expect(buildSection(overrides)).toEqual([]);
   });
 });

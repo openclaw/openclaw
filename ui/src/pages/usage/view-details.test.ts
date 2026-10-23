@@ -2,13 +2,14 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import type { SessionUsageTimePoint } from "../../../../src/shared/session-usage-timeseries-types.js";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { SessionLogEntry, UsageProps, UsageSessionEntry } from "./types.ts";
 import { SessionDetailPanel } from "./view-details.tsx";
+import { text, texts } from "./view-render.test-support.ts";
 import { createUsageProps } from "./view.test-support.ts";
 
 afterEach(() => {
@@ -62,16 +63,6 @@ function toolUsage(read = 4, exec = 3) {
   };
 }
 
-function text(root: ParentNode | null | undefined, selector: string) {
-  return root?.querySelector(selector)?.textContent;
-}
-
-function texts(root: ParentNode, selector: string, normalize = false) {
-  return [...root.querySelectorAll(selector)].map((item) =>
-    normalize ? item.textContent?.replaceAll(/\s+/g, " ").trim() : item.textContent,
-  );
-}
-
 function expectText(root: ParentNode, selector: string, ...parts: string[]) {
   for (const part of parts) {
     expect(text(root, selector)).toContain(part);
@@ -92,7 +83,7 @@ function log(timestamp: number, role: SessionLogEntry["role"], content: string):
 function toolRows(root: ParentNode) {
   return [...root.querySelectorAll(".usage-list-item")].map((item) => [
     item.firstElementChild?.textContent,
-    text(item, ".usage-list-value > span"),
+    text(item, ".usage-list-value"),
   ]);
 }
 
@@ -169,7 +160,7 @@ function mount(
           sessionLogs: errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
           sessionLogsStatus: status(errors.sessionLogs, errors.sessionLogsHasLoaded),
           logFilters: errors.logFilters ?? defaults.detail.logFilters,
-          context: { weight: errors.contextWeight, loading: false, status: status() },
+          context: { weight: errors.contextWeight, read: null, status: status() },
         },
         callbacks: {
           ...defaults.callbacks.details,
@@ -371,7 +362,9 @@ it("aggregates selected tokens while counting actual loaded message roles", () =
     { value: "—", meta: "— tool results" },
     { value: "1s" },
   ]);
-  const breakdown = texts(container, ".timeseries-breakdown .legend-item", true);
+  const breakdown = texts(container, ".timeseries-breakdown .legend-item").map((value) =>
+    value?.replaceAll(/\s+/g, " "),
+  );
   expect(breakdown).toEqual(["Output 20", "Input 10", "Cache Write 5", "Cache Read 12"]);
   expect(text(container, ".timeseries-breakdown .cost-breakdown-total")).toContain("47");
 
@@ -553,10 +546,10 @@ it("counts embedded context once with an unverified native file", () => {
     injectedWorkspaceFiles: [contextFile("known.md", 200), contextFile("AGENTS.md", 900, true)],
   };
   const container = mount([], { contextWeight });
-
-  expect(container.querySelector(".context-total")?.textContent).toContain("325");
-  const legend = texts(container, ".context-legend .legend-item", true);
-  expect(legend).toEqual(["Sys ~125", "Skills ~50", "Tools ~100", "Files ~50"]);
+  expect(text(container, ".context-total")).toContain("325");
+  expect(
+    texts(container, ".context-legend .legend-item").map((value) => value?.replaceAll(/\s+/g, " ")),
+  ).toEqual(["Sys ~125", "Skills ~50", "Tools ~100", "Files ~50"]);
   const fileRows = container.querySelectorAll(
     ".context-breakdown-card:last-child .context-breakdown-item",
   );

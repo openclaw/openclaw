@@ -1,5 +1,5 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
   adaptScopedAccountAccessor,
@@ -21,6 +21,7 @@ import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   createAllowlistProviderRouteAllowlistWarningCollector,
   createConditionalWarningCollector,
@@ -34,10 +35,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
   isNextcloudTalkAccountConfigured,
@@ -48,7 +46,6 @@ import {
   resolveNextcloudTalkAccount,
 } from "./accounts.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
-import { DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
 import { NextcloudTalkChannelConfigSchema } from "./config-schema.js";
 import { nextcloudTalkDoctor } from "./doctor.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
@@ -60,6 +57,8 @@ import {
   stripNextcloudTalkTargetPrefix,
 } from "./normalize.js";
 import {
+  normalizeNextcloudTalkAllowEntry,
+  normalizeNextcloudTalkAllowlist,
   resolveNextcloudTalkGroupRequireMention,
   resolveNextcloudTalkGroupToolPolicy,
 } from "./policy.js";
@@ -76,21 +75,13 @@ import {
 } from "./webhook-route.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
 
-function normalizeNextcloudTalkApproverId(value: string | number): string | undefined {
-  return normalizeOptionalLowercaseString(
-    String(value)
-      .trim()
-      .replace(/^(nextcloud-talk|nc-talk|nc):/i, ""),
-  );
-}
-
 const nextcloudTalkApprovalAuth = createChannelApprovalAuth({
   channelLabel: "Nextcloud Talk",
   resolveInputs: ({ cfg, accountId }) => {
     const account = resolveNextcloudTalkAccount({ cfg, accountId });
     return { allowFrom: account.config.allowFrom };
   },
-  normalizeApprover: normalizeNextcloudTalkApproverId,
+  normalizeApprover: (value) => normalizeNextcloudTalkAllowEntry(String(value)) || undefined,
 }).approvalAuth;
 
 function resolveNextcloudTalkOutboundSessionRoute(params: {
@@ -132,6 +123,7 @@ function sendNextcloudTalkMessage(
   return sendMessageNextcloudTalk(ctx.to, text, {
     accountId: ctx.accountId ?? undefined,
     replyTo: ctx.replyToId ?? undefined,
+    silent: ctx.silent,
     cfg: ctx.cfg,
     onPlatformSendDispatch: ctx.onPlatformSendDispatch,
     assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
@@ -162,6 +154,7 @@ const nextcloudTalkMessageAdapter = defineChannelMessageAdapter({
       text: true,
       media: true,
       replyTo: true,
+      silent: true,
     },
   },
   send: {
@@ -269,11 +262,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           defaultAccountId: resolveDefaultNextcloudTalkAccountId,
           clearBaseFields: ["botSecret", "botSecretFile", "baseUrl", "name"],
           resolveAllowFrom: (account) => account.config.allowFrom,
-          formatAllowFrom: (allowFrom) =>
-            formatAllowFromLowercase({
-              allowFrom,
-              stripPrefixRe: /^(nextcloud-talk|nc-talk|nc):/i,
-            }),
+          formatAllowFrom: normalizeNextcloudTalkAllowlist,
         }),
         isConfigured: isNextcloudTalkAccountConfigured,
         describeAccount: (account) =>
@@ -538,8 +527,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         resolvePolicy: (account) => account.config.dmPolicy,
         resolveAllowFrom: (account) => account.config.allowFrom,
         policyPathSuffix: "dmPolicy",
-        normalizeEntry: (raw) =>
-          normalizeLowercaseStringOrEmpty(raw.trim().replace(/^(nextcloud-talk|nc-talk|nc):/i, "")),
+        normalizeEntry: normalizeNextcloudTalkAllowEntry,
       }),
       collectWarnings: collectNextcloudTalkOpenGroupFindings,
     },

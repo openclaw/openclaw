@@ -1,11 +1,5 @@
 import { createSignal, createStore } from "solid-js";
-import type {
-  ChatGoalDraftMode,
-  ChatQueueItem,
-  HumanMention,
-} from "../../../lib/chat/chat-types.ts";
-import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
-import type { ChatRunUiStatus } from "../run-lifecycle.ts";
+import type { ChatGoalDraftMode, HumanMention } from "../../../lib/chat/chat-types.ts";
 import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
@@ -20,10 +14,6 @@ function createChatComposerState(): ChatComposerState {
   const [presentation, updatePresentation] = createStore<ChatComposerState["presentation"]>({
     dictationError: null,
     goalExpandedId: null,
-    activeQuestionKey: null,
-    gatewayQuestionIds: new Set(),
-    asyncQuestionIds: new Set(),
-    questionCollapsed: false,
   });
   return {
     // Admission survives composer remounts while the same goal mode is pending.
@@ -61,41 +51,6 @@ export function getChatComposerState(paneId: string): ChatComposerState {
     composerStates.set(paneId, state);
   }
   return state;
-}
-
-export function hasTerminalRunStatus(status: ChatRunUiStatus | null | undefined): boolean {
-  return status?.phase === "done" || status?.phase === "interrupted";
-}
-
-export function isCurrentSessionSubmittedProgress(
-  item: ChatQueueItem,
-  sessionKey: string,
-  status: ChatRunUiStatus | null | undefined,
-): boolean {
-  return (
-    item.sessionKey === sessionKey &&
-    !item.pendingRunId &&
-    (item.sendState === "submitting" ||
-      item.sendState === "sending" ||
-      item.sendState === "waiting-model") &&
-    (status == null || item.sendRunId !== status.runId)
-  );
-}
-
-// Shared by the thread, composer, pane activity, and header presentation.
-export function isChatRunWorking(
-  props: Pick<
-    ChatComposerProps,
-    "runActive" | "runStatus" | "queue" | "sessionKey" | "startupStatus"
-  >,
-): boolean {
-  return isSessionRunVisuallyActive(
-    (props.runActive === true && !hasTerminalRunStatus(props.runStatus)) ||
-      props.queue.some((item) =>
-        isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
-      ),
-    props.startupStatus?.phase,
-  );
 }
 
 export function composerDraftKey(
