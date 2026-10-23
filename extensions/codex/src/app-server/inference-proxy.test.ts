@@ -104,7 +104,7 @@ async function fixture(
   });
   proxies.push(proxy);
   const controller = new AbortController();
-  const registration = proxy.context.register({
+  const registration = await proxy.context.register({
     threadId: "root",
     text: contextText,
     signal: controller.signal,
