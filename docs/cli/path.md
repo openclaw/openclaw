@@ -241,6 +241,8 @@ depending on the per-kind AST shape.
   `yaml` package's document API for map/sequence updates. Malformed YAML
   documents with parser errors are refused before mutation with
   `parse-error`.
+  Leaf replacement through object-valued mapping keys, such as YAML 1.1
+  timestamp keys, is refused with `unresolved` and leaves the file unchanged.
 
 Use `--dry-run` before user-visible writes when the exact bytes matter. JSONC
 and YAML edits patch the existing document (via `jsonc-parser` or the `yaml`

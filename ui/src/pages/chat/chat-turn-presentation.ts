@@ -2,6 +2,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
+import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
@@ -11,7 +12,6 @@ import {
   isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
-import { userTurnRunId } from "./chat-thread-items.ts";
 import {
   assistantGroupIsIndependentBoundary,
   chatItemStartsUserTurn,
@@ -121,7 +121,7 @@ function groupHasFailedResult(group: MessageGroup): boolean {
   );
 }
 
-function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
+function groupHasVisibleReplyContent(group: MessageGroup, includeText: boolean): boolean {
   return group.visibleContent === "non-text" || (includeText && group.visibleContent === "text");
 }
 

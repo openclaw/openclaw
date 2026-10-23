@@ -1,60 +1,28 @@
-import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
-import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import {
   listSessionChildEntriesReadOnly,
   loadSessionEntry,
-  loadTranscriptEvents,
-  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requestActiveCronJobCancellation } from "../../cron/active-jobs.js";
-import { CronService } from "../../cron/service.js";
-import { createNoopLogger } from "../../cron/service.test-harness.js";
-import type { CronServiceDeps } from "../../cron/service/state.js";
-import { loadCronStore } from "../../cron/store.js";
-import type { CronAgentExecutionStarted } from "../../cron/types.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
-import { invalidateOperatorRolePolicy } from "../../gateway/operator-role-policy.js";
-import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
-import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
-import { createGatewayCronAgentJobRunner } from "../../gateway/server-cron-agent-run.js";
-import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
-import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
-import { loadOpenClawPlugins } from "../../plugins/loader.js";
-import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
-import type { PluginRegistry } from "../../plugins/registry-types.js";
-import {
-  disposePluginRegistryInstances,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import type { PluginCommandScheduledTurns } from "../../plugins/runtime/types-scheduled-turns.js";
-import type { PluginCommandContext, PluginCommandResult } from "../../plugins/types.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { trackAsyncWork } from "../../shared/async-work-scope.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { getCommandOwnerAuthority } from "../command-owner-authority.js";
-import { handlePluginCommand } from "./commands-plugin.js";
-import type { HandleCommandsParams } from "./commands-types.js";
-import { buildCommandTestParams } from "./commands.test-harness.js";
-import { runWithCommandNativeSubagents } from "./dispatch-native-subagent.js";
-import { finalizeInboundContext } from "./inbound-context.js";
-const pluginId = "command-controller";
+import type { PluginCommandContext } from "../../plugins/types.js";
+import { holdScheduledChildCapacity } from "./commands-plugin.scheduled-capacity.test-support.js";
+import {
+  commandInvocation,
+  createContinuation,
+  declaredCommand,
+  pluginId,
+  scheduleRequest,
+  withCommandPlugin,
+} from "./commands-plugin.scheduled-turns.test-support.js";
 
 // Every test doubles as a no-fallback guard: no scheduled occurrence may reach an ordinary
 // session prompt or the embedded model runner. Model choice is stubbed only for the child
@@ -78,391 +46,13 @@ vi.mock("../../agents/model-runtime-choice.js", async (importOriginal) => {
   };
 });
 
-type Handler = (ctx: PluginCommandContext) => PluginCommandResult | Promise<PluginCommandResult>;
-type CommandMetadata = {
-  name: string;
-  requireAuth?: boolean;
-  runtimeCapabilities?: unknown;
-  channels?: string[];
-};
-const declaredCommand: CommandMetadata = {
-  name: "review-panel",
-  requireAuth: true,
-  runtimeCapabilities: ["subagents", "scheduledTurns"],
-};
-
-type Fixture = {
-  cfg: OpenClawConfig;
-  registry: PluginRegistry;
-  params: (body?: string) => HandleCommandsParams;
-  handler: ReturnType<typeof vi.fn<Handler>>;
-  userInputs: () => Promise<unknown[]>;
-  assistantOutputs: () => Promise<unknown[]>;
-  restrictParentTools: () => Promise<unknown>;
-  revokeOwner: () => void;
-  /** Commits a role downgrade and publishes it, as the `users.setRole` Gateway method does. */
-  demoteOwner: () => void;
-  /** Lets a launched child reach its agent turn through the real Gateway instance runtime. */
-  installAgentTurnFacade: () => void;
-  readJobs: () => Promise<import("../../cron/types.js").CronStoredJob[]>;
-  cron: CronService;
-  scheduledResults: Array<Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]>>>;
-  resetParent: () => Promise<unknown>;
-  reloadPlugin: () => Promise<void>;
-  onExecutionStarted?: (info: CronAgentExecutionStarted) => void;
-};
-
-// The fixture is a third-party plugin loaded from disk, not an injected registry record.
-// Only its application handler crosses this bridge; registration, selection, authority,
-// native tool policy, and command lifetime all use their production owners.
-async function withCommandPlugin(
-  run: (fixture: Fixture) => Promise<void>,
-  options: {
-    commands?: CommandMetadata[];
-    manifestCapabilities?: unknown;
-    scheduledContract?: boolean;
-  } = {},
-) {
-  await withAdminIngress(async ({ cfg, state, admins, context, gateway }) => {
-    const bridge = Symbol.for(`openclaw.command-native-test.${randomUUID()}`);
-    const handler = vi.fn<Handler>((ctx) => ({
-      text: JSON.stringify({
-        subagents: ctx.runtimeContext?.subagents !== undefined,
-        args: ctx.args,
-      }),
-    }));
-    Reflect.set(globalThis, bridge, handler);
-    const pluginDir = state.path("controller-plugin");
-    await fs.mkdir(pluginDir);
-    const pluginFile = path.join(pluginDir, "index.cjs");
-    await fs.writeFile(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-        contracts: {
-          ...(options.scheduledContract === false
-            ? {}
-            : { sessionScheduledTurns: ["requester-command"] }),
-          commandRuntimeCapabilities:
-            options.manifestCapabilities === undefined
-              ? ["subagents", "scheduledTurns"]
-              : options.manifestCapabilities,
-        },
-      }),
-    );
-    const commands = options.commands ?? [declaredCommand, { name: "ordinary" }];
-    await fs.writeFile(
-      pluginFile,
-      `module.exports = { id: ` +
-        JSON.stringify(pluginId) +
-        `, register(api) {
-        for (const command of ` +
-        JSON.stringify(commands) +
-        `) {
-          api.registerCommand({ ...command, description: "Synthetic review command", acceptsArgs: true,
-            handler(ctx) { return globalThis[Symbol.for(` +
-        JSON.stringify(Symbol.keyFor(bridge)) +
-        `)](ctx); }
-          });
-        }
-      } };`,
-    );
-    cfg.agents = { defaults: { workspace: state.workspaceDir, model: "openai/gpt-4.1" } };
-    cfg.auth = {
-      profiles: { "openai:schedule-fixture": { provider: "openai", mode: "api_key" } },
-      order: { openai: ["openai:schedule-fixture"] },
-    };
-    await persistAuthProfileBatch({
-      profiles: [
-        {
-          profileId: "openai:schedule-fixture",
-          credential: { type: "api_key", provider: "openai", key: "synthetic-s6-never-sent" },
-        },
-      ],
-    });
-    cfg.commands = { ...cfg.commands, text: true };
-    const storePath = path.join(state.sessionsDir("main"), "sessions.json");
-    cfg.session = { ...cfg.session, store: storePath };
-    cfg.plugins = {
-      allow: [pluginId],
-      load: { paths: [pluginFile] },
-      entries: { [pluginId]: { enabled: true } },
-    };
-    const cronStorePath = state.path("cron/jobs.json");
-    let registry: PluginRegistry | undefined;
-    let agentTurnRuntime: ReturnType<typeof createGatewayInstanceRuntime> | undefined;
-    const scheduledResults: Fixture["scheduledResults"] = [];
-    const sessionEventPrompts: string[] = [];
-    let fixtureRef: Fixture | undefined;
-    const runSchedulerOwned = createScheduledGatewayRunner(
-      () => gateway,
-      () => registry,
-    );
-    const runAgentJob = createGatewayCronAgentJobRunner({
-      deps: {},
-      resolveCronAgent: () => ({ agentId: "main", cfg }),
-      resolveGatewayContext: () => gateway,
-      resolvePluginRegistry: () => registry,
-    });
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      nowMs: Date.now,
-      storePath: cronStorePath,
-      cronEnabled: false,
-      defaultAgentId: "main",
-      log: createNoopLogger(),
-      enqueueSystemEvent: vi.fn(),
-      runSchedulerOwned,
-      // Present, as in the Gateway, so a misrouted command schedule would be observed here.
-      runSessionEvent: async ({ text }) => {
-        sessionEventPrompts.push(text);
-        return { status: "error", error: "ordinary session prompt" };
-      },
-      runIsolatedAgentJob: async (request) => {
-        const result = await runAgentJob({
-          ...request,
-          onExecutionStarted: (info) => {
-            if (info) {
-              fixtureRef?.onExecutionStarted?.(info);
-            }
-            request.onExecutionStarted?.(info);
-          },
-        });
-        scheduledResults.push(result);
-        return result;
-      },
-    });
-    Object.assign(
-      gateway,
-      createDirectChatContext({
-        cron,
-        cronStorePath,
-        getRuntimeConfig: () => cfg,
-        resolveGatewayContext: () => gateway,
-        validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-        getGatewayMethodRegistry: () => createRequestGatewayMethodRegistry(),
-        trackExecution: trackAsyncWork,
-      }),
-    );
-    const inbound = await context(admins[0]!.identity.senderId);
-    expectDefined(getCommandOwnerAuthority(inbound)?.operatorAuthority, "real ingress authority");
-    const sessionKey = expectDefined(inbound.SessionKey, "real ingress session key");
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey, storePath },
-      {
-        sessionId: "command-parent",
-        lifecycleRevision: "revision-1",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-4.1",
-        authProfileOverride: "openai:schedule-fixture",
-        authProfileOverrideSource: "auto",
-      },
-    );
-    await state.writeConfig(cfg);
-    const params = (body = "/review-panel") => {
-      const value = buildCommandTestParams(
-        body,
-        cfg,
-        {
-          ...inbound,
-          Body: body,
-          CommandBody: body,
-          RawBody: body,
-          // The fixture ingress was created with plain text; project this as the
-          // authenticated command turn, as real command dispatch does.
-          CommandAuthorized: true,
-          CommandTurn: undefined,
-        },
-        { workspaceDir: state.workspaceDir },
-      );
-      value.sessionKey = sessionKey;
-      value.storePath = storePath;
-      value.sessionEntry = expectDefined(
-        loadSessionEntry({ agentId: "main", sessionKey, storePath }),
-        "persisted command requester",
-      );
-      return value;
-    };
-    const transcriptContents = async (role: "user" | "assistant") => {
-      const events = await loadTranscriptEvents({
-        agentId: "main",
-        sessionKey,
-        storePath,
-        sessionId: "command-parent",
-      });
-      return events.flatMap((event) => {
-        const record = asOptionalRecord(event);
-        const message = asOptionalRecord(record?.message);
-        return record?.type === "message" && message?.role === role ? [message.content] : [];
-      });
-    };
-    try {
-      registry = loadOpenClawPlugins({
-        config: cfg,
-        workspaceDir: state.workspaceDir,
-        cache: false,
-        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      });
-      setActivePluginRegistry(registry);
-      if (
-        options.commands === undefined &&
-        options.manifestCapabilities === undefined &&
-        options.scheduledContract !== false
-      ) {
-        expect(
-          registry.diagnostics.filter((diagnostic) => diagnostic.pluginId === pluginId),
-          "the valid declaring plugin must load without registration refusals",
-        ).toEqual([]);
-      }
-      await withPluginRuntimeGatewayRequestScope(
-        {
-          context: gateway,
-          resolveGatewayContext: () => gateway,
-          pluginRegistry: registry,
-          isWebchatConnect: () => false,
-        },
-        () =>
-          run(
-            (fixtureRef = {
-              cfg,
-              cron,
-              scheduledResults,
-              resetParent: () =>
-                upsertSessionEntryCore(
-                  { agentId: "main", sessionKey, storePath },
-                  {
-                    sessionId: "replacement-parent",
-                    lifecycleRevision: "revision-2",
-                    updatedAt: Date.now(),
-                  },
-                ),
-              registry: expectDefined(registry, "loaded registry"),
-              reloadPlugin: async () => {
-                await expect(
-                  disposePluginRegistryInstances(expectDefined(registry, "previous registry")),
-                ).resolves.toMatchObject({ failures: [] });
-                registry = loadOpenClawPlugins({
-                  config: cfg,
-                  workspaceDir: state.workspaceDir,
-                  cache: false,
-                  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-                });
-                setActivePluginRegistry(registry);
-              },
-              params,
-              handler,
-              userInputs: () => transcriptContents("user"),
-              assistantOutputs: () => transcriptContents("assistant"),
-              restrictParentTools: () =>
-                upsertSessionEntryCore(
-                  { agentId: "main", sessionKey, storePath },
-                  { toolOverrides: { webSearch: false }, updatedAt: Date.now() },
-                ),
-              readJobs: async () => (await loadCronStore(cronStorePath)).jobs,
-              revokeOwner: () => setUserProfileRole(admins[0]!.profile.id, "member"),
-              demoteOwner: () => {
-                setUserProfileRole(admins[0]!.profile.id, "member");
-                invalidateOperatorRolePolicy(admins[0]!.profile.id);
-              },
-              installAgentTurnFacade: () => {
-                const methodRegistry = createRequestGatewayMethodRegistry();
-                const runtime = createGatewayInstanceRuntime({
-                  getContext: () => gateway,
-                  getMethodRegistry: () => methodRegistry,
-                  isDispatchAvailable: () => true,
-                });
-                agentTurnRuntime = runtime;
-                gateway.createAgentTurnFacade = runtime.createAgentTurnFacade;
-                gateway.recoveryRuntime = runtime.recovery;
-                gateway.getGatewayMethodRegistry = () => methodRegistry;
-              },
-            }),
-          ),
-      );
-      expect(sessionEventPrompts, "no ordinary session prompt").toEqual([]);
-      expect(guards.embeddedRuns, "no embedded model run").toBe(0);
-    } finally {
-      cron.stop();
-      await cron.waitForIdle();
-      agentTurnRuntime?.close();
-      Reflect.deleteProperty(globalThis, bridge);
-      resetGlobalHookRunner();
-      resetPluginRuntimeStateForTest();
-      if (registry) {
-        await expect(disposePluginRegistryInstances(registry)).resolves.toMatchObject({
-          failures: [],
-        });
-      }
-      await expect(waitForPluginCacheRetirement()).resolves.toMatchObject({ failures: [] });
-    }
-  });
-}
-
-function commandInvocation(fixture: Fixture, body = "/review-panel") {
-  const params = fixture.params(body);
-  const state = commandDispatchState(params);
-  const recorder = expectDefined(state.params.replyOptions?.userTurnTranscriptRecorder, "recorder");
-  params.opts = {
-    withCommandNativeSubagents: (binding, run) =>
-      runWithCommandNativeSubagents(state, binding, run),
-  };
-  return { params, state, recorder, run: () => handlePluginCommand(params, true) };
-}
-
-function commandDispatchState(
-  params: HandleCommandsParams,
-): Parameters<typeof runWithCommandNativeSubagents>[0] {
-  const entry = expectDefined(params.sessionEntry, "command session");
-  return {
-    cfg: params.cfg,
-    ctx: finalizeInboundContext(params.ctx),
-    sessionAgentId: params.agentId,
-    sessionKey: params.sessionKey,
-    sessionStoreEntry: { sessionKey: params.sessionKey, entry },
-    params: {
-      replyOptions: {
-        runId: "command-turn",
-        operatorAuthority: getCommandOwnerAuthority(params.ctx)?.operatorAuthority,
-        toolsAllow: ["sessions_spawn", "agents_wait", "automations", "read"],
-        userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-          input: { text: params.command.commandBodyNormalized },
-          target: {
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            sessionId: entry.sessionId,
-            sessionEntry: entry,
-            storePath: params.storePath,
-            config: params.cfg,
-          },
-        }),
-      },
-    },
-    turnAdoption: undefined,
-    getPreDispatchAbortSignal: () => undefined,
-    getDispatchAbortSignal: () => params.opts?.abortSignal,
-    assertProgressCurrent: () => {},
-    assertCurrentBindingRoute: async () => {},
-  };
-}
-
 afterEach(() => {
+  expect(guards.embeddedRuns, "no embedded model run").toBe(0);
   guards.embeddedRuns = 0;
   guards.stubModelChoice = false;
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
 });
-function scheduleRequest(overrides: { requestId?: string; maxRuns?: number } = {}) {
-  return {
-    requestId: "resume",
-    command: "review-panel",
-    schedule: { kind: "every" as const, everyMs: 60_000 },
-    deadlineAtMs: Date.now() + 300_000,
-    maxRuns: 2,
-    ...overrides,
-  };
-}
 describe("requester-admitted scheduled commands", () => {
   it.each([
     ["missing scheduled contract", { scheduledContract: false }],
@@ -645,19 +235,6 @@ describe("requester-admitted scheduled commands", () => {
   });
 });
 
-async function createContinuation(fixture: Fixture) {
-  let accepted: { jobId: string } | undefined;
-  fixture.handler.mockImplementation(async (ctx) => {
-    accepted = await expectDefined(
-      ctx.runtimeContext?.scheduledTurns,
-      "schedule capability",
-    ).schedule(scheduleRequest());
-    return { text: "scheduled" };
-  });
-  expect((await commandInvocation(fixture).run())?.reply?.text).toBe("scheduled");
-  return expectDefined(accepted, "durable native schedule").jobId;
-}
-
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => {
@@ -695,24 +272,8 @@ describe("native scheduled command execution", () => {
     guards.stubModelChoice = true;
     await withCommandPlugin(async (fixture) => {
       const id = await createContinuation(fixture);
-      const blockers: string[] = [];
-      let scheduledRunId: string | undefined;
       // Hold swarm capacity so the accepted child stays queued and never reaches a model.
-      fixture.onExecutionStarted = (info) => {
-        const runId = expectDefined(info.runId, "scheduled occurrence run id");
-        const sessionKey = expectDefined(info.sessionKey, "scheduled occurrence parent");
-        scheduledRunId = runId;
-        const blocker = "capacity-" + runId;
-        blockers.push(blocker);
-        enqueueSwarmRun({
-          groupId: JSON.stringify(["main", sessionKey, "swarm:" + sessionKey + ":" + runId]),
-          runId: blocker,
-          maxConcurrent: 1,
-          activeRunIds: [],
-          start: async () => {},
-          onStartFailure: () => true,
-        });
-      };
+      const capacity = holdScheduledChildCapacity(fixture);
       let childRunId: string | undefined;
       let childSessionKey: string | undefined;
       fixture.handler.mockImplementation(async (ctx) => {
@@ -731,10 +292,9 @@ describe("native scheduled command execution", () => {
       });
       try {
         await fixture.cron.run(id, "force");
+        capacity.expectWaiting(expectDefined(childRunId, "accepted child run"));
       } finally {
-        for (const blocker of blockers) {
-          releaseSwarmRun(blocker);
-        }
+        capacity.release();
       }
       expect(fixture.scheduledResults[0]).toMatchObject({
         status: "ok",
@@ -751,77 +311,66 @@ describe("native scheduled command execution", () => {
       expect(child?.inheritedToolAllow).toEqual(["read", "sessions_spawn", "agents_wait"]);
       expect(subagentRuns.get(expectDefined(childRunId, "accepted child run"))).toMatchObject({
         requesterSessionKey: parent.sessionKey,
-        requesterTurnRunId: expectDefined(scheduledRunId, "scheduled occurrence run"),
+        requesterTurnRunId: expectDefined(capacity.occurrenceRunId(), "scheduled occurrence run"),
       });
     });
   });
-  it("admits a queued scheduled child's agent turn only while its requester stays authorized", async () => {
+  /** Queues one native child from a scheduled occurrence, then releases it after settlement. */
+  async function releaseQueuedScheduledChild(demoteFirst: boolean) {
     guards.stubModelChoice = true;
+    let outcome: unknown;
     await withCommandPlugin(async (fixture) => {
       fixture.installAgentTurnFacade();
       const id = await createContinuation(fixture);
-      const blockers: string[] = [];
-      // Hold swarm capacity so each child is still queued when its occurrence settles.
-      fixture.onExecutionStarted = (info) => {
-        const runId = expectDefined(info.runId, "scheduled occurrence run id");
-        const sessionKey = expectDefined(info.sessionKey, "scheduled occurrence parent");
-        const blocker = "capacity-" + runId;
-        blockers.push(blocker);
-        enqueueSwarmRun({
-          groupId: JSON.stringify(["main", sessionKey, "swarm:" + sessionKey + ":" + runId]),
-          runId: blocker,
-          maxConcurrent: 1,
-          activeRunIds: [],
-          start: async () => {},
-          onStartFailure: () => true,
-        });
-      };
-      const children: string[] = [];
+      // Hold swarm capacity so the child is still queued when its occurrence settles.
+      const capacity = holdScheduledChildCapacity(fixture);
+      let childRunId: string | undefined;
       fixture.handler.mockImplementation(async (ctx) => {
         const native = expectDefined(ctx.runtimeContext?.subagents, "scheduled native runtime");
         const child = await native.spawn({
-          requestId: "scheduled-queued-" + children.length,
+          requestId: "scheduled-queued",
           task: "Synthetic scheduled child released after its occurrence settles",
           context: "isolated",
         });
-        children.push(child.runId);
+        childRunId = child.runId;
         return { text: "child queued" };
       });
-      const releaseSettledOccurrence = async (index: number, demoteFirst: boolean) => {
-        try {
-          await fixture.cron.run(id, "force");
-          expect(fixture.scheduledResults[index]).toMatchObject({
-            status: "ok",
-            outputText: "child queued",
-          });
-          const runId = expectDefined(children[index], "queued child run");
-          expect(subagentRuns.get(runId)?.execution).toMatchObject({ status: "queued" });
-          if (demoteFirst) {
-            fixture.demoteOwner();
-          }
-        } finally {
-          for (const blocker of blockers.splice(0)) {
-            releaseSwarmRun(blocker);
-          }
-        }
-        const runId = expectDefined(children[index], "queued child run");
-        await vi.waitFor(() => expect(subagentRuns.get(runId)?.execution.status).toBe("terminal"), {
-          timeout: 15_000,
+      try {
+        await fixture.cron.run(id, "force");
+        expect(fixture.scheduledResults[0]).toMatchObject({
+          status: "ok",
+          outputText: "child queued",
         });
-        return subagentRuns.get(runId)?.execution.outcome;
-      };
-      // Authorized: after its occurrence settled, the child passed the real agent turn's
-      // admission revalidation. This harness publishes no reply runtime, so the turn stops at
-      // that next seam, still before the model runner (the fixture's no-embedded-run guard).
-      await expect(releaseSettledOccurrence(0, false)).resolves.toMatchObject({
-        status: "error",
-        error: "published reply runtime missing for main",
+        const runId = expectDefined(childRunId, "queued child run");
+        expect(subagentRuns.get(runId)?.execution).toMatchObject({ status: "queued" });
+        capacity.expectWaiting(runId);
+        if (demoteFirst) {
+          fixture.demoteOwner();
+        }
+      } finally {
+        capacity.release();
+      }
+      const runId = expectDefined(childRunId, "queued child run");
+      await vi.waitFor(() => expect(subagentRuns.get(runId)?.execution.status).toBe("terminal"), {
+        timeout: 15_000,
       });
-      // Demoted while queued: the next child is refused at that admission, before any runner.
-      await expect(releaseSettledOccurrence(1, true)).resolves.toMatchObject({
-        status: "error",
-        error: "Queued channel operator authority changed; submit a new request.",
-      });
+      outcome = subagentRuns.get(runId)?.execution.outcome;
+    });
+    return outcome;
+  }
+  it("admits a queued scheduled child's agent turn while its requester stays authorized", async () => {
+    // After its occurrence settled, the child passed the real agent turn's admission
+    // revalidation. This harness publishes no reply runtime, so the turn stops at that next
+    // seam, still before the model runner (the fixture's no-embedded-run guard).
+    await expect(releaseQueuedScheduledChild(false)).resolves.toMatchObject({
+      status: "error",
+      error: "published reply runtime missing for main",
+    });
+  });
+  it("refuses a queued scheduled child's agent turn after its requester is demoted", async () => {
+    await expect(releaseQueuedScheduledChild(true)).resolves.toMatchObject({
+      status: "error",
+      error: "Queued channel operator authority changed; submit a new request.",
     });
   });
   it("refuses a same-metadata plugin reload before command or input acceptance", async () => {

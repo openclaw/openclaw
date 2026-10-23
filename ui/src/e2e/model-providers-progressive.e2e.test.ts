@@ -156,15 +156,17 @@ suite.define(() => {
           await gateway.setMethodResponse("models.list", partial);
           await gateway.emitGatewayEvent("chat.metadata.changed", {});
         }
-        // The failing provider's row reports the gap; the defaults card does not repeat it.
+        // Provider details explain the gap; catalog feedback keeps discovery retryable.
         await expect
           .poll(() =>
             settings.locator('[data-provider-id="broken"] .model-providers__head').textContent(),
           )
           .toContain("Models unavailable");
+        const catalogWarning = settings.locator('.model-providers__catalog-progress[role="alert"]');
+        await catalogWarning.waitFor({ state: "visible" });
         expect(
-          await settings.locator('.model-providers__catalog-progress[role="alert"]').count(),
-        ).toBe(0);
+          await catalogWarning.getByRole("button", { name: "Retry", exact: true }).isVisible(),
+        ).toBe(true);
         expect(
           await settings
             .locator('[data-provider-id="healthy"] .model-providers__head')

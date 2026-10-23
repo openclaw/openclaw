@@ -17,6 +17,7 @@ import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatDetailSlot } from "./components/chat-detail-slot-view.tsx";
+import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
 import {
   requestCloseSessionWorkspacePreview,
   pinSessionWorkspacePreview,
@@ -452,30 +453,7 @@ type EmbeddedAttributes<Element extends HTMLElement> = SolidJSX.HTMLAttributes<E
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-chat-session-rail": HTMLAttributes<HTMLElement> & {
-        "prop:presentation"?: SidebarPanelDefinitionParams["presentation"];
-        "prop:sessionKey"?: SidebarPanelDefinitionParams["state"]["sessionKey"];
-        "prop:agentId"?: SidebarPanelDefinitionParams["agentId"];
-        "prop:assistantName"?: SidebarPanelDefinitionParams["state"]["assistantName"];
-        "prop:digest"?: SidebarPanelDefinitionParams["digest"];
-        "prop:running"?: boolean;
-        "prop:activeRunId"?: SidebarPanelDefinitionParams["activeRunId"];
-        "prop:pullRequests"?: SidebarPanelDefinitionParams["pullRequests"];
-        "prop:companion"?: SidebarPanelDefinitionParams["companion"];
-        "prop:modelControls"?: SidebarPanelDefinitionParams["companionModelControls"];
-        "prop:client"?: SidebarPanelDefinitionParams["state"]["client"];
-        "prop:connected"?: boolean;
-        "prop:sendShortcut"?: SidebarPanelDefinitionParams["state"]["settings"]["chatSendShortcut"];
-        "prop:inputDeviceId"?: string;
-        "prop:onSubmit"?: SidebarPanelDefinitionParams["onCompanionSubmit"];
-        "prop:onDraftChange"?: SidebarPanelDefinitionParams["onCompanionDraftChange"];
-        "prop:onAttachmentsChange"?: SidebarPanelDefinitionParams["onCompanionAttachmentsChange"];
-        "prop:onOpenImage"?: SidebarPanelDefinitionParams["state"]["handleOpenImage"];
-        "prop:uploadConfig"?: SidebarPanelDefinitionParams["state"]["uploadConfig"];
-        "prop:attachmentLimits"?: ReturnType<typeof resolveChatAttachmentLimits>;
-        "prop:presented"?: boolean;
-        "prop:focusRequest"?: SidebarPanelDefinitionParams["companionFocusRequest"];
-      };
+      "openclaw-chat-session-rail": EmbeddedAttributes<ChatSessionRailElement>;
       "openclaw-portals-page": EmbeddedAttributes<HTMLElementTagNameMap["openclaw-portals-page"]>;
       "openclaw-chat-files-panel": EmbeddedAttributes<
         HTMLElementTagNameMap["openclaw-chat-files-panel"]

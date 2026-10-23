@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { channel } from "node:diagnostics_channel";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -162,6 +163,27 @@ suite.define(() => {
     let gateway: GatewayServer | undefined;
     let proxy: ViteDevServer | undefined;
     let restoreFetch: (() => void) | undefined;
+    const gitOperations = [
+      ["checkout.context", "Context"],
+      ["checkout.revision", "Revision"],
+      ["pull-request.branch-comparison", "Comparison"],
+      ["pull-request.branch-facts", "BranchFacts"],
+    ].map(([type, label]) => ({ type, label, count: 0, errors: 0, elapsedMs: 0 }));
+    const gitOperationChannel = channel("openclaw.git.operation");
+    const recordGitOperation = (message: unknown) => {
+      if (!isRecord(message) || typeof message.operation !== "string") {
+        return;
+      }
+      const operation = gitOperations.find((entry) => entry.type === message.operation);
+      if (!operation || typeof message.elapsedMs !== "number") {
+        return;
+      }
+      operation.count++;
+      operation.errors += Number(message.outcome === "error");
+      operation.elapsedMs += message.elapsedMs;
+    };
+    gitOperationChannel.subscribe(recordGitOperation);
+    test.onTestFinished(() => gitOperationChannel.unsubscribe(recordGitOperation));
     await suite.runScenario(test, {
       retainedState: () => state?.root,
       async run() {
@@ -304,6 +326,10 @@ suite.define(() => {
         browserGatewayUrl.protocol = "ws:";
         // Browser WebSocket traffic is never replaced: only external GitHub HTTP is fixture-backed.
         for (const stage of ["initial", "restarted"] as const) {
+          const stageStartedAt = performance.now();
+          for (const operation of gitOperations) {
+            operation.count = operation.errors = operation.elapsedMs = 0;
+          }
           const requestsBeforeStage = githubRequests.length;
           await suite.withPage(
             {
@@ -467,6 +493,14 @@ suite.define(() => {
                 const latestSnapshot = snapshots.at(-1);
                 const workerCompute = getWorkerComputeCapacity().getSnapshot();
                 recordControlUiE2eFailureFacts(page, {
+                  taskPrStageElapsedMs: performance.now() - stageStartedAt,
+                  ...Object.fromEntries(
+                    gitOperations.flatMap((operation) => [
+                      [`taskPrGit${operation.label}Completed`, operation.count],
+                      [`taskPrGit${operation.label}Errors`, operation.errors],
+                      [`taskPrGit${operation.label}ElapsedMs`, operation.elapsedMs],
+                    ]),
+                  ),
                   taskPrWorkerComputeLimit: workerCompute.limit,
                   taskPrWorkerComputeActive: workerCompute.active,
                   taskPrWorkerComputeWaitingPools: workerCompute.waitingPools,

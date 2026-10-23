@@ -119,19 +119,19 @@ function readPixVerseInteger(value: unknown, label: string): number {
 }
 
 function readPixVerseStatus(payload: PixVerseVideoResultResponse): number {
-  return readPixVerseInteger(payload.status, "PixVerse video status response missing status");
-}
-
-function readPixVerseFailureMessage(payload: PixVerseVideoResultResponse): string | undefined {
-  switch (readPixVerseStatus(payload)) {
+  const status = readPixVerseInteger(
+    payload.status,
+    "PixVerse video status response missing status",
+  );
+  switch (status) {
     case 7:
-      return "PixVerse video generation failed content moderation";
+      throw new Error("PixVerse video generation failed content moderation");
     case 8:
-      return "PixVerse video generation failed";
+      throw new Error("PixVerse video generation failed");
     case 6:
-      return "PixVerse video generation was deleted before completion";
+      throw new Error("PixVerse video generation was deleted before completion");
     default:
-      return undefined;
+      return status;
   }
 }
 
@@ -368,7 +368,6 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
           requestFailedMessage: "PixVerse video status request failed",
           timeoutMessage: `PixVerse video generation task ${videoId} did not finish in time`,
           isComplete: (candidate) => readPixVerseStatus(readResult(candidate)) === 1,
-          getFailureMessage: (candidate) => readPixVerseFailureMessage(readResult(candidate)),
           allowPrivateNetwork,
           dispatcherPolicy,
         });

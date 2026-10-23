@@ -1,7 +1,7 @@
 // Provider access keeps account credentials and plan limits together in each row.
 import { createSignal, For, Show } from "solid-js";
 import type { ModelsProbeResult } from "../../api/types.ts";
-import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import {

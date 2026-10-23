@@ -29,6 +29,7 @@ import {
   resolveNextRunAtMsOrDisable,
   resolveCronRestartRetryAtMs,
 } from "./jobs-scheduling.js";
+import { cronNotificationJob, resolveCronNotificationQueueOwner } from "./notification-intents.js";
 import {
   isCronOneShotContinuationJob,
   resolveManualOneShotOccurrenceAtMs,
@@ -254,17 +255,20 @@ export function applyJobResult(
     if (shouldDelete || job.schedule.kind === "event") {
       job.state.nextRunAtMs = undefined;
     }
-    const failureNotification = finalizeCronFailureNotifications(state, {
-      job,
-      alertConfig,
-      result,
-      completionStatus,
-      terminalRecurring,
-      terminalOneShot,
-      pendingTransientRetry,
-      replay: opts.replay,
-      deferredNotifications: opts.deferredNotifications,
-    });
+    // A parent pause is not a failure: its own notice below replaces the skipped-run alert.
+    const failureNotification = result.parentUnavailable
+      ? undefined
+      : finalizeCronFailureNotifications(state, {
+          job,
+          alertConfig,
+          result,
+          completionStatus,
+          terminalRecurring,
+          terminalOneShot,
+          pendingTransientRetry,
+          replay: opts.replay,
+          deferredNotifications: opts.deferredNotifications,
+        });
     if (terminalRecurring && failureNotification !== "queued") {
       // Same contract as a terminal one-shot: the route-backed alert carries the
       // safety notice; every other outcome keeps the in-app notice as before.
@@ -286,6 +290,28 @@ export function applyJobResult(
         notify: failureNotification === "unavailable" && !opts.replay,
         deferredNotifications: opts.deferredNotifications,
       });
+    }
+    // One-shot handling may already have disabled the job above; the notice
+    // belongs to the pause either way, sent once while the job was still enabled.
+    // A newer operator edit owns enablement, so a stale pause result changes nothing.
+    if (result.parentUnavailable && ownsSchedule && previousScheduleState.enabled) {
+      // The parent conversation is gone; pause until someone re-enables the job.
+      job.enabled = false;
+      job.state.nextRunAtMs = undefined;
+      if (!opts.replay) {
+        // The gone conversation cannot accept the notice; its owning agent gets it instead.
+        const notice = cronNotificationJob(job);
+        const { agentId } = resolveCronNotificationQueueOwner(notice, "auto-disabled");
+        const { sessionKey, ...ownerNotice } = notice;
+        opts.deferredNotifications.push({
+          kind: "auto-disabled",
+          job:
+            sessionKey === result.parentUnavailable.parentSessionKey
+              ? { ...ownerNotice, ...(agentId ? { agentId } : {}) }
+              : notice,
+          text: result.error ?? "Automation paused: its parent conversation is unavailable.",
+        });
+      }
     }
     return shouldDelete;
   };

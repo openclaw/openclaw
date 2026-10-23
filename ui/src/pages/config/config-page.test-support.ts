@@ -148,9 +148,9 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   });
   Object.assign(context.overlays, { snapshot: context.overlays.snapshot ?? {} });
   Object.assign(context.webPush, { snapshot: context.webPush.snapshot ?? {} });
-  Object.assign(context.theme, {
-    branding: context.theme.branding ?? resolveThemeBranding(undefined),
-  });
+  if (!context.theme.branding) {
+    Object.assign(context.theme, { branding: resolveThemeBranding(undefined) });
+  }
   if (!context.theme.settings) {
     Object.defineProperty(context.theme, "settings", { configurable: true, get: loadSettings });
   }

@@ -110,11 +110,6 @@
   --shell-chrome-safe-area-left: calc(var(--shell-controls-width) + 18px);
 }
 
-/* Drawer shells keep the nav mounted offscreen; desktop collapse removes it. */
-.shell--nav-collapsed:not(.shell--mobile-nav) .shell-nav {
-  display: none;
-}
-
 /* The collapsed sidebar restores its controls in the content header. On
    native macOS hosts without the full strip, they sit below the drag region. */
 .shell-chrome-controls {
@@ -1026,7 +1021,7 @@ openclaw-settings-save-indicator:empty {
   min-height: 100%;
   overflow: visible;
   border-inline-end: var(--resize-handle-line-size) solid var(--resize-handle-rest-color);
-  transition: width var(--shell-focus-duration) var(--shell-focus-ease);
+  transition: clip-path var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
 .shell-nav-backdrop {
@@ -1041,10 +1036,6 @@ openclaw-settings-save-indicator:empty {
   align-self: stretch;
   justify-self: end;
   z-index: 20;
-}
-
-.shell.shell--nav-resizing {
-  transition: grid-template-rows var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
 .sidebar {
@@ -1315,6 +1306,11 @@ openclaw-settings-save-indicator:empty {
   margin-inline: -8px;
   /* Sessions are stateful app chrome, not navigation links. */
   cursor: var(--cursor-action);
+}
+
+/* Pinned renders in its own list container above the chip list or agent roster. */
+.sidebar-recent-sessions--pinned {
+  margin-block-end: var(--sidebar-group-gap);
 }
 
 .shell:not(.shell--mobile-nav) .sidebar-recent-sessions {
@@ -4159,7 +4155,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
   outline: none;
 }
 
-.content > * + * {
+/* Child position preserves spacing without a universal sibling invalidation set. */
+.content > :where(:not(:first-child)) {
   margin-top: 20px;
 }
 
@@ -4178,8 +4175,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
   padding-bottom: 0;
 }
 
-.content--chat > * + *,
-.content--custodian > * + * {
+.content--chat > :where(:not(:first-child)),
+.content--custodian > :where(:not(:first-child)) {
   margin-top: 0;
 }
 
@@ -4201,7 +4198,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   padding-bottom: 0;
 }
 
-.content--workboard > * + * {
+.content--workboard > :where(:not(:first-child)) {
   margin-top: 14px;
 }
 

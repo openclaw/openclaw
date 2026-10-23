@@ -379,6 +379,9 @@ async function createWorkerSessionToolTestFixture(
     resolveGatewayContext,
     placements,
     dispatchChild,
+    waitForInitialPlacement: async () => {
+      throw new Error("Unexpected initial placement wait");
+    },
     portals: {
       getService: () => undefined,
       carrier: { open: vi.fn() },
@@ -502,6 +505,7 @@ async function createWorkerSessionToolTestFixture(
 
   return {
     root,
+    database,
     placements,
     identity,
     execute,

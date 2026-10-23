@@ -25,9 +25,9 @@ it("keeps project search live through catalog reads and retires invalidated rows
     connectionEpoch: 1,
   });
   Object.assign(context.gateway.snapshot.hello!, { features: { methods: ["projects.list"] } });
-  vi.spyOn(browser, "popoverOpen").mockReturnValue(true);
+  const popoverOpen = vi.spyOn(browser, "popoverOpen").mockReturnValue(false);
   vi.spyOn(place, "folder", "get").mockReturnValue("");
-  vi.spyOn(place, "workspacePath").mockReturnValue("/fixture");
+  vi.spyOn(place, "workspacePath").mockReturnValue("/home/openclaw/.openclaw/workspace");
   vi.spyOn(place, "browseAvailable").mockReturnValue(true);
   vi.spyOn(place, "isAdmin").mockReturnValue(true);
   vi.spyOn(place, "canWrite").mockReturnValue(true);
@@ -57,7 +57,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
           params: { ...options },
           state: resolveProjectChip({
             folder: "",
-            workspace: "/fixture",
+            workspace: "/home/openclaw/.openclaw/workspace",
             projectId: browser.projectId,
             selectedRemoteProject: browser.remoteProject,
             projects: browser.projects,
@@ -70,6 +70,12 @@ it("keeps project search live through catalog reads and retires invalidated rows
       return <ProjectChip {...props()} />;
     });
   let view = mountPicker();
+  expect(view.container.querySelector('input[type="search"]')).toBeNull();
+  popoverOpen.mockReturnValue(true);
+  changed();
+  await waitForSolid(() =>
+    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
+  );
   let input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   const rows = () => Array.from(view.container.querySelectorAll('[data-value^="project:"]'));
   const type = (value: string) => {
@@ -79,18 +85,41 @@ it("keeps project search live through catalog reads and retires invalidated rows
   };
   input.focus();
   type("alpha");
+  popoverOpen.mockReturnValue(false);
+  changed();
+  await waitForSolid(() =>
+    expect(
+      view.container
+        .querySelector(".new-session-page__project-popover")
+        ?.getAttribute("data-phase"),
+    ).toBe("hidden"),
+  );
+  expect(view.container.querySelector('input[type="search"]')).toBe(input);
+  popoverOpen.mockReturnValue(true);
+  changed();
+  await waitForSolid(() =>
+    expect(
+      view.container
+        .querySelector(".new-session-page__project-popover")
+        ?.getAttribute("data-phase"),
+    ).toBe("open"),
+  );
+  expect(input.value).toBe("alpha");
+  input.focus();
   expect(rows()).toHaveLength(0);
   expect(request).toHaveBeenCalledExactlyOnceWith("projects.list", {});
   const alpha = {
     id: "alpha",
     displayName: "Alpha project",
-    repoRoot: "/fixture/alpha",
+    repoRoot: "/home/openclaw/.openclaw/projects/alpha",
+    originUrl: "https://github.com/openclaw/alpha.git",
     source: "registered" as const,
   };
   const beta = {
     id: "beta",
     displayName: "Beta project",
-    repoRoot: "/fixture/beta",
+    repoRoot: "/home/openclaw/.openclaw/projects/beta",
+    originUrl: "https://github.com/openclaw/beta.git",
     source: "registered" as const,
   };
   first.resolve({ projects: [alpha, beta] });
@@ -101,7 +130,14 @@ it("keeps project search live through catalog reads and retires invalidated rows
   expect(document.activeElement).toBe(input);
   type("");
   expect(rows()).toHaveLength(2);
-  type("ALPHA");
+  type("  ALPHA  ");
+  expect(rows()).toEqual([alphaRow]);
+  type("openclaw");
+  expect(rows()).toHaveLength(0);
+  expect(view.container.querySelector('[data-value="workspace"]')).toBeNull();
+  type("worksp");
+  expect(view.container.querySelector('[data-value="workspace"]')).not.toBeNull();
+  type("alpha");
   expect(rows()).toEqual([alphaRow]);
   const refresh = browser.refreshProjects();
   nativeTerminal = true;
@@ -119,6 +155,9 @@ it("keeps project search live through catalog reads and retires invalidated rows
   expect(document.activeElement).toBe(input);
   view.unmount();
   view = mountPicker();
+  await waitForSolid(() =>
+    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
+  );
   input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   input.focus();
   await waitForSolid(() => expect(rows()[0]?.textContent).toContain("Alpha project"));

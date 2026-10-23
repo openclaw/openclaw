@@ -5,7 +5,7 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import type { UiPreferences } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { trimHumanMentions, updateHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -19,7 +19,7 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { releaseChatAttachmentPayloads } from "../chat/attachment-payload-store.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 
-registerNewSessionSetupEnglish();
+registerNewSessionRuntimeEnglish();
 
 type CreationComposerContext = {
   readonly gateway: ApplicationGateway;

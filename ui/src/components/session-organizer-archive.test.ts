@@ -118,25 +118,25 @@ describe("session organizer nested archive choice", () => {
       const pending = modal.track(archiveSessionWithUndo(harness.host, root, harness.scope));
       const actions = await waitForConfirmDialogActions();
       expect(document.body.textContent).toContain(
-        '"Batch 0" has a nested session. Archive only this one and it moves to the top level.',
+        '"Batch 0" has 1 directly nested session. If you archive only this session, that nested session moves to the top level.',
       );
       expect(document.body.textContent).toContain(t("sessionsView.archiveRunningSessions"));
-      expect(actions.textContent).toContain(`Archive ${count} sessions`);
+      expect(actions.textContent).toContain(`Archive all (${count})`);
       expect(harness.patch).not.toHaveBeenCalled();
       expect(harness.request).not.toHaveBeenCalled();
       answerConfirmDialog(actions, choice);
       await pending;
-      expect(harness.patch).toHaveBeenCalledTimes(choice === "confirm" ? 1 : 0);
-      expect(harness.request).toHaveBeenCalledTimes(choice === "alternative" ? 1 : 0);
-      if (choice === "confirm") {
+      expect(harness.patch).toHaveBeenCalledTimes(choice === "alternative" ? 1 : 0);
+      expect(harness.request).toHaveBeenCalledTimes(choice === "confirm" ? 1 : 0);
+      if (choice === "alternative") {
         expect(harness.patch).toHaveBeenCalledWith(
           root.key,
           { archived: true },
           { agentId: "main", expectedSessionId: root.sessionId },
         );
-      } else if (choice === "alternative") {
+      } else if (choice === "confirm") {
         expect(harness.request.mock.calls[0]?.[1]).toEqual({
-          targets: [2, 1, 0].map((index) =>
+          targets: Array.from({ length: count }, (_, index) => count - index - 1).map((index) =>
             Object.assign(guardedTarget(index), {
               expectedArchived: false,
               expectedSidebarAncestors: Array.from({ length: index }, (_, ancestor) =>

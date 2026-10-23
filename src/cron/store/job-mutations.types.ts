@@ -10,6 +10,7 @@ import type { CronSchedulerSnapshot } from "./scheduler-actor.types.js";
 type CronJobMutationOptions = Pick<
   CronAddOptions,
   | "pluginCommand"
+  | "pluginCommandSourceDigest"
   | "streamSandbox"
   | "enabledExplicit"
   | "systemOwned"

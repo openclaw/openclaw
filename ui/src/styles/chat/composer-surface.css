@@ -663,6 +663,10 @@
   position: relative;
 }
 
+.agent-chat__input-btn--attach > .oc-menu-item__label {
+  display: contents;
+}
+
 .agent-chat__input-btn--has-overrides::after {
   position: absolute;
   top: 3px;
@@ -1307,10 +1311,6 @@
 @container chat-conversation (max-height: 320px) {
   .chat-footer {
     --chat-footer-max-height: 100cqh;
-  }
-
-  .chat-footer::before {
-    display: none;
   }
 
   .agent-chat__input {

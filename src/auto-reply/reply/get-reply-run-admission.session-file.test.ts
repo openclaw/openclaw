@@ -40,9 +40,6 @@ vi.mock("./queue/drain.js", async (importOriginal) => ({
   scheduleFollowupDrain: () => {
     throw new Error("Admission fixture must not start a drain");
   },
-  kickFollowupDrainIfIdle: () => {
-    throw new Error("Admission fixture must not start a drain");
-  },
 }));
 vi.mock("./get-reply-run-helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./get-reply-run-helpers.js")>()),

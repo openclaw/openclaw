@@ -18,12 +18,12 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { orderedBoardTabs } from "./board-tabs.tsx";
-import type { BoardWidgetCellMethods } from "./board-widget-cell-options.ts";
-import {
-  boardWidgetPresentationReady,
-  type BoardWidgetCellCallbacks,
-  type BoardWidgetCellProps,
-} from "./board-widget-cell.ts";
+import type {
+  BoardWidgetCellCallbacks,
+  BoardWidgetCellMethods,
+  BoardWidgetCellProps,
+} from "./board-widget-cell-options.ts";
+import { boardWidgetPresentationReady } from "./board-widget-cell.solid.tsx";
 
 type BoardPointerGesture = {
   mode: "move" | "resize";

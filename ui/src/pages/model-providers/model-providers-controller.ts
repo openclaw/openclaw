@@ -292,7 +292,6 @@ export function createModelProviders(
         gateway.isRouteDataCurrent(data)
       ) {
         supplemental.adoptCoreData(data.client, data.data);
-        core.adopt();
         if (!catalogCurrent) {
           retryCatalog();
         }
@@ -593,11 +592,8 @@ export function createModelProviders(
       connected: gatewaySnapshot.phase === "connected",
       loading: state.data === null && !rosterError && !noSelectableAgents,
       refreshing: core.loading,
-      coreReceipt: core.receipt,
-      scopeError: rosterError ?? (noSelectableAgents ? t("agents.noAgents") : null),
       error: rosterError ?? (noSelectableAgents ? t("agents.noAgents") : data.error),
       providerUsageFailed: data.providerUsageFailed,
-      supplementalLoading: loaderPending || supplemental.loading,
       updatedAt: data.updatedAt,
       onOpenUsage: () => context.navigate("usage"),
       credentialAgentLabel: agentLabel,
@@ -605,14 +601,7 @@ export function createModelProviders(
       ...values,
       catalogReceipt: core.catalogReceipt,
       catalogDiscovering: core.catalogLoading || Boolean(catalog?.pendingProviders?.length),
-      // A provider row that reports its own failed discovery already explains the gap.
-      catalogDiscoveryError:
-        core.catalogLoading ||
-        cards.some(
-          (card) => card.catalogStatus === "unavailable" || card.catalogStatus === "auth-rejected",
-        )
-          ? null
-          : (core.catalogError ?? data.catalogError),
+      catalogDiscoveryError: core.catalogLoading ? null : (core.catalogError ?? data.catalogError),
       configBusy: modelProviderConfigBusy(context),
       canViewProfiles: profilesVisible,
       mutationBlockedReason: mutationBlockedReason(),

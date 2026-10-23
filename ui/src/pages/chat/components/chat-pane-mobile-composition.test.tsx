@@ -6,7 +6,11 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { offlineDeviceSession } from "../chat-pane.test-support.ts";
-import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
+import {
+  chatPaneHeaderSessionMenu,
+  mountChatPaneHeader,
+  selectNativeMenu,
+} from "./chat-pane-header.test-support.ts";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 
 const containers: HTMLElement[] = [];
@@ -19,6 +23,53 @@ afterEach(() => {
 function mountHeader(patch: Partial<ChatPaneHeaderProps> = {}) {
   return mountChatPaneHeader(containers, patch);
 }
+
+it("retains the focused mobile Actions trigger while session commands become available", async () => {
+  const mobileHost: ChatMobileHost = {
+    scopeKey: "menu-retention",
+    open: false,
+    suspended: false,
+    mode: "dock",
+    height: undefined,
+    reservedHeight: 0,
+    destination: { area: "panels" },
+    detailsMount: null,
+    setDetailsMount: vi.fn(),
+    navigate: vi.fn(),
+    reveal: vi.fn(),
+    close: vi.fn(),
+    back: vi.fn(),
+    toggleExpanded: vi.fn(),
+    resize: vi.fn(),
+    keyboardVisible: false,
+    onComposerEditingChange: vi.fn(),
+  };
+  const mounted = mountHeader({
+    mergedChrome: true,
+    detailsControl: {
+      chat: undefined,
+      elements: {},
+      mobile: true,
+      mobileHost,
+      presentation: true,
+      setRef: vi.fn(),
+    },
+  });
+  const trigger = mounted.container.querySelector<HTMLButtonElement>(
+    ".chat-header-session-menu__trigger",
+  )!;
+  trigger.focus();
+  mounted.update({ sessionMenuAction: chatPaneHeaderSessionMenu() });
+  await waitForSolid(() => {
+    expect(mounted.container.querySelector(".chat-header-session-menu__trigger")).toBe(trigger);
+    expect(document.activeElement).toBe(trigger);
+  });
+  mounted.update({ gatewayStatus: { kind: "offline", onRetry: vi.fn() } });
+  await waitForSolid(() => {
+    expect(mounted.container.querySelector(".chat-header-session-menu__trigger")).toBe(trigger);
+    expect(document.activeElement).toBe(trigger);
+  });
+});
 
 it("clears the device name while replacing its request and ignores retired results", async () => {
   const first = createDeferred<string | undefined>();
@@ -80,7 +131,6 @@ it("retains the People page and lookup across native host replacement and deskto
     resize: vi.fn(),
     keyboardVisible: false,
     onComposerEditingChange: vi.fn(),
-    onViewportChange: vi.fn(),
   };
   const detailsControl = {
     chat: undefined,
@@ -103,13 +153,14 @@ it("retains the People page and lookup across native host replacement and deskto
       participantsComplete: false,
     },
     mobilePeopleMentions: mentions,
+    sessionMenuAction: chatPaneHeaderSessionMenu(),
   });
   function refreshHost() {
     mounted.update({ detailsControl: { ...detailsControl, mobileHost: { ...mobileHost } } });
   }
-  const trigger = mounted.container.querySelector<HTMLButtonElement>(".chat-mobile-people-grid")!;
+  const menu = mounted.container.querySelector("openclaw-chat-header-session-menu")!;
   expect(mentions.activate).not.toHaveBeenCalled();
-  trigger.click();
+  await selectNativeMenu(menu, "quick:header-people");
   const renderPage = mobileHost.destination.page!.render!;
   const mountPage = () =>
     mountSolid(() => {
@@ -132,7 +183,7 @@ it("retains the People page and lookup across native host replacement and deskto
     detailsControl: { ...detailsControl, mobileHost: undefined },
   });
   mounted.update({ mergedChrome: true, detailsControl });
-  expect(mounted.container.querySelector(".chat-mobile-people-grid")).toBe(trigger);
+  expect(mounted.container.querySelector("openclaw-chat-header-session-menu")).toBe(menu);
   expect(mentions.activate).toHaveBeenCalledOnce();
   expect(release).not.toHaveBeenCalled();
   firstPage.unmount();

@@ -307,12 +307,25 @@ ${source}`;
       return;
     }
     if (message.kind === "cpu-usage" && message.action === "sample") {
-      process.send?.({
-        channel: GATEWAY_PROFILE_CHANNEL,
-        kind: message.kind,
-        action: message.action,
-        cpuUsage: sampleCpu(),
-      });
+      void (async () => {
+        const workerCpu = message.includeWorkers ? await workers.sampleCpu() : undefined;
+        return { ...sampleCpu(), ...(workerCpu ? { workerCpu } : {}) };
+      })().then(
+        (cpuUsage) =>
+          process.send?.({
+            channel: GATEWAY_PROFILE_CHANNEL,
+            kind: message.kind,
+            action: message.action,
+            cpuUsage,
+          }),
+        (error: unknown) =>
+          process.send?.({
+            channel: GATEWAY_PROFILE_CHANNEL,
+            kind: message.kind,
+            action: message.action,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      );
       return;
     }
     const reply = (error?: string) => {

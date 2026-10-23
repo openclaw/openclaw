@@ -111,9 +111,18 @@ requester under `auto-reply.plugin-command`. Children inherit that requester’s
 lineage and effective tool ceiling. No new hook is registered, so Goal
 start/resume and restart-safe chat admission keep their existing rules.
 
-Channel messages without explicit provenance use the channel’s ordinary sender
-authorization; an authorized non-owner can spend child-model budget only under
-that requester’s tool ceiling. A native slash surface targeting a different
+Gateway chat and channel text commands are both eligible. Messages without explicit
+provenance use the ingress's ordinary sender authorization. On Gateway chat, an
+authorized operator who is not an owner can spend child-model budget only under
+that requester's tool ceiling. A channel message carries operator authority only
+when its verified sender has a
+[channel identity link](/concepts/user-model#channel-identity-links) to a
+person whose current role grants `operator.admin`. That sender must also pass the
+channel's command authorization. Unlinked, unverified, or demoted senders see
+`undefined`, even when the channel lets them run the command, and every native
+call rechecks the link and role. The host records the channel command text once,
+as that message's input: a reply adds only the response, and a continuing agent
+turn reuses the same input. A native slash surface targeting a different
 `CommandTargetSessionKey` than the current dispatch session gets no capability.
 The deprecated direct command registrar cannot grant runtime capabilities; use
 the managed `api.registerCommand` path with its reviewed manifest declaration.
@@ -172,7 +181,12 @@ const accepted = await schedules.schedule({
   deadlineAtMs: Date.now() + 30 * 60_000,
   maxRuns: 10,
 });
-return { text: "Continuation scheduled: " + accepted.jobId };
+return {
+  text:
+    "Continuation scheduled: " +
+    accepted.jobId +
+    (accepted.survivesRestart ? "" : " (ends if the Gateway restarts)"),
+};
 ```
 
 Use an `at` schedule with an ISO `at` value for a single occurrence, or
@@ -184,12 +198,13 @@ and capacity deferral do not. Restart recovery never refunds attempts.
 
 The schedule is retired (disabled, with no next run) in the same scheduler
 transaction that launches its final allowed attempt, or that finds its deadline
-passed, its attempts exhausted, or its Gateway process gone. A retired schedule
-never wakes again and stays visible for inspection. One invocation can create
-at most 4 schedules, and each loaded plugin instance can keep at most 8 active
-schedules per parent session. Only enabled schedules created by the same
-plugin instance in the current Gateway process count toward that cap.
-Schedules left by an earlier Gateway process or a replaced plugin instance can
+passed, its attempts exhausted, or, after a Gateway restart, no matching loaded
+plugin. A retired schedule never wakes again, including after later restarts,
+and stays visible for inspection. One invocation can create at most 4
+schedules, and each plugin can keep at most 8 active schedules per parent
+session. Enabled schedules bound to the loaded plugin instance count toward that
+cap, as do unexpired schedules of the same plugin code that a restart can
+re-arm. Schedules bound to a replaced plugin instance or to different code can
 never run plugin code again, so they do not block re-enrollment; each one
 retires at its next occurrence.
 
@@ -210,26 +225,49 @@ command-scoped native-child eligibility producer. Reset, deletion, revocation,
 expired budgets, and unloaded plugins fail closed. Stored source facts are not
 execution authority. No caller can choose a different parent or delivery route.
 
-Schedules bind the exact managed plugin instance, not just its ID, version, or
-source path. Registry adoption of that same instance preserves the binding.
-Plugin replacement/reload or a Gateway process restart cannot inherit old
-schedules; a fresh eligible requester command must enroll a new schedule.
-Persisted jobs do not establish instance continuity or restore execution authority.
+Within one Gateway process, schedules bind the exact managed plugin instance,
+not just its ID, version, or source path. Registry adoption of that same
+instance preserves the binding. After an in-process plugin reload, the first
+occurrence that finds another live instance of the plugin is refused without
+running plugin code and retires the schedule; it does not wait for generic
+repeated-failure auto-disable. That refusal spends one attempt. A transient gap,
+such as a registry swap that keeps the same instance or a plugin that is still
+unloading, is an ordinary refusal that retries at the next occurrence.
 
-Schedules are therefore restart-scoped. After a Gateway restart or update, each
-old schedule is retired at its next occurrence without spending an attempt. A
-plugin that needs to continue across restarts must re-enroll from a later
-eligible requester command, such as an explicit resume command. After an
-in-process plugin reload, the first occurrence that finds another live instance
-of the plugin is refused without running plugin code and retires the schedule;
-it does not wait for generic repeated-failure auto-disable. That refusal spends
-one attempt. A transient gap, such as a registry swap that keeps the same
-instance or a plugin that is still unloading, is an ordinary refusal that
-retries at the next occurrence.
+Accepted schedules survive a Gateway restart on hosts advertising
+`command-scheduled-turns-restart-v1` in `api.runtime.capabilities`. The accepted
+result's `survivesRestart` reports this for each schedule; when it is true, do
+not re-enroll that schedule after a restart. When it is false, as for
+core-bundled plugins, which load host-owned modules without a captured source
+digest, or absent on hosts without the capability, the schedule ends with the
+Gateway process and a plugin must re-enroll from a later
+eligible requester command. After a restart, each
+schedule keeps its original deadline, `maxRuns` and spent attempts, and a missed
+occurrence follows the scheduler's normal startup deferral. Its next
+occurrence re-arms it onto the newly loaded instance of the same plugin code, in
+the same scheduler transaction that claims the occurrence. Matching metadata is
+not enough: the instance must have the same plugin ID, source, root and version,
+must still register the target command, and must have loaded source with exactly
+the digest captured when the schedule was accepted. That
+occurrence then restores the original requester and rechecks it, the parent
+session and the plugin exactly as any other occurrence does. A demoted or
+removed requester is refused before the command runs. If the plugin is disabled,
+uninstalled, or its code changed, the occurrence retires the schedule without
+running plugin code or spending an attempt; re-enabling or restoring the plugin
+later does not revive it. An expired or exhausted schedule is never re-armed. Disabled,
+removed and completed schedules stay ended. An occurrence interrupted by the
+restart is not replayed once its command may have started, so a restart never
+runs one occurrence twice. Neither persisted jobs nor restart continuity restore
+execution authority on their own.
 
 Schedules are stored under a dedicated `pluginCommand` payload kind. An older
 Gateway that does not support scheduled command turns treats that row as an
-invalid job and never runs it as an ordinary model prompt.
+invalid job and never runs it as an ordinary model prompt. Restart continuity is
+stored privately in the job's runtime state and leaves the stored schedule
+unchanged. After a rollback, a Gateway that supports scheduled turns but not
+restart continuity ignores it and ends each schedule at its next occurrence, as
+it ends its own schedules after a restart. That ended schedule stays ended after
+upgrading again.
 
 Scheduled invocations expose native spawn/collect, not another scheduling
 capability. Direct command `llm.complete` and `continueAgent` are refused:

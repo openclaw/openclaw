@@ -10,6 +10,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   asNullableRecord as asRecord,
   normalizeNullableString as nonEmptyString,
+  readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTlonRuntime } from "../runtime.js";
 import { UrbitAuthError, UrbitHttpError } from "../urbit/errors.js";
@@ -66,35 +67,34 @@ function serializeTlonIngressEvent(event: unknown): string {
   }
 }
 
-function inspectChannelsEvent(event: unknown): { eventId: string; laneKey: string } | null {
+export function decodeTlonChannelsEvent(event: unknown) {
   const envelope = asRecord(event);
-  const nest = nonEmptyString(envelope?.nest);
-  const response = asRecord(envelope?.response);
-  const post = asRecord(response?.post);
+  const nest = readString(envelope, "nest");
+  const post = asRecord(asRecord(envelope?.response)?.post);
   const rPost = asRecord(post?.["r-post"]);
   const set = asRecord(rPost?.set);
   const reply = asRecord(rPost?.reply);
-  const rReply = asRecord(reply?.["r-reply"]);
-  const replySet = asRecord(rReply?.set);
-  if (!nest || (!asRecord(set?.essay) && !asRecord(replySet?.memo))) {
+  const replySet = asRecord(asRecord(reply?.["r-reply"])?.set);
+  const memo = asRecord(replySet?.memo);
+  const content = memo ?? asRecord(set?.essay);
+  const messageId = readString(memo ? reply : post, "id");
+  if (!nest || !messageId || !content) {
     return null;
   }
-  const eventId = nonEmptyString(asRecord(replySet?.memo) ? reply?.id : post?.id);
-  return eventId ? { eventId, laneKey: `group:${nest}` } : null;
+  return {
+    nest,
+    messageId,
+    content,
+    isThreadReply: Boolean(memo),
+    messageSet: memo ? replySet : set,
+  };
 }
 
-function inspectChatEvent(event: unknown): { eventId: string; laneKey: string } | null {
+export function decodeTlonChatEvent(event: unknown) {
   const envelope = asRecord(event);
-  const response = asRecord(envelope?.response);
-  const add = asRecord(response?.add);
-  const essay = asRecord(add?.essay);
-  const eventId = nonEmptyString(envelope?.id);
-  if (!essay || !eventId) {
-    return null;
-  }
-  const whom = nonEmptyString(asRecord(envelope?.whom)?.ship);
-  const peer = nonEmptyString(envelope?.whom) ?? whom ?? nonEmptyString(essay.author);
-  return { eventId, laneKey: peer ? `direct:${peer}` : `event:${eventId}` };
+  const messageId = readString(envelope, "id");
+  const essay = asRecord(asRecord(asRecord(envelope?.response)?.add)?.essay);
+  return envelope && messageId && essay ? { messageId, whom: envelope.whom, essay } : null;
 }
 
 function inspectTlonIngressEvent(
@@ -103,7 +103,20 @@ function inspectTlonIngressEvent(
 ): { eventId: string; laneKey: string } | null {
   // Urbit SSE ids belong to a disposable HTTP channel. The message id inside
   // each firehose envelope survives resubscription and preserves the retired guard key.
-  return source === "channels" ? inspectChannelsEvent(event) : inspectChatEvent(event);
+  if (source === "channels") {
+    const message = decodeTlonChannelsEvent(event);
+    const eventId = nonEmptyString(message?.messageId);
+    const nest = nonEmptyString(message?.nest);
+    return eventId && nest ? { eventId, laneKey: `group:${nest}` } : null;
+  }
+  const message = decodeTlonChatEvent(event);
+  const eventId = nonEmptyString(message?.messageId);
+  if (!message || !eventId) {
+    return null;
+  }
+  const whom = nonEmptyString(asRecord(message.whom)?.ship);
+  const peer = nonEmptyString(message.whom) ?? whom ?? nonEmptyString(message.essay.author);
+  return { eventId, laneKey: peer ? `direct:${peer}` : `event:${eventId}` };
 }
 
 function decodeTlonIngressPayload(

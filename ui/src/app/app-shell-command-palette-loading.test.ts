@@ -35,8 +35,7 @@ function loaderHost<T extends object>(elements: T) {
     elements,
     commandPaletteElement: COMMAND_PALETTE_ELEMENT,
     lazyCustomElements: createLazyCustomElementRequests(),
-    chatNavigationOptions: () => undefined,
-    navigate: () => {},
+    shellNavigation: { chatNavigationOptions: () => undefined, navigate: () => {} },
   };
 }
 function mountLoading(state: ShellCommandPaletteOwner["loading"], onClose: () => void) {
@@ -195,8 +194,8 @@ describe("cold command palette input custody", () => {
     },
   );
 
-  it.each(["transfer", "dismiss"] as const)(
-    "keeps pasted images only until %s",
+  it.each(["transfer", "dismiss", "context retirement"] as const)(
+    "handles pasted-file custody after %s",
     async (outcome) => {
       const { state, input } = await mountLoader();
       const file = new File(["image"], "clipboard.png", { type: "image/png" });
@@ -209,17 +208,37 @@ describe("cold command palette input custody", () => {
       const take = state.captureHandoff();
       keydown(input, { ctrlKey: true });
       expect(state.submitRequested()).toBe(true);
-      if (outcome === "dismiss") {
-        state.clear();
+      if (outcome !== "transfer") {
+        if (outcome === "dismiss") {
+          state.dismiss();
+        } else {
+          state.clear();
+        }
         state.begin();
         expect(take()).toBeUndefined();
-        expect(state.captureHandoff()()?.imageFiles).toBeUndefined();
+        const reopened = state.captureHandoff()();
+        expect(reopened?.attachmentFiles).toEqual(outcome === "dismiss" ? [file] : undefined);
+        expect(reopened?.submitRequested).toBeUndefined();
       } else {
-        expect(take()).toMatchObject({ value: "", imageFiles: [file], submitRequested: true });
+        expect(take()).toMatchObject({ value: "", attachmentFiles: [file], submitRequested: true });
         expect(take()).toBeUndefined();
       }
     },
   );
+
+  it("hands dropped non-image files to the canonical draft exactly once", async () => {
+    const { state, input } = await mountLoader();
+    const file = new File(["brief"], "brief.pdf", { type: "application/pdf" });
+    const event = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", { value: { types: ["Files"], files: [file] } });
+    input.dispatchEvent(event);
+    flush();
+    expect(event.defaultPrevented).toBe(true);
+    expect(input.placeholder).toBe("What would you like to do with these files?");
+    const take = state.captureHandoff();
+    expect(take()?.attachmentFiles).toEqual([file]);
+    expect(take()).toBeUndefined();
+  });
 
   it.each([
     { modifier: { ctrlKey: true }, submit: true, value: "Start this background task" },

@@ -141,7 +141,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     } as const;
     const property = pendingProperty[mode];
     const pendingKey = this.headerPresentation[property];
-    const placementStartup = scope.context.placementStartup;
     const onPendingChange = (key: string | null) => {
       if (mode === "recover" && key !== null && this.state) {
         dismissChatError(this.state);
@@ -157,26 +156,26 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       gatewaySnapshot: scope.context.gateway.snapshot,
       currentGatewaySnapshot: () => scope.context.gateway.snapshot,
       row,
-      currentRow: () => (this.state ? selectedChatSessionRow(this.state) : undefined),
+      currentRow: () => {
+        const current = this.state ? selectedChatSessionRow(this.state) : undefined;
+        return current?.key === row.key ? current : undefined;
+      },
       fallbackAgentId: resolveChatAgentId(scope.state),
       isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       publishError: (error: unknown) => this.publishHeaderError(error, scope.headerOutcomeOwner),
       reconcileMutation: (agentId?: string | null) => scope.sessions.reconcileMutation(agentId),
     };
-    if (mode === "reclaim") {
-      const { reclaimChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
-      await reclaimChatPanePlacement({
-        ...params,
-        currentRow: () => {
-          const current = this.state ? selectedChatSessionRow(this.state) : undefined;
-          return current?.key === row.key ? current : undefined;
-        },
-        machineName,
-        reclaimingKey: pendingKey,
-        placementStartup,
-        onReclaimingChange: onPendingChange,
-      });
-    } else {
+    try {
+      if (mode === "reclaim") {
+        const { reclaimChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
+        return await reclaimChatPanePlacement({
+          ...params,
+          machineName,
+          reclaimingKey: pendingKey,
+          placementStartup: scope.context.placementStartup,
+          onReclaimingChange: onPendingChange,
+        });
+      }
       const { changeSessionPlacement } =
         await import("../../components/session-placement.runtime.ts");
       await changeSessionPlacement({
@@ -188,6 +187,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
           scope.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
         onPendingChange,
       });
+    } catch (error) {
+      params.publishError(error);
     }
   }
 
@@ -450,7 +451,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const browserUnavailableReason = browserPanelSurfaceUnavailableReason(snapshot);
     state.browserPanelUnavailableReason = browserUnavailableReason;
     state.browserPanelAvailable = browserUnavailableReason === null;
-    const desktopPanelAvailable = isDesktopPanelAvailable(snapshot);
     const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const sidebarKeyChanged = sidebarSessionKey !== previousSidebarSessionKey;
     // Restore offline/compact preferences immediately, then migrate ready-only
@@ -462,7 +462,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         settings: loadSettings(),
         sessionKey: sidebarSessionKey,
         browserAvailable: state.browserPanelAvailable,
-        desktopAvailable: desktopPanelAvailable,
+        desktopAvailable: isDesktopPanelAvailable(snapshot),
       });
       const persistedLayout = sidebarSettings.sidebarSessionLayouts?.[sidebarSessionKey];
       if (persistedLayout !== undefined) {

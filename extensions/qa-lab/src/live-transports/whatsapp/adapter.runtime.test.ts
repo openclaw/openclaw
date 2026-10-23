@@ -148,6 +148,19 @@ afterEach(async () => {
 });
 
 describe("WhatsApp QA adapter cleanup through the suite", () => {
+  it("reports a driver polling failure through the transport wait boundary", async () => {
+    const transport = await createAdapter();
+    const driver = await mocks.startDriver.mock.results[0]!.value;
+    const failure = new Error("driver polling failed");
+    vi.spyOn(driver, "getObservedMessages").mockImplementation(() => {
+      throw failure;
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(transport.adapter.waitForCondition(() => true)).rejects.toBe(failure);
+  });
+
   it.each([
     ["none", undefined, undefined],
     ["gateway stop", undefined, "gateway stop"],

@@ -109,11 +109,15 @@ export type DetailProps = SharedProps &
     onRetryInspection: () => void;
     onTabChange: (tab: InstalledPluginDetailTab) => void;
   };
-function renderRetryError(error: string, onRetry: () => void): JSX.Element {
+export function PluginRetryError(props: { error: string; onRetry: () => void }): JSX.Element {
   return (
     <div class="callout danger plugins-settings-error oc-banner oc-banner-error" role="alert">
-      <span>{error}</span>
-      <button type="button" class="btn btn--sm oc-action oc-action-secondary" onClick={onRetry}>
+      <span>{props.error}</span>
+      <button
+        type="button"
+        class="btn btn--sm oc-action oc-action-secondary"
+        onClick={() => props.onRetry()}
+      >
         {t("pluginsPage.tryAgain")}
       </button>
     </div>
@@ -170,10 +174,10 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
       ) : props.loading && !props.result ? (
         <SettingsLoadingSkeleton rows={4} carapace />
       ) : props.error && !props.result ? (
-        renderRetryError(props.error, props.onRefresh)
+        <PluginRetryError error={props.error} onRetry={props.onRefresh} />
       ) : (
         <>
-          {props.error ? renderRetryError(props.error, props.onRefresh) : null}
+          {props.error ? <PluginRetryError error={props.error} onRetry={props.onRefresh} /> : null}
           {!plugins().length ? (
             <SettingsEmpty
               message={
@@ -283,7 +287,7 @@ function AdvancedSettings(options: InventoryProps): JSX.Element {
           !options.configError && !config() && (options.configSchemaLoading || !options.configValue)
         }
         rows={4}
-        renderError={renderRetryError}
+        renderError={(error, onRetry) => <PluginRetryError error={error} onRetry={onRetry} />}
       />
     </Show>
   );
@@ -415,19 +419,13 @@ function PluginInspectionStatus(props: DetailProps) {
     <Loading on={receipt()} fallback={placeholder()}>
       <Errored
         fallback={(error, reset) => (
-          <div class="callout danger plugins-settings-error oc-banner oc-banner-error" role="alert">
-            <span>{formatUiError(error())}</span>
-            <button
-              type="button"
-              class="btn btn--sm oc-action oc-action-secondary"
-              onClick={() => {
-                props.onRetryInspection();
-                reset();
-              }}
-            >
-              {t("pluginsPage.tryAgain")}
-            </button>
-          </div>
+          <PluginRetryError
+            error={formatUiError(error())}
+            onRetry={() => {
+              props.onRetryInspection();
+              reset();
+            }}
+          />
         )}
       >
         {read()}
@@ -442,7 +440,7 @@ function PluginNotices(props: DetailProps) {
   );
   return (
     <>
-      {props.error ? renderRetryError(props.error, props.onRefresh) : null}
+      {props.error ? <PluginRetryError error={props.error} onRetry={props.onRefresh} /> : null}
       <PluginInspectionStatus {...props} />
       {plugin()?.error ? (
         <div class="callout danger oc-banner oc-banner-error" role="alert">
@@ -466,7 +464,7 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
         </SettingsPage>
       ) : props.error && !props.result ? (
         <SettingsPage carapace={true}>
-          {renderRetryError(props.error, props.onRefresh)}
+          <PluginRetryError error={props.error} onRetry={props.onRefresh} />
         </SettingsPage>
       ) : !props.result ? (
         <SettingsPage carapace={true}>

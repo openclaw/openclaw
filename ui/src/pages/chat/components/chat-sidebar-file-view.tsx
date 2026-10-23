@@ -285,7 +285,7 @@ export function SidebarFile(props: {
           >
             <Show when={desktop()}>
               <div class="sidebar-file-view__floating-copy">
-                <FileCopyButton action="contents" controls={props.controls} />
+                <FileCopyButton controls={props.controls} />
               </div>
             </Show>
             <Show when={props.controls?.markdown && props.controls.readingMode === "preview"}>

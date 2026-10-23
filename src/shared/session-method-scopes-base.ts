@@ -55,6 +55,8 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "users.prefs.get",
   "users.prefs.set",
   "users.self",
+  "users.setAvatar",
+  "users.setDisplayName",
 ]);
 
 const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([

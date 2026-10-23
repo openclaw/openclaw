@@ -205,7 +205,9 @@ function createDeletionHarness(request: ReturnType<typeof vi.fn>) {
   cleanups.push(() => sessions.dispose());
   const watch = (sessionKeys = [deletedKey, mainKey]) => {
     const fixture = recoveryShell({ sessionKeys, sessions });
-    cleanups.push(sessions.subscribe(() => fixture.shell.recoverDeletedActiveSession()));
+    cleanups.push(
+      sessions.subscribe(() => fixture.shell.shellNavigation.recoverDeletedActiveSession()),
+    );
     return { ...fixture, toast: toastHost() };
   };
   return { ...harness, sessions, watch };
@@ -372,12 +374,12 @@ describe("OpenClaw shell deleted-session recovery", () => {
       },
       retryable: false,
     });
-    shell.recoverDeletedActiveSession();
+    shell.shellNavigation.recoverDeletedActiveSession();
     expect(shell.activeSessionKey).toBe(deletedKey);
     expect(replace).not.toHaveBeenCalled();
     expect(setSessionKey).not.toHaveBeenCalled();
     get.mockReturnValue(null);
-    shell.recoverDeletedActiveSession();
+    shell.shellNavigation.recoverDeletedActiveSession();
     expect(shell.activeSessionKey).toBe(mainKey);
     expect(replace).toHaveBeenCalledOnce();
   });
@@ -587,7 +589,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       sessionKeys: [key],
       deletedSessionKeys: pathname ? [] : [key],
     });
-    shell.recoverNotFoundRoute();
+    shell.shellNavigation.recoverNotFoundRoute();
     expect(setSessionKey).not.toHaveBeenCalled();
     if (pathname) {
       expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname });

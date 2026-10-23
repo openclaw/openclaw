@@ -196,11 +196,6 @@ export async function syncWorkspaceSkills(params: {
     const skillRoots = skillsSnapshot?.skillRoots;
     const executionWorkspaceFileHost = resolveSkillSnapshotExecutionFileHost(skillsSnapshot);
     const sourceWorkspace = skillRoots?.agentWorkspaceDir ?? sourceDir;
-    const sourceScope = {
-      executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
-      executionWorkspaceFileHost,
-      agentId: params.agentId,
-    };
     // Names and versions do not identify a source tree. Both reuse paths must
     // bind its full discovery context, or shared sandboxes retain another owner's bytes.
     const skillRootsFingerprint = sha256Hex(
@@ -225,7 +220,7 @@ export async function syncWorkspaceSkills(params: {
     assertCurrent?.();
     const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));
     assertCurrent?.();
-    const sourceVersion = getSkillsResourceVersion(sourceWorkspace, sourceScope);
+    const sourceVersion = getSkillsResourceVersion(sourceWorkspace);
     const skillsVersion = getSkillsSnapshotVersion(sourceWorkspace);
     const expectedManifestKey =
       skillsSnapshot?.version === skillsVersion

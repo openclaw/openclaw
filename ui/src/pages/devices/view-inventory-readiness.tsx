@@ -9,10 +9,6 @@ import type { DevicesProps } from "./view.types.ts";
 
 export function DeviceInventory(props: DevicesProps) {
   const scope = createMemo(() => props.inventoryScope);
-  const readInventory = () => {
-    latest(() => props.inventoryRead());
-    return null;
-  };
   return (
     <Errored
       fallback={(error, reset) => (
@@ -41,7 +37,7 @@ export function DeviceInventory(props: DevicesProps) {
           </SettingsSection>
         }
       >
-        {readInventory()}
+        {(latest(() => props.inventoryRead()), null)}
         <DeviceInventoryContent {...props} pending={isPending(() => props.inventoryRead())} />
       </Loading>
     </Errored>

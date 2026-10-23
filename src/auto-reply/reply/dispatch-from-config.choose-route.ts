@@ -26,6 +26,7 @@ import {
 import { renderPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
 import { recoverBlockReplySources, setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
+import { commandTranscriptMirror } from "./channel-command-user-turn.js";
 import { resolveCommandContextText } from "./context-text.js";
 import {
   DispatchReplyOperationAbortedError,
@@ -199,8 +200,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         agentId: sessionAgentId,
         expectedSessionId: binding?.sessionId,
         storePath: binding?.storePath ?? sessionStoreEntry.storePath,
-        commandText,
-        commandId,
+        ...commandTranscriptMirror(state, commandText, commandId),
         preferText: true,
         idempotencyKey: `command-block:${commandId}:${++commandReplyIndex}`,
         deliveryMirror: { kind: "channel-final", sourceMessageId: commandId },
@@ -471,7 +471,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
               agentId: sessionAgentId,
               ...transcriptWriterMetadata(transcriptMirrorSessionBinding),
               preferText: true,
-              ...(isCommandReply && commandText && commandId ? { commandText, commandId } : {}),
+              ...(isCommandReply && commandText && commandId
+                ? commandTranscriptMirror(state, commandText, commandId)
+                : {}),
               ...(hasTranscriptOwner ? { transcriptOwner: true } : {}),
               idempotencyKey: transcriptMirrorSourceId
                 ? `channel-final:${commandId ?? transcriptMirrorSourceId}:${options.deliveryId ?? "single"}`

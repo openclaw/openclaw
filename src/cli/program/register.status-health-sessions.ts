@@ -7,6 +7,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { throwExpectedCliError } from "../failure-output.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import type { SessionsImportOptions } from "../sessions-import.js";
 
 type SessionsListCliOptions = Omit<Parameters<typeof sessionsCommand>[0], "limit"> & {
@@ -190,10 +191,7 @@ async function runWithVerboseAndTimeout(
   const verbose = Boolean(opts.verbose || opts.debug);
   setVerbose(verbose);
   await runCommandWithRuntime(defaultRuntime, async () => {
-    const timeoutMs = parseStrictPositiveInteger(opts.timeout);
-    if (opts.timeout !== undefined && timeoutMs === undefined) {
-      throw new Error("--timeout must be a positive integer (milliseconds)");
-    }
+    const timeoutMs = parseOptionalPositiveInteger(opts.timeout, "--timeout", " (milliseconds)");
     await action({ verbose, timeoutMs });
   });
 }

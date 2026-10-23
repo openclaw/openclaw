@@ -355,9 +355,9 @@ export async function probeGateway(opts: {
         timer = null;
       }
     };
-    const armProbeTimer = (onTimeout: () => void, timeoutMs = initialProbeTimeoutMs) => {
+    const armProbeTimer = (onTimeout: () => void) => {
       clearProbeTimer();
-      timer = setTimeout(onTimeout, resolveSafeTimeoutDelayMs(timeoutMs));
+      timer = setTimeout(onTimeout, resolveSafeTimeoutDelayMs(initialProbeTimeoutMs));
     };
     const settle = (
       result: Omit<GatewayProbeResult, "url" | "connectErrorDetails"> & {

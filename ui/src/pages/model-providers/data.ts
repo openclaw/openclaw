@@ -16,7 +16,7 @@ import type {
   ModelCatalogEntry,
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
-import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import {
   canonicalModelAuthProviderId,
@@ -174,7 +174,7 @@ function addLogoutTarget(
   existing.profileIds = [...new Set([...existing.profileIds, ...profileIds])];
 }
 
-export function collectProviderUsage(
+function collectProviderUsage(
   summary: UsageSummary | null,
 ): Map<string, { displayName: string; snapshot: ProviderUsageSnapshot }> {
   const result = new Map<string, { displayName: string; snapshot: ProviderUsageSnapshot }>();

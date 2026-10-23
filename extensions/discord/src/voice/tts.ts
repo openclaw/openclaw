@@ -61,7 +61,6 @@ export async function synthesizeVoiceReplyAudio(params: {
       mode: "stream" as const,
       audioStream: streamResult.audioStream,
       release: streamResult.release,
-      speakText,
     };
   }
   const streamFailure = !streamResult.success
@@ -76,7 +75,6 @@ export async function synthesizeVoiceReplyAudio(params: {
     status: "ok" as const,
     mode: "file" as const,
     audioPath: result.audioPath,
-    speakText,
     ...(streamFailure
       ? {
           streamFailure: { provider: streamFailure.provider, reasonCode: streamFailure.reasonCode },
