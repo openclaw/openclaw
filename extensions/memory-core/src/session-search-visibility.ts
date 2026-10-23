@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-hit";
 import {
   createAgentToAgentPolicy,
+  createSessionVisibilityChecker,
   createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
@@ -196,9 +197,9 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       })
     : [];
   const archivedSessionsByName = new Map(archives.map((archive) => [archive.archiveName, archive]));
-  const guard = params.requesterSessionKey
-    ? await createSessionVisibilityGuard({
-        action: "history",
+  const guardOptions = params.requesterSessionKey
+    ? {
+        action: "history" as const,
         requesterSessionKey: params.requesterSessionKey,
         requesterAgentId,
         mainSessionKey:
@@ -212,13 +213,26 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
             : undefined,
         visibility,
         a2aPolicy,
-      })
+      }
+    : null;
+  // Every key checked below is scoped to this agent. Under all-visibility,
+  // same-agent access cannot depend on spawned-session ownership. Keep the
+  // native checker (including incognito/scoped-grant checks), without listing
+  // every spawned session just to establish a fact already known here.
+  const sameAgentAll =
+    visibility === "all" &&
+    Boolean(scopedAgentId && requesterAgentId) &&
+    normalizeAgentIdForCompare(scopedAgentId) === normalizeAgentIdForCompare(requesterAgentId);
+  const guard = guardOptions
+    ? sameAgentAll
+      ? createSessionVisibilityChecker({ ...guardOptions, spawnedKeys: null })
+      : await createSessionVisibilityGuard(guardOptions)
     : null;
 
-  const { store: combinedSessionStore, storePath } = loadCombinedSessionStoreForGateway(
-    params.cfg,
-    scopedAgentId ? { agentId: scopedAgentId } : {},
-  );
+  const { store: combinedSessionStore, storePath } = loadCombinedSessionStoreForGateway(params.cfg, {
+    ...(scopedAgentId ? { agentId: scopedAgentId } : {}),
+    projection: "list",
+  });
 
   const conversationRecall = params.conversationRecall;
   const trustedAgentScope = Boolean(

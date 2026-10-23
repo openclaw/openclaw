@@ -22,13 +22,14 @@ export type {
 /** Loads the cross-session plugin view without process-only incognito rows. */
 export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
-  opts: { agentId?: string; configuredAgentsOnly?: boolean } = {},
+  opts: { agentId?: string; configuredAgentsOnly?: boolean; projection?: "full" | "list" } = {},
 ) {
-  // This published view has no projection option; installed plugins receive complete entries.
+  // Identity/visibility readers do not need saved prompts and skill snapshots.
+  // Preserve complete entries for existing plugin callers.
   const result = loadGatewaySessionStore(cfg, {
     ...opts,
     includeIncognito: false,
-    projection: "full",
+    projection: opts.projection ?? "full",
   });
   return {
     storePath: result.storePath,

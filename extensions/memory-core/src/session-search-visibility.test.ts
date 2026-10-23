@@ -772,7 +772,29 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(sessionTranscriptHit.loadCombinedSessionStoreForGateway).toHaveBeenCalledTimes(1);
     expect(sessionTranscriptHit.loadCombinedSessionStoreForGateway).toHaveBeenCalledWith(cfg, {
       agentId: "main",
+      projection: "list",
     });
+  });
+
+  it("uses the native direct checker for all-visible same-agent keys", async () => {
+    combinedSessionStore = {
+      "agent:main:main": sessionEntry("requester", 1, "/tmp/sessions/requester.jsonl"),
+      "agent:main:old": sessionEntry("old", 1, "/tmp/sessions/old.jsonl"),
+      "agent:peer:only": sessionEntry("peer", 1, "/tmp/sessions/peer.jsonl"),
+    };
+    const guard = vi.spyOn(sessionVisibility, "createSessionVisibilityGuard");
+    const direct = vi.spyOn(sessionVisibility, "createSessionVisibilityChecker");
+    const visible = searchHit("sessions/main/old.jsonl", "sessions", "allowed");
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "all" } } }),
+      agentId: "main",
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [visible, searchHit("sessions/peer/peer.jsonl", "sessions", "denied")],
+    });
+    expect(filtered).toEqual([visible]);
+    expect(direct).toHaveBeenCalledOnce();
+    expect(guard).not.toHaveBeenCalled();
   });
 
   it.each([
