@@ -1,30 +1,16 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { BoardSessionTarget } from "../boards/board-store.js";
-import { createTestBoardStore } from "../boards/board-store.test-support.js";
+import { useWidgetHarness } from "../canvas/widget-tool.test-support.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  replaceSessionEntrySync,
+  resetSessionEntryLifecycle,
+} from "../config/sessions/session-accessor.js";
+import { boardStore } from "../gateway/board-store.js";
 import { createBoardHarness } from "../gateway/server-methods/board.test-support.js";
 import type { RespondFn } from "../gateway/server-methods/types.js";
 import type { CronStoredJob } from "./types.js";
 
-// Parent row reads and the parent generation lease stand in for the session store.
-const parent = vi.hoisted(() => ({ reset: false }));
-vi.mock("../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-runtime.js")>()),
-  readSessionEntryInWorker: async () => ({
-    sessionId: "parent-session",
-    lifecycleRevision: "rev-1",
-  }),
-}));
-vi.mock("../config/sessions/session-delivery-generation.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/sessions/session-delivery-generation.js")>()),
-  prepareSessionGenerationFacts: async () => ({
-    assertCurrent: () => {
-      if (parent.reset) {
-        throw new Error("parent conversation was reset");
-      }
-    },
-    release: () => {},
-  }),
-}));
 vi.mock("../agents/openclaw-plugin-tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/openclaw-plugin-tools.js")>()),
   resolveOpenClawPluginToolsForOptions: () => [],
@@ -69,14 +55,39 @@ const LINKED_JOB = {
   sourceConversation: { sessionKey: PARENT.sessionKey, sessionId: "parent-session" },
 } as unknown as CronStoredJob;
 
-beforeEach(() => {
-  parent.reset = false;
-});
+// Real session rows, generation leases and board store live in this state directory.
+useWidgetHarness();
 
-// Wires the real board handlers and store behind the in-process gateway caller.
+// Writes the parent conversation and the run session the way the Gateway persists them.
+function seedSessions() {
+  replaceSessionEntrySync(
+    { sessionKey: PARENT.sessionKey },
+    { sessionId: "parent-session", lifecycleRevision: "rev-1", updatedAt: Date.now() },
+  );
+  replaceSessionEntrySync(
+    { sessionKey: RUN_KEY },
+    { sessionId: "run-session", updatedAt: Date.now() },
+  );
+}
+
+// A `/new` reset of the parent conversation through the real lifecycle owner.
+async function resetParent() {
+  await resetSessionEntryLifecycle({
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    target: { canonicalKey: PARENT.sessionKey, storeKeys: [PARENT.sessionKey] },
+    buildNextEntry: () => ({
+      sessionId: "replacement-session",
+      lifecycleRevision: "rev-2",
+      updatedAt: Date.now(),
+    }),
+  });
+}
+
+// Wires the real board handlers and Gateway board store behind the in-process gateway caller.
 function useBoard() {
-  const store = createTestBoardStore();
+  const store = boardStore;
   const { handlers, context } = createBoardHarness(undefined, {}, store);
+  seedSessions();
   dispatch.call = async (method, params, guard) => {
     const respond = vi.fn<RespondFn>();
     await handlers[method]!({
@@ -177,9 +188,9 @@ it("refuses board writes after the parent resets mid-run", async () => {
   const store = useBoard();
   const run = await admitChildRun();
   const before = await store.getSnapshot(PARENT);
-  parent.reset = true;
-  await expect(run.dashboard.execute("tab", createTab)).rejects.toThrow("reset");
-  await expect(run.widget.execute("pin", pinReport)).rejects.toThrow("reset");
+  await resetParent();
+  await expect(run.dashboard.execute("tab", createTab)).rejects.toThrow();
+  await expect(run.widget.execute("pin", pinReport)).rejects.toThrow();
   expect(await store.getSnapshot(PARENT)).toEqual(before);
   run.settle();
 });
@@ -190,7 +201,7 @@ it("refuses a write when the parent resets between the tool's check and the comm
   const before = await store.getSnapshot(PARENT);
   const applyOps = store.applyOps.bind(store);
   vi.spyOn(store, "applyOps").mockImplementation(async (...args) => {
-    parent.reset = true;
+    await resetParent();
     return await applyOps(...args);
   });
   await expect(run.dashboard.execute("tab", createTab)).rejects.toThrow();
@@ -223,6 +234,12 @@ it("offers a CLI child pinned authoring on its parent's board through the loopba
   const widget = scoped.tools.find((tool) => tool.name === "show_widget");
   expect(widget?.parameters).toMatchObject({ properties: { pin: { const: true } } });
   await widget!.execute("pin", pinReport);
+  expect((await store.getSnapshot(PARENT)).widgets.map((entry) => entry.title)).toEqual(["Status"]);
+  // After a real parent reset the same CLI tool refuses, leaving the parent board unchanged.
+  await resetParent();
+  await expect(
+    widget!.execute("pin-after-reset", { ...pinReport, title: "Late" }),
+  ).rejects.toThrow();
   expect((await store.getSnapshot(PARENT)).widgets.map((entry) => entry.title)).toEqual(["Status"]);
   // Without the grant's cap the scheduled run keeps the inline-client requirement.
   const uncapped = await resolveGatewayScopedTools({
