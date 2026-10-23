@@ -405,6 +405,25 @@ describe("DraftSubmissionFlow submit gates", () => {
     expect(flow.blockedSubmitNotice()).toBeUndefined();
   });
 
+  it("retires attempted-submit feedback when the draft is cleared before readiness", async () => {
+    const { flow, context } = withMessage();
+    const snapshot = context.gateway.snapshot;
+    snapshot.phase = "connecting";
+    await flow.submit();
+    expect(flow.blockedSubmitNotice()).toBeTruthy();
+
+    flow.setMessage("");
+    snapshot.phase = "connected";
+    flow.synchronizeSubmission();
+    expectGate(flow, "empty-draft");
+    expect(flow.blockedSubmitNotice()).toBeUndefined();
+
+    snapshot.phase = "connecting";
+    flow.synchronizeSubmission();
+    expect(flow.blockedSubmitNotice()).toBeUndefined();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+  });
+
   it.each(["unavailable", "rejected", "write-denied", "admin-denied", "forbidden"] as const)(
     "keeps saved worktree submission gated until discovery succeeds (%s)",
     async (result) => {

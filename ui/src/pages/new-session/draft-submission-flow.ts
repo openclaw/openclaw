@@ -181,7 +181,7 @@ export class DraftSubmissionFlow {
   }
 
   synchronizeSubmission() {
-    this.blockedSubmitAttempt = this.blockedSubmitAttempt && this.submitBlock() !== undefined;
+    this.blockedSubmitAttempt = this.blockedSubmitAttempt && Boolean(this.submitBlock()?.reason);
     const startup = this.sessionStartup.resume();
     if (startup.kind === "resume") {
       void this.submit(startup);
