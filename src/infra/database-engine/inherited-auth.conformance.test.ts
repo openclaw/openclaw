@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import { createServer } from "node:http";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { readRequestText } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { resolveSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
@@ -37,16 +38,15 @@ import { withAgentDatabaseStartupAdmission } from "../../state/agent-database-st
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { acquireStateDatabaseSchemaLease } from "../gateway-state-owner.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
+import { sqliteWorkerPreloadEnv } from "../sqlite-worker-preload.test-support.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
-import { getPostgresPhysicalFacts } from "./physical-facts.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -75,8 +75,8 @@ describe.skipIf(!connection)("PostgreSQL inherited auth startup", () => {
     signal,
   }) => {
     const prefix = `inheritauth_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    const blocker = new Client({ connectionString: connection });
-    await blocker.connect();
+    const database = new Client({ connectionString: connection });
+    await database.connect();
     const state = await createModelsTestState("postgres-inherited-auth", {
       env: {
         OPENCLAW_TEST_INHERITED_AUTH_DSN: connection,
@@ -84,6 +84,39 @@ describe.skipIf(!connection)("PostgreSQL inherited auth startup", () => {
         OPENCLAW_SKIP_PROVIDERS: "1",
       },
     });
+    const inspectionEntered = state.path("owner-inspection-entered");
+    const inspectionRelease = state.path("owner-inspection-release");
+    const preload = state.path("pause-owner-inspection.cjs");
+    const releaseInspection = () => fs.writeFileSync(inspectionRelease, "resume");
+    signal.addEventListener("abort", releaseInspection, { once: true });
+    onTestFinished(() => {
+      signal.removeEventListener("abort", releaseInspection);
+      vi.unstubAllEnvs();
+    });
+    // Delay delivery, not inspection results: the child reads PostgreSQL after release.
+    fs.writeFileSync(
+      preload,
+      `const fs = require('node:fs');
+const emit = process.emit;
+process.emit = function(event, ...args) {
+  const request = args[0];
+  if (event === 'message' && request?.type === 'inspect' &&
+      request.input?.agentId === 'owner' &&
+      request.input.requireStartupMigrationReadiness === true &&
+      request.databaseEngineSelection) {
+    fs.writeFileSync(${JSON.stringify(inspectionEntered)}, 'entered');
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    while (!fs.existsSync(${JSON.stringify(inspectionRelease)})) {
+      Atomics.wait(pause, 0, 0, 10);
+    }
+  }
+  return emit.call(this, event, ...args);
+};
+`,
+    );
+    for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preload))) {
+      vi.stubEnv(key, value);
+    }
     let gateway: Awaited<ReturnType<typeof startModelsGateway>> | undefined;
     let unsubscribe: (() => void) | undefined;
     const requests: Array<{ authorization: string | undefined; body: string }> = [];
@@ -190,10 +223,6 @@ describe.skipIf(!connection)("PostgreSQL inherited auth startup", () => {
       expect(resolveSharedAuthStoreOwnership(state.env)).toEqual({ location: "legacy-main" });
       const mainPath = resolveAuthProfileDatabasePath(state.agentDir());
       const ownerPath = resolveAuthProfileDatabasePath(state.agentDir("owner"));
-      const ownerFacts = withEngineStoreAdmission(() =>
-        getPostgresPhysicalFacts(openOpenClawAgentDatabase({ agentId: "owner" }).db),
-      );
-      expect(ownerFacts).toBeDefined();
       await closeDatabases();
       for (const pathname of [mainPath, ownerPath]) {
         retireSqliteDatabaseAdmissionForPath(pathname);
@@ -201,18 +230,13 @@ describe.skipIf(!connection)("PostgreSQL inherited auth startup", () => {
       clearSecretsRuntimeSnapshot();
       await resetPreparedModelCatalogStateForTest();
 
-      // Block the real owner inspection while leaving its sibling's schema readable.
-      await blocker.query("BEGIN");
-      const namespace = ownerFacts!.namespace.replaceAll('"', '""');
-      await blocker.query(
-        `LOCK TABLE "${namespace}".openclaw_schema_meta IN ACCESS EXCLUSIVE MODE`,
-      );
       await withAgentDatabaseStartupAdmission(async (admission) => {
         await assertOpenClawDatabasesReady({
           env: state.env,
           operation: "gateway-startup",
           config: cfg,
         });
+        await expect.poll(() => fs.existsSync(inspectionEntered), { timeout: 30_000 }).toBe(true);
         gateway = await startModelsGateway(state, cfg, "inheritauth-token");
         await gateway.server.startupSettled;
         await admission.waitForAgentPreparation("main", { env: state.env, signal });
@@ -256,7 +280,7 @@ describe.skipIf(!connection)("PostgreSQL inherited auth startup", () => {
             inheritedPublished.resolve();
           }
         });
-        await blocker.query("ROLLBACK");
+        releaseInspection();
         await withinTest(inheritedPublished.promise, signal);
         await admission.waitForAgentPreparation("owner", { env: state.env, signal });
         expect(readAgentDatabaseAdmissionRefusal("owner", { env: state.env })).toBeUndefined();
@@ -275,7 +299,8 @@ describe.skipIf(!connection)("PostgreSQL inherited auth startup", () => {
       });
     } finally {
       unsubscribe?.();
-      await blocker.query("ROLLBACK");
+      signal.removeEventListener("abort", releaseInspection);
+      releaseInspection();
       await gateway?.close();
       endpoint.closeAllConnections();
       if (endpoint.listening) {
@@ -283,14 +308,14 @@ describe.skipIf(!connection)("PostgreSQL inherited auth startup", () => {
       }
       await Promise.allSettled(providerWork);
       await closeDatabases();
-      const schemas = await blocker.query<{ nspname: string }>(
+      const schemas = await database.query<{ nspname: string }>(
         "SELECT nspname FROM pg_namespace WHERE starts_with(nspname, $1)",
         [prefix + "_"],
       );
       for (const { nspname } of schemas.rows) {
-        await blocker.query(`DROP SCHEMA "${nspname.replaceAll('"', '""')}" CASCADE`);
+        await database.query(`DROP SCHEMA "${nspname.replaceAll('"', '""')}" CASCADE`);
       }
-      await blocker.end();
+      await database.end();
       await state.cleanup();
       clearSecretsRuntimeSnapshot();
       await resetPreparedModelCatalogStateForTest();

@@ -67,6 +67,12 @@ credentials, and model preparation finish; rebuilding its transcript projections
 does not hold agent admission or another agent's preparation. Shutdown still joins
 accepted repair work, and repair failures are logged without withdrawing admission.
 
+When `agents.defaults.authInheritance.agentId` names an owner whose PostgreSQL
+database is still preparing, admitted agents start with their own credentials.
+Inherited credentials become available automatically when the owner's admission
+completes. Failed owner inspections remain visible and do not use this pending
+fallback.
+
 Health and status collection groups fast session-store reads into short work
 slices, keeping busy background preparation from delaying every individual read.
 Slow reads finish their transaction before yielding to other Gateway work.

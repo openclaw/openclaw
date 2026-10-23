@@ -90,6 +90,16 @@ it("omits only the current inherited owner's pending admission", () => {
   };
   expect(loadInheritedAuthProfileStore(read, mainDir, env)).toBeUndefined();
   expect(() => loadInheritedAuthProfileStore(read, workerDir, env)).toThrow(error);
+  const wrongOwner = new AgentDatabaseAdmissionError({ ...pending, agentId: "worker" });
+  expect(() =>
+    loadInheritedAuthProfileStore(
+      () => {
+        throw wrongOwner;
+      },
+      mainDir,
+      env,
+    ),
+  ).toThrow(wrongOwner);
 
   // A failed or replaced admission must not be hidden by an earlier pending read.
   const failed = createAgentDatabaseInspectionRefusal({
