@@ -8,3 +8,10 @@ export const CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS = 8_000;
 export function detachCodexCatalogString(value: string): string {
   return Buffer.from(value, "utf16le").toString("utf16le");
 }
+
+export function rememberCodexCatalogCursor(cursors: Set<string>, cursor: string): void {
+  cursors.add(cursor);
+  if (cursors.size > CODEX_CATALOG_MAX_ROWS) {
+    cursors.delete(cursors.values().next().value!);
+  }
+}
