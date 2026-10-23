@@ -1,7 +1,10 @@
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { createIconElement } from "../markdown-icon.ts";
 import type { PanelHostedTab } from "../panel-hosted-tabs.ts";
 import type { BrowserPanelTab } from "./browser-client.ts";
+
+registerBrowserEnglish();
 
 function tabLabel(tab: BrowserPanelTab): string {
   return tab.title.trim() || (URL.parse(tab.url)?.host ?? tab.url) || t("browser.untitledTab");

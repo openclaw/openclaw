@@ -27,12 +27,6 @@ import {
 
 const PROFILE_ID = `${PIXVERSE_PROVIDER_ID}:default`;
 
-type PixVerseAuthResult = {
-  profiles: Array<{ profileId: string; credential: ReturnType<typeof buildApiKeyCredential> }>;
-  configPatch: OpenClawConfig;
-  notes: string[];
-};
-
 function applyPixVerseConfig(
   cfg: OpenClawConfig,
   region: PixVerseApiRegion,
@@ -62,7 +56,11 @@ function applyPixVerseConfig(
   return applyAgentDefaultMediaModel(next, "video", PIXVERSE_DEFAULT_VIDEO_MODEL_REF);
 }
 
-async function runPixVerseApiKeyAuth(ctx: ProviderAuthContext): Promise<PixVerseAuthResult> {
+async function runPixVerseApiKeyAuth(ctx: ProviderAuthContext): Promise<{
+  profiles: Array<{ profileId: string; credential: ReturnType<typeof buildApiKeyCredential> }>;
+  configPatch: OpenClawConfig;
+  notes: string[];
+}> {
   const { input, mode } = await captureProviderApiKey(ctx, {
     token:
       normalizeOptionalSecretInput(ctx.opts?.pixverseApiKey) ??

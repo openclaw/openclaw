@@ -144,6 +144,12 @@ shows the reason before you try to send. This includes sandbox requirements,
 shared-session write restrictions, and read-only operator access. Your existing
 draft stays in place when access changes.
 
+In an expanded optional question, focus the panel or an answer option and use its
+displayed number shortcuts to select an answer. The displayed **Other** shortcut
+focuses the free-form answer instead. These keys preserve any unrelated composer
+draft. Other printable keys still type into the composer; editing an answer field,
+collapsed questions, and disabled controls keep their existing keyboard behavior.
+
 Saved split panes keep their conversation and arrangement. If an older saved pane
 does not identify its agent, it shows **Choose a conversation** instead of opening
 another agent's history. Select that pane, then choose **Home** or a conversation

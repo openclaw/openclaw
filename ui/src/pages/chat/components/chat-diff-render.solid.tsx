@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, onSettled, Show, untrack } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import {
   projectDiffCodeFolds,
@@ -17,6 +18,8 @@ import type { DiffFilePaths, DiffLine } from "../../../lib/chat/tool-call-diff.t
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { DiffHighlightToken } from "./chat-diff-highlight.runtime.ts";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 registerEnglishCatalog(registerChatSessionEnglish);
 

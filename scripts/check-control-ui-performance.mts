@@ -805,10 +805,10 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (moduleAttribution) {
     const { collectControlUiModuleAttribution, formatControlUiModuleAttribution } =
       await import("./lib/control-ui-module-attribution.mts");
-    if (!result.metrics.routeBoot) {
-      throw new Error("Module attribution requires a build with route preload templates");
-    }
-    attribution = collectControlUiModuleAttribution(distDir, result.metrics.routeBoot);
+    attribution = collectControlUiModuleAttribution(distDir, {
+      startup: result.metrics.startup,
+      ...result.metrics.routeBoot,
+    });
     result.report += `\n${formatControlUiModuleAttribution(attribution)}`;
   }
   if (json) {

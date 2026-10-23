@@ -55,6 +55,38 @@ for a synthetic turn and direct/nested calls to an owned plugin instance. Counts
 include the turn's outer Gateway scope. No instrumentation remains during the
 allocation or CPU passes. Raw allocation profiles accompany each result.
 
+## Subagent idle sweep
+
+`subagent-sweep-measure.ts` exercises the production sweeper with immutable synthetic
+registry rows. Run with `--runs 50` and `--runs 500`. The `settled` workload retains
+finished history; `mixed` uses 70% history, 10% live claimed runs, 10% pending
+deliveries, and 10% future archives. Unexpected effects fail the run, and exact
+records and their digest must remain unchanged.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/subagent-sweep-measure.ts \
+  --runs 500 --workload mixed --operations 4000 --yield-ms 1 \
+  --state-dir /path/to/new-state --start-at <future-epoch-ms> \
+  --gc-log /path/to/capture.log --output /path/to/result.json > /path/to/capture.log 2>&1
+```
+
+Run on the approved benchmark host with isolated state. Setup and warmup precede
+`SWEEP_READY`. Compare concurrent baseline/candidate pairs under one quiet lock
+and the shared guard, then swap interleaved CPU assignments. Discard interrupted
+pairs. The report includes sampled allocation per sweep, its projection at the
+60-second idle cadence, sweep duration, total GC/work, promotion, and event-loop
+tails. Total allocation includes timing and pacing overhead; registry allocation
+is reported separately. This is owner-level evidence, not whole-Gateway latency.
+
+Apply the campaign's paired-delta and sample-count rules. Report absolute deltas
+when signs disagree or baselines differ by more than 5×, and use a third pair for
+an inconclusive gating metric. p95 needs 200 samples per side, p99 needs 1,000;
+major GC is context below 50 collections. GC pause-percentile shifts below 1 ms
+are context, as are higher tails with at least 20% fewer collections and no rise
+in total GC. Always report both maximum pauses; the candidate maximum still
+gates above `max(50 ms, 2 × baseline maximum)`.
+
 ## Subagent maintenance capture
 
 `subagent-maintenance-capture-measure.ts` measures the production session

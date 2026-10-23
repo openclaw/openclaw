@@ -607,6 +607,66 @@ it("publishes fixed phases and known failure locations, not raw reporter content
   expectRedacted(result, /private|token|secret|password|actual|expected|success|title|https/u);
 });
 
+it("retains native desktop file and case timing without publishing private reporter fields", async () => {
+  const file = fixtureFile("desktop-timing-report-", "report.json");
+  const log = path.join(path.dirname(file), "test-node.log");
+  const report = rawTestReport();
+  Object.assign(report.testResults[0]!, { startTime: 1000, endTime: 1025 });
+  Object.assign(report.testResults[0]!.assertionResults[0]!, { duration: 25.5 });
+  await writeJson(file, report);
+  await writeFile(
+    log,
+    [
+      "private stdout",
+      "[vitest:module] " +
+        JSON.stringify({
+          file: "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
+          project: "private-project",
+          diagnostic: { duration: 72.25, collectDuration: 14.5, privateData: "private-token" },
+        }),
+    ].join("\n"),
+  );
+  const result = await readDesktopProofTestReport(file, log);
+  expect(result.files[0]?.timing).toEqual({ executionMs: 72.25, collectionMs: 14.5 });
+  expect(reportAssertion(result)?.durationMs).toBe(25.5);
+  expectRedacted(result, /private|token|stdout|project|startTime|endTime|privateData/u);
+});
+
+it("leaves unavailable or invalid desktop timing unknown without changing failure evidence", async () => {
+  const file = fixtureFile("desktop-timing-missing-", "report.json");
+  const log = path.join(path.dirname(file), "test-node.log");
+  const report = rawTestReport();
+  await writeJson(file, report);
+  const unchanged = await readDesktopProofTestReport(file);
+  expect(unchanged.files[0]?.timing).toBeNull();
+  expect(reportAssertion(unchanged)?.durationMs).toBeNull();
+  const record = {
+    file: "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
+    diagnostic: { duration: 12, collectDuration: 4 },
+  };
+  const line = "[vitest:module] " + JSON.stringify(record);
+  for (const text of [
+    "private partial stdout\n[vitest:module] {",
+    line + "\n[vitest:module] {",
+    line + "\n" + line,
+    "[vitest:module] " + JSON.stringify({ ...record, file: "/private/other.test.ts" }),
+    ...[-1, null, "private-token", 720_001].map(
+      (duration) =>
+        "[vitest:module] " +
+        JSON.stringify({ ...record, diagnostic: { duration, collectDuration: 4 } }),
+    ),
+  ]) {
+    await writeFile(log, text);
+    expect(await readDesktopProofTestReport(file, log)).toEqual(unchanged);
+  }
+  expect(await readDesktopProofTestReport(file, log + ".missing")).toEqual(unchanged);
+  for (const duration of [-1, Infinity, Number.NaN, "private-token", 720_001]) {
+    const value = rawTestReport();
+    Object.assign(value.testResults[0]!.assertionResults[0]!, { duration });
+    expect(reportAssertion(desktopProofTestReport(value))?.durationMs).toBeNull();
+  }
+});
+
 it.each([
   ["Error: Test timed out in 120000ms.\nprivate pending operation", "test-timeout"],
   ["Error: Hook timed out in 60000ms.\nprivate pending operation", "hook-timeout"],

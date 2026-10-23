@@ -1,11 +1,14 @@
 import { createMemo, Errored, Loading, Match, onCleanup, refresh, Show, Switch } from "solid-js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { isSvgImageMediaPath, isTextAttachment } from "../../../lib/media-file-extension.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { AttachmentStateCard, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
+import "./chat-audio-player.tsx";
+import "./chat-video-player.tsx";
 import type { AttachmentDownload } from "./chat-attachment-download.ts";
 import {
   isCrossOriginHttpSource,
@@ -13,8 +16,6 @@ import {
   safePlainTextAttachmentHref,
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
-import "./chat-audio-player.tsx";
-import "./chat-video-player.tsx";
 import type { FileSessionAttachment } from "./chat-file-session-attachment.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { openResolvedImage } from "./chat-message-image-open.ts";
@@ -30,6 +31,8 @@ import {
   SidebarFileMobileImageControls,
 } from "./chat-sidebar-file-mobile.tsx";
 import { ChatTextAttachment } from "./chat-text-attachment.tsx";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 type SidebarAttachmentProps = {
   content: Extract<SidebarContent, { kind: "attachment" }>;

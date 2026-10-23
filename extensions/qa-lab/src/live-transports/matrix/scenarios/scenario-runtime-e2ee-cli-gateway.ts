@@ -217,10 +217,7 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
       waitAccountId: accountId,
     },
   );
-  const cli = await createMatrixQaCliGatewayRuntime({
-    artifactLabel: "cli-setup-then-gateway-reply",
-    context,
-  });
+  const cli = await createMatrixQaCliGatewayRuntime(context);
   try {
     const { artifacts: setupArtifacts, payload: setupPayload } = await runMatrixQaSetupCliJson(
       cli,

@@ -10,7 +10,7 @@
 import { render } from "@solidjs/web";
 import { createMemo, createStore, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
-import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
+import { isReportableUpdateRun } from "../../../src/shared/update-outcome-classification.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { UpdateGitRevisions } from "../components/solid/update-git-revisions.tsx";
 import { UpdateRunView } from "../components/update-run-view.tsx";

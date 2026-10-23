@@ -6,6 +6,7 @@ import { Errored, Show, createMemo, createSignal, onCleanup, onSettled } from "s
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveSandboxHostUrl } from "../../../components/sandbox-host.ts";
 import { registerBoardEnglish } from "../../../i18n/locales/en-board.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
@@ -20,6 +21,8 @@ import { prepareHtmlPreviewAssets } from "./chat-html-preview-assets.ts";
 import { prepareHtmlPreviewLinks } from "./chat-html-preview-links.ts";
 import { HtmlPreviewLoading } from "./chat-html-preview-view.tsx";
 import type { SessionFileSource } from "./chat-sidebar-content-types.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 registerEnglishCatalog(registerBoardEnglish);

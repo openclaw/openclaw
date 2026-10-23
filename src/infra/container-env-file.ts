@@ -3,11 +3,6 @@ import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { normalizeEnvVarKey } from "./host-env-security.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
-type ContainerEnvFile = {
-  path: string;
-  cleanup: () => Promise<void>;
-};
-
 export function getContainerEnvFileEntryIssue(
   key: string,
   value: string,
@@ -24,7 +19,7 @@ export function getContainerEnvFileEntryIssue(
 /** Stages engine environment values outside process arguments until the caller-owned cleanup. */
 export async function createContainerEnvFile(
   env: Readonly<Record<string, string>>,
-): Promise<ContainerEnvFile> {
+): Promise<{ path: string; cleanup: () => Promise<void> }> {
   let content = "";
   const entries = Object.entries(env).toSorted(([left], [right]) => left.localeCompare(right));
   for (const [key, value] of entries) {

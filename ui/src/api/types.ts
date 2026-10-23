@@ -91,8 +91,6 @@ export type ChannelStatus = Omit<ChannelAccountSnapshot, "accountId" | "probe"> 
   probe?: { ok?: boolean; status?: number | string | null; error?: string | null } | null;
 };
 
-type ConfigSnapshotIssue = { path: string; message: string };
-
 export type ConfigSnapshot = {
   writeError?: ErrorShape;
   path?: string | null;
@@ -107,7 +105,7 @@ export type ConfigSnapshot = {
   resolved?: Record<string, unknown> | null;
   runtimeConfig?: Record<string, unknown> | null;
   config?: Record<string, unknown> | null;
-  issues?: ConfigSnapshotIssue[] | null;
+  issues?: { path: string; message: string }[] | null;
 };
 
 export type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
