@@ -4,8 +4,14 @@
     "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-gateway-other.tsbuildinfo"
   },
   "include": [
+    "../../src/gateway/chat-*.test.ts",
+    "../../src/gateway/chat-*.test.tsx",
+    "../../src/gateway/cron-stream-*.test.ts",
+    "../../src/gateway/cron-stream-*.test.tsx",
     "../../src/gateway/*/**/*.test.ts",
     "../../src/gateway/*/**/*.test.tsx",
+    "../../src/acp/**/*.test.ts",
+    "../../src/acp/**/*.test.tsx",
     "../../src/node-host/**/*.test.ts",
     "../../src/node-host/**/*.test.tsx",
     "../../src/worker/**/*.test.ts",

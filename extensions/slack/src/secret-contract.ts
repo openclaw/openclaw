@@ -4,12 +4,16 @@ import {
   collectSimpleChannelFieldAssignments,
   createChannelSecretContract,
   hasOwnProperty,
+  isRecord,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { hasSlackAccountCredentialsFromConfig } from "./account-configured.js";
 
 export const channelSecrets = createChannelSecretContract({
   channelKey: "slack",
   account: ["appToken", "relay.authToken", "botToken", "signingSecret", "userToken"],
   channel: ["appToken", "botToken", "relay.authToken", "signingSecret", "userToken"],
+  hasImplicitDefaultAccount: ({ context }) =>
+    hasSlackAccountCredentialsFromConfig(context.sourceConfig.channels?.slack, context.env),
   collect(params) {
     const { channel: slack, surface } = params;
     const resolveMode = (value: unknown) =>
@@ -28,12 +32,7 @@ export const channelSecrets = createChannelSecretContract({
       resolveMode(account.mode) ?? baseMode;
     const hasNestedAuthTokenOverride = (account: Record<string, unknown>) => {
       const relay = account.relay;
-      return (
-        relay !== null &&
-        typeof relay === "object" &&
-        !Array.isArray(relay) &&
-        hasOwnProperty(relay as Record<string, unknown>, "authToken")
-      );
+      return isRecord(relay) && hasOwnProperty(relay, "authToken");
     };
     for (const [field, mode, label] of [
       ["appToken", "socket", "socket"],

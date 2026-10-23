@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth-provider.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -58,6 +59,61 @@ function envTokenRef(id: string) {
 }
 
 describe("secrets runtime provider and media surfaces", () => {
+  it.each([false, true])(
+    "retains config publication when auth profiles refresh with model SecretRef: %s",
+    async (withModelRef) => {
+      const agentDir = autoCleanupTempDirs.make("openclaw-auth-only-publication-");
+      let key = "profile-old";
+      const config = asConfig({
+        agents: { entries: { main: { agentDir } } },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.test/v1",
+              apiKey: withModelRef ? envTokenRef("SYNTHETIC_MODEL_KEY") : "model-key",
+              models: [],
+            },
+          },
+        },
+      });
+      const initial = await prepareSecretsRuntimeSnapshot({
+        config,
+        env: { SYNTHETIC_MODEL_KEY: "model-key" },
+        agentDirs: [agentDir],
+        loadAuthStore: () =>
+          createAuthProfileStoreFixture({
+            "openai:default": { type: "api_key", provider: "openai", key },
+          }),
+      });
+      const { getActiveSecretsRuntimeSnapshot, refreshActiveProviderAuthRuntimeSnapshot } =
+        await import("./runtime.js");
+      const { getActiveSecretsRuntimeSnapshotRevisionState } = await import("./runtime-state.js");
+      const {
+        getRuntimeConfigSnapshot,
+        getRuntimeConfigSourceSnapshot,
+        getRuntimeConfigSnapshotMetadata,
+      } = await import("../config/runtime-snapshot.js");
+      activateSecretsRuntimeSnapshot(initial);
+      const runtime = getRuntimeConfigSnapshot();
+      const source = getRuntimeConfigSourceSnapshot();
+      const publication = getRuntimeConfigSnapshotMetadata();
+      const secretsRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+
+      key = "profile-new";
+      await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
+
+      expect(
+        getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store.profiles["openai:default"],
+      ).toMatchObject({
+        key: "profile-new",
+      });
+      expect(getActiveSecretsRuntimeSnapshotRevisionState()).toBeGreaterThan(secretsRevision);
+      expect(getRuntimeConfigSnapshot()).toBe(runtime);
+      expect(getRuntimeConfigSourceSnapshot()).toBe(source);
+      expect(getRuntimeConfigSnapshotMetadata()).toBe(publication);
+    },
+  );
+
   it("resolves talk realtime provider api key refs", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
@@ -166,6 +222,10 @@ describe("secrets runtime provider and media surfaces", () => {
         runtimeSourceConfig,
       );
 
+      const publication = (
+        await import("../config/runtime-snapshot.js")
+      ).getRuntimeConfigSnapshotMetadata();
+      const runtime = getRuntimeConfigSnapshot();
       await writeSecrets(undefined, "model-new");
       await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
 
@@ -177,6 +237,10 @@ describe("secrets runtime provider and media surfaces", () => {
       expect(active?.config.auth?.order?.openai).toEqual(["runtime-only-profile"]);
       expect(active?.config.models?.catalogRefresh?.enabled).toBe(false);
       expect(active?.config.models?.providers?.openai?.apiKey).toBe("model-new");
+      expect(getRuntimeConfigSnapshot()).not.toBe(runtime);
+      expect(
+        (await import("../config/runtime-snapshot.js")).getRuntimeConfigSnapshotMetadata(),
+      ).not.toBe(publication);
       expect(getRuntimeConfigSnapshot()).toEqual(active?.config);
       expect(getRuntimeConfigSourceSnapshot()).toEqual(runtimeSourceConfig);
       expect(listActiveDegradedSecretOwners()).toContainEqual(

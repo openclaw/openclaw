@@ -81,6 +81,8 @@ export type ControlUiBootstrapConfig = {
   automaticallyFetchFavicons?: boolean;
   /** Whether experimental speech-bubble presentation is available. */
   chatBubblesEnabled?: boolean;
+  /** Whether optional composer prediction inference is enabled. */
+  composerPredictionsEnabled?: boolean;
   seamColor?: string;
   environment?: ControlUiEnvironment;
   /** Whether this Gateway's served UI may show the Discord community invitation. */

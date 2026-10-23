@@ -37,7 +37,7 @@ export function findGitRoot(startDir: string, opts: { maxDepth?: number } = {}):
   return walkUpFrom(startDir, opts, (repoRoot) => (hasGitMarker(repoRoot) ? repoRoot : null));
 }
 
-export function readGitMetadataFile(filePath: string, limit = 1024 * 1024): Buffer {
+function readGitMetadataFile(filePath: string, limit = 1024 * 1024): Buffer {
   const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
   try {
     const stat = fs.fstatSync(fd);

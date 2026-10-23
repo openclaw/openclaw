@@ -1,16 +1,12 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { createMemo, For, Show, untrack } from "solid-js";
-import { renderHubTabs } from "../../../components/hub-tabs.ts";
+import { createMemo, For, Show } from "solid-js";
+import { HubTabs } from "../../../components/solid/hub-tabs.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-bridge.ts";
-import { DiaryEmpty, DreamingAction } from "./view-shared.tsx";
+import type { DreamingViewState } from "./dreaming.ts";
+import { DiaryEmpty, DreamingAction, DreamingRead } from "./view-shared.tsx";
 import type { DreamingProps } from "./view-types.ts";
-import {
-  ImportedInsightsContent,
-  renderWikiPreviewOverlay,
-  WikiOverviewContent,
-} from "./view-wiki.tsx";
+import { ImportedInsightsContent, WikiPreviewOverlay, WikiOverviewContent } from "./view-wiki.tsx";
 
 type DiaryEntry = {
   date: string;
@@ -178,16 +174,24 @@ function DreamDiaryContent(props: {
   );
 }
 
-export function renderDiarySection(props: DreamingProps) {
-  const state = untrack(() => props.viewState);
-  const activeDiarySubTab = createMemo(() => state.activeDiarySubTab);
+export function DreamingDiarySection(props: DreamingProps) {
+  const state = () => props.viewState;
+  const activeDiarySubTab = createMemo(() => state().activeDiarySubTab);
+  const selectedAgentId = createMemo(() => props.selectedAgentId);
+  const initialLoading = createMemo(() =>
+    activeDiarySubTab() === "dreams"
+      ? props.dreamDiaryContent === null && props.dreamDiaryLoading
+      : activeDiarySubTab() === "insights"
+        ? props.wikiImportInsights === null && props.wikiImportInsightsLoading
+        : props.wikiOverview === null && props.wikiOverviewLoading,
+  );
   const content = createMemo(() => props.dreamDiaryContent);
   const entries = createMemo(() => {
     const current = content();
     return typeof current === "string" ? parseDiaryEntries(current).toReversed() : [];
   });
-  const imports = createMemo(() => props.wikiImportInsights);
-  const overview = createMemo(() => props.wikiOverview);
+  const imports = () => props.wikiImportInsights;
+  const overview = () => props.wikiOverview;
   const labels = createMemo(() =>
     activeDiarySubTab() === "dreams"
       ? entries().map((entry) => formatDiaryChipLabel(entry.date))
@@ -196,156 +200,164 @@ export function renderDiarySection(props: DreamingProps) {
         : (overview()?.clusters.map((cluster) => cluster.label) ?? []),
   );
   const selectedPage = createMemo(() =>
-    Math.max(0, Math.min(state.diaryPage, labels().length - 1)),
+    Math.max(0, Math.min(state().diaryPage, labels().length - 1)),
   );
   const diary = createMemo(
     () =>
       ({
         dreams: {
-          error: props.dreamDiaryError,
           loading: props.dreamDiaryLoading,
           refresh: props.onRefreshDiary,
           explainer: "dreaming.wiki.dreamsExplainer",
         },
         insights: {
-          error: props.wikiImportInsightsError,
           loading: props.wikiImportInsightsLoading,
           refresh: props.onRefreshImports,
           explainer: "dreaming.wiki.insightsExplainer",
         },
         wiki: {
-          error: props.wikiOverviewError,
           loading: props.wikiOverviewLoading,
           refresh: props.onRefreshWikiOverview,
           explainer: "dreaming.wiki.wikiExplainer",
         },
       })[activeDiarySubTab()],
   );
-  const memoryWikiUnavailable = createMemo(
-    () => activeDiarySubTab() !== "dreams" && !props.memoryWikiEnabled,
-  );
+  const memoryWikiUnavailable = () => activeDiarySubTab() !== "dreams" && !props.memoryWikiEnabled;
   return (
     <section class="dreams-diary">
-      <Show
-        when={!(diary().error && !memoryWikiUnavailable())}
-        fallback={<div class="dreams-diary__error">{diary().error}</div>}
-      >
-        <div class="dreams-diary__chrome">
-          <div class="dreams-diary__header">
-            <span class="dreams-diary__title">{t("dreaming.diary.title")}</span>
-            <LitContent
-              render={() =>
-                renderHubTabs({
-                  id: "dream-diary",
-                  active: activeDiarySubTab(),
-                  tabs: [
-                    { value: "dreams", label: t("dreaming.wiki.dreamsTab") },
-                    { value: "insights", label: t("dreaming.wiki.insightsTab") },
-                    { value: "wiki", label: t("dreaming.wiki.wikiTab") },
-                  ],
-                  ariaLabel: t("dreaming.diary.title"),
-                  panelId: "dream-diary-panel",
-                  variant: "sub",
-                  onSelect: (tab) => {
-                    state.wikiPreview = null;
-                    state.activeDiarySubTab = tab;
-                    state.diaryPage = 0;
-                    props.onViewStateChange();
-                  },
-                })
+      <div class="dreams-diary__chrome">
+        <div class="dreams-diary__header">
+          <span class="dreams-diary__title">{t("dreaming.diary.title")}</span>
+          <HubTabs<DreamingViewState["activeDiarySubTab"]>
+            {...{
+              id: "dream-diary",
+              active: activeDiarySubTab(),
+              tabs: [
+                { value: "dreams", label: t("dreaming.wiki.dreamsTab") },
+                { value: "insights", label: t("dreaming.wiki.insightsTab") },
+                { value: "wiki", label: t("dreaming.wiki.wikiTab") },
+              ],
+              ariaLabel: t("dreaming.diary.title"),
+              panelId: "dream-diary-panel",
+              variant: "sub",
+              onSelect: (tab) => {
+                props.onCloseWikiPreview();
+                props.onViewStateChange((draft) => {
+                  draft.activeDiarySubTab = tab;
+                  draft.diaryPage = 0;
+                });
+              },
+            }}
+          />
+          <DreamingAction
+            label={
+              memoryWikiUnavailable()
+                ? t(props.configOpening ? "common.loading" : "dreaming.wiki.howToEnable")
+                : activeDiarySubTab() === "dreams"
+                  ? t(diary().loading ? "dreaming.diary.reloading" : "dreaming.diary.reload")
+                  : diary().loading
+                    ? "Reloading…"
+                    : "Reload"
+            }
+            disabled={
+              memoryWikiUnavailable()
+                ? props.configOpening || !props.access.canOpenConfig
+                : props.modeSaving || diary().loading
+            }
+            busy={memoryWikiUnavailable() && props.configOpening}
+            onClick={() => {
+              props.onViewStateChange((draft) => {
+                draft.diaryPage = 0;
+              });
+              if (memoryWikiUnavailable()) {
+                void props.onOpenConfig();
+              } else {
+                diary().refresh();
               }
-            />
-            <DreamingAction
-              label={
-                memoryWikiUnavailable()
-                  ? t("dreaming.wiki.howToEnable")
-                  : activeDiarySubTab() === "dreams"
-                    ? t(diary().loading ? "dreaming.diary.reloading" : "dreaming.diary.reload")
-                    : diary().loading
-                      ? "Reloading…"
-                      : "Reload"
-              }
-              disabled={
-                memoryWikiUnavailable()
-                  ? !props.access.canOpenConfig
-                  : props.modeSaving || diary().loading
-              }
-              onClick={() => {
-                state.diaryPage = 0;
-                if (memoryWikiUnavailable()) {
-                  props.onOpenConfig();
-                } else {
-                  diary().refresh();
-                }
-              }}
-            />
-          </div>
-          <p class="dreams-diary__explainer">{t(diary().explainer)}</p>
-          <Show when={!memoryWikiUnavailable() && labels().length > 0}>
-            <DiaryNavigation
-              labels={labels()}
-              selectedPage={selectedPage()}
-              onSelect={(index) => {
-                state.diaryPage = index;
-                props.onViewStateChange();
-              }}
-            />
-          </Show>
+            }}
+          />
         </div>
-        <div
-          id="dream-diary-panel"
-          role="tabpanel"
-          aria-labelledby={`dream-diary-tab-${activeDiarySubTab()}`}
-        >
-          <Show
-            when={!memoryWikiUnavailable()}
-            fallback={
-              <div class="dreams-diary__empty">
-                <div class="dreams-diary__empty-text">{t("dreaming.wiki.unavailable")}</div>
-                <div class="dreams-diary__empty-hint">
-                  {t("dreaming.wiki.unavailablePluginPrefix")} <code>memory-wiki</code>{" "}
-                  {t("dreaming.wiki.unavailablePluginSuffix")}
-                </div>
-                <div class="dreams-diary__empty-hint">
-                  {t("dreaming.wiki.enablePrefix")}{" "}
-                  <code>plugins.entries.memory-wiki.enabled = true</code>
-                  {t("dreaming.wiki.enableSuffix")}
-                </div>
-                <div class="dreams-diary__empty-actions">
-                  <DreamingAction
-                    label={t("dreaming.wiki.openConfig")}
-                    disabled={!props.access.canOpenConfig}
-                    onClick={() => props.onOpenConfig()}
-                  />
-                </div>
+        <p class="dreams-diary__explainer">{t(diary().explainer)}</p>
+        <Show when={!memoryWikiUnavailable() && labels().length > 0}>
+          <DiaryNavigation
+            labels={labels()}
+            selectedPage={selectedPage()}
+            onSelect={(index) => {
+              props.onViewStateChange((draft) => {
+                draft.diaryPage = index;
+              });
+            }}
+          />
+        </Show>
+      </div>
+      <div
+        id="dream-diary-panel"
+        role="tabpanel"
+        aria-labelledby={`dream-diary-tab-${activeDiarySubTab()}`}
+      >
+        <Show
+          when={!memoryWikiUnavailable()}
+          fallback={
+            <div class="dreams-diary__empty">
+              <div class="dreams-diary__empty-text">{t("dreaming.wiki.unavailable")}</div>
+              <div class="dreams-diary__empty-hint">
+                {t("dreaming.wiki.unavailablePluginPrefix")} <code>memory-wiki</code>{" "}
+                {t("dreaming.wiki.unavailablePluginSuffix")}
               </div>
+              <div class="dreams-diary__empty-hint">
+                {t("dreaming.wiki.enablePrefix")}{" "}
+                <code>plugins.entries.memory-wiki.enabled = true</code>
+                {t("dreaming.wiki.enableSuffix")}
+              </div>
+              <div class="dreams-diary__empty-actions">
+                <DreamingAction
+                  label={t(props.configOpening ? "common.loading" : "dreaming.wiki.openConfig")}
+                  disabled={props.configOpening || !props.access.canOpenConfig}
+                  busy={props.configOpening}
+                  onClick={() => void props.onOpenConfig()}
+                />
+              </div>
+            </div>
+          }
+        >
+          <DreamingRead
+            on={[selectedAgentId(), activeDiarySubTab(), initialLoading()]}
+            errorClass="dreams-diary__error"
+            fallback={
+              <DiaryEmpty
+                message={
+                  activeDiarySubTab() === "dreams"
+                    ? t("dreaming.diary.reloading")
+                    : activeDiarySubTab() === "insights"
+                      ? t("dreaming.wiki.loadingInsights")
+                      : t("dreaming.wiki.loadingWiki")
+                }
+              />
             }
           >
             {activeDiarySubTab() === "dreams" ? (
               <DreamDiaryContent
-                entries={entries()}
+                entries={parseDiaryEntries(props.readDiary() ?? "").toReversed()}
                 selectedPage={selectedPage()}
-                missing={content() === null}
+                missing={props.readDiary() === null}
               />
             ) : activeDiarySubTab() === "insights" ? (
               <ImportedInsightsContent
                 owner={props}
-                data={imports()}
+                data={props.readImports()}
                 selectedPage={selectedPage()}
-                loading={props.wikiImportInsightsLoading}
               />
             ) : (
               <WikiOverviewContent
                 owner={props}
-                data={overview()}
+                data={props.readOverview()}
                 selectedPage={selectedPage()}
-                loading={props.wikiOverviewLoading}
               />
             )}
-          </Show>
-        </div>
-        {renderWikiPreviewOverlay(props)}
-      </Show>
+          </DreamingRead>
+        </Show>
+      </div>
+      <WikiPreviewOverlay {...props} />
     </section>
   );
 }

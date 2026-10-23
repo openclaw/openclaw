@@ -40,9 +40,9 @@ function fixture() {
     includePluginCatalogs: false,
     pluginMetadataSnapshot: metadataSnapshot,
   });
-  const createStores = vi.fn(() => {
+  const createStores = vi.fn((publishedModels?: ReadonlyMap<string, readonly Model[]>) => {
     const authStorage = AuthStorage.inMemory();
-    return { authStorage, modelRegistry: template.fork(authStorage) };
+    return { authStorage, modelRegistry: template.fork(authStorage, publishedModels) };
   });
   const source: PreparedModelRuntimeSnapshot = {
     agentDir: "unused:agent",

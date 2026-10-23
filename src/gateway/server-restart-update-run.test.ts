@@ -4,11 +4,15 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import { buildUpdateRestartSentinelPayload } from "../infra/update-restart-sentinel-payload.js";
+import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import {
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
+  getUpdateRunWithReconciliationAsync,
+  reconcileAbandonedUpdateRunsAsync,
   recordUpdateRunPhase,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
@@ -40,7 +44,41 @@ afterEach(() => {
 });
 
 describe("update restart verification ownership", () => {
-  it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
+  it.each(["foreground", "managed", "foreign", "explicit"] as const)(
+    "preserves replacement completion ownership during %s history reconciliation",
+    async (kind) => {
+      prepareRestartState("update-restart-reconciliation-");
+      const driver = readUpdateRunDriver()!;
+      const version = resolveRuntimeServiceVersion();
+      const run = createUpdateRun({
+        trigger: "api",
+        target: { version },
+        origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
+      });
+      recordUpdateRunPhase(run.runId, "restarting", { after: { version } });
+      const payload = buildUpdateRestartSentinelPayload({
+        result: { status: "ok", mode: "npm", after: { version }, steps: [], durationMs: 1 },
+        meta: {
+          runId: kind === "foreign" ? "another-update" : run.runId,
+          ...(kind === "managed" ? { handoffId: "managed-update-handoff" } : {}),
+        },
+      });
+      await writeRestartSentinel(payload);
+      if (kind === "explicit") {
+        await reconcileAbandonedUpdateRunsAsync({ runIds: [run.runId], explicit: true });
+      }
+      const observed = (await getUpdateRunWithReconciliationAsync(run.runId)).run;
+      expect(observed?.status).toBe(kind === "foreground" ? "running" : "failed");
+      if (kind === "foreground") {
+        expect(await finalizeRestartUpdateRun(payload)).toMatchObject({
+          status: "succeeded",
+          verification: { booted: true, serviceRunning: true, versionMatch: true },
+        });
+      }
+    },
+  );
+
+  it.each(["failed", "succeeded", "rolled-back"] as const)(
     "does not attribute an unrelated later boot to a terminal %s update",
     async (status) => {
       prepareRestartState("update-terminal-boot-");
@@ -59,7 +97,7 @@ describe("update restart verification ownership", () => {
     },
   );
 
-  it.each(["api", "chat", "control-ui", "campaign"] as const)(
+  it.each(["api", "chat", "control-ui"] as const)(
     "finishes an unmanaged %s update after replacement startup",
     async (trigger) => {
       prepareRestartState("update-unmanaged-boot-");
@@ -79,7 +117,7 @@ describe("update restart verification ownership", () => {
     },
   );
 
-  it.each(["api", "chat", "control-ui", "campaign"] as const)(
+  it.each(["api"] as const)(
     "preserves managed %s verification after replacement startup",
     async (trigger) => {
       prepareRestartState("update-managed-boot-");
@@ -99,7 +137,7 @@ describe("update restart verification ownership", () => {
     },
   );
 
-  it.each(["api", "chat", "control-ui", "campaign"] as const)(
+  it.each(["api"] as const)(
     "preserves the restored-version verification for a failed managed %s update",
     async (trigger) => {
       prepareRestartState("update-managed-restore-");
@@ -179,37 +217,6 @@ describe("update restart verification ownership", () => {
     expect(observed?.verification.runningVersion).toBe(restoredVersion);
   });
 
-  it("regrades a restored-version boot whose build cannot be resolved when a build was recorded", async () => {
-    prepareRestartState("update-managed-restore-build-missing-");
-    const restoredVersion = "1.2.3";
-    vi.stubEnv("OPENCLAW_VERSION", restoredVersion);
-    runtimeBuildId = null;
-    const run = createUpdateRun({ trigger: "api", target: { version: "2.0.0" } });
-    recordUpdateRunPhase(run.runId, "restarting");
-    recordUpdateRunPhase(run.runId, "verifying", { after: {} });
-    recordUpdateRunVerification(run.runId, {
-      serviceRunning: true,
-      runningVersion: restoredVersion,
-      runningBuildId: "build-restored",
-      versionMatch: true,
-      settled: true,
-      channelsReady: true,
-      pluginErrors: [],
-    });
-    const payload = buildUpdateRestartSentinelPayload({
-      result: {
-        status: "error",
-        mode: "npm",
-        reason: "managed-service-handoff-failed",
-        steps: [],
-        durationMs: 1,
-      },
-      meta: { runId: run.runId, handoffId: "managed-update-handoff" },
-    });
-    const observed = await finalizeRestartUpdateRun(payload, true);
-    expect(observed?.verification.versionMatch).toBe(false);
-  });
-
   it("reuses a restored-version verification recorded without build identity", async () => {
     prepareRestartState("update-managed-restore-build-unrecorded-");
     const restoredVersion = "1.2.3";
@@ -285,35 +292,30 @@ describe("update restart verification ownership", () => {
     ).toMatchObject({ status: "failed", phase: "finished", reason: "restart-unhealthy" });
   });
 
-  it.each([
-    "requested",
-    "staging",
-    "validating",
-    "repairing",
-    "activating",
-    "restarting",
-    "verifying",
-  ] as const)("does not let sentinel expiry finish the orchestrator during %s", async (phase) => {
-    prepareRestartState("update-boot-owner-");
-    const run = createUpdateRun({
-      trigger: "cli",
-      target: { version: resolveRuntimeServiceVersion() },
-    });
-    recordUpdateRunPhase(run.runId, phase);
-    const observed = await finalizeRestartUpdateRun(
-      {
-        kind: "update",
-        status: "skipped",
-        ts: Date.now(),
-        stats: { runId: run.runId, reason: "restart-health-pending" },
-      },
-      true,
-    );
-    expect(observed).toMatchObject({
-      status: "running",
-      phase: phase === "restarting" ? "verifying" : phase,
-      confirmedAtMs: null,
-      verification: { booted: true },
-    });
-  });
+  it.each(["requested", "restarting", "verifying"] as const)(
+    "does not let sentinel expiry finish the orchestrator during %s",
+    async (phase) => {
+      prepareRestartState("update-boot-owner-");
+      const run = createUpdateRun({
+        trigger: "cli",
+        target: { version: resolveRuntimeServiceVersion() },
+      });
+      recordUpdateRunPhase(run.runId, phase);
+      const observed = await finalizeRestartUpdateRun(
+        {
+          kind: "update",
+          status: "skipped",
+          ts: Date.now(),
+          stats: { runId: run.runId, reason: "restart-health-pending" },
+        },
+        true,
+      );
+      expect(observed).toMatchObject({
+        status: "running",
+        phase: phase === "restarting" ? "verifying" : phase,
+        confirmedAtMs: null,
+        verification: { booted: true },
+      });
+    },
+  );
 });

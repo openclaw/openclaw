@@ -1,4 +1,3 @@
-// Imessage plugin module binds provider message ids to one authorized chat.
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { ResolvedIMessageAccount } from "./accounts.js";
 import { chatContextFromIMessageTarget } from "./chat-context.js";
@@ -62,7 +61,6 @@ export async function resolveAuthorizedIMessageReplyReference(params: {
   }
   const chatContext = chatContextFromIMessageTarget(params.target, params.service);
   const messageId = await resolveIMessageMessageId(rawReplyToId, {
-    requireKnownShortId: true,
     chatContext,
   });
   await authorizeIMessageResourceReference({

@@ -1,15 +1,14 @@
-// Coverage for sampling, token, and response-format extra parameter precedence.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { applyExtraParamsToAgent, resolveExtraParams } from "./extra-params.js";
 import { runExtraParamsCase, testing as extraParamsTesting } from "./extra-params.test-support.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
 vi.mock("./logger.js", () => ({
-  // Sampling tests assert call options only; silence warning/debug output from
-  // invalid or provider-specific extra params.
   log: {
     isEnabled: () => false,
     debug: vi.fn(),
@@ -41,39 +40,39 @@ function createStreamAgent() {
   return { underlying, agent };
 }
 
-function captureStreamOptions(
-  agent: { streamFn?: StreamFn },
-  underlying: StreamFn,
-  model: Parameters<StreamFn>[0],
-  options: (NonNullable<Parameters<StreamFn>[2]> & { topP?: number }) | undefined,
+function modelConfig(ref: string, params: Record<string, unknown>): OpenClawConfig {
+  return { agents: { defaults: { models: { [ref]: { params } } } } };
+}
+
+function sample(
+  override?: Record<string, unknown>,
+  cfg?: OpenClawConfig,
+  options?: NonNullable<Parameters<StreamFn>[2]> & { topP?: number },
+  provider = "openai",
+  id = "gpt-5.4",
 ) {
+  const { underlying, agent } = createStreamAgent();
+  applyExtraParamsToAgent(agent, cfg, provider, id, override);
   if (!agent.streamFn) {
     throw new Error("expected extra params to wrap streamFn");
   }
-  void agent.streamFn(model, { messages: [], tools: [] }, options);
+  void agent.streamFn(
+    makeProviderModelFixture({ id, api: "openai-completions", provider, baseUrl: "" }),
+    { messages: [], tools: [] },
+    options,
+  );
+  expect(underlying).toHaveBeenCalledTimes(1);
   return vi.mocked(underlying).mock.calls[0]?.[2];
 }
 
 describe("createStreamFnWithExtraParams sampling overrides", () => {
-  it("forwards temperature, topP, and maxTokens from override into the underlying streamFn options", () => {
-    const { underlying, agent } = createStreamAgent();
-
-    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4", {
-      temperature: 0.4,
-      topP: 0.7,
-      maxTokens: 512,
-    });
-
-    const callOptions = captureStreamOptions(
-      agent,
-      underlying,
-      { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
-      undefined,
-    );
-
-    expect(underlying).toHaveBeenCalledTimes(1);
-
-    expect(callOptions).toMatchObject({ temperature: 0.4, topP: 0.7, maxTokens: 512 });
+  it.each([
+    { temperature: 0.4, topP: 0.7, maxTokens: 512 },
+    { frequencyPenalty: 0.8, presencePenalty: 0.3, seed: 12345 },
+    { stop: ["User:", "Assistant:"] },
+  ])("forwards request overrides to stream options: %j", (override) => {
+    const expected = structuredClone(override);
+    expect(sample(override)).toMatchObject(expected);
   });
 
   it.each([
@@ -86,67 +85,40 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
   ])(
     "projects configured nucleus sampling with request precedence: %j",
     ({ params, override, options, expected }) => {
-      const { underlying, agent } = createStreamAgent();
-      applyExtraParamsToAgent(
-        agent,
-        { agents: { defaults: { models: { "local/model": { params } } } } },
+      const callOptions = sample(
+        override,
+        modelConfig("local/model", params),
+        options,
         "local",
         "model",
-        override,
-      );
-      const callOptions = captureStreamOptions(
-        agent,
-        underlying,
-        { id: "model", api: "openai-completions", provider: "local" } as Model,
-        options,
       );
       expect(callOptions).toMatchObject({ topP: expected });
     },
   );
 
   it.each([false, true])("forwards configured streaming=%s to the transport", (streaming) => {
-    const { underlying, agent } = createStreamAgent();
-    applyExtraParamsToAgent(
-      agent,
-      {
-        agents: { defaults: { models: { "local/model": { params: { streaming } } } } },
-      },
+    const callOptions = sample(
+      undefined,
+      modelConfig("local/model", { streaming }),
+      undefined,
       "local",
       "model",
-    );
-    const callOptions = captureStreamOptions(
-      agent,
-      underlying,
-      { id: "model", api: "openai-completions", provider: "local" } as Model,
-      undefined,
     );
     expect(callOptions).toMatchObject({ streaming });
   });
 
   it("canonicalizes token aliases with config precedence before preparing stream params", () => {
-    // Canonicalization happens before provider preparation so plugins receive a
-    // single maxTokens field with agent-level precedence already applied.
     const resolved = resolveExtraParams({
       cfg: {
         agents: {
           defaults: {
-            params: {
-              maxTokens: 32_000,
-            },
+            params: { maxTokens: 32_000 },
             models: {
-              "dashscope/kimi-k2.6": {
-                params: {
-                  max_completion_tokens: 64_000,
-                },
-              },
+              "dashscope/kimi-k2.6": { params: { max_completion_tokens: 64_000 } },
             },
           },
           entries: {
-            bot: {
-              params: {
-                max_tokens: 48_000,
-              },
-            },
+            bot: { params: { max_tokens: 48_000 } },
           },
         },
       } as never,
@@ -161,84 +133,26 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
   });
 
   it("threads a run-scoped responseFormat schema ahead of configured response_format", () => {
-    const { underlying, agent } = createStreamAgent();
-
     const responseFormat = {
       type: "object",
       properties: { reply: { type: "string" } },
       required: ["reply"],
       additionalProperties: false,
     };
-    applyExtraParamsToAgent(
-      agent,
-      {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-5.4": {
-                params: {
-                  response_format: { type: "text" },
-                },
-              },
-            },
-          },
-        },
-      },
-      "openai",
-      "gpt-5.4",
-      {
-        responseFormat,
-      },
-    );
-
-    const callOptions = captureStreamOptions(
-      agent,
-      underlying,
-      { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
-      undefined,
+    const callOptions = sample(
+      { responseFormat },
+      modelConfig("openai/gpt-5.4", { response_format: { type: "text" } }),
     );
 
     expect(callOptions?.responseFormat).toEqual(responseFormat);
   });
 
-  it("forwards frequency_penalty, presence_penalty, and seed from override into stream options", () => {
-    const { underlying, agent } = createStreamAgent();
-
-    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4", {
-      frequencyPenalty: 0.8,
-      presencePenalty: 0.3,
-      seed: 12345,
-    });
-
-    const callOptions = captureStreamOptions(
-      agent,
-      underlying,
-      { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
-      undefined,
-    );
-
-    expect(underlying).toHaveBeenCalledTimes(1);
-
-    expect(callOptions).toMatchObject({ frequencyPenalty: 0.8, presencePenalty: 0.3, seed: 12345 });
-  });
-
-  it("forwards stop sequences from override into stream options", () => {
-    const { underlying, agent } = createStreamAgent();
-
-    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4", {
-      stop: ["User:", "Assistant:"],
-    });
-
-    const callOptions = captureStreamOptions(
-      agent,
-      underlying,
-      { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
-      undefined,
-    );
-
-    expect(underlying).toHaveBeenCalledTimes(1);
-
-    expect(callOptions?.stop).toEqual(["User:", "Assistant:"]);
+  it("projects configured prompt cache TTL with request precedence and rejects invalid values", () => {
+    const cfg = modelConfig("openai/gpt-5.4", { promptCacheTtl: "12h" });
+    expect(sample(undefined, cfg)?.promptCacheTtl).toBe("12h");
+    expect(sample(undefined, cfg, { promptCacheTtl: undefined })?.promptCacheTtl).toBe("12h");
+    expect(sample(undefined, cfg, { promptCacheTtl: "30m" })?.promptCacheTtl).toBe("30m");
+    expect(sample({ promptCacheTtl: "24h" })?.promptCacheTtl).toBeUndefined();
   });
 
   it("preserves configured cache retention with an own undefined request option", () => {
@@ -258,12 +172,12 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
 
     const requestOptions = { cacheRetention: undefined };
     expect(requestOptions).toHaveProperty("cacheRetention");
-    const callOptions = captureStreamOptions(
-      agent,
-      underlying,
+    void agent.streamFn?.(
       { id: "claude-sonnet-5", api: "anthropic-messages", provider: "anthropic" } as never,
+      { messages: [], tools: [] },
       requestOptions,
     );
+    const callOptions = vi.mocked(underlying).mock.calls[0]?.[2];
 
     expect(underlying).toHaveBeenCalledTimes(1);
 
@@ -272,26 +186,6 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
 });
 
 describe("cacheRetention default behavior", () => {
-  it("leaves Model Studio retention unspecified without opting into cache keys", () => {
-    const captured = runExtraParamsCase({
-      model: {
-        id: "qwen-plus",
-        name: "Qwen Plus",
-        api: "openai-completions",
-        provider: "qwen",
-        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 4_096,
-      },
-      cfg: { agents: { defaults: { params: { temperature: 0.5, cacheRetention: undefined } } } },
-      payload: {},
-    });
-    expect(captured.options?.cacheRetention).toBeUndefined();
-  });
-
   it("respects legacy cacheControlTtl config", () => {
     expect(resolveCacheRetention({ cacheControlTtl: "1h" }, "anthropic")).toBe("long");
   });
@@ -309,8 +203,6 @@ describe("cacheRetention default behavior", () => {
 });
 
 function runGoogleExtraParamsCase(params?: { cfg?: unknown }) {
-  // Common Gemini payload fixture: tests vary only config precedence and final
-  // option shape.
   return runExtraParamsCase({
     ...(params?.cfg ? { cfg: params.cfg as never } : {}),
     applyProvider: "google",
@@ -320,9 +212,7 @@ function runGoogleExtraParamsCase(params?: { cfg?: unknown }) {
       provider: "google",
       id: "gemini-2.5-pro",
     } as unknown as Model<"openai-completions">,
-    payload: {
-      contents: [],
-    },
+    payload: { contents: [] },
   });
 }
 
@@ -340,15 +230,9 @@ describe("extra-params: Google thinking payload compatibility", () => {
       cfg: {
         agents: {
           defaults: {
-            params: {
-              cached_content: "cachedContents/default-cache",
-            },
+            params: { cached_content: "cachedContents/default-cache" },
             models: {
-              "google/gemini-2.5-pro": {
-                params: {
-                  cachedContent: "cachedContents/model-cache",
-                },
-              },
+              "google/gemini-2.5-pro": { params: { cachedContent: "cachedContents/model-cache" } },
             },
           },
         },

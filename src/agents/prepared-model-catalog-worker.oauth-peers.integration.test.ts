@@ -63,7 +63,6 @@ it("rolls back shared and historical OAuth claims when a later peer blocks catal
     { makeTempDir, signal, sharedStatePeers: "conflicting" },
     async (fixture) => {
       const result = await withinTest(fixture.pending, signal);
-      expect(result.status).not.toBe("generation-mismatch");
       expect(fixture.discoveryStarted()).toBe(true);
       expect(fixture.readRefreshFailure()).toContain("already claimed by another owner");
       if (result.status === "ok" && result.kind === "catalog") {

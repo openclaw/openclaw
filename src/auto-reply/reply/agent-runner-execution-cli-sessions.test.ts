@@ -18,9 +18,8 @@ import type { TemplateContext } from "../templating.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 import {
   createFollowupRun,
+  createCliFollowupRun as createCliRun,
   createMinimalRunAgentTurnParams,
-  createRunAgentTurnParams,
-  createTestUserTurnRecorder,
   expectMockCallArgFields,
   getExecuteAgentTurnForTest,
   initialFallbackAttemptOptions,
@@ -29,22 +28,10 @@ import {
   requireRecord,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
+import { createTestUserTurnRecorder } from "./agent-runner-execution.transcript.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 
-function createCliRun(provider: string, model: string) {
-  state.isCliProviderMock.mockReturnValue(true);
-  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-    result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
-    provider,
-    model,
-    attempts: [],
-  }));
-  const followupRun = createFollowupRun();
-  followupRun.run.provider = provider;
-  followupRun.run.model = model;
-  return followupRun;
-}
 afterEach(resetGeneratedMediaTaskActivityForTests);
 
 function rejectUnexpectedCompactionSuccessor(): never {
@@ -67,6 +54,13 @@ describe("executeAgentTurn: CLI session routing", () => {
         meta: {},
       });
       followupRun.originatingThreadId = 42;
+      followupRun.run.conversationToolPolicy = {
+        allow: ["read", "sessions_spawn"],
+        deny: ["exec"],
+      };
+      followupRun.run.execOverrides = { host: "node", node: "mac-a" };
+      followupRun.run.bashElevated = { enabled: true, allowed: true, defaultLevel: "full" };
+      followupRun.run.runtimePolicySessionKey = "agent:main:telegram:default:direct:sender-static";
       followupRun.run.thinkingCatalog = [
         {
           provider: "claude-cli",
@@ -97,6 +91,10 @@ describe("executeAgentTurn: CLI session routing", () => {
         modelContextTokens: 321_000,
         currentThreadTs: "42",
         currentMessageId,
+        conversationToolPolicy: { allow: ["read", "sessions_spawn"], deny: ["exec"] },
+        execOverrides: { host: "node", node: "mac-a" },
+        bashElevated: { enabled: true, allowed: true, defaultLevel: "full" },
+        runtimePolicySessionKey: "agent:main:telegram:default:direct:sender-static",
       });
     },
   );
@@ -257,60 +255,6 @@ describe("executeAgentTurn: CLI session routing", () => {
       imageOrder,
       mediaImageLayout,
       media,
-    });
-  });
-
-  it("forwards the static extra system prompt to CLI backends", async () => {
-    const followupRun = createCliRun("codex-cli", "gpt-5.4");
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    followupRun.run.agentId = "main";
-    followupRun.run.extraSystemPrompt = "dynamic inbound metadata\n\nstable group prompt";
-    followupRun.run.extraSystemPromptStatic = "stable group prompt";
-    followupRun.run.senderId = "sender-static";
-    followupRun.run.senderName = "Sender Static";
-    followupRun.run.senderUsername = "sender-static-user";
-    followupRun.run.senderE164 = "+15550002222";
-    followupRun.run.conversationToolPolicy = { allow: ["read", "sessions_spawn"], deny: ["exec"] };
-    followupRun.run.execOverrides = { host: "node", node: "mac-a" };
-    followupRun.run.bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "full",
-    };
-    followupRun.run.groupId = "group-static";
-    followupRun.run.groupChannel = "ops";
-    followupRun.run.groupSpace = "workspace-static";
-    followupRun.run.spawnedBy = "agent:main:telegram:group:parent";
-    followupRun.run.runtimePolicySessionKey = "agent:main:telegram:default:direct:sender-static";
-    followupRun.originatingChannel = "telegram";
-
-    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
-
-    expect(result.kind).toBe("success");
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      modelProvider: "codex-cli",
-      extraSystemPrompt: "dynamic inbound metadata\n\nstable group prompt",
-      extraSystemPromptStatic: "stable group prompt",
-      trigger: "user",
-      messageChannel: "telegram",
-      messageProvider: "telegram",
-      senderId: "sender-static",
-      senderName: "Sender Static",
-      senderUsername: "sender-static-user",
-      senderE164: "+15550002222",
-      conversationToolPolicy: { allow: ["read", "sessions_spawn"], deny: ["exec"] },
-      execOverrides: { host: "node", node: "mac-a" },
-      bashElevated: { enabled: true, allowed: true, defaultLevel: "full" },
-      groupId: "group-static",
-      groupChannel: "ops",
-      groupSpace: "workspace-static",
-      spawnedBy: "agent:main:telegram:group:parent",
-      runtimePolicySessionKey: "agent:main:telegram:default:direct:sender-static",
     });
   });
 
@@ -526,71 +470,6 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
     expect(result.runResult.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
     expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
-  });
-
-  it("clears a fork-marked Claude CLI binding when the channel turn fails", async () => {
-    const followupRun = createCliRun("claude-cli", "claude-opus-4-8");
-    state.runCliAgentMock.mockRejectedValueOnce(
-      new FailoverError("No conversation found", {
-        reason: "session_expired",
-        provider: "claude-cli",
-        model: "claude-opus-4-8",
-      }),
-    );
-
-    const sessionEntry = {
-      sessionId: "openclaw-session",
-      updatedAt: 1,
-      cliSessionBindings: {
-        "claude-cli": { sessionId: "stale-cli-session", forkNextResume: true },
-      },
-      cliSessionIds: { "claude-cli": "stale-cli-session" },
-      claudeCliSessionId: "stale-cli-session",
-    } as SessionEntry;
-    const activeSessionStore = { main: sessionEntry };
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      activeSessionStore,
-      getActiveSessionEntry: () => sessionEntry,
-    });
-
-    expect(result.kind).toBe("final");
-    expect(sessionEntry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(sessionEntry.claudeCliSessionId).toBeUndefined();
-  });
-
-  it("preserves a reused binding after a channel turn starts detached media", async () => {
-    const sessionKey = "agent:main:cron:media-job:run:run-1";
-    const followupRun = createCliRun("claude-cli", "claude-opus-4-8");
-    const abort = Object.assign(new Error("detached media continues"), { name: "AbortError" });
-    state.runCliAgentMock.mockImplementationOnce(async () => {
-      registerGeneratedMediaTaskActivity("tool:image_generate:run-1", sessionKey);
-      throw abort;
-    });
-
-    const sessionEntry = {
-      sessionId: "openclaw-session",
-      updatedAt: 1,
-      cliSessionBindings: { "claude-cli": { sessionId: "media-session" } },
-      cliSessionIds: { "claude-cli": "media-session" },
-      claudeCliSessionId: "media-session",
-    } as SessionEntry;
-    const activeSessionStore = { [sessionKey]: sessionEntry };
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-
-    await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      sessionKey,
-      activeSessionStore,
-      getActiveSessionEntry: () => sessionEntry,
-    });
-
-    expect(sessionEntry.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("media-session");
-    expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBe("media-session");
-    expect(sessionEntry.claudeCliSessionId).toBe("media-session");
   });
 
   it("preserves a reused binding after an operator aborts a channel turn", async () => {

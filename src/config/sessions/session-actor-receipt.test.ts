@@ -1,10 +1,18 @@
+import assert from "node:assert/strict";
+import { serialize } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionActorHotState } from "./session-actor-contract.js";
 import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
-import { withActor, type Mutation } from "./session-actor-worker.test-support.js";
+import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
+
+// mock-isolation: Count real receipt encodings separately from residency/transport work.
+vi.mock("node:v8", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:v8")>();
+  return { ...actual, serialize: vi.fn(actual.serialize) };
+});
 
 // mock-isolation: The fixture owns its database lifetime without background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -13,8 +21,35 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 // mock-isolation: The fixture controls archival rather than launching disk-budget maintenance.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
-it("publishes only newly committed events with exact stored UTF-8 sizes, including noncanonical JSON", async () => {
-  await withActor(async (f) => {
+async function append(f: Fixture, eventJson: string, expected?: SessionActorHotState["version"]) {
+  const command: Mutation = {
+    type: "session.actor.appendTranscriptEvent",
+    input: {
+      target: f.target,
+      sessionId: f.scope.sessionId,
+      lifecycleRevision: null,
+      commandId: "append",
+      phaseId: "turn",
+      expected,
+      eventJson,
+    },
+  };
+  await f.prepare(command);
+  vi.mocked(serialize).mockClear();
+  const outcome = f.mutate(command);
+  assert(outcome.kind === "committed", "Expected transcript append commit");
+  return { command, outcome };
+}
+
+function expectRetry(f: Fixture, command: Mutation) {
+  expect(f.mutate(command)).toMatchObject({
+    kind: "committed",
+    receipt: { transcript: { appendedEvents: [] } },
+  });
+}
+
+it("publishes only newly committed events with exact stored UTF-8 sizes, including noncanonical JSON", () =>
+  withActor(async (f) => {
     runSqliteImmediateTransactionSync(f.database.db, () => {
       appendTranscriptEventsInTransaction(f.database, f.scope, [
         {
@@ -35,30 +70,14 @@ it("publishes only newly committed events with exact stored UTF-8 sizes, includi
       modelId: "fixture-🦞",
     };
     const eventJson = JSON.stringify(event, null, 2);
-    const command: Mutation = {
-      type: "session.actor.appendTranscriptEvent",
-      input: {
-        target: f.target,
-        expected: f.read().version,
-        commandId: "model-change",
-        phaseId: "model",
-        sessionId: f.scope.sessionId,
-        lifecycleRevision: null,
-        eventJson,
-      },
-    };
-    await f.prepare(command);
-    const first = f.mutate(command);
-    if (first.kind !== "committed") {
-      throw new Error("Expected transcript append commit");
-    }
+    const { command, outcome: first } = await append(f, eventJson, f.read().version);
     expect(first.receipt.transcript.appendedEvents).toEqual([
       { rawSeq: 1, event, serializedBytes: Buffer.byteLength(eventJson) + 1 },
     ]);
     expect(readTranscriptEventRows(f.database, f.scope.sessionId).at(-1)?.eventJson).toBe(
       eventJson,
     );
-    const retry = f.mutate({
+    expectRetry(f, {
       ...command,
       input: {
         ...command.input,
@@ -66,12 +85,7 @@ it("publishes only newly committed events with exact stored UTF-8 sizes, includi
         commandId: "model-change-retry",
       },
     });
-    expect(retry).toMatchObject({
-      kind: "committed",
-      receipt: { transcript: { appendedEvents: [] } },
-    });
-  });
-});
+  }));
 
 function hot(rawSeq: number, generation = "generation"): SessionActorHotState {
   return {
@@ -124,4 +138,66 @@ it("detaches complete append deltas and omits unavailable, incomplete, or replac
   expect(create(hot(3))).toBeUndefined();
   expect(create(hot(2, "replacement"))).toBeUndefined();
   expect(create(hot(0))).toBeUndefined();
+});
+
+it("keeps append receipts independent of retained transcript length", async () => {
+  const receiptBytes: number[] = [];
+  for (const historyLength of [16, 256]) {
+    await withActor(async (f) => {
+      const history = Array.from({ length: historyLength }, (_, index) => ({
+        type: "message",
+        id: `history-${index}`,
+        parentId: index ? `history-${index - 1}` : null,
+        timestamp: "2026-01-01T00:00:00Z",
+        message: { role: "user", content: "synthetic history", idempotencyKey: `input-${index}` },
+      }));
+      runSqliteImmediateTransactionSync(f.database.db, () =>
+        appendTranscriptEventsInTransaction(f.database, f.scope, history),
+      );
+      const event = {
+        type: "custom",
+        customType: "synthetic-receipt",
+        id: "new-event",
+        parentId: `history-${historyLength - 1}`,
+        timestamp: "2026-01-01T00:00:01Z",
+        data: { content: "x".repeat(6 * 1024) },
+      };
+      const { command, outcome } = await append(f, JSON.stringify(event));
+      const fullReceiptEncodings = vi
+        .mocked(serialize)
+        .mock.calls.filter(
+          ([value]) =>
+            value?.kind === "committed" && value.receipt?.kind === "session-actor-committed",
+        );
+      expect(fullReceiptEncodings).toHaveLength(1);
+      const bytes = serialize(outcome).byteLength;
+      receiptBytes.push(bytes);
+      expect(bytes).toBeLessThan(16 * 1024);
+      expect(outcome.receipt.postimage).toMatchObject({
+        completionKeys: [],
+        transcript: {
+          anchorsState: "unavailable",
+          anchors: [],
+          idempotency: [],
+          modelContext: { kind: "unavailable" },
+        },
+      });
+      expect(outcome.receipt.transcript.appendedEvents).toEqual([
+        {
+          rawSeq: historyLength,
+          event,
+          serializedBytes: Buffer.byteLength(JSON.stringify(event)) + 1,
+        },
+      ]);
+      expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(
+        historyLength + 1,
+      );
+      expectRetry(f, { ...command, input: { ...command.input, commandId: "retry" } });
+      expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(
+        historyLength + 1,
+      );
+    });
+  }
+  // Scalar sequence/count encodings may grow; retained history must not cross the worker boundary.
+  expect(Math.max(...receiptBytes) - Math.min(...receiptBytes)).toBeLessThan(128);
 });

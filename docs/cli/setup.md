@@ -61,6 +61,8 @@ running auth-status commands or starting an app server. Readable Codex
 credentials are reported as stored evidence; the active login remains
 unverified during detection. Stored credentials do not
 receive verified-subscription priority over environment API keys.
+Codex execution or sign-in inspection errors are reported with a retry diagnostic;
+only a missing executable or login is treated as absent.
 
 In the Control UI, Model Setup can also select models from installed native
 agents through the shared model picker. **Use** saves that model and its runtime

@@ -8,7 +8,7 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentDeliveryPlanWithSessionRoute } from "../../infra/outbound/agent-delivery.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, withoutRuntimeOutput } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
@@ -139,7 +139,7 @@ export async function resolveBareSessionResetResult(params: {
   return await deliverAgentCommandResult({
     cfg: params.cfg,
     deps: params.context.deps,
-    runtime: defaultRuntime,
+    runtime: withoutRuntimeOutput(defaultRuntime),
     opts: {
       message: params.ackText ?? sessionResetAckText(params.reason),
       ...(params.agentId ? { agentId: params.agentId } : {}),

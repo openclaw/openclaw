@@ -5,19 +5,17 @@ import type { ClickClackMessage } from "./types.js";
 
 type ActivityClient = Parameters<typeof createClickClackActivityPublisher>[0]["client"];
 
-function createClientMock(): {
-  client: ActivityClient;
-  createActivityMessage: ReturnType<typeof vi.fn>;
-  updateMessageBody: ReturnType<typeof vi.fn>;
-} {
+function createClientMock() {
   let counter = 0;
-  const createActivityMessage = vi.fn(async () => {
+  const createActivityMessage = vi.fn<ActivityClient["createActivityMessage"]>(async () => {
     counter += 1;
     return { id: `msg_${counter}` } as ClickClackMessage;
   });
-  const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
+  const updateMessageBody = vi.fn<ActivityClient["updateMessageBody"]>(
+    async () => ({}) as ClickClackMessage,
+  );
   return {
-    client: { createActivityMessage, updateMessageBody } as ActivityClient,
+    client: { createActivityMessage, updateMessageBody },
     createActivityMessage,
     updateMessageBody,
   };
@@ -47,10 +45,10 @@ describe("createClickClackActivityPublisher", () => {
 
   it("keeps complete commentary during a partial successor and accepts shorter completion", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createPublisher(client, { flushMs: 10 });
+    const publisher = createPublisher(client);
 
     publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First and second" });
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(700);
     publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First and second" });
     publisher.onItemEvent({
       itemId: "c1",
@@ -155,6 +153,67 @@ describe("createClickClackActivityPublisher", () => {
     expect(updateMessageBody).not.toHaveBeenCalled();
   });
 
+  it.each(["POST", "PATCH"])(
+    "publishes updates arriving during an activity %s",
+    async (operation) => {
+      const { client, createActivityMessage, updateMessageBody } = createClientMock();
+      const entered = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      let remoteBody = "";
+      let blocked = false;
+      const write = async (method: string, body: string): Promise<ClickClackMessage> => {
+        if (method === operation && !blocked) {
+          blocked = true;
+          entered.resolve();
+          await resume.promise;
+        }
+        remoteBody = body;
+        return {
+          id: "msg_1",
+          workspace_id: "wsp_1",
+          author_id: "usr_agent",
+          thread_root_id: "msg_turn",
+          body,
+          body_format: "markdown",
+          created_at: "2026-10-15T00:00:00.000Z",
+        };
+      };
+      createActivityMessage.mockImplementation(async ({ body }) => write("POST", body));
+      updateMessageBody.mockImplementation(async (_id, body) => write("PATCH", body));
+      const publisher = createPublisher(client);
+      const event = { itemId: "work", kind: "tool", name: "read" };
+
+      publisher.onItemEvent({ ...event, progressText: "First" });
+      if (operation === "PATCH") {
+        await publisher.finalize();
+        publisher.onItemEvent({ ...event, progressText: "Second" });
+      }
+      await entered.promise;
+      publisher.onItemEvent({ ...event, progressText: "Latest" });
+      resume.resolve();
+      await publisher.finalize();
+
+      expect(remoteBody).toBe("Read: Latest");
+    },
+  );
+
+  it("does not retry an ambiguous failed activity POST when a later frame arrives", async () => {
+    const { client, createActivityMessage, updateMessageBody } = createClientMock();
+    const onError = vi.fn();
+    createActivityMessage.mockRejectedValueOnce(new Error("connection lost after dispatch"));
+    const publisher = createPublisher(client, { onError });
+    const event = { itemId: "work", kind: "tool", name: "read" };
+
+    publisher.onItemEvent({ ...event, progressText: "First" });
+    await publisher.finalize();
+    publisher.onItemEvent({ ...event, progressText: "Latest" });
+    await publisher.finalize();
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(createActivityMessage).toHaveBeenCalledOnce();
+    expect(updateMessageBody).not.toHaveBeenCalled();
+  });
+
   it("renders non-tool item kinds as commentary rows and skips lifecycle lanes", async () => {
     const { client, createActivityMessage } = createClientMock();
     const publisher = createPublisher(client);
@@ -172,7 +231,7 @@ describe("createClickClackActivityPublisher", () => {
 
   it("normalizes reasoning-style progress lanes into durable commentary rows", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createPublisher(client, { flushMs: 10 });
+    const publisher = createPublisher(client);
 
     publisher.onItemEvent({ itemId: "empty1", kind: "thinking", progressText: " " });
     publisher.onItemEvent({
@@ -180,7 +239,7 @@ describe("createClickClackActivityPublisher", () => {
       kind: "thinking",
       progressText: "Checking the runtime",
     });
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(700);
     publisher.onItemEvent({
       itemId: "think1",
       kind: "thinking",

@@ -1,29 +1,34 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   listAgentSessionMcpRuntimeIds,
   retireSessionMcpRuntimeForAgentDeletion,
 } from "../../agents/agent-bundle-mcp-manager-cleanup.js";
 import { tryResolveAgentOperationAgentId } from "../../agents/agent-scope-config.js";
 import { drainAgentExecProcesses } from "../../agents/bash-process-control.js";
-import { listActiveEmbeddedRunSessionIds } from "../../agents/embedded-agent-runner/active-run-projections.js";
+import { nativeAttemptAttachments } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   captureEmbeddedRunDrainTarget,
   type EmbeddedRunDrainTarget,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
-import { resolveActiveReplyOperationForSessionId } from "../../auto-reply/reply/reply-run-registry.registry.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getAgentRunContext, listLiveAgentRunIds } from "../../infra/agent-run-registry.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../routing/session-key.js";
-import { agentWorkAdmissionIdentity } from "../../sessions/session-agent-work-admission.js";
 import {
   collectActiveAgentSessionWorkAdmissions,
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
   startAgentWorkAdmissionInterruption,
-} from "../../sessions/session-lifecycle-admission.js";
+} from "../../sessions/session-controller.lifecycle.js";
+import {
+  getRpcSourceIdentity,
+  listRpcSourceEntries,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { activeSessionOperations } from "../../sessions/session-controller.state.js";
+import { settlesWithin } from "../../shared/settle-within.js";
 import { chatRunBelongsToAgent } from "../chat-run-owner.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import {
@@ -37,15 +42,20 @@ export async function drainAgentDeletionRuns(
   agentId: string,
   cfg: OpenClawConfig,
   context: GatewayRequestContext,
-  assertCurrent: () => void,
+  assertDeletionCurrent: () => void,
 ): Promise<void> {
+  let finished = false;
+  const assertCurrent = () => {
+    assertDeletionCurrent();
+    if (finished) {
+      throw new Error(`Agent ${agentId} deletion drain has ended`);
+    }
+  };
   assertCurrent();
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const defaultAgentId = tryResolveAgentOperationAgentId(cfg);
   const admissions = collectActiveAgentSessionWorkAdmissions({ agentId });
-  const admissionAgent = agentWorkAdmissionIdentity({ agentId });
-  const embeddedRuns = new Map<string, EmbeddedRunDrainTarget>();
-  const unkeyedRuns: EmbeddedRunDrainTarget[] = [];
+  const sessionlessRuns: EmbeddedRunDrainTarget[] = [];
   const mcpSessionIds = new Set<string>();
   const targets = new Map<string, Parameters<typeof prepareSessionLifecycleDrain>[0]>();
   const add = (
@@ -70,12 +80,10 @@ export async function drainAgentDeletionRuns(
     const sessionKeys = [...new Set([...keys, ...(existing?.sessionKeys ?? [])])];
     targets.set(key, {
       action: "delete",
-      timeoutMs: null,
       authorize: assertCurrent,
       context,
       storePath: selectedScope,
       agentId,
-      admissionAgent,
       defaultAgentId,
       sessionKey: canonicalKey,
       sessionKeys,
@@ -92,7 +100,6 @@ export async function drainAgentDeletionRuns(
             },
           }
         : existing?.session,
-      embeddedRun: sessionId ? (embeddedRuns.get(sessionId) ?? null) : null,
       lifecycleIdentities: sessionId ? [...sessionKeys, sessionId] : sessionKeys,
     });
   };
@@ -106,26 +113,25 @@ export async function drainAgentDeletionRuns(
   const drains: SessionLifecycleDrain[] = [];
   try {
     // Capture runtime owners before any asynchronous inventory or cancellation can settle them.
-    for (const sessionId of listActiveEmbeddedRunSessionIds()) {
-      const embedded = captureEmbeddedRunDrainTarget(sessionId, { agentId, defaultAgentId });
-      if (embedded) {
-        embeddedRuns.set(sessionId, embedded);
-        mcpSessionIds.add(sessionId);
+    for (const attachment of nativeAttemptAttachments()) {
+      if (attachment.operation || attachment.sessionKey) {
+        continue;
       }
-      addOwned(embedded);
-      if (embedded && !embedded.sessionKey) {
-        unkeyedRuns.push(embedded);
-      }
-      const reply = resolveActiveReplyOperationForSessionId(sessionId);
-      if (reply) {
-        addOwned({ agentId: reply.agentId, sessionKey: reply.key, sessionId: reply.sessionId });
+      const run = captureEmbeddedRunDrainTarget(attachment, { agentId, defaultAgentId });
+      if (run) {
+        sessionlessRuns.push(run);
+        mcpSessionIds.add(run.sessionId);
       }
     }
-    for (const run of context.chatAbortControllers.values()) {
-      addOwned(run);
+    for (const operation of activeSessionOperations()) {
+      addOwned({
+        agentId: operation.agentId,
+        sessionKey: operation.key,
+        sessionId: operation.sessionId,
+      });
     }
-    for (const runId of listLiveAgentRunIds()) {
-      addOwned(getAgentRunContext(runId));
+    for (const [, source] of listRpcSourceEntries()) {
+      addOwned(getRpcSourceIdentity(source));
     }
     for (const [scope, identities] of admissions) {
       for (const identity of identities) {
@@ -166,13 +172,25 @@ export async function drainAgentDeletionRuns(
       }
     }
     assertCurrent();
-    const embedded = unkeyedRuns.map(async (run) => {
+    const sessionless = sessionlessRuns.map(async (run) => {
       assertCurrent();
       run.abort();
-      return run.waitForEnd(null);
+      if (!(await run.waitForEnd(SESSION_CONTROLLER_DRAIN_TIMEOUT_MS))) {
+        throw new Error(
+          `Embedded run in session ${run.sessionId} did not end. Wait for the run to end, then retry agents.delete; agent storage has been preserved.`,
+        );
+      }
     });
-    const sessions = [...targets.values()].map(async (target) => {
-      const drain = await prepareSessionLifecycleDrain(target);
+    const preparing = new Set(targets.values());
+    const sessions = [...preparing].map(async (target) => {
+      const drain = await prepareSessionLifecycleDrain({
+        ...target,
+        onPrepared: () => preparing.delete(target),
+      });
+      if (finished) {
+        drain.release();
+        return;
+      }
       drains.push(drain);
       if (drain.hasAuthoritativeWork()) {
         throw new Error(`Agent ${agentId} still has active work in ${target.sessionKey}`);
@@ -194,12 +212,41 @@ export async function drainAgentDeletionRuns(
         drain?.release();
       }
     });
-    const settled = await Promise.allSettled([...sessions, admitted, ...embedded, terminals]);
-    const failures = settled.filter((result) => result.status === "rejected");
-    if (failures.length) {
+    const failures: unknown[] = [];
+    const settled = await settlesWithin(
+      Promise.all(
+        [...sessions, admitted, ...sessionless, terminals].map((work) =>
+          work.catch((error: unknown) => {
+            failures.push(error);
+          }),
+        ),
+      ),
+      SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+    );
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
       throw new AggregateError(
-        failures.map((result) => result.reason),
-        `Agent ${agentId} deletion is still draining`,
+        failures,
+        `Agent ${agentId} deletion failed: ${failures.map((error) => formatErrorMessage(error)).join("; ")}`,
+      );
+    }
+    if (!settled) {
+      if (preparing.size) {
+        throw new Error(
+          `Agent ${agentId} deletion preparation timed out for sessions: ${[...preparing].map((target) => target.sessionKey).join(", ")}. Check session placement availability, then retry agents.delete; agent storage has been preserved.`,
+        );
+      }
+      throw new Error(
+        `Agent ${agentId} deletion is still draining active work for sessions: ${[
+          ...targets.values(),
+        ]
+          .map((target) => target.sessionId ?? target.sessionKey)
+          .concat(sessionlessRuns.filter((run) => run.isActive()).map((run) => run.sessionId))
+          .join(
+            ", ",
+          )}. Wait for active work to end, then retry agents.delete; agent storage has been preserved.`,
       );
     }
     await drainAgentExecProcesses(agentId, assertCurrent);
@@ -227,11 +274,12 @@ export async function drainAgentDeletionRuns(
     });
     assertCurrent();
   } finally {
+    finished = true;
+    for (const run of sessionlessRuns) {
+      run.release();
+    }
     for (const drain of drains) {
       drain.release();
-    }
-    for (const run of embeddedRuns.values()) {
-      run.release();
     }
   }
 }

@@ -1,18 +1,16 @@
-import {
-  COMPUTER_USE_V2_ACTION_NAMES,
-  type ComputerActParams,
-} from "openclaw/plugin-sdk/computer-use";
+import type { ComputerActParams } from "openclaw/plugin-sdk/computer-use";
 import {
   elementArgs,
   requireWindowTarget,
   windowPointArgs,
   type CuaComputerActParams,
 } from "./action-targets.js";
-import { normalizeModifiers, parseKeyChord } from "./actions.js";
+import { CLICK_ACTIONS, normalizeModifiers, parseKeyChord } from "./actions.js";
 import { handleBrowserAct } from "./browser-actions.js";
 import type { CuaDriverSession } from "./driver-client.js";
 import {
   actionEnvelope,
+  CUA_WIRE_ACTION_NAMES,
   callWindowTool,
   nativeWindows,
   projectApps,
@@ -31,7 +29,6 @@ import {
 } from "./frame.js";
 import { handleRecordingAct } from "./recording-actions.js";
 
-const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 const CUA_TARGETED_ACTION_NAMES = new Set([
   "left_click",
   "right_click",
@@ -72,13 +69,7 @@ async function handleTargetedAct(
     case "double_click":
     case "triple_click": {
       tool = "click";
-      const button =
-        params.action === "right_click"
-          ? "right"
-          : params.action === "middle_click"
-            ? "middle"
-            : "left";
-      const count = params.action === "double_click" ? 2 : params.action === "triple_click" ? 3 : 1;
+      const { button, count } = CLICK_ACTIONS[params.action];
       const modifiers = normalizeModifiers(params.modifiers, platform);
       args = {
         ...base,

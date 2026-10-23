@@ -346,11 +346,6 @@ describe("model runtime generation scope", () => {
     await state.writeAuthProfiles({
       version: 1,
       profiles: {
-        "generation-missing:selected": {
-          type: "api_key",
-          provider: "generation-missing",
-          key: "synthetic-missing-generation-key",
-        },
         [`${generation.provider}:selected`]: {
           type: "api_key",
           provider: generation.provider,
@@ -400,8 +395,7 @@ describe("model runtime generation scope", () => {
     expect(getRuntimeConfigSnapshot()).toBeNull();
     try {
       const { resolution } = await resolveTieredModel({
-        provider: "generation-missing",
-        fallbackProvider: generation.provider,
+        provider: generation.provider,
         modelId: generation.modelId,
         agentDir: state.agentDir(),
         config: generation.preparedModelRuntime.config,
@@ -490,22 +484,21 @@ describe("model runtime generation scope", () => {
     { ambientScope: false, invalidation: "abort" },
     { ambientScope: false, invalidation: "authority" },
   ] as const)(
-    "reuses fresh auth readers during fallback (ambient=$ambientScope, invalidation=$invalidation)",
+    "retains auth readers during model selection (ambient=$ambientScope, invalidation=$invalidation)",
     async ({ ambientScope, invalidation }) => {
-      const missingProvider = "generation-missing";
-      const fallbackProvider = "generation-fallback";
+      const provider = "generation-selected";
       const children: ChildProcess[] = [];
-      let liveDuringFallback: ChildProcess[] = [];
+      let liveDuringPreparation: ChildProcess[] = [];
       let liveAfterSelection: ChildProcess[] = [];
       let current = true;
       const controller = new AbortController();
-      const stopped = new Error("Model selection stopped during fallback preparation");
+      const stopped = new Error("Model selection stopped during preparation");
       const generation = generationFixture({
         label: "readonly-reuse",
-        provider: fallbackProvider,
-        requestProvider: fallbackProvider,
+        provider,
+        requestProvider: provider,
         prepareDynamicModel: async () => {
-          liveDuringFallback = children.filter((child) => child.exitCode === null);
+          liveDuringPreparation = children.filter((child) => child.exitCode === null);
           await Promise.resolve();
           if (invalidation === "abort") {
             controller.abort(stopped);
@@ -518,15 +511,10 @@ describe("model runtime generation scope", () => {
       await state.writeAuthProfiles({
         version: 1,
         profiles: {
-          [`${missingProvider}:default`]: {
+          [`${provider}:default`]: {
             type: "api_key",
-            provider: missingProvider,
-            key: "synthetic-missing-provider-key",
-          },
-          [`${fallbackProvider}:default`]: {
-            type: "api_key",
-            provider: fallbackProvider,
-            key: "synthetic-fallback-provider-key",
+            provider,
+            key: "synthetic-selected-provider-key",
           },
         },
       });
@@ -554,8 +542,7 @@ describe("model runtime generation scope", () => {
                   throw stopped;
                 }
               },
-              provider: missingProvider,
-              fallbackProvider,
+              provider,
               modelId: generation.modelId,
               agentDir: state.agentDir(),
               config: generation.preparedModelRuntime.config,
@@ -569,31 +556,30 @@ describe("model runtime generation scope", () => {
         });
         if (invalidation === "none") {
           const result = await resolving;
-          expect(result.provider).toBe(fallbackProvider);
+          expect(result.provider).toBe(provider);
           expect(result.resolution.model).toMatchObject({
             id: generation.modelId,
-            provider: fallbackProvider,
+            provider,
             name: "Runtime READONLY-REUSE",
           });
         } else {
           await expect(resolving).rejects.toBe(stopped);
         }
         expect(auth.spy.mock.calls.map(([, options]) => options?.migrationProvider)).toEqual([
-          missingProvider,
-          fallbackProvider,
+          provider,
         ]);
         if (invalidation === "authority") {
           expect(generation.resolveDynamicModel).not.toHaveBeenCalled();
         } else {
           expect(generation.resolveDynamicModel).toHaveBeenCalledWith(
             expect.objectContaining({
-              authProfileId: `${fallbackProvider}:default`,
+              authProfileId: `${provider}:default`,
               authProfileMode: "api_key",
             }),
           );
         }
         expect(children).toHaveLength(1);
-        expect(liveDuringFallback).toEqual(children);
+        expect(liveDuringPreparation).toEqual(children);
         expect(liveAfterSelection).toEqual(invalidation === "none" ? children : []);
         for (const child of children) {
           expect(child.exitCode).toBeNull();

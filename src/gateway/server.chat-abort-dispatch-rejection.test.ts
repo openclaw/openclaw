@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
@@ -14,7 +15,6 @@ import {
   createAgentRunRestartAbortError,
 } from "../agents/run-termination.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
-import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import * as staging from "../auto-reply/reply/stage-sandbox-media.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { clearConfigCache } from "../config/config.js";
@@ -23,10 +23,10 @@ import { appendTranscriptMessage } from "../config/sessions/session-accessor.sql
 import type { SessionEntry } from "../config/sessions/types.js";
 import { emitAgentEventIfCurrent } from "../infra/agent-events.js";
 import {
-  getSessionWorkAdmissionRelease,
-  interruptSessionWorkAdmissions,
-  startSessionWorkAdmissionInterruption,
-} from "../sessions/session-lifecycle-admission.js";
+  captureSessionControllerSettlement,
+  interruptSessionControllerEffects,
+  startSessionControllerInterruption,
+} from "../sessions/session-controller.lifecycle.js";
 import * as sessionRunError from "../sessions/session-run-error.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { observeGatewayConnectionWork } from "./server-held-work.test-support.js";
@@ -114,6 +114,30 @@ async function writeMainSession(
   await writeSessionStore({ entries: { main: { sessionId, updatedAt: Date.now(), ...entry } } });
 }
 
+async function prepareChatSession(
+  label: string,
+  sessionId = "sess-main",
+  entry: Pick<SessionEntry, "startedAt" | "status"> = {},
+) {
+  const storePath = path.join(
+    temporaryDirectories.make(`openclaw-chat-${label}-`),
+    "sessions.json",
+  );
+  testState.sessionStorePath = storePath;
+  await writeMainSession(sessionId, entry);
+  return { storePath, agentId: "main", sessionKey: "agent:main:main", sessionId };
+}
+
+function expectRun(
+  response: { ok: boolean; payload?: unknown },
+  runId: string,
+  status: string,
+  ok = true,
+) {
+  expect(response.ok).toBe(ok);
+  expect(response.payload).toMatchObject({ runId, status });
+}
+
 function textAttachment(bytes: string) {
   return {
     fileName: "notes.txt",
@@ -124,16 +148,8 @@ function textAttachment(bytes: string) {
 
 describe("gateway WebSocket chat abort ownership", () => {
   test("preserves committed native input across a profile-bound reconnect", async () => {
-    const sessionDirectory = temporaryDirectories.make("openclaw-chat-native-reconnect-");
-    const storePath = path.join(sessionDirectory, "sessions.json");
-    testState.sessionStorePath = storePath;
-    const scope = {
-      storePath,
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionId: "native-reconnect-bound",
-    };
-    await writeMainSession(scope.sessionId);
+    const scope = await prepareChatSession("native-reconnect", "native-reconnect-bound");
+    const { storePath } = scope;
     const runId = "real-websocket-native-reconnect-bound";
     const sendParameters = {
       sessionKey: scope.sessionKey,
@@ -206,8 +222,7 @@ describe("gateway WebSocket chat abort ownership", () => {
       );
       return await response;
     };
-    dispatchInboundMessageMock.mockImplementation((args: unknown) => {
-      const { dispatcher, replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
+    dispatchInboundMessageMock.mockImplementation(({ dispatcher, replyOptions }) => {
       const dispatchWork = (async () => {
         const recorder = replyOptions?.userTurnTranscriptRecorder;
         const signal = replyOptions?.abortSignal;
@@ -236,8 +251,7 @@ describe("gateway WebSocket chat abort ownership", () => {
         }
         const expectedProfileId = profileId;
         const started = await send(original.socket, expectedProfileId);
-        expect(started.ok).toBe(true);
-        expect(started.payload).toMatchObject({ runId, status: "started" });
+        expectRun(started, runId, "started");
         await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledOnce(), {
           interval: 10,
           timeout: 2_000,
@@ -260,14 +274,13 @@ describe("gateway WebSocket chat abort ownership", () => {
           message: { content: sendParameters.message },
         });
         expect(signal.aborted).toBe(false);
-        admissionRelease = getSessionWorkAdmissionRelease({
-          scope: storePath,
-          identities: [scope.sessionKey, scope.sessionId],
-        });
-        expect(admissionRelease).toBeDefined();
-        if (!admissionRelease) {
-          throw new Error("Accepted native work must retain its session admission");
-        }
+        admissionRelease = expectDefined(
+          captureSessionControllerSettlement({
+            scope: storePath,
+            identities: [scope.sessionKey, scope.sessionId],
+          }),
+          "Accepted native work must retain its session admission",
+        );
 
         original.socket.close();
         await original.closed;
@@ -287,8 +300,7 @@ describe("gateway WebSocket chat abort ownership", () => {
           expect(recorder.getAdmissionReceipt()).toEqual(receipt);
         };
         const retry = await send(reconnected.socket, expectedProfileId);
-        expect(retry.ok).toBe(true);
-        expect(retry.payload).toMatchObject({ runId, status: "in_flight" });
+        expectRun(retry, runId, "in_flight");
         expectRetainedInput();
         const wrongProfile = "unselected-native-profile";
         expect(wrongProfile).not.toBe(profileId);
@@ -300,8 +312,7 @@ describe("gateway WebSocket chat abort ownership", () => {
         });
         expectRetainedInput();
         const correctRetry = await send(reconnected.socket, profileId);
-        expect(correctRetry.ok).toBe(true);
-        expect(correctRetry.payload).toMatchObject({ runId, status: "in_flight" });
+        expectRun(correctRetry, runId, "in_flight");
         expectRetainedInput();
 
         const terminal = ownFrame(
@@ -320,20 +331,17 @@ describe("gateway WebSocket chat abort ownership", () => {
         await admissionRelease;
         const completed = loadTranscriptEventsSync(scope);
         expect(completed.filter(isUserMessage)).toEqual(userRows);
-        expect(completed).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
-          ]),
+        expect(completed).toContainEqual(
+          expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
         );
         const replay = await send(reconnected.socket, expectedProfileId);
-        expect(replay.ok).toBe(true);
-        expect(replay.payload).toMatchObject({ runId, status: "ok" });
+        expectRun(replay, runId, "ok");
         expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
         expect(loadTranscriptEventsSync(scope)).toEqual(completed);
         expect(recorder.getAdmissionReceipt()).toEqual(receipt);
       },
       async () => {
-        admissionRelease ??= getSessionWorkAdmissionRelease({
+        admissionRelease ??= captureSessionControllerSettlement({
           scope: storePath,
           identities: [scope.sessionKey, scope.sessionId],
         });
@@ -363,10 +371,7 @@ describe("gateway WebSocket chat abort ownership", () => {
   test.for([false, true])(
     "retains dispatch failure and rejects late abort after yielded waiting end=%s",
     async (yielded, { signal }) => {
-      const sessionDirectory = temporaryDirectories.make("openclaw-chat-error-late-abort-");
-      const storePath = path.join(sessionDirectory, "sessions.json");
-      testState.sessionStorePath = storePath;
-      await writeMainSession("sess-main");
+      const { storePath } = await prepareChatSession("error-late-abort");
 
       const socket = await gateway.openWs();
       const dispatchEntered = createDeferred();
@@ -378,8 +383,7 @@ describe("gateway WebSocket chat abort ownership", () => {
 
       try {
         await connectOk(socket);
-        dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-          const { replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
+        dispatchInboundMessageMock.mockImplementationOnce(async ({ replyOptions }) => {
           await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
           if (yielded) {
             replyOptions?.onAgentRunStart?.(runId);
@@ -395,11 +399,10 @@ describe("gateway WebSocket chat abort ownership", () => {
           idempotencyKey: runId,
         };
         const started = await rpcReq(socket, "chat.send", sendParameters);
-        expect(started.ok).toBe(true);
-        expect(started.payload).toMatchObject({ runId, status: "started" });
+        expectRun(started, runId, "started");
         await dispatchEntered.promise;
         expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-        admissionRelease = getSessionWorkAdmissionRelease({
+        admissionRelease = captureSessionControllerSettlement({
           scope: storePath,
           identities: ["main", "agent:main:main", "sess-main"],
         });
@@ -430,20 +433,17 @@ describe("gateway WebSocket chat abort ownership", () => {
         // Admission release follows error persistence/publication; the replay response
         // follows that error event on this socket, without timing the persistence work.
         const established = await rpcReq(socket, "chat.send", sendParameters);
-        expect(established.ok).toBe(false);
-        expect(established.payload).toMatchObject({ runId, status: "error" });
+        expectRun(established, runId, "error", false);
         expect(terminalStates).toEqual(yielded ? ["final", "error"] : ["error"]);
         const history = await rpcReq<{ messages: unknown[] }>(socket, "chat.history", {
           sessionKey: "main",
         });
-        expect(history.payload?.messages).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              role: "custom",
-              customType: "run-failed-before-reply",
-              content: expect.stringContaining("dispatch rejected before a late abort"),
-            }),
-          ]),
+        expect(history.payload?.messages).toContainEqual(
+          expect.objectContaining({
+            role: "custom",
+            customType: "run-failed-before-reply",
+            content: expect.stringContaining("dispatch rejected before a late abort"),
+          }),
         );
 
         const lateAbort = await rpcReq(socket, "chat.abort", {
@@ -473,10 +473,9 @@ describe("gateway WebSocket chat abort ownership", () => {
   ])(
     "retains signal-only interruption (restart=$restart, runtime terminal=$runtimeTerminal)",
     async ({ restart, runtimeTerminal }, { signal }) => {
-      const sessionDirectory = temporaryDirectories.make("openclaw-chat-lifecycle-interrupt-");
-      const storePath = path.join(sessionDirectory, "sessions.json");
-      testState.sessionStorePath = storePath;
-      await writeMainSession("sess-main", { startedAt: 900 });
+      const { storePath } = await prepareChatSession("lifecycle-interrupt", "sess-main", {
+        startedAt: 900,
+      });
 
       const socket = await gateway.openWs();
       const dispatchEntered = createDeferred<AbortSignal>();
@@ -490,9 +489,8 @@ describe("gateway WebSocket chat abort ownership", () => {
 
       try {
         await connectOk(socket);
-        dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-          const capturedAbortSignal = (args as { replyOptions?: GetReplyOptions }).replyOptions
-            ?.abortSignal;
+        dispatchInboundMessageMock.mockImplementationOnce(async ({ replyOptions }) => {
+          const capturedAbortSignal = replyOptions?.abortSignal;
           if (!capturedAbortSignal) {
             throw new Error("Admitted chat dispatch must receive its cancellation signal");
           }
@@ -516,11 +514,10 @@ describe("gateway WebSocket chat abort ownership", () => {
           message: "preserve the signal-only lifecycle terminal",
           idempotencyKey: runId,
         });
-        expect(started.ok).toBe(true);
-        expect(started.payload).toMatchObject({ runId, status: "started" });
+        expectRun(started, runId, "started");
         const capturedAbortSignal = await withinTest(dispatchEntered.promise, signal);
 
-        interruption = interruptSessionWorkAdmissions({
+        interruption = interruptSessionControllerEffects({
           scope: storePath,
           identities: ["main", "agent:main:main", "sess-main"],
           reason,
@@ -592,16 +589,8 @@ describe("gateway WebSocket chat abort ownership", () => {
   test("publishes one runtime-loss terminal and retains its failure after commentary for another client", async ({
     signal,
   }) => {
-    const sessionDirectory = temporaryDirectories.make("openclaw-chat-runtime-loss-");
-    const storePath = path.join(sessionDirectory, "sessions.json");
-    testState.sessionStorePath = storePath;
-    const scope = {
-      storePath,
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionId: "runtime-loss-session",
-    };
-    await writeMainSession(scope.sessionId);
+    const scope = await prepareChatSession("runtime-loss", "runtime-loss-session");
+    const { storePath } = scope;
     const socket = await gateway.openWs();
     const reader = await gateway.openWs();
     const runId = "runtime-loss-after-commentary";
@@ -624,8 +613,7 @@ describe("gateway WebSocket chat abort ownership", () => {
       });
     let admissionRelease: Promise<void> | undefined;
     let startedAt = Date.now();
-    dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-      const { dispatcher, replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
+    dispatchInboundMessageMock.mockImplementationOnce(async ({ dispatcher, replyOptions }) => {
       await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
       replyOptions?.onAgentRunStart?.(runId);
       startedAt = Date.now();
@@ -674,7 +662,7 @@ describe("gateway WebSocket chat abort ownership", () => {
       const started = await rpcReq(socket, "chat.send", sendParameters);
       expect(started.payload).toMatchObject({ runId, status: "started" });
       await commentaryPersisted.promise;
-      admissionRelease = getSessionWorkAdmissionRelease({
+      admissionRelease = captureSessionControllerSettlement({
         scope: storePath,
         identities: [scope.sessionKey, scope.sessionId],
       });
@@ -739,14 +727,12 @@ describe("gateway WebSocket chat abort ownership", () => {
           }),
         ]),
       );
-      expect(loadTranscriptEventsSync(scope)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            customType: "run-failed-before-reply",
-            content: warning,
-            details: expect.objectContaining({ runId, error }),
-          }),
-        ]),
+      expect(loadTranscriptEventsSync(scope)).toContainEqual(
+        expect.objectContaining({
+          customType: "run-failed-before-reply",
+          content: warning,
+          details: expect.objectContaining({ runId, error }),
+        }),
       );
       expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
       dispatchRelease.resolve();
@@ -792,7 +778,7 @@ describe("gateway WebSocket chat abort ownership", () => {
     const bytes = "synthetic attachment awaiting staging";
     let inboundPath: string | undefined;
     let filePresentAtResponse: boolean | undefined;
-    let interruption: ReturnType<typeof startSessionWorkAdmissionInterruption> | undefined;
+    let interruption: ReturnType<typeof startSessionControllerInterruption> | undefined;
     let send: ReturnType<typeof rpcReq> | undefined;
     const stageSpy = vi.spyOn(staging, "stageSandboxMedia").mockImplementation(async ({ ctx }) => {
       inboundPath = ctx.media?.[0]?.path;
@@ -830,7 +816,7 @@ describe("gateway WebSocket chat abort ownership", () => {
       expect(await fs.readFile(inboundPath, "utf8")).toBe(bytes);
       // This is the real admitted-work interruption path after registration,
       // which forwards its reason without creating an explicit RPC abort marker.
-      interruption = startSessionWorkAdmissionInterruption({
+      interruption = startSessionControllerInterruption({
         scope: storePath,
         identities: ["main", "agent:main:main", "sess-attachment-abort"],
         reason,

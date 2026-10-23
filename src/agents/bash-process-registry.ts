@@ -14,6 +14,8 @@ import type {
   TerminationReason,
 } from "../process/supervisor/types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { notifyListeners } from "../shared/listeners.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 
@@ -62,11 +64,16 @@ export interface ProcessSession {
   readonly cleanupMs: number;
   /** Agent owner frozen when the exec process starts. */
   agentId?: string;
+  /** Run whose exec call started this process; completion provenance only, never authority. */
+  originRunId?: string;
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
-  notifyFromConversationTurn?: boolean;
   notifySessionTarget?: SessionEventTarget;
+  assertExitNotificationAcceptanceCurrent?: () => void;
+  persistExitNotification?: () => Promise<void>;
+  exitNotificationPersistence?: Promise<void>;
+  clearExitNotification?: () => Promise<void>;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
@@ -134,6 +141,45 @@ const activeExecSessions = new Map<
 let finishedSessionOutputChars = 0;
 
 let sweeper: NodeJS.Timeout | null = null;
+type ProcessChange = { sessionKey: string; agentId?: string };
+const changeListeners = new Set<(target: ProcessChange) => void>();
+const pendingChanges = new Map<string, ProcessChange>();
+let changeTimer: NodeJS.Timeout | undefined;
+
+/** Process observation is independent of the creating turn's lifetime. */
+export function onBackgroundProcessesChanged(listener: (target: ProcessChange) => void) {
+  changeListeners.add(listener);
+  return () => {
+    changeListeners.delete(listener);
+    if (changeListeners.size === 0) {
+      clearTimeout(changeTimer);
+      changeTimer = undefined;
+      pendingChanges.clear();
+    }
+  };
+}
+
+function queueProcessChange(session: ProcessSession) {
+  const sessionKey = session.scopeKey ?? session.sessionKey;
+  if (!sessionKey || changeListeners.size === 0) {
+    return;
+  }
+  const target = { sessionKey, agentId: session.agentId };
+  pendingChanges.set(JSON.stringify([sessionKey, session.agentId]), target);
+  // Bound chatty output to the former five-second polling cadence. Later writes
+  // never postpone the signal, and no command text or output crosses this bus.
+  changeTimer ??= runInDetachedAsyncContext(() =>
+    setTimeout(() => {
+      changeTimer = undefined;
+      const changes = [...pendingChanges.values()];
+      pendingChanges.clear();
+      for (const change of changes) {
+        notifyListeners(changeListeners, change);
+      }
+    }, 5_000),
+  );
+  changeTimer.unref?.();
+}
 
 /** Return whether a process session id is live, retained, or reserved for notification. */
 export function isProcessSessionIdTaken(id: string): boolean {
@@ -146,6 +192,9 @@ export function addSession(session: ProcessSession) {
   processInstanceIds.set(session, randomUUID());
   runningSessions.set(session.id, session);
   activeExecSessions.set(session.id, { session, promoted: session.backgrounded });
+  if (session.backgrounded) {
+    queueProcessChange(session);
+  }
 }
 
 /** Sorts registered process records newest-first, including same-millisecond starts. */
@@ -185,12 +234,17 @@ function deleteFinishedSession(id: string): boolean {
   }
   finishedSessions.delete(id);
   finishedSessionOutputChars -= session.aggregated.length;
+  queueProcessChange(session);
   return true;
 }
 
 /** Removes visible session records without changing live-process activity. */
 export function deleteSession(id: string) {
+  const session = runningSessions.get(id);
   runningSessions.delete(id);
+  if (session && (session.backgrounded || activeExecSessions.get(id)?.promoted)) {
+    queueProcessChange(session);
+  }
   deleteFinishedSession(id);
   scheduleSweeper();
 }
@@ -245,6 +299,9 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
   session.tail = tail(session.aggregated, 2000);
+  if (session.backgrounded) {
+    queueProcessChange(session);
+  }
 }
 
 /** Drains pending chunks in producer callback order for a process poll. */
@@ -323,6 +380,9 @@ export function markExited(
   session.pendingOutput = pending.output;
   session.pendingOutputDropped = pending.outputDropped;
   moveToFinished(session);
+  if (session.backgrounded) {
+    queueProcessChange(session);
+  }
   if (!session.finalizing) {
     settleExecSessionFinalization(session);
   }
@@ -338,13 +398,28 @@ export function settleExecSessionFinalization(session: ProcessSession): void {
   }
 }
 
+/** Publish accepted Stop while cleanup still owns the terminal transition. */
+export function markCancellationRequested(session: ProcessSession) {
+  if (session.cancellationRequested) {
+    return;
+  }
+  session.cancellationRequested = true;
+  if (session.backgrounded) {
+    queueProcessChange(session);
+  }
+}
+
 /** Marks a running session as reconnectable after the exec call returns. */
 export function markBackgrounded(session: ProcessSession) {
+  if (!session.backgrounded) {
+    queueProcessChange(session);
+  }
   session.backgrounded = true;
   const active = activeExecSessions.get(session.id);
   if (active?.session === session) {
     active.promoted = true;
   }
+  session.exitNotificationPersistence ??= session.persistExitNotification?.();
 }
 
 /** Retains the precise completion-event removal handle on its process owner. */
@@ -369,7 +444,11 @@ export function acknowledgeNotifyOnExit(record: {
 }
 
 /** Retire notification custody without claiming that retained output was observed. */
-export function removeNotifyOnExit(record: { notifyOnExitRemoval?: NotifyOnExitRemoval }): void {
+export function removeNotifyOnExit(record: {
+  notifyOnExitRemoval?: NotifyOnExitRemoval;
+  clearExitNotification?: () => Promise<void>;
+}): void {
+  void record.clearExitNotification?.();
   const remove = record.notifyOnExitRemoval;
   if (!remove) {
     return;
@@ -429,7 +508,7 @@ function moveToFinished(session: ProcessSession) {
   if (stdin) {
     if (typeof stdin.destroy === "function") {
       stdin.destroy();
-    } else if (typeof stdin.end === "function") {
+    } else {
       stdin.end();
     }
     delete session.stdin;
@@ -521,6 +600,9 @@ export function listFinishedSessions() {
 
 /** Test-only reset for in-memory registry state and retention timers. */
 function resetProcessRegistryForTests() {
+  clearTimeout(changeTimer);
+  changeTimer = undefined;
+  pendingChanges.clear();
   runningSessions.clear();
   finishedSessions.clear();
   processSessionStartOrders = new WeakMap();

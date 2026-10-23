@@ -2,10 +2,7 @@ import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
 import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
-import {
-  getCachedChromeGraphicsDiagnostics,
-  inspectChromeGraphicsDiagnostics,
-} from "../chrome.graphics.js";
+import { getCachedChromeGraphicsDiagnostics } from "../chrome.graphics.js";
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { buildBrowserDoctorReport } from "../doctor.js";
 import { listBrowserEngines, resolveBrowserEngine } from "../engines/registry.js";
@@ -22,7 +19,6 @@ import { jsonError, runProfileRouteOperation, toBoolean, toStringOrEmpty } from 
 
 const STATUS_CDP_HTTP_TIMEOUT_MS = 300;
 const STATUS_CDP_TRANSPORT_TIMEOUT_MS = 600;
-const STATUS_GRAPHICS_COMMAND_TIMEOUT_MS = 1_000;
 const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = 7_000;
 const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
 
@@ -140,34 +136,29 @@ async function buildBrowserStatus(
     !lifecycle?.blockedReason &&
     running.cdpPort === profileCtx.profile.cdpPort;
   const graphics = canInspectManagedGraphics
-    ? await getCachedChromeGraphicsDiagnostics(
-        running,
-        async () =>
-          await inspectChromeGraphicsDiagnostics(`http://127.0.0.1:${running.cdpPort}`, {
-            httpTimeoutMs: STATUS_CDP_HTTP_TIMEOUT_MS,
-            handshakeTimeoutMs: STATUS_CDP_TRANSPORT_TIMEOUT_MS,
-            commandTimeoutMs: STATUS_GRAPHICS_COMMAND_TIMEOUT_MS,
-            ssrfPolicy: current.resolved.ssrfPolicy,
-          }),
-      )
+    ? await getCachedChromeGraphicsDiagnostics(running, current.resolved.ssrfPolicy)
     : null;
+  const configuredHeadlessMode = resolveManagedBrowserHeadlessMode(
+    current.resolved,
+    profileCtx.profile,
+  );
   let detected: ReturnType<typeof resolveBrowserExecutableForPlatform> = null;
   let detectError: string | null = null;
 
   try {
     detected = resolveBrowserExecutableForPlatform(
       capabilities.mode === "local-managed" && capabilities.browserFilesystemLocal
-        ? { ...current.resolved, executablePath: profileCtx.profile.executablePath }
+        ? {
+            ...current.resolved,
+            executablePath: profileCtx.profile.executablePath,
+            headless: configuredHeadlessMode.headless,
+          }
         : current.resolved,
       process.platform,
     );
   } catch (err) {
     detectError = String(err);
   }
-  const configuredHeadlessMode = resolveManagedBrowserHeadlessMode(
-    current.resolved,
-    profileCtx.profile,
-  );
   const headlessMode =
     typeof profileState?.running?.headless === "boolean"
       ? {

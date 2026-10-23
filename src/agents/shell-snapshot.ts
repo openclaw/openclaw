@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -172,17 +173,13 @@ function buildStartupSignature(shell: string): Array<[string, number, number] | 
   });
 }
 
-function readNonBlankPathEnv(value: string | undefined): string | undefined {
-  return value?.trim() ? value : undefined;
-}
-
 function getTrustedShellHome(): string {
   const configuredHome =
-    readNonBlankPathEnv(process.env.HOME) ?? readNonBlankPathEnv(process.env.USERPROFILE);
+    readNonBlankString(process.env.HOME) ?? readNonBlankString(process.env.USERPROFILE);
   if (configuredHome) {
     return configuredHome;
   }
-  const accountHome = readNonBlankPathEnv(os.userInfo().homedir);
+  const accountHome = readNonBlankString(os.userInfo().homedir);
   if (!accountHome) {
     throw new Error("Unable to resolve the current user's home directory");
   }
@@ -200,11 +197,8 @@ async function createShellSnapshot(
   void cleanupPromise;
 
   const snapshotPath = path.join(snapshotDir, `${key}.sh`);
-  if (
-    !forceRefresh &&
-    (await isFreshSnapshot(snapshotPath)) &&
-    (await validateSnapshot(opts, snapshotPath))
-  ) {
+  // Only validated captures are atomically published at this path.
+  if (!forceRefresh && (await isFreshSnapshot(snapshotPath))) {
     return snapshotPath;
   }
 
@@ -238,11 +232,6 @@ async function validateSnapshot(
   opts: ShellSnapshotWrapOptions,
   snapshotPath: string,
 ): Promise<boolean> {
-  try {
-    await fs.access(snapshotPath);
-  } catch {
-    return false;
-  }
   const exitCode = await runShell({
     shell: opts.shell,
     shellArgs: opts.shellArgs,

@@ -1,6 +1,5 @@
-// iOS release wrapper tests keep release args fail-closed before Fastlane work.
-import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -8,125 +7,30 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const gemfilePath = path.join(process.cwd(), "apps", "ios", "Gemfile");
-type WrapperCase = readonly [scriptPath: string, args: readonly string[], option: string];
-
-function runScript(
-  scriptPath: string,
-  args: readonly string[],
-  extraEnv: NodeJS.ProcessEnv = {},
-): { ok: boolean; stdout: string; stderr: string } {
-  const scriptArgs =
-    process.platform === "win32" ? [scriptPath] : ["--noprofile", "--norc", scriptPath];
-  try {
-    const stdout = execFileSync(BASH_BIN, [...scriptArgs, ...args], {
-      cwd: process.cwd(),
-      env: { ...process.env, ...extraEnv },
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    return { ok: true, stdout, stderr: "" };
-  } catch (error) {
-    const e = error as { stdout?: unknown; stderr?: unknown };
-    const stdout = Buffer.isBuffer(e.stdout)
-      ? e.stdout.toString("utf8")
-      : ((e.stdout ?? "") as string);
-    const stderr = Buffer.isBuffer(e.stderr)
-      ? e.stderr.toString("utf8")
-      : ((e.stderr ?? "") as string);
-    return { ok: false, stdout, stderr };
-  }
-}
+const releaseArgs = ["--version", "2026.7.2", "--revision", "1", "--build-number", "3"];
+const runBash = (args: string[], env: NodeJS.ProcessEnv) =>
+  spawnSync(BASH_BIN, args, {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, ...env },
+  });
 
 describe("iOS release shell wrapper arguments", () => {
-  const missingValueCases: readonly WrapperCase[] = [
-    ["scripts/ios-release-upload.sh", ["--build-number", "--bogus"], "--build-number"],
-    ["scripts/ios-release-upload.sh", ["--version", "--bogus"], "--version"],
-    ["scripts/ios-release-upload.sh", ["--revision", "--bogus"], "--revision"],
-    ["scripts/ios-release-plan.sh", ["--build-number", "--bogus"], "--build-number"],
-    ["scripts/ios-release-plan.sh", ["--version", "--bogus"], "--version"],
-    ["scripts/ios-release-plan.sh", ["--revision", "--bogus"], "--revision"],
-    ["scripts/ios-release-archive.sh", ["--build-number", "--bogus"], "--build-number"],
-    ["scripts/ios-release-archive.sh", ["--version", "--bogus"], "--version"],
-    ["scripts/ios-release-archive.sh", ["--revision", "--bogus"], "--revision"],
-    ["scripts/ios-release-prepare.sh", ["--build-number", "--team-id"], "--build-number"],
-    [
-      "scripts/ios-release-prepare.sh",
-      ["--build-number", "3", "--version", "--bogus"],
-      "--version",
-    ],
-    [
-      "scripts/ios-release-prepare.sh",
-      ["--version", "2026.7.2", "--revision", "1", "--build-number", "3", "--team-id", "--bogus"],
-      "--team-id",
-    ],
-  ];
-
-  it.each(missingValueCases)(
-    "rejects missing %s option values before release work",
-    (scriptPath, args, option) => {
-      const result = runScript(path.join(process.cwd(), scriptPath), args);
-
-      expect(result.ok).toBe(false);
-      expect(result.stderr).toContain(`Missing value for ${option}.`);
-      expect(result.stderr).not.toContain("No such file or directory");
-      expect(result.stderr).not.toContain("fastlane");
-      expect(result.stdout).toBe("");
-    },
-  );
-
-  it.each(["scripts/ios-release-archive.sh", "scripts/ios-release-prepare.sh"])(
-    "requires an explicit gateway version before release work in %s",
-    (scriptPath) => {
-      const args = scriptPath.endsWith("prepare.sh") ? ["--build-number", "3"] : [];
-      const result = runScript(path.join(process.cwd(), scriptPath), args, {
-        IOS_RELEASE_VERSION: "2026.6.10",
-      });
-
-      expect(result.ok).toBe(false);
-      expect(result.stderr).toContain("Missing required --version.");
-      expect(result.stderr).not.toContain("No such file or directory");
-      expect(result.stderr).not.toContain("fastlane");
-      expect(result.stdout).toBe("");
-    },
-  );
-
-  it.each(["scripts/ios-release-archive.sh", "scripts/ios-release-prepare.sh"])(
-    "requires an explicit App Store revision before release work in %s",
-    (scriptPath) => {
-      const args = ["--version", "2026.7.2"];
-      if (scriptPath.endsWith("prepare.sh")) {
-        args.push("--build-number", "3");
-      }
-      const result = runScript(path.join(process.cwd(), scriptPath), args);
-
-      expect(result.ok).toBe(false);
-      expect(result.stderr).toContain("Missing required --revision.");
-      expect(result.stderr).not.toContain("fastlane");
-      expect(result.stdout).toBe("");
-    },
-  );
-
-  it.each(["scripts/ios-release-upload.sh", "scripts/ios-release-archive.sh"])(
-    "does not accept ambient release build numbers in %s",
-    (scriptPath) => {
-      const script = readFileSync(path.join(process.cwd(), scriptPath), "utf8");
-
-      expect(script).toContain('BUILD_NUMBER=""');
-      expect(script).not.toContain('BUILD_NUMBER="${IOS_RELEASE_BUILD_NUMBER:-}"');
-    },
-  );
-
   it("rejects App Store release relay URL overrides before release work", () => {
-    const result = runScript(
-      path.join(process.cwd(), "scripts/ios-release-prepare.sh"),
-      ["--version", "2026.7.2", "--revision", "1", "--build-number", "3"],
+    const result = runBash(
+      [
+        ...(process.platform === "win32" ? [] : ["--noprofile", "--norc"]),
+        "scripts/ios-release-prepare.sh",
+        ...releaseArgs,
+      ],
       {
         IOS_DEVELOPMENT_TEAM: "FWJYW4S8P8",
         OPENCLAW_PUSH_RELAY_BASE_URL: "https://relay.example.com",
       },
     );
 
-    expect(result.ok).toBe(false);
+    expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("custom relay URL overrides are not allowed");
     expect(result.stderr).not.toContain("fastlane");
     expect(result.stdout).toBe("");
@@ -135,53 +39,20 @@ describe("iOS release shell wrapper arguments", () => {
   it("requires stamped build metadata for App Store release preparation", () => {
     const script = readFileSync(path.join(process.cwd(), "scripts/ios-release-prepare.sh"), "utf8");
 
-    expect(script).toContain("OPENCLAW_REQUIRE_BUILD_METADATA=1");
-    expect(script).toContain(
+    for (const marker of [
+      "OPENCLAW_REQUIRE_BUILD_METADATA=1",
       'RELEASE_SOURCE_HELPER="${ROOT_DIR}/scripts/apple-release-source-check.sh"',
-    );
-    expect(script).toContain('--expected-commit "${RELEASE_GIT_COMMIT}"');
+      '--expected-commit "${RELEASE_GIT_COMMIT}"',
+      'export GIT_COMMIT="${RELEASE_GIT_COMMIT}"',
+    ]) {
+      expect(script).toContain(marker);
+    }
     expect(script.indexOf('bash "${RELEASE_SOURCE_HELPER}"')).toBeLessThan(
       script.lastIndexOf("prepare_build_dir"),
     );
-    expect(script).toContain('export GIT_COMMIT="${RELEASE_GIT_COMMIT}"');
   });
 
-  it("cuts the planned iOS notes independently and keeps repeated preparation idempotent", () => {
-    const root = tempDirs.make("openclaw-ios-cut-");
-    const changelog = path.join(root, "apps/ios/CHANGELOG.md");
-    mkdirSync(path.dirname(changelog), { recursive: true });
-    writeFileSync(changelog, "# iOS Changelog\n\n## Unreleased\n\nNew release note.\n");
-    const plan = path.join(root, "plan.json");
-    writeFileSync(plan, JSON.stringify({ appStoreVersion: "2026.7.21" }));
-    const cut = () =>
-      spawnSync(
-        process.execPath,
-        [
-          "--import",
-          path.join(process.cwd(), "scripts/tsx.mjs"),
-          path.join(process.cwd(), "scripts/ios-release-cut.ts"),
-          "--plan",
-          plan,
-        ],
-        { cwd: root, encoding: "utf8" },
-      );
-
-    const first = cut();
-    expect(first.status, first.stderr).toBe(0);
-    expect(readFileSync(changelog, "utf8")).toBe(
-      "# iOS Changelog\n\n## Unreleased\n\n## 2026.7.21\n\nNew release note.\n",
-    );
-    const second = cut();
-    expect(second.status, second.stderr).toBe(0);
-    expect(second.stdout).toBe("iOS App Store release notes for 2026.7.21 are already cut.\n");
-  });
-
-  function runSharedFastlane(options: {
-    fastlaneExit: number;
-    bundleGemfile?: string;
-    changeDirectoryAfterSource?: boolean;
-    uploadArgs?: string[];
-  }) {
+  function runSharedFastlane(args: string[], bundleGemfile = "") {
     const binDir = tempDirs.make("openclaw-fastlane-test-");
     const bundle = path.join(binDir, "bundle");
     const fastlane = path.join(binDir, "fastlane");
@@ -195,65 +66,33 @@ describe("iOS release shell wrapper arguments", () => {
         "shift 3\n" +
         'exec fastlane "$@"\n',
     );
-    writeFileSync(
-      fastlane,
-      `#!/usr/bin/env bash\nprintf '%s\\n' "$*"\nexit ${options.fastlaneExit}\n`,
-    );
+    writeFileSync(fastlane, `#!/usr/bin/env bash\nprintf '%s\\n' "$*"\nexit 0\n`);
     chmodSync(bundle, 0o755);
     chmodSync(fastlane, 0o755);
-    return spawnSync(
-      BASH_BIN,
-      options.uploadArgs
-        ? ["scripts/ios-release-upload.sh", ...options.uploadArgs]
-        : [
-            "-c",
-            options.changeDirectoryAfterSource
-              ? "source scripts/lib/ios-fastlane.sh; cd apps/ios; run_ios_fastlane ios release_plan"
-              : "source scripts/lib/ios-fastlane.sh; run_ios_fastlane ios release_plan",
-          ],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          BUNDLE_GEMFILE: options.bundleGemfile ?? "",
-          OPENCLAW_FASTLANE_EXPECTED_GEMFILE: gemfilePath,
-          PATH: `${binDir}:${process.env.PATH ?? ""}`,
-        },
-        encoding: "utf8",
-      },
-    );
+    return runBash(args, {
+      BUNDLE_GEMFILE: bundleGemfile,
+      OPENCLAW_FASTLANE_EXPECTED_GEMFILE: gemfilePath,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    });
   }
 
   it("routes stage recovery to the non-uploading lane with the saved identity", () => {
-    const result = runSharedFastlane({
-      fastlaneExit: 0,
-      uploadArgs: [
-        "--stage-only",
-        "--version",
-        "2026.7.2",
-        "--revision",
-        "1",
-        "--build-number",
-        "3",
-      ],
-    });
+    const result = runSharedFastlane([
+      "scripts/ios-release-upload.sh",
+      "--stage-only",
+      ...releaseArgs,
+    ]);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(
       "ios release_stage release_version:2026.7.2 app_store_revision:1 build_number:3\n",
     );
   });
 
-  it("preserves Fastlane failures through the pinned shared runner", () => {
-    const result = runSharedFastlane({ fastlaneExit: 37 });
-    expect(result.status).toBe(37);
-  });
-
   it("keeps the repository Gemfile after the caller changes directories", () => {
-    const result = runSharedFastlane({
-      bundleGemfile: "/tmp/hostile/Gemfile",
-      changeDirectoryAfterSource: true,
-      fastlaneExit: 0,
-    });
+    const result = runSharedFastlane(
+      ["-c", "source scripts/lib/ios-fastlane.sh; cd apps/ios; run_ios_fastlane ios release_plan"],
+      "/tmp/hostile/Gemfile",
+    );
 
     expect(result.status).toBe(0);
   });

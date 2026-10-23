@@ -31,7 +31,6 @@ import {
   currentConfigConnectionEpoch,
   isCurrentConfigConnection,
   isCurrentRequest,
-  nextRequestVersion,
   resolveEditableSnapshotConfig,
   type ConfigRead,
   type ConfigGatewayClient,
@@ -231,9 +230,12 @@ export async function executeConfigExternalMutation<T>(
     if (!refreshed.ok) {
       return refreshFailure(refreshed.error);
     }
-    if (receipt?.noop === true) {
-      // A no-op has no write revision. Reconcile only the source admitted by
-      // the read owner, without invalidating its successors as a new write.
+    if (
+      receipt?.noop === true ||
+      (!receipt && state.configFormMode === "form" && state.configFormDirty)
+    ) {
+      // Refresh-only mutations have no write receipt. Reconcile Form edits
+      // against the admitted source; overlapping changes still conflict.
       const snapshot = state.configSnapshot;
       const config = resolveEditableSnapshotConfig(snapshot);
       if (!config || !snapshot?.hash) {
@@ -319,7 +321,7 @@ async function readConfig(
   isCurrentLoad: () => boolean,
 ): Promise<Result<void, string>> {
   const isCurrent = () =>
-    isCurrentLoad() && isCurrentRequest(state, "config", version, client, connectionEpoch);
+    isCurrentLoad() && isCurrentRequest(state, version, client, connectionEpoch);
   if (!options.background) {
     state.configLoading = true;
   }
@@ -390,13 +392,13 @@ async function readConfig(
     }
     return failure(outcome.message);
   } finally {
-    if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
+    if (isCurrentRequest(state, version, client, connectionEpoch)) {
       state.configLoading = false;
     }
   }
 }
 
-export async function loadConfigSchema(state: RuntimeConfigState) {
+export async function loadConfigSchema(state: RuntimeConfigState): Promise<Result<void, string>> {
   const client = state.client;
   if (
     !client ||
@@ -404,28 +406,30 @@ export async function loadConfigSchema(state: RuntimeConfigState) {
     state.configSchemaLoading ||
     !hasOperatorReadAccess(client.auth)
   ) {
-    return;
+    return ok(undefined);
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
-  const version = nextRequestVersion(state, "schema");
   state.configSchemaLoading = true;
   try {
     const res = await client.request<ConfigSchemaResponse>("config.schema", {});
-    if (!isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
-      return;
+    if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
+      return failure("The schema refresh was superseded.");
     }
     state.configSchema = res.schema ?? null;
     state.configUiHints = res.uiHints ?? {};
     state.configSchemaVersion = res.version ?? null;
+    return ok(undefined);
   } catch (err) {
-    if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
-      state.lastError = formatUiError(err);
+    const message = formatUiError(err);
+    if (isCurrentConfigConnection(state, client, connectionEpoch)) {
+      state.lastError = message;
       if (state.configAutoSaveStatus === "rejected") {
         state.configAutoSaveStatus = "error";
       }
     }
+    return failure(message);
   } finally {
-    if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
+    if (isCurrentConfigConnection(state, client, connectionEpoch)) {
       state.configSchemaLoading = false;
     }
   }

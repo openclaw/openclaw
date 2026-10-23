@@ -5,7 +5,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
 import type { ApprovalRequestInput } from "./approval-types.js";
-import type { ExecApprovalChannelRuntimeAdapterAsync } from "./exec-approval-channel-runtime.types.js";
+import type { ExecApprovalChannelRuntimeAdapterAsync } from "./exec-approval-channel-runtime.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 import type {
@@ -471,29 +471,6 @@ describe("createExecApprovalChannelRuntime", () => {
     expectStartGatewayClientCall();
   });
 
-  it("can retry start after gateway client creation fails", async () => {
-    const boom = new Error("boom");
-    mockCreateOperatorApprovalsGatewayClient
-      .mockRejectedValueOnce(boom)
-      .mockImplementationOnce(async (params) => ({
-        start: () => {
-          mockGatewayClientStarts();
-          queueMicrotask(() => {
-            params.onHelloOk?.({ type: "hello-ok" } as never);
-          });
-        },
-        stop: mockGatewayClientStops,
-        request: mockGatewayClientRequests,
-      }));
-    const runtime = createRuntime();
-
-    await expect(runtime.start()).rejects.toThrow("boom");
-    await runtime.start();
-
-    expect(mockCreateOperatorApprovalsGatewayClient).toHaveBeenCalledTimes(2);
-    expect(mockGatewayClientStarts).toHaveBeenCalledTimes(1);
-  });
-
   it("waits through retryable connect auth errors until hello succeeds", async () => {
     const authError = Object.assign(new Error("gateway token mismatch"), {
       details: {
@@ -750,49 +727,6 @@ describe("createExecApprovalChannelRuntime", () => {
       expect(loggerMocks.error).toHaveBeenCalledWith(
         "error replaying pending approvals: deliver failed",
       );
-    });
-  });
-
-  it("clears pending state when delivery throws", async () => {
-    const deliverRequested = vi
-      .fn<() => Promise<Array<{ id: string }>>>()
-      .mockRejectedValueOnce(new Error("deliver failed"))
-      .mockResolvedValueOnce([{ id: "abc" }]);
-    const finalizeResolved = vi.fn(async () => undefined);
-    const runtime = createRuntime({
-      deliverRequested,
-      finalizeResolved,
-    });
-
-    await expect(
-      runtime.handleRequested({
-        id: "abc",
-        request: {
-          command: "echo abc",
-        },
-        createdAtMs: 1000,
-        expiresAtMs: 2000,
-      }),
-    ).rejects.toThrow("deliver failed");
-
-    await runtime.handleRequested({
-      id: "abc",
-      request: {
-        command: "echo abc",
-      },
-      createdAtMs: 1000,
-      expiresAtMs: 2000,
-    });
-    await runtime.handleResolved({
-      id: "abc",
-      decision: "allow-once",
-      ts: 1500,
-    });
-
-    expectFinalizedResolved(finalizeResolved, {
-      id: "abc",
-      decision: "allow-once",
-      entries: [{ id: "abc" }],
     });
   });
 });

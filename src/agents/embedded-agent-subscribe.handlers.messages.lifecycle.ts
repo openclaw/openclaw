@@ -1,9 +1,15 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
+import { detectToolCallShapedText } from "../../packages/tool-call-repair/src/index.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
+import { bindAgentAssistantSource, readAgentAssistantSource } from "../infra/agent-events.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
+import { isToolCallBlockType } from "../shared/tool-block-contract.js";
+import { prepareAgentRunTerminalReply } from "./agent-run-terminal-reply.js";
 import {
   recordPendingAssistantReplyDirectives,
   resolveManagedStreamMediaUrls,
@@ -28,7 +34,6 @@ import {
 } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
-import { warnIfAssistantEmittedSuspiciousText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
 import {
   createThinkingTagStreamState,
   extractAssistantThinking,
@@ -38,6 +43,24 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
+
+function isRegisteredToolName(
+  toolName: string | undefined,
+  registeredToolNames: ReadonlySet<string> | undefined,
+): boolean | undefined {
+  if (!toolName || !registeredToolNames) {
+    return undefined;
+  }
+  const normalized = normalizeToolPolicyName(toolName);
+  for (const registeredToolName of registeredToolNames) {
+    if (normalizeToolPolicyName(registeredToolName) === normalized) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function handleMessageStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -97,13 +120,14 @@ export function handleMessageEnd(
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
     !suppressSourceReplyOutput;
+  const diagnosticSessionId = (ctx.params.session as { id?: string }).id;
   const appendRawMessage = (getText: () => string) =>
     appendRawStream(
       () => ({
         ts: Date.now(),
         event: "assistant_message_end",
         runId: ctx.params.runId,
-        sessionId: (ctx.params.session as { id?: string }).id,
+        sessionId: diagnosticSessionId,
         rawText: getText(),
         rawThinking: extractAssistantThinking(assistantMessage),
       }),
@@ -132,9 +156,68 @@ export function handleMessageEnd(
   let rawText: string | undefined;
   const getRawText = () => (rawText ??= extractEmbeddedAssistantText(assistantMessage));
   const snapshot = extractAssistantStreamSnapshot(ctx, assistantMessage);
+  const preparedReply = prepareAgentRunTerminalReply({ rawText: snapshot.rawText });
+  // The snapshot's protocol accumulator already removed the raw control line.
+  // Render its prepared source directly; feeding the suffix back through it would
+  // incorrectly silence a visible suffix that itself spells NO_REPLY.
   const rawVisibleText = snapshot.text;
   appendRawMessage(getRawText);
-  warnIfAssistantEmittedSuspiciousText(ctx, assistantMessage);
+  {
+    // Detect text pretending to call a tool only when no real invocation was emitted.
+    const structuredToolInvocation = assistantMessage.content.some((block) =>
+      isToolCallBlockType(block.type),
+    );
+    const text =
+      extractTextFromChatContent(assistantMessage.content, {
+        joinWith: "\n",
+        normalizeText: (chunk) => chunk.trim(),
+      }) ?? "";
+    const toolDetection = structuredToolInvocation ? null : detectToolCallShapedText(text);
+    if (toolDetection) {
+      const provider = normalizeOptionalString(assistantMessage.provider);
+      const model = normalizeOptionalString(assistantMessage.model);
+      const registeredTool = isRegisteredToolName(toolDetection.toolName, ctx.builtinToolNames);
+      const sessionId = normalizeOptionalString(diagnosticSessionId);
+      ctx.log.warn(
+        "Assistant reply looks like a tool call, but no structured tool invocation was emitted; treating it as text.",
+        {
+          runId: ctx.params.runId,
+          ...(sessionId ? { sessionId } : {}),
+          ...(provider ? { provider } : {}),
+          ...(model ? { model } : {}),
+          pattern: toolDetection.kind,
+          ...(toolDetection.toolName ? { toolName: toolDetection.toolName } : {}),
+          ...(registeredTool !== undefined ? { registeredTool } : {}),
+        },
+      );
+    }
+    // Parsed headers need a bracket or angle delimiter, written literally or as an entity.
+    const roleDetection =
+      text.includes("[") || text.includes("<") || text.includes("&")
+        ? markdownToIR(text, {
+            assistantTranscriptRoleHeaders: true,
+            enableSpoilers: true,
+            linkify: false,
+            tableMode: "off",
+          }).annotations?.[0]
+        : undefined;
+    if (roleDetection?.type === "assistant_transcript_role") {
+      const provider = normalizeOptionalString(assistantMessage.provider);
+      const model = normalizeOptionalString(assistantMessage.model);
+      const sessionId = normalizeOptionalString(diagnosticSessionId);
+      ctx.log.warn(
+        "Assistant reply contains transcript-role-looking text; treating it as inert assistant text.",
+        {
+          runId: ctx.params.runId,
+          ...(sessionId ? { sessionId } : {}),
+          ...(provider ? { provider } : {}),
+          ...(model ? { model } : {}),
+          pattern: roleDetection.kind,
+          role: roleDetection.role,
+        },
+      );
+    }
+  }
   const messageToolText = extractStandaloneMessageToolText(rawVisibleText, {
     allowRoutedReply: isOpenAiCompletionsAssistantMessage(assistantMessage),
     allowCurrentSourceReply:
@@ -157,7 +240,6 @@ export function handleMessageEnd(
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(getRawText())
       : "";
-  const trimmedText = text.trim();
   ctx.resetPartialReplyDirectives();
   const parsedText = parseReplyDirectives(text);
   // Final media is emitted after the buffered text drains, never on its first chunk.
@@ -246,9 +328,7 @@ export function handleMessageEnd(
     );
   }
 
-  const silentExpectedWithoutSentinel =
-    ctx.params.silentExpected && !isSilentReplyText(trimmedText, SILENT_REPLY_TOKEN);
-  const finalAssistantText = silentExpectedWithoutSentinel ? "" : text;
+  const finalAssistantText = ctx.params.silentExpected ? "" : cleanedText;
   // Each streamed item rotates the text baseline, so hidden commentary after the answer would
   // re-add the answer under the commentary's index. The last visible item's text is already
   // recorded for this message in that case.
@@ -271,14 +351,14 @@ export function handleMessageEnd(
     !ctx.params.silentExpected &&
     assistantMessage.stopReason === "stop" &&
     assistantMessage.endTurn !== false &&
-    !parsedText.isSilent &&
+    preparedReply.terminalReply.disposition === "visible" &&
     Boolean(cleanedText.trim() || mediaUrls.length > 0);
   // A NO_REPLY or empty stop without attachment or speech adds nothing to an answer this
   // input already completed, so that answer stays the turn's reply. Persistence may already
   // have moved voice and TTS directives into delivery facts.
   const addsNothing =
     assistantMessage.stopReason === "stop" &&
-    (parsedText.isSilent || !cleanedText.trim()) &&
+    (preparedReply.terminalReply.disposition !== "visible" || !cleanedText.trim()) &&
     mediaUrls.length === 0 &&
     !parsedText.audioAsVoice &&
     !assistantMessage.openclawDelivery?.audioAsVoice &&
@@ -304,7 +384,7 @@ export function handleMessageEnd(
     const pending = ctx.flushBlockReplyBuffer({
       assistantMessageIndex: ctx.state.assistantMessageIndex,
       final: true,
-      finalReply: parsedText,
+      finalReply: { ...parsedText, text: cleanedText },
     });
     if (pending) {
       void pending.catch((err: unknown) => {
@@ -319,6 +399,10 @@ export function handleMessageEnd(
       assistant: applyAssistantDeliveryDirectives(structuredClone(assistantMessage)),
       messageIndex: ctx.state.lastAssistantTextMessageIndex,
     };
+    const sourceReceipt = readAgentAssistantSource(assistantMessage);
+    if (sourceReceipt) {
+      bindAgentAssistantSource(ctx.state.inputAnswer.assistant, sourceReceipt);
+    }
   }
 
   if (!ctx.params.silentExpected && rawThinking) {

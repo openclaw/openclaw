@@ -40,6 +40,8 @@ compaction with session-store patches and harness calls. The result contains
 `compacted`, optional `reason`, and optional `tokensBefore` and `tokensAfter`
 snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
+Opted-in authorized commands may also use [command-scoped native children](/plugins/sdk-runtime/background-work#command-scoped-native-children) through `ctx.runtimeContext?.subagents`.
+
 ## Auth-profile resolution
 
 The experimental `openclaw/plugin-sdk/agent-runtime` entrypoint exports
@@ -242,6 +244,132 @@ providers participate only in subsequent resolutions. Wire cleanup into the
 plugin's existing runtime lifecycle and revalidate plugin-owned authority after
 the provider's own awaited work.
 
+## Context engine transcript cursor
+
+Context engines keep their own store in step with the host transcript through
+the typed `openclaw/plugin-sdk/context-engine-transcript-runtime` subpath:
+
+```ts
+import {
+  readSessionTranscriptVisibleMessageDelta,
+  SessionTranscriptReadFenceError,
+  type SessionTranscriptMessageEntry,
+  type SessionTranscriptVisibleMessageDeltaParams,
+  type SessionTranscriptVisibleMessageDeltaResult,
+} from "openclaw/plugin-sdk/context-engine-transcript-runtime";
+
+const result = await readSessionTranscriptVisibleMessageDelta({
+  agentId,
+  sessionKey,
+  sessionId,
+  cursor: storedCursor, // omit for the first read
+  maxMessages: 1_000,
+  maxBytes: 1_000_000,
+  start: "reset-window",
+});
+```
+
+`storePath` is optional and follows the [store-selection rules](#agent-and-session-namespaces)
+of the other identity-based transcript APIs. Each read returns one of four results.
+
+| Result                                            | Meaning                                                                                                                                                                                                                                                          | Engine response                                                                                                                                                                                                         |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `page`                                            | Up to `maxMessages` active-path messages after the cursor, oldest first, totaling at most `maxBytes` of stored JSONL. `hasMore` reports unread messages. When the next message alone exceeds `maxBytes`, the page is empty and `requiredBytes` reports its size. | Ingest `entries` keyed by `entryId`. Persist `cursor` in the same commit as the ingested entries, then read again while `hasMore` is true. Retry an empty page with `maxBytes` at least `requiredBytes` (up to 64 MiB). |
+| `reset`                                           | The supplied cursor no longer describes the transcript. `cursor` is a fresh cursor and `reason` names the discontinuity.                                                                                                                                         | Drain again from the fresh cursor, as described per reason below.                                                                                                                                                       |
+| `unavailable` with reason `projection_rebuilding` | The host is rebuilding its active-message projection after a branch change.                                                                                                                                                                                      | Keep the stored cursor and retry later, for example on the next lifecycle call. Do not read transcript files instead.                                                                                                   |
+| `missing`                                         | No transcript exists for this session identity.                                                                                                                                                                                                                  | Treat the session as empty and keep no cursor.                                                                                                                                                                          |
+
+The cursor is opaque. Store it and pass it back unchanged; it identifies a
+position only and never grants access to a session. A cursor is bound to one
+agent, session ID, and transcript generation. Linear appends, including
+compaction rows, keep it valid, so a steady-state read costs time proportional
+to new messages. Reset rows keep default cursors valid; reset-window cursors
+handle them as described under [Reset-window start](#reset-window-start). Defaults are 1,000 messages and 1,000,000 bytes;
+caps are 10,000 messages and 64 MiB.
+
+### Reset reasons
+
+| Reason                | Cause                                                                                                               | Engine response                                                                                                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `anchor_missing`      | The last entry the cursor returned left the active path, for example after a branch change or a transcript rewrite. | Drain from the fresh cursor and reconcile by `entryId`. Map rewritten copies to their originals through `supersedesEntryId`; entries absent from the new drain left the active path. |
+| `anchor_moved`        | That entry is still on the active path at a different position.                                                     | Same as `anchor_missing`.                                                                                                                                                            |
+| `generation_mismatch` | The transcript was replaced, for example by an in-place rewrite.                                                    | Same as `anchor_missing`.                                                                                                                                                            |
+| `invalid_cursor`      | The stored cursor is malformed or was altered.                                                                      | Same as `anchor_missing`.                                                                                                                                                            |
+| `scope_mismatch`      | The cursor belongs to another agent or session ID.                                                                  | Do not reuse state from the other session; start this session from the fresh cursor.                                                                                                 |
+| `session_reset`       | Reset-window cursors only. A same-session reset after the cursor was created closed the window it was draining.     | Retire the conversation state built from the old window and drain the new one from the fresh cursor.                                                                                 |
+
+When several discontinuities apply at once, a read reports one reason in this
+order: `invalid_cursor`, `scope_mismatch`, `session_reset`, `generation_mismatch`,
+then `anchor_missing` or `anchor_moved`. For a reset-window cursor, a newer reset
+therefore wins over a rewrite or generation change that happened before the
+read, because the fresh cursor already starts in the new window and the engine
+must retire the old one rather than reconcile it. Resets are compared by their
+entry ID across generations, since raw positions restart when the generation
+changes.
+
+A reset always returns a cursor that starts a complete drain. Because entry IDs
+are stable, a bulk ID match after the drain is cheaper than per-entry lookups.
+
+### Reset-window start
+
+`start` selects where fresh cursors begin: on a read without `cursor`, and in
+`reset` results.
+
+- `"transcript"` (the default) starts at the first active-path message, including
+  history before any same-session reset. Its cursors are not reset-aware: they
+  continue through later reset rows.
+- `"reset-window"` starts at the latest same-session reset. A `preserve-tail`
+  reset first returns the retained tail: the user and assistant messages the
+  host replays after the reset, plus tool results paired with retained tool
+  calls. Then it returns every message after the reset row. A `clear` reset
+  returns only messages after the reset row. Without a reset, it matches
+  `"transcript"`.
+
+Reset-window cursors stay reset-aware. When a newer reset appears, the next read
+returns `reset` with reason `session_reset` and a fresh reset-window cursor,
+even if the engine has not yet handled its reset lifecycle hook. Pass the same
+`start` on every read: a reset for a readable reset-window cursor keeps that
+mode, but a malformed cursor (`invalid_cursor`) cannot report its mode, so its
+fresh cursor follows `start`.
+Retained-tail entries keep their original `seq`, so ordinals skip the excluded
+pre-reset messages.
+
+### Current-turn fence
+
+When an engine declares `currentTurnFence: "before-current-turn-entry-v1"`, the
+host runs `bootstrap`, maintenance, and `assemble` for an admitted turn under a
+read fence. Inside the fence, a read returns only messages before the admitted
+user entry, and its cursor stays before that entry. The host later supplies the
+turn through `commitTurn`, and the next read resumes from the fenced cursor.
+Reset-window starts inside the fence use the latest reset before the admitted
+entry.
+
+If the stored cursor is already at or past the admitted entry, or saw a reset
+after it, for example because the engine read the transcript outside the fence
+during the same turn, the read throws `SessionTranscriptReadFenceError`. Keep the stored cursor and
+let the error propagate: the host then uses the legacy context path for that
+logical turn and tries the engine again on the next one.
+
+### Entries
+
+Each `SessionTranscriptMessageEntry` contains:
+
+- `entryId`: the stable transcript entry ID.
+- `parentId`: the ID of the preceding active-path entry, or `null` for the first.
+  It can name an entry the drain does not return: a non-message entry such as a
+  reset or compaction row, or a pre-reset message that a reset-window drain skips.
+- `seq`: the one-based active-path message ordinal. It is read metadata, not a
+  cursor.
+- `role` and `message`: the redacted persisted message.
+- `createdAt` and `idempotencyKey`, when the persisted entry has them.
+- `supersedesEntryId`, only when a transcript rewrite re-appended this message.
+  A rewrite (tool-result truncation, chat edits, or `rewriteTranscriptEntries()`)
+  copies the active suffix under new entry IDs, so a stored cursor anchored in
+  that suffix returns `reset` with reason `anchor_missing`. After the new drain,
+  map each copy to the entry it immediately replaced through this field instead
+  of matching content; repeated rewrites form a chain. Plain appends, and copies
+  made by rewrites before this field existed, have no marker.
+
 ## Agent and session namespaces
 
 <AccordionGroup>
@@ -299,7 +427,9 @@ the provider's own awaited work.
 
     `runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw agent turn from plugin code. It uses the same provider/model resolution and agent-harness selection as channel-triggered replies.
 
-    The caller owns `terminalReplyExpectation`: `"required"` for a requested response, or `"optional"` for work that may finish silently. A model's `NO_REPLY` is empty output, not permission to waive a required response. Recovery after settled tools uses a tool-free finalization pass rather than repeating completed actions.
+    The caller owns `terminalReplyExpectation`: `"required"` for a normally requested response, `"optional"` for optional work, or `"result-required"` for internal work that must return a result. External turns may explicitly finish with an entire final that trims to uppercase `NO_REPLY` under either default reply expectation. The terminal producer prepares the full payload once and publishes `meta.terminalReply`; delivery consumes that fact without reparsing text. Producer preparation strips one literal leading `NO_REPLY\n`, preserving the remaining bytes as visible text. Otherwise, a standalone `NO_REPLY` on the last non-empty line is removed and the preceding answer is delivered; whitespace around that final line is allowed. Lowercase, punctuation, quoted or JSON forms, and inline or mid-text mentions are ordinary visible text. Internal result-required turns need a completed current-source final result, not a silent payload or progress update. `NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently. Empty output is not silence: recovery after settled tools uses a tool-free finalization pass rather than repeating completed actions.
+
+    For stored assistant text without an authoritative display or final-result fact, `openclaw/plugin-sdk/reply-runtime` exports `isSilentReplyText(text?: string)`, which checks only `text?.trim() === "NO_REPLY"`. It has no custom-token parameter. `reply-chunking` no longer exports silence helpers, and the memory-host runtime no longer re-exports them. There are no compatibility aliases; live delivery must use producer-prepared output rather than this stored-text helper.
 
     If your adapter delivers a final reply before the run returns, provide `resolveReplyDelivery(minimumAssistantMessageIndex?)`. Return `"delivered"` for a confirmed final to the current source, `"pending"` while its transport owns delivery or the outcome is uncertain, and `"missing"` when no final was delivered. Bind observations to this run and input; exclude earlier-input receipts when the supplied lower bound advances. Collecting a block, showing a preview, or writing an external channel's transcript is not a delivery receipt. Observation failures retain pending custody instead of authorizing another reply.
 
@@ -307,7 +437,7 @@ the provider's own awaited work.
 
     An explicit `resolveReplyDelivery` always takes precedence. If `onBlockReply` only collects output, updates a preview, or fails before sending, return `"missing"` when the adapter can confirm that no source transport owns a final response; this permits required recovery. Migrate delivery adapters to the observer so they can report actual receipts and uncertain sends. The block callback returns no delivery result, so a generic rejection alone does not authorize recovery. Legacy custody is scoped to the run and assistant-message index, retired for later inputs and on cancellation or completion; blocks without an index apply only to the initial input.
 
-    The optional `githubPublicationAvailable` input shipped in 2026.9.4 is deprecated and ignored. Remove it from plugin calls: the host checks the current session and Gateway for every attempt. The SDK accepts the old input until the next Plugin SDK major; it does not grant or disable publication tools.
+    The optional `githubPublicationAvailable` input shipped in 2026.9.4 is deprecated and ignored. Remove it from plugin calls: the host checks the current session and Gateway for every attempt. The SDK accepts the old input until a separately announced ordinary stable removal release; it does not grant or disable publication tools.
 
     `resolveCliBackendDispatchEligibility({ provider, model, agentId, authProfileId, config, agentDir, workspaceDir })` shares the embedded runner's CLI-backend dispatch decision (route, the backend's declared `subscriptionAuthDispatch` capability, stored credential mode — honoring an explicitly pinned `authProfileId`) with callers that opt embedded runs into `cliBackendDispatch: "subscription-auth"`. It returns `{ provider }` when the run would execute through the CLI backend and `undefined` when it stays on the direct passthrough, so callers can budget timeouts for the run that will actually execute.
 
@@ -357,7 +487,7 @@ the provider's own awaited work.
 
     Prefer `getSessionEntryAsync(...)`, `getSessionEntryByIdAsync(...)`, `prepareSessionEntryPatch(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic repair of the underlying store.
 
-    Both async getters are also exported from the existing `openclaw/plugin-sdk/session-store-runtime` subpath. They return the complete public entry projection, excluding host-private fields, or `undefined` for a missing entry. The by-ID result includes `{ sessionKey, entry }` from the same selected owner. An explicit `storePath` selects that physical store; an omitted path inside a host-supplied incognito scope retains that scope. Managed runtime calls reject if their plugin owner retires while the read is pending. Returned metadata does not authorize a later effect; revalidate the caller's current authority at that boundary. The SDK and runtime `getSessionEntry(...)` getters are deprecated in favor of `getSessionEntryAsync(...)` and will be removed at the next Plugin SDK major. Their synchronous behavior remains unchanged during the migration window. The existing `readSessionUpdatedAt(...)` deprecation follows the same removal window; await `readSessionUpdatedAtAsync(...)` instead.
+    Both async getters are also exported from the existing `openclaw/plugin-sdk/session-store-runtime` subpath. They return the complete public entry projection, excluding host-private fields, or `undefined` for a missing entry. The by-ID result includes `{ sessionKey, entry }` from the same selected owner. An explicit `storePath` selects that physical store; an omitted path inside a host-supplied incognito scope retains that scope. Managed runtime calls reject if their plugin owner retires while the read is pending. Returned metadata does not authorize a later effect; revalidate the caller's current authority at that boundary. The SDK and runtime `getSessionEntry(...)` getters are deprecated in favor of `getSessionEntryAsync(...)` and remain supported through 2026-12-31, with removal in the first January 2027 stable release. Their synchronous behavior remains unchanged during the migration window. The existing `readSessionUpdatedAt(...)` deprecation follows the same removal window; await `readSessionUpdatedAtAsync(...)` instead.
 
     By default, `getSessionEntryByIdAsync(...)` chooses the first visible exact ID match in session-key order, falling back to trimmed legacy IDs only when there is no exact match. Pass `orderBy: "updatedAt"` to choose the most recently updated match across exact and trimmed IDs, with session-key order breaking ties. Active Memory uses this option to preserve its most-recent-session selection.
 
@@ -389,7 +519,7 @@ the provider's own awaited work.
 
     Use `runWithWorkAdmission(...)` when a plugin starts work on a persisted session. The callback rejects archived or concurrently replaced sessions, keeps archive/reset/delete mutations coordinated through completion, and receives an `AbortSignal` that must be forwarded to the agent run. A harness may explicitly name trusted execution delegates through its experimental `delegatedExecutionPluginIds` registration field. Delegates can admit and run only an exact existing model-locked session; all session mutations remain restricted to the harness owner. See [Agent harness plugins](/plugins/sdk-agent-harness#delegated-execution).
 
-    Maintenance and repair plugins may use `deleteSessionEntry(...)` for one scoped session entry, `cleanupSessionLifecycleArtifacts(...)` for lifecycle-owned scratch sessions, and `resolveSessionStoreBackupPaths(...)` before mutating a store. Pass `expectedSessionId` and `expectedUpdatedAt` when deletion must not race a concurrent session update; use `expectedSessionId: null` when the earlier snapshot had no session id. These helpers are narrow repair/lifecycle surfaces, not a general store deletion API.
+    Maintenance and repair plugins may use `deleteSessionEntry(...)` for one scoped session entry, `cleanupSessionLifecycleArtifacts(...)` for lifecycle-owned scratch sessions, and `deleteSessionEntry({ ..., backupDir })` to complete a recovery snapshot before deletion. When repairing several entries in one store, pass `backupDir` on the first deletion only. The backup uses the verified SQLite snapshot owner, embeds retained cold transcripts, and publishes a standalone database without WAL or SHM sidecars alongside any legacy session index. Use a fresh backup directory; existing target files are never overwritten. `resolveSessionStoreBackupPaths(...)` remains an artifact inventory, not a safe file-copy protocol. Pass `expectedSessionId` and `expectedUpdatedAt` when deletion must not race a concurrent session update; use `expectedSessionId: null` when the earlier snapshot had no session id. These helpers are narrow repair/lifecycle surfaces, not a general store deletion API.
 
     `resolveStorePath(...)` and `updateSessionStoreEntry(...)` round out the session helpers: `resolveStorePath` resolves the session store path for a given scope, and `updateSessionStoreEntry({ storePath, sessionKey, update })` patches one entry directly by store path when the caller already knows it.
 
@@ -403,7 +533,7 @@ the provider's own awaited work.
 
     `readLatestAssistantTextByIdentity(...)` preserves the selected assistant text's whitespace and includes optional validated `openclawDelivery` facts from that same persisted message. Recovery consumers can retain reply, voice, media, and TTS intent without reparsing removed directives. These facts do not grant delivery authority; callers still apply their current-turn and reply-policy checks.
 
-    `withSessionTranscriptWrite(...)` exposes `readMessageFacts({ idempotencyKeys })` for exact-key lookups without loading the complete transcript. Facts and writes retain the context’s captured session and store; retained callbacks reject after the context closes. Native-history repair can preserve an existing message’s original run attribution while leaving the append owner’s strict payload comparison intact. A returned identity is evidence, not new execution authority.
+    `withSessionTranscriptWrite(...)` exposes `readMessageFacts({ idempotencyKeys })` for exact-key lookups without loading the complete transcript when its index is current. Pass `activeBranchOnly: true` to exclude identities on abandoned branches; the default includes every branch. While projection repair is pending, the owner derives the same facts from raw history. Facts and writes retain the context’s captured session and store; retained callbacks reject after the context closes. Native-history repair can preserve an existing message’s original run attribution while leaving the append owner’s strict payload comparison intact. A returned identity is evidence, not new execution authority.
 
     `appendSessionTranscriptMessageByIdentity(...)` is a low-level append of a message already in the supported format. Plugins must not synthesize media-bearing user rows with top-level `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, or `MediaTypes`. Channel ingress should pass ordered facts through `MsgContext.media` and let the host own user-turn persistence. A host-prepared persisted user message carries normalized ordered facts under `message.__openclaw.media`; the generic append API does not infer or repair legacy parallel arrays.
 
@@ -413,7 +543,7 @@ the provider's own awaited work.
 
     A harness that supports `sessions_yield` uses `appendSessionYieldContext(...)` after successful yield settlement to retain private resume context in the stored session transcript. Pass the session target, `message`, and an `assertCurrent` callback that checks the current run and settlement authority. The writer checks that callback again before appending the hidden context entry. Failed or revoked settlement must not append context; public tool results and display projections must omit the private message.
 
-Read-only native session catalogs use `readSessionTranscriptCatalogPage({ agentId, sessionKey, storePath?, limit, cursor, sourceDomain, pluginId })` from the same subpath. It returns `{ items, nextCursor? }` in newest-first catalog order; the optional opaque cursor continues toward older items and malformed cursors are rejected. The reader resolves the configured session store when `storePath` is omitted and binds the cursor to the selected store and session. Only nonempty user and assistant text from the local chat display projection is included; tool calls, tool results, reasoning, and other non-conversation blocks are omitted. Text preserves credentials and is bounded per item with `truncated` set when clipped. Review it before sharing; diagnostic exports retain their masking. Reads scan at most 1,000 source messages per page, so a page containing only omitted activity can have no items and still return a continuation cursor. Cursors from the earlier tool-inclusive projection are rejected with a reload message. Raw page reads are bounded to 8 MiB; an oversized entry returns an explicit error. Cold history requires restoration by the source Gateway; the catalog reader never opens a writer to restore it. User sender attribution is portable: source-local profiles become remote identities in the caller's plugin/domain namespace, using a verified numeric GitHub account ID when available and a source profile ID otherwise. Existing remote and observed identities remain portable. The caller must authorize each session read separately; a cursor or identity claim never grants access. [Session Share](/plugins/session-share) uses this reader for its paired-node publication.
+Read-only native session catalogs use `readSessionTranscriptCatalogPage({ agentId, sessionKey, storePath?, limit, cursor, sourceDomain, pluginId })` from the same subpath. It returns `{ items, nextCursor? }` in newest-first catalog order; the optional opaque cursor continues toward older items and malformed cursors are rejected. The reader resolves the configured session store when `storePath` is omitted and binds the cursor to the selected store and session. Only nonempty user and assistant text from the local chat display projection is included; tool calls, tool results, reasoning, and other non-conversation blocks are omitted. Standalone control lines removed by that projection are not catalog items; raw transcript reads retain the original source rows. Text preserves credentials and is bounded per item with `truncated` set when clipped. Review it before sharing; diagnostic exports retain their masking. Reads scan at most 1,000 source messages per page, so a page containing only omitted activity can have no items and still return a continuation cursor. Cursors from the earlier tool-inclusive projection are rejected with a reload message. Raw page reads are bounded to 8 MiB; an oversized entry returns an explicit error. Cold history requires restoration by the source Gateway; the catalog reader never opens a writer to restore it. User sender attribution is portable: source-local profiles become remote identities in the caller's plugin/domain namespace, using a verified numeric GitHub account ID when available and a source profile ID otherwise. Existing remote and observed identities remain portable. The caller must authorize each session read separately; a cursor or identity claim never grants access. [Session Share](/plugins/session-share) uses this reader for its paired-node publication.
 
 Catalog list publishers await `prepareSessionCatalogSourceActorProjector({ pluginId, sourceDomain, actors })` from the same subpath after selecting a page. It prepares profile and verified GitHub facts in workers; call the returned function for each actor synchronously and in publication order. Only human creators stamped with `source: "profile"` resolve local profiles; the resulting remote claims never grant access. Prepare a new projector for each page or request so profile merges, display names, and primary GitHub accounts are refreshed. The synchronous `createSessionCatalogSourceActorProjector` is deprecated and remains available only for existing consumers. See [catalog identity preparation](/plugins/sdk-migration/how-to-migrate#prepare-session-catalog-identities).
 
@@ -427,7 +557,9 @@ Catalog list publishers await `prepareSessionCatalogSourceActorProjector({ plugi
 
     `readSessionTranscriptRawDelta(...)` returns a bounded `page`, `reset`, or `missing` result. Pass the opaque `page.cursor` into the next call. Pure appends preserve the cursor, while transcript replacement returns `reset` with a new bootstrap cursor. Pages default to 1,000 events and 1,000,000 serialized bytes; callers may request up to 10,000 events and 64 MiB. When the next event alone exceeds `maxBytes`, the page is empty and reports `requiredBytes`; retry with at least that byte limit when it is no greater than 64 MiB. Larger individual events require the complete-read API. A cursor identifies position only and never grants access to another session.
 
-    `readSessionTranscriptVisibleMessageDelta(...)` provides the same bounded bootstrap-and-resume shape over the host-owned active message projection. It returns messages from oldest to newest, so context engines can drain initial history and persist the opaque cursor as their watermark. Store and return the cursor unchanged; it is a continuation hint, not an authorization credential. Linear appends resume after the last returned message. Transcript replacement, a cursor whose anchor left or moved within the active branch, malformed cursors, and cross-session cursors return `reset` with a fresh bootstrap cursor. The count and byte defaults and caps match the raw delta API. While the active projection is rebuilding after a branch change, the result is `unavailable` with reason `projection_rebuilding`; retry later rather than falling back to an active transcript file.
+    `readSessionTranscriptVisibleMessageDelta(...)` provides the same bounded bootstrap-and-resume shape over the host-owned active message projection. Context engines import it from the typed `openclaw/plugin-sdk/context-engine-transcript-runtime` subpath; see [Context engine transcript cursor](#context-engine-transcript-cursor) for cursor semantics, reset reasons, the reset-window start, and fence behavior.
+
+    Entries from `readVisibleSessionTranscriptMessageEntries(...)` and `readSessionTranscriptVisibleMessageDelta(...)` include an optional `supersedesEntryId` only when a transcript rewrite re-appended that message. A rewrite (tool-result truncation, chat edits, or `rewriteTranscriptEntries()`) copies the active suffix under new entry ids, so a stored cursor whose anchor was replaced returns `reset` with reason `anchor_missing`. After rebootstrapping, map each copy to its previous entry through `supersedesEntryId` instead of matching content. The value is the immediately replaced entry id; repeated rewrites form a chain. Plain appends and messages re-appended by rewrites made before this field existed have no marker.
 
     The beta.5 whole-store and transcript-path bridge has been removed from `openclaw/plugin-sdk/session-store-runtime`, along with the package-root `loadSessionStore` and `saveSessionStore` aliases. The September 30, 2026 approved [supported-plugin cutoff](/plugins/compatibility#session-store-bridge-retirement) excludes `v2026.7.1-beta.5` and other releases still importing that bridge. The subpath, scoped entry helpers, and `resolveStorePath(...)` remain available. Pass `agentId` to row operations explicitly; path resolution does not select an agent for later calls.
 

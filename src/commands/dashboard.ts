@@ -1,16 +1,20 @@
+import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import { formatCliJsonFailure } from "../cli/failure-output.js";
+import { promptYesNo } from "../cli/prompt.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { openUrlPrivately } from "../infra/browser-handoff.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
 import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { sleep } from "../utils/sleep.js";
 import {
   hasVerifiedControlUiLoopbackAlias,
   issueControlUiBrowserHandoff,
   resolveControlUiHandoffTarget,
   waitForControlUiDocument,
 } from "./control-ui-handoff.js";
-import { ensureDashboardGatewayReady } from "./gateway-readiness.js";
-import { detectBrowserOpenSupport, formatControlUiSshHint, openUrl } from "./onboard-helpers.js";
+import { gatewayProbeResultSawGateway } from "./gateway-health-auth-diagnostic.js";
+import { detectBrowserOpenSupport, formatControlUiSshHint } from "./onboard-helpers.js";
 
 type DashboardOptions = {
   json?: boolean;
@@ -39,22 +43,161 @@ async function resolveDashboardTarget() {
   });
 }
 
+function activeProbePortStatus(status: DaemonStatus): DaemonStatus["port"] {
+  const probeUrl = status.rpc?.url ?? status.gateway?.probeUrl;
+  const probePort = probeUrl
+    ? (() => {
+        try {
+          return Number(new URL(probeUrl).port);
+        } catch {
+          return Number.NaN;
+        }
+      })()
+    : Number.NaN;
+  if (Number.isFinite(probePort) && status.portCli?.port === probePort) {
+    return status.portCli;
+  }
+  return status.port;
+}
+
+function gatewayIsReady(status: DaemonStatus): boolean {
+  // A busy port alone is not enough: pair it with probe evidence so another
+  // local service on the same port cannot satisfy gateway readiness.
+  return (
+    status.rpc?.ok === true ||
+    (activeProbePortStatus(status)?.status === "busy" &&
+      Boolean(status.rpc && gatewayProbeResultSawGateway(status.rpc)))
+  );
+}
+
+function gatewayLooksStopped(status: DaemonStatus): boolean {
+  if (status.rpc && gatewayProbeResultSawGateway(status.rpc)) {
+    return false;
+  }
+  const port = activeProbePortStatus(status);
+  if (port?.status === "busy") {
+    return false;
+  }
+  if (port?.status === "free") {
+    return true;
+  }
+  const runtimeStatus = status.service.runtime?.status;
+  if (runtimeStatus === "stopped") {
+    return true;
+  }
+  const error = status.rpc?.error ?? "";
+  return /\bECONNREFUSED\b|couldn't connect|connection refused/i.test(error);
+}
+
+function gatewayServiceIsInstalled(status: DaemonStatus): boolean {
+  return Boolean(status.service.command || status.service.loadState.status === "loaded");
+}
+
+function nativeServiceTargetsGateway(status: DaemonStatus): boolean {
+  return status.service.targetRole !== "diagnostic-only";
+}
+
+function readinessFailureReason(status: DaemonStatus): string {
+  if (gatewayLooksStopped(status)) {
+    return "Gateway is not running.";
+  }
+  return status.rpc?.error
+    ? `Gateway check failed: ${status.rpc.error}`
+    : "Gateway is not healthy.";
+}
+
+function printGatewayNotReadyHints(
+  runtime: RuntimeEnv,
+  reason: string,
+  canStartService = true,
+): void {
+  runtime.log(reason);
+  runtime.log("Run `openclaw gateway status --deep` for details.");
+  if (!canStartService) {
+    runtime.log(
+      "Use the owning environment or supervisor to start or repair the selected Gateway.",
+    );
+    return;
+  }
+  runtime.log("Run `openclaw gateway start` to start a managed gateway.");
+  runtime.log("Run `openclaw gateway run` for a foreground gateway.");
+}
+
 async function ensureDashboardTargetReady(params: {
   target: Awaited<ReturnType<typeof resolveDashboardTarget>>;
   runtime: RuntimeEnv;
   yes?: boolean;
   allowRecovery?: boolean;
 }) {
-  return ensureDashboardGatewayReady({
-    runtime: params.runtime,
-    yes: params.yes,
-    probeUrl: params.target.probeUrl,
-    ...(params.allowRecovery === false ? { allowInstall: false, interactive: false } : {}),
-  });
+  const { runtime, yes, allowRecovery } = params;
+  const probeUrl = params.target.probeUrl;
+  const gatherStatus = async () => {
+    const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
+    return gatherDaemonStatus({
+      rpc: probeUrl ? { url: probeUrl } : {},
+      probe: true,
+      requireRpc: false,
+      deep: false,
+    });
+  };
+
+  const initialStatus = await gatherStatus();
+  if (gatewayIsReady(initialStatus)) {
+    return { ready: true as const, recovered: false };
+  }
+
+  const reason = readinessFailureReason(initialStatus);
+  const nativeServiceCanRecover = nativeServiceTargetsGateway(initialStatus);
+  const canStartService = gatewayLooksStopped(initialStatus) && nativeServiceCanRecover;
+  const shouldInstall = canStartService && !gatewayServiceIsInstalled(initialStatus);
+  if (!canStartService || (shouldInstall && allowRecovery === false)) {
+    printGatewayNotReadyHints(runtime, reason, canStartService);
+    return { ready: false as const, reason };
+  }
+
+  const prompt = shouldInstall
+    ? "No background Gateway service was detected for this profile. Install and start one to open the dashboard?"
+    : "The background Gateway service is not running. Start it to open the dashboard?";
+  const approved =
+    yes || (allowRecovery !== false && process.stdin.isTTY && (await promptYesNo(prompt, true)));
+  if (!approved) {
+    printGatewayNotReadyHints(runtime, reason);
+    return { ready: false as const, reason };
+  }
+
+  if (shouldInstall) {
+    const { runDaemonInstall } = await import("../cli/daemon-cli/install.js");
+    await runDaemonInstall({ json: false });
+  } else {
+    const { runDaemonStart } = await import("../cli/daemon-cli/lifecycle.js");
+    await runDaemonStart({ json: false });
+  }
+
+  let recoveredStatus = await gatherStatus();
+  for (let attempt = 1; attempt < 20 && !gatewayIsReady(recoveredStatus); attempt += 1) {
+    await sleep(500);
+    recoveredStatus = await gatherStatus();
+  }
+  if (gatewayIsReady(recoveredStatus)) {
+    return { ready: true as const, recovered: true };
+  }
+
+  const recoveredReason = readinessFailureReason(recoveredStatus);
+  const recoverable =
+    gatewayLooksStopped(recoveredStatus) && nativeServiceTargetsGateway(recoveredStatus);
+  printGatewayNotReadyHints(runtime, recoveredReason, recoverable);
+  return {
+    ready: false as const,
+    reason: recoveredReason,
+  };
 }
 
 function dashboardJsonFailure(runtime: RuntimeEnv, reason: string): void {
-  writeRuntimeJson(runtime, { ...formatCliJsonFailure(reason), reason }, 0);
+  const failure = formatCliJsonFailure(reason);
+  writeRuntimeJson(runtime, { ...failure, reason }, 0);
+  runtime.error(
+    `${failure.error.message}\nRun \`openclaw gateway status --deep\` for details, then retry \`openclaw dashboard --json\`.`,
+  );
   runtime.exit(1);
 }
 
@@ -197,7 +340,11 @@ export async function dashboardCommand(
   if (!options.noOpen) {
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
-      opened = await openUrl(browserUrl);
+      // The handoff URL carries the one-time pairing credential in its
+      // fragment. Open it through a private file handoff so the credential
+      // never appears in a browser-opener process argument, where another
+      // OS user could read it from /proc on default procfs hosts.
+      opened = await openUrlPrivately(browserUrl);
     }
     if (!browserSupport.ok || (!opened && !copied && isRemoteEnvironment())) {
       hint = formatControlUiSshHint({

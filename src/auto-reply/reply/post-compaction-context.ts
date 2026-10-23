@@ -41,16 +41,15 @@ function matchesSectionSet(sectionNames: string[], expectedSections: string[]): 
 type PostCompactionContextOptions = {
   cfg?: OpenClawConfig;
   agentId?: string;
-  nowMs?: number;
 };
 
 export async function readPostCompactionContext(
   workspaceDir: string,
   options?: PostCompactionContextOptions,
 ): Promise<string | null> {
-  const { cfg, agentId, nowMs } = options ?? {};
+  const { cfg, agentId } = options ?? {};
   const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
-  if (!Array.isArray(configuredSections) || configuredSections.length === 0) {
+  if (!configuredSections?.length) {
     return null;
   }
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
@@ -108,7 +107,7 @@ export async function readPostCompactionContext(
       return null;
     }
 
-    const resolvedNowMs = nowMs ?? Date.now();
+    const resolvedNowMs = Date.now();
     const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
     const dateStamp = formatDateStamp(resolvedNowMs, timezone);
     const maxContextChars =

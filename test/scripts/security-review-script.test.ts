@@ -88,12 +88,19 @@ const lockfileRoutes = {
   },
 };
 
-function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadline?: number) {
+function evaluate(
+  routes: Record<string, unknown> = {},
+  mode = "enforce",
+  deadline?: number,
+  completedCi?: { id: number; attempt: number },
+) {
   const root = tempDirs.make("security-review-");
   const logPath = path.join(root, "requests.jsonl");
   const fixturePath = path.join(root, "fixture.json");
   const eventPath = path.join(root, "event.json");
   const environmentPath = path.join(root, "environment");
+  const outputPath = path.join(root, "output");
+  writeFileSync(outputPath, "");
   writeFileSync(environmentPath, "");
   writeFileSync(logPath, "");
   // The resolver selects the PR for CI-completion events as well as PR/comments.
@@ -137,7 +144,14 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
           ? {}
           : { OPENCLAW_SECURITY_REVIEW_DEADLINE_MS: String(deadline) }),
         GITHUB_EVENT_PATH: eventPath,
+        ...(completedCi
+          ? {
+              OPENCLAW_SECURITY_REVIEW_CI_RUN_ID: String(completedCi.id),
+              OPENCLAW_SECURITY_REVIEW_CI_RUN_ATTEMPT: String(completedCi.attempt),
+            }
+          : {}),
         GITHUB_ENV: environmentPath,
+        GITHUB_OUTPUT: outputPath,
         GITHUB_REPOSITORY: "openclaw/openclaw",
         GITHUB_RUN_ID: "123",
         OPENCLAW_SECURITY_REVIEW_PR_NUMBER: "7",
@@ -163,6 +177,7 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
   return {
     ...result,
     environment: readFileSync(environmentPath, "utf8"),
+    output: readFileSync(outputPath, "utf8"),
     requests,
     waits: requests.filter((entry) => entry.method === "WAIT").map((entry) => entry.delay!),
     combined: requests
@@ -173,6 +188,64 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
 }
 
 describe("combined security review entry point", () => {
+  it("finishes ordinary preparation with the same decisions and fewer requests than separate detection", () => {
+    const detection = evaluate({}, "detect");
+    const enforcement = evaluate();
+    const prepared = evaluate({}, "prepare");
+    expect(prepared.status, prepared.stderr).toBe(0);
+    expect(prepared.output).toContain("autoscrub=false\n");
+    expect(prepared.output).toContain("completed=true\n");
+    expect(prepared.requests).toEqual(enforcement.requests);
+    expect(prepared.combined).toEqual(["pending", "success"]);
+    expect(prepared.reviews).toEqual(enforcement.reviews);
+    expect(detection.requests.length).toBeGreaterThan(0);
+    expect(prepared.requests.length).toBeLessThan(
+      detection.requests.length + enforcement.requests.length,
+    );
+  });
+
+  it("leaves cleanup candidates pending for autoscrub and fresh enforcement", () => {
+    const routes = { ...lockfileRoutes, [`GET ${pullPath}`]: lockfilePr };
+    const prepared = evaluate(routes, "prepare");
+    expect(prepared.status, prepared.stderr).toBe(0);
+    expect(prepared.output).toContain("autoscrub=true\n");
+    expect(prepared.output).not.toContain("completed=true");
+    expect(prepared.combined).toEqual(["pending"]);
+    expect(prepared.requests.some((entry) => entry.path === "/graphql")).toBe(false);
+    const enforcement = evaluate(routes);
+    expect(enforcement.requests[0]).toMatchObject({ method: "GET", path: pullPath });
+    expect(enforcement.combined.at(-1)).toBe("failure");
+  });
+
+  it.each([
+    { name: "real error", response: { httpError: 401 }, status: 1 },
+    { name: "ineligible PR", response: { ...pr, draft: true }, status: 0 },
+  ])("does not complete preparation after $name", ({ response, status }) => {
+    const result = evaluate({ [`GET ${pullPath}`]: response }, "prepare");
+    expect(result.status, result.stderr).toBe(status);
+    expect(result.output).not.toContain("completed=true");
+    expect(result.combined).not.toContain("success");
+  });
+
+  it("shares notice inventories between both guards without sharing approval authority", () => {
+    const result = evaluate();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.combined.at(-1)).toBe("success");
+    for (const inventory of ["comments", "labels"]) {
+      expect(
+        result.requests.filter(
+          (entry) =>
+            entry.method === "GET" &&
+            entry.path === `/repos/openclaw/openclaw/issues/7/${inventory}`,
+        ),
+      ).toHaveLength(1);
+    }
+    expect(
+      result.requests.filter((entry) => entry.method === "GET" && entry.path === rolePath.slice(4))
+        .length,
+    ).toBeGreaterThan(1);
+  });
+
   it.each([
     {
       name: "fetch deadline",
@@ -1310,6 +1383,80 @@ describe("combined security review entry point", () => {
   };
   const listedRuns = (workflow_runs: object[]) => ({
     [runsPath]: { total_count: workflow_runs.length, workflow_runs },
+  });
+
+  describe("completion reconciliation", () => {
+    const completedCi = { id: 10, attempt: 1 };
+    it("retries a missing completed run before reporting success", () => {
+      const result = evaluate(
+        {
+          [runsPath]: {
+            responses: [
+              { total_count: 0, workflow_runs: [] },
+              { total_count: 1, workflow_runs: [run] },
+            ],
+          },
+        },
+        "enforce",
+        undefined,
+        completedCi,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits.reduce((sum, delay) => sum + delay, 0)).toBe(60_000);
+      expect(result.combined.at(-1)).toBe("success");
+    });
+
+    it("fails the pass when the completed run remains missing", () => {
+      const result = evaluate(listedRuns([]), "enforce", undefined, completedCi);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("completed CI run is missing");
+      expect(result.combined.at(-1)).toBe("failure");
+    });
+
+    it("retries a stale pending listing before publishing the completed gate", () => {
+      const result = evaluate(
+        {
+          [runsPath]: {
+            responses: [
+              { total_count: 1, workflow_runs: [{ ...run, status: "in_progress" }] },
+              { total_count: 1, workflow_runs: [run] },
+            ],
+          },
+        },
+        "enforce",
+        undefined,
+        completedCi,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits.reduce((sum, delay) => sum + delay, 0)).toBe(60_000);
+      expect(result.combined.at(-1)).toBe("success");
+    });
+
+    it.each([
+      { name: "run", newer: { ...run, id: 11, status: "in_progress" } },
+      { name: "attempt", newer: { ...run, run_attempt: 2, status: "in_progress" } },
+    ])("keeps a newer active $name pending", ({ newer }) => {
+      const result = evaluate(listedRuns([newer]), "enforce", undefined, completedCi);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits).toEqual([]);
+      expect(result.combined.at(-1)).toBe("pending");
+    });
+
+    it("retries a stale live observation of the completed attempt", () => {
+      const result = evaluate(
+        {
+          [`GET ${actions}/runs/10`]: {
+            responses: [{ ...run, status: "in_progress" }, run],
+          },
+        },
+        "enforce",
+        undefined,
+        completedCi,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits.reduce((sum, delay) => sum + delay, 0)).toBe(60_000);
+      expect(result.combined.at(-1)).toBe("success");
+    });
   });
 
   it.each<{

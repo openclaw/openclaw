@@ -30,6 +30,8 @@ import type { CapturedSessionEntryReadSource } from "./session-entry-read-source
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
+  /** Closed operations can acknowledge completion without returning the entry. */
+  result?: "none";
   /** Exact captured writer under its caller's foreground reservation; never a new owner. */
   retainedExecution?: OpenClawAgentDatabaseExecution;
   /** Audited internal updaters: no nested writer admission; guards retain only host authority. */
@@ -61,6 +63,7 @@ export type SqliteSessionEntrySnapshotPatchParams = {
   ) => SqliteLifecycleTargetSnapshot;
   resolved: ResolvedSqliteScope;
   sessionKey: string;
+  sharedWriteReserved?: boolean;
   storePath: string;
   // Callback preparation precedes BEGIN; fixed operations evaluate the transaction's current rows.
   update: SessionEntryUpdater | SessionEntryPatchOperation;

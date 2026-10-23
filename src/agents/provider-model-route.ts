@@ -16,7 +16,7 @@ import {
   resolveProviderModelRoutes,
 } from "../plugins/provider-model-routes.js";
 import { listProviderPolicyOwners } from "../plugins/provider-policy-owners.js";
-import type { ModelCatalogRoutePolicy } from "./model-catalog-route.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 
@@ -92,7 +92,7 @@ function routeTupleMatches(
 ): boolean {
   return (
     source.api === route.api &&
-    typeof source.baseUrl === "string" &&
+    source.baseUrl !== undefined &&
     (normalizeCatalogRouteBaseUrl(source.baseUrl) ?? "") ===
       (normalizeCatalogRouteBaseUrl(route.baseUrl) ?? "")
   );
@@ -140,10 +140,10 @@ export function modelMatchesProviderModelRoute(params: {
 }
 
 /** Creates catalog equivalence and physical-route matching from provider facts. */
-export function createProviderModelCatalogRoutePolicy(providerId: string): ModelCatalogRoutePolicy {
+export function createProviderModelCatalogRoutePolicy(providerId: string) {
   const provider = normalizeProviderId(providerId);
   return {
-    resolveIdentity: (entry) => {
+    resolveIdentity: (entry: Pick<ModelCatalogEntry, "provider" | "id">) => {
       if (normalizeProviderId(entry.provider) !== provider) {
         return null;
       }
@@ -153,7 +153,7 @@ export function createProviderModelCatalogRoutePolicy(providerId: string): Model
       });
       return id ? { id, key: `${provider}/${id}` } : null;
     },
-    matchesRoute: (entry, route) =>
+    matchesRoute: (entry: ModelCatalogEntry, route: ProviderModelRouteCandidate) =>
       normalizeProviderId(entry.provider) === provider &&
       modelMatchesProviderModelRoute({
         provider,

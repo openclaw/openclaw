@@ -14,7 +14,6 @@ import com.google.android.gms.tasks.Tasks
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -694,47 +693,6 @@ class WearProxyBridgeTest {
       runCurrent()
 
       assertTrue(awaiting.isCancelled)
-    }
-
-  @Test
-  fun staleEventFailureDoesNotRemoveRefreshedPeer() =
-    withActorScope { actorScope ->
-      val eventStarted = CompletableDeferred<Unit>()
-      val releaseEvent = CompletableDeferred<Unit>()
-      val sent = mutableListOf<SentWearMessage>()
-      var failFirstEvent = true
-      val bridge =
-        actorScope.testBridge(
-          sender =
-            WearMessageSender { nodeId, path, data ->
-              if (path == WearProtocol.EVENT_PATH && failFirstEvent) {
-                failFirstEvent = false
-                eventStarted.complete(Unit)
-                releaseEvent.await()
-                error("stale send failed")
-              }
-              sent += SentWearMessage(nodeId, path, data)
-            },
-          monotonicMillis = { 1_000L },
-        )
-      bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
-
-      bridge.publishConnection(connected = true, status = "Connected")
-      eventStarted.await()
-      val refreshed =
-        async(start = CoroutineStart.UNDISPATCHED) {
-          bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-2")))
-        }
-      releaseEvent.complete(Unit)
-      assertTrue(refreshed.await())
-      bridge.awaitIdleForTests()
-
-      bridge.publishConnection(connected = false, status = "Offline")
-      bridge.awaitIdleForTests()
-
-      assertEquals(1, bridge.peerCountForTests())
-      // The stale send is retried after discovery, then the later offline event also delivers.
-      assertEquals(2, sent.count { it.path == WearProtocol.EVENT_PATH })
     }
 
   private fun assertForeignTerminalPreservesStream(

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
 
 type RawCopyFinding = {
@@ -36,6 +36,8 @@ const SOURCE_DIRS = [
 const BASELINE_PATH = path.join(I18N_ASSETS_DIR, "raw-copy-baseline.json");
 const BASELINE_VERSION = 1;
 const INTERPOLATION_MARKER = "\u0000";
+export const CONTROL_UI_TEST_FILE_PATTERN =
+  /\.(?:test|browser\.test|node\.test|test-support)\.tsx?$/u;
 const RAW_COPY_ATTRIBUTE_NAMES = new Set(["alt", "aria-label", "placeholder", "title"]);
 
 function toRepoPath(filePath: string): string {
@@ -121,7 +123,7 @@ async function walkSourceFiles(dir: string): Promise<string[]> {
     if (
       entry.isFile() &&
       /\.tsx?$/u.test(entry.name) &&
-      !/\.(?:test|browser\.test|node\.test)\.tsx?$/u.test(entry.name)
+      !CONTROL_UI_TEST_FILE_PATTERN.test(entry.name)
     ) {
       files.push(fullPath);
     }

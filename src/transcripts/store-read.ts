@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import {
   asSafeIntegerInRange,
@@ -23,12 +22,11 @@ import {
 } from "../infra/database-engine/json-values.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { projectTranscriptSession } from "./read.js";
 import {
   meetingTranscriptDb,
-  type meetingTranscriptSessionQuery,
+  meetingTranscriptSessionQuery,
   meetingTranscriptUtteranceQuery,
   sessionFromRow,
 } from "./store-sqlite.js";
@@ -92,9 +90,8 @@ function transcriptPageLimit(limit = TRANSCRIPTS_PAGE_DEFAULT, max = TRANSCRIPTS
 export function assertTranscriptByteLimit(
   text: string,
   maxBytes = TRANSCRIPTS_RESULT_MAX_BYTES,
-  exporting = false,
 ): void {
-  assertTranscriptByteCount(Buffer.byteLength(text, "utf8"), maxBytes, exporting);
+  assertTranscriptByteCount(Buffer.byteLength(text, "utf8"), maxBytes);
 }
 
 export function assertTranscriptByteCount(
@@ -291,44 +288,13 @@ export type TranscriptReadOptions = Omit<TranscriptsListParams, "cursor"> & {
   session?: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
 };
 
-const dateReaders = new WeakSet<EngineConnection>();
-const dateParser = new AsyncLocalStorage<typeof parseDateStringTimestampMs>();
-
-function parseTranscriptDate(value: unknown): number | undefined {
-  return (dateParser.getStore() ?? parseDateStringTimestampMs)(value);
-}
-
-function registerTranscriptDateReader(database: EngineConnection): void {
-  if (isPostgresSqlConnection(database)) {
-    throw new Error("PostgreSQL transcript date filtering is not supported yet");
-  }
-  if (dateReaders.has(database)) {
-    return;
-  }
-  // Canonical database reopen creates a new handle. Date parsing is not
-  // deterministic because timezone-free strings depend on the process timezone.
-  database.function("openclaw_transcript_date_ms", (value) => parseTranscriptDate(value) ?? null);
-  dateReaders.add(database);
-}
-
-function transcriptStartTime(startedAt: Expression<string>) {
-  const eb = expressionBuilder();
-  // Bound the native-to-JavaScript argument before invoking the parser.
-  return eb
-    .case()
-    .when(eb.fn<number>("octet_length", [startedAt]), "<=", TRANSCRIPTS_RESULT_MAX_BYTES)
-    .then(eb.fn<number | null>("openclaw_transcript_date_ms", [startedAt]))
-    .end();
-}
-
-/** Chronological key selection scans candidates; filters never turn into ownership. */
+/** Chronological selection uses persisted instants; filters never turn into ownership. */
 function readTranscriptPage<Entry>(
   database: EngineConnection,
   options: TranscriptReadOptions,
   project: (entry: TranscriptReadEntry) => Entry,
 ): TranscriptReadPage<Entry> {
   const limit = transcriptPageLimit(options.limit, TRANSCRIPTS_LIST_MAX);
-  registerTranscriptDateReader(database);
   let query = meetingTranscriptDb(database).selectFrom("meeting_transcript_sessions");
   if (options.session) {
     query = query
@@ -348,29 +314,39 @@ function readTranscriptPage<Entry>(
     query = query.where("metadata_agent_id", "=", options.agentId);
   }
   if (options.startedAfter) {
-    const startedAfter = parseTranscriptDate(options.startedAfter) ?? null;
-    query = query.where((eb) => eb(transcriptStartTime(eb.ref("started_at")), ">=", startedAfter));
+    const startedAfter = parseDateStringTimestampMs(options.startedAfter) ?? null;
+    query = query.where("started_at_ms", ">=", startedAfter);
   }
   if (options.startedBefore) {
-    const startedBefore = parseTranscriptDate(options.startedBefore) ?? null;
-    query = query.where((eb) => eb(transcriptStartTime(eb.ref("started_at")), "<", startedBefore));
+    const startedBefore = parseDateStringTimestampMs(options.startedBefore) ?? null;
+    query = query.where("started_at_ms", "<", startedBefore);
   }
   if (options.after) {
     const after = options.after;
-    const afterTime = parseTranscriptDate(after.startedAt);
+    // The original string is identity only; its persisted instant survives timezone changes.
+    const cursor = executeSqliteQueryTakeFirstSync(
+      database,
+      meetingTranscriptSessionQuery(database, after).select("started_at_ms"),
+    );
+    if (!cursor) {
+      throw new TranscriptLibraryError(
+        "transcript_invalid_cursor",
+        "Transcript cursor session no longer exists; restart pagination.",
+      );
+    }
+    const afterTime = cursor.started_at_ms;
     query = query.where((eb) => {
-      const time = transcriptStartTime(eb.ref("started_at"));
       const afterIdentity = eb(
         eb.refTuple("session_id", "started_at"),
         ">",
         eb.tuple(after.sessionId, after.startedAt),
       );
-      return afterTime === undefined
-        ? eb.and([eb(time, "is", null), afterIdentity])
+      return afterTime === null
+        ? eb.and([eb("started_at_ms", "is", null), afterIdentity])
         : eb.or([
-            eb(time, "<", afterTime),
-            eb(time, "is", null),
-            eb.and([eb(time, "=", afterTime), afterIdentity]),
+            eb("started_at_ms", "<", afterTime),
+            eb("started_at_ms", "is", null),
+            eb.and([eb("started_at_ms", "=", afterTime), afterIdentity]),
           ]);
     });
   }
@@ -423,9 +399,9 @@ function readTranscriptPage<Entry>(
   }
   const keys = query
     .select(["session_id", "started_at"])
-    .orderBy((eb) => transcriptStartTime(eb.ref("started_at")), "desc")
-    .orderBy("session_id", "asc")
-    .orderBy("started_at", "asc")
+    .orderBy("started_at_ms", (order) => order.desc().nullsLast())
+    .orderBy("session_id", (order) => order.asc().nullsFirst())
+    .orderBy("started_at", (order) => order.asc().nullsFirst())
     .limit(limit + 1);
   // Select identities before projecting notes and participants, so the scan
   // evaluates expensive payloads only for this page and its lookahead.
@@ -443,12 +419,9 @@ function readTranscriptPage<Entry>(
           ),
         ),
     )
-      .orderBy(
-        (eb) => transcriptStartTime(eb.ref("meeting_transcript_sessions.started_at")),
-        "desc",
-      )
-      .orderBy("meeting_transcript_sessions.session_id", "asc")
-      .orderBy("meeting_transcript_sessions.started_at", "asc"),
+      .orderBy("meeting_transcript_sessions.started_at_ms", (order) => order.desc().nullsLast())
+      .orderBy("meeting_transcript_sessions.session_id", (order) => order.asc().nullsFirst())
+      .orderBy("meeting_transcript_sessions.started_at", (order) => order.asc().nullsFirst()),
   );
   const entries: Entry[] = [];
   let bytes = 0;
@@ -511,18 +484,15 @@ export type TranscriptLibraryPage = TranscriptReadPage<ReturnType<typeof project
 export function queryTranscriptReadEntries(
   database: EngineConnection,
   options: TranscriptReadOptions & { projection?: "public" },
-  parseDate = parseDateStringTimestampMs,
 ) {
-  return dateParser.run(parseDate, () =>
-    options.projection === "public"
-      ? readTranscriptPage(database, options, projectTranscriptSession)
-      : readTranscriptPage(database, options, (entry) => {
-          // Reads need attribution, while provider authorization uses the unchanged source.
-          const agentId = entry.session.metadata?.agentId;
-          entry.session.metadata = typeof agentId === "string" ? { agentId } : undefined;
-          return entry;
-        }),
-  );
+  return options.projection === "public"
+    ? readTranscriptPage(database, options, projectTranscriptSession)
+    : readTranscriptPage(database, options, (entry) => {
+        // Reads need attribution, while provider authorization uses the unchanged source.
+        const agentId = entry.session.metadata?.agentId;
+        entry.session.metadata = typeof agentId === "string" ? { agentId } : undefined;
+        return entry;
+      });
 }
 
 function utteranceQuery(

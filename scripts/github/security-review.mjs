@@ -46,6 +46,32 @@ function ciRunState(run) {
 
 async function ciState(review) {
   const { api, owner, repo, pullRequest } = review;
+  const completedRunId = Number(process.env.OPENCLAW_SECURITY_REVIEW_CI_RUN_ID || 0);
+  const completedAttempt = Number(process.env.OPENCLAW_SECURITY_REVIEW_CI_RUN_ATTEMPT || 0);
+  if (
+    !Number.isSafeInteger(completedRunId) ||
+    completedRunId < 0 ||
+    !Number.isSafeInteger(completedAttempt) ||
+    completedAttempt < 0 ||
+    Boolean(completedRunId) !== Boolean(completedAttempt)
+  ) {
+    throw new Error("Invalid completed CI run identity.");
+  }
+  function assertCompletedRunObserved(observed) {
+    if (
+      completedRunId &&
+      (!observed ||
+        observed.id < completedRunId ||
+        (observed.id === completedRunId &&
+          (observed.run_attempt < completedAttempt ||
+            (observed.run_attempt === completedAttempt && observed.status !== "completed"))))
+    ) {
+      // A successful scheduled pass advances its window; do not strand this completed run.
+      throw new GitHubDiffDataError(
+        "The completed CI run is missing or stale in the current observation.",
+      );
+    }
+  }
   const root = `/repos/${owner}/${repo}/actions`;
   const response = await api.request(
     `${root}/workflows/ci.yml/runs?head_sha=${pullRequest.head.sha}&per_page=100`,
@@ -91,6 +117,7 @@ async function ciState(review) {
       break;
     }
   }
+  assertCompletedRunObserved(run);
   if (!run || run.status !== "completed") {
     return "pending";
   }
@@ -131,6 +158,7 @@ async function ciState(review) {
   if (current.id !== run.id || current.head_sha !== run.head_sha) {
     throw new Error("The CI run identity changed during security review.");
   }
+  assertCompletedRunObserved(current);
   if (currentState === "pending") {
     return "pending";
   }
@@ -148,7 +176,7 @@ let currentReview;
 
 async function main() {
   const mode = process.env.OPENCLAW_SECURITY_REVIEW_MODE ?? "enforce";
-  if (!["detect", "autoscrub", "enforce"].includes(mode)) {
+  if (!["detect", "autoscrub", "enforce", "prepare"].includes(mode)) {
     throw new Error(`Unknown security review mode: ${mode}`);
   }
   const review = await readGuardReview(recoveryReview);
@@ -162,7 +190,7 @@ async function main() {
   try {
     review.rollout = await securityReviewRollout(review);
     if (review.rollout.mode === "enforced") {
-      if (mode !== "enforce") {
+      if (mode !== "enforce" && mode !== "prepare") {
         await reviewDependencyChanges(review, mode);
         return;
       }
@@ -171,8 +199,11 @@ async function main() {
       let allowed = true;
       for (const guard of [reviewDependencyChanges, reviewSecuritySensitiveChanges]) {
         try {
-          if (!(await guard(review))) {
+          if (!(await guard(review, mode === "prepare" ? "prepare" : "enforce"))) {
             allowed = false;
+          }
+          if (review.autoscrubPending) {
+            return;
           }
         } catch (error) {
           if (
@@ -208,7 +239,7 @@ async function main() {
       } else {
         console.log(summary);
       }
-      if (mode !== "enforce") {
+      if (mode !== "enforce" && mode !== "prepare") {
         return;
       }
     }
@@ -281,13 +312,26 @@ async function main() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  withSecurityReviewRecovery(main, {
-    checkCurrent: async () => {
-      if (currentReview) {
-        await assertGuardUnchanged(currentReview, { allowFileCountChange: true });
+  withSecurityReviewRecovery(
+    async () => {
+      await main();
+      if (
+        process.env.OPENCLAW_SECURITY_REVIEW_MODE === "prepare" &&
+        currentReview &&
+        !currentReview.autoscrubPending &&
+        process.env.GITHUB_OUTPUT
+      ) {
+        await appendFile(process.env.GITHUB_OUTPUT, "completed=true\n");
       }
     },
-  }).catch(
+    {
+      checkCurrent: async () => {
+        if (currentReview) {
+          await assertGuardUnchanged(currentReview, { allowFileCountChange: true });
+        }
+      },
+    },
+  ).catch(
     /** @param {unknown} error */ (error) => {
       if (error instanceof ObsoleteReviewError) {
         console.log(error.message);

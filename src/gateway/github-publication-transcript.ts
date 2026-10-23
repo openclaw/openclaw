@@ -6,7 +6,11 @@ import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
 } from "../config/sessions/session-actor-storage-binding.js";
-import type { GitHubPublicationCoordinator } from "./github-publication.js";
+import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import type {
+  GitHubPublicationCoordinator,
+  GitHubPublicationTranscriptReport,
+} from "./github-publication.js";
 
 const GITHUB_PUBLICATION_RESPONSE_PREFIX = "github-publication:";
 
@@ -38,12 +42,7 @@ export async function reportGitHubPublicationTranscript(
     resolveGatewaySessionStoreTargetInWorker: typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker;
   }>,
   coordinator: Pick<GitHubPublicationCoordinator, "markReportedAsync">,
-  params: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-    result: SessionGitHubPublicationResult;
-  },
+  params: GitHubPublicationTranscriptReport,
 ): Promise<void> {
   const memory = captureSessionActorStorageOwner(params, {
     assertCurrent() {},
@@ -83,17 +82,20 @@ export async function reportGitHubPublicationTranscript(
     },
     {
       kind: "assistant",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: formatGitHubPublicationResult(params.result) }],
-        api: "openai-responses",
-        provider: "openclaw",
-        model: "gateway-publication",
-        responseId: `${GITHUB_PUBLICATION_RESPONSE_PREFIX}${params.result.requestId}`,
-        usage: makeZeroUsageSnapshot(),
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
+      message: attachSessionTranscriptRunId(
+        {
+          role: "assistant",
+          content: [{ type: "text", text: formatGitHubPublicationResult(params.result) }],
+          api: "openai-responses",
+          provider: "openclaw",
+          model: "gateway-publication",
+          responseId: `${GITHUB_PUBLICATION_RESPONSE_PREFIX}${params.result.requestId}`,
+          usage: makeZeroUsageSnapshot(),
+          stopReason: "stop",
+          timestamp: Date.now(),
+        },
+        params.runId,
+      ),
     },
   );
   if (!appended.ok) {

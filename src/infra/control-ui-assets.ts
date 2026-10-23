@@ -8,7 +8,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../gateway/control-ui-root-assets.js";
 import { selectControlUiRoutePreloads } from "../gateway/control-ui-route-preloads.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import type { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "./boundary-file-read.js";
 import { FsSafeError } from "./fs-safe.js";
@@ -29,35 +29,21 @@ type ControlUiAssetHealth =
   | { kind: "stale"; indexPath: string; buildId: string | null }
   | { kind: "ready"; indexPath: string; publicAssetBuildId?: string };
 
-export async function resolveControlUiAssetHealth(
-  opts: {
-    root?: string;
-    argv1?: string;
-    moduleUrl?: string;
-    expectedBuildId?: string | null;
-  } = {},
-): Promise<ControlUiAssetHealth> {
-  const indexPath = opts.root
-    ? resolveControlUiDistIndexPathForRoot(opts.root)
-    : await resolveControlUiDistIndexPath({
-        argv1: opts.argv1 ?? process.argv[1],
-        moduleUrl: opts.moduleUrl,
-      });
+export async function resolveControlUiAssetHealth(opts: {
+  root: string;
+  expectedBuildId?: string | null;
+}): Promise<ControlUiAssetHealth> {
+  const indexPath = resolveControlUiDistIndexPathForRoot(opts.root);
   return inspectControlUiAssetHealth(indexPath, opts.expectedBuildId);
 }
 
-function resolveControlUiRepoRoot(opts: {
-  root?: string;
-  argv1?: string;
-  moduleUrl?: string;
-  cwd?: string;
-}): string | null {
-  const cwd = opts.cwd ?? process.cwd();
+function resolveControlUiRepoRoot(opts: { root?: string; moduleUrl?: string }): string | null {
+  const cwd = process.cwd();
   const roots = opts.root
     ? [path.resolve(opts.root)]
     : [
         resolveOpenClawPackageRootSync({
-          argv1: opts.argv1 ?? process.argv[1],
+          argv1: process.argv[1],
           moduleUrl: opts.moduleUrl ?? import.meta.url,
           cwd,
         }),
@@ -85,10 +71,8 @@ function resolveControlUiEntrypointPaths(argv1: string): string[] {
   return realpath && realpath !== normalized ? [normalized, realpath] : [normalized];
 }
 
-async function resolveControlUiDistIndexPath(
-  opts: ControlUiRootResolveOptions,
-): Promise<string | null> {
-  const argv1 = opts.argv1 ?? process.argv[1];
+async function resolveControlUiDistIndexPath(opts: { moduleUrl?: string }): Promise<string | null> {
+  const argv1 = process.argv[1];
   const moduleUrl = opts.moduleUrl;
   if (!argv1) {
     return null;
@@ -108,43 +92,7 @@ async function resolveControlUiDistIndexPath(
     argv1: path.resolve(argv1),
     moduleUrl,
   });
-  if (packageRoot) {
-    return path.join(packageRoot, "dist", "control-ui", "index.html");
-  }
-
-  // Fallback: traverse up and find package.json with name "openclaw" + dist/control-ui/index.html
-  // This handles global installs where path-based resolution might fail.
-  const fallbackStartDirs = new Set(
-    entrypointCandidates.map((candidate) => path.dirname(candidate)),
-  );
-  for (const startDir of fallbackStartDirs) {
-    let dir = startDir;
-    for (let i = 0; i < 8; i++) {
-      const pkgJsonPath = path.join(dir, "package.json");
-      const indexPath = path.join(dir, "dist", "control-ui", "index.html");
-      if (fs.existsSync(pkgJsonPath)) {
-        try {
-          const raw = fs.readFileSync(pkgJsonPath, "utf-8");
-          const parsed = JSON.parse(raw) as { name?: unknown };
-          if (parsed.name === "openclaw") {
-            return fs.existsSync(indexPath) ? indexPath : null;
-          }
-          // Stop at the first package boundary to avoid resolving through unrelated ancestors.
-          break;
-        } catch {
-          // Invalid package.json at package boundary; abort this candidate chain.
-          break;
-        }
-      }
-      const parent = path.dirname(dir);
-      if (parent === dir) {
-        break;
-      }
-      dir = parent;
-    }
-  }
-
-  return null;
+  return packageRoot ? resolveControlUiDistIndexPathForRoot(packageRoot) : null;
 }
 
 type ControlUiRootResolveOptions = {
@@ -238,23 +186,23 @@ export function isPackageProvenControlUiRootSync(
 }
 
 type EnsureControlUiAssetsResult =
-  | { ok: true; built: boolean; assets: Extract<ControlUiAssetHealth, { kind: "ready" }> }
-  | { ok: false; built: boolean; message: string };
+  | { ok: true; assets: Extract<ControlUiAssetHealth, { kind: "ready" }> }
+  | { ok: false; message: string };
 
-type EnsureControlUiAssetsOptions = ControlUiRootResolveOptions & {
+type EnsureControlUiAssetsOptions = {
+  moduleUrl?: string;
   root?: string;
   assetRoot?: string;
   expectedBuildId?: string | null;
   force?: boolean;
   signal?: AbortSignal;
-  timeoutMs?: number;
   onBuildStart?: () => void;
 };
 
 export const CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS = 10 * 60_000;
 
-function controlUiAssetsFailure(message: string, built = false): EnsureControlUiAssetsResult {
-  return { ok: false, built, message };
+function controlUiAssetsFailure(message: string): EnsureControlUiAssetsResult {
+  return { ok: false, message };
 }
 
 function inspectControlUiAssetHealth(
@@ -374,7 +322,7 @@ export async function ensureControlUiAssetsBuilt(
     : await resolveControlUiDistIndexPath(opts);
   const health = inspectControlUiAssetHealth(selectedIndex, opts.expectedBuildId);
   if (!opts.force && health.kind === "ready") {
-    return { ok: true, built: false, assets: health };
+    return { ok: true, assets: health };
   }
 
   const repoRoot = resolveControlUiRepoRoot(opts);
@@ -419,9 +367,10 @@ export async function ensureControlUiAssetsBuilt(
 
   let build: Awaited<ReturnType<typeof runCommandWithTimeout>>;
   try {
+    const { runCommandWithTimeout } = await import("../process/exec.js");
     build = await runCommandWithTimeout([process.execPath, uiScript, "build"], {
       cwd: repoRoot,
-      timeoutMs: opts.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,
+      timeoutMs: CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
   } catch (error) {
@@ -450,7 +399,7 @@ export async function ensureControlUiAssetsBuilt(
         : builtHealth.kind === "incomplete"
           ? `startup asset ${builtHealth.missingAsset} is missing.`
           : `its identity is ${builtHealth.buildId ?? "unknown"}; expected ${opts.expectedBuildId}. Restart the Gateway after rebuilding its runtime and UI together.`;
-    return controlUiAssetsFailure(`Control UI build completed but ${issue}`, true);
+    return controlUiAssetsFailure(`Control UI build completed but ${issue}`);
   }
-  return { ok: true, built: true, assets: builtHealth };
+  return { ok: true, assets: builtHealth };
 }

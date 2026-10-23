@@ -1,5 +1,14 @@
-import { resolveSafeTimeoutDelayMs } from "@openclaw/gateway-client/browser";
+import {
+  isRetryableGatewayStartupUnavailableError,
+  resolveSafeTimeoutDelayMs,
+} from "@openclaw/gateway-client/browser";
+import {
+  isGatewayRestartUnavailableError,
+  isGatewaySuspendUnavailableError,
+} from "../../../packages/gateway-protocol/src/restart-unavailable.js";
+import type { GatewayBrowserClientOptions } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "./context.ts";
+import { readSuspensionPhase } from "./gateway-readiness.ts";
 
 // Grace window before offline presentation appears; reconnects never wait.
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
@@ -57,6 +66,26 @@ export function createAvailabilityIndicators(host: AvailabilityHost) {
     }, OFFLINE_INDICATOR_DELAY_MS);
   };
   return {
+    observeClose(
+      error: Parameters<NonNullable<GatewayBrowserClientOptions["onClose"]>>[0]["error"],
+    ) {
+      // Fresh drain evidence re-arms the deadline while the server remains unavailable.
+      const restartPending = isGatewayRestartUnavailableError(error);
+      if (restartPending) {
+        setUnavailableDeadline("restartPending", 0);
+      }
+      const suspensionPhase = isGatewaySuspendUnavailableError(error)
+        ? (readSuspensionPhase(error?.details) ?? "prepared")
+        : undefined;
+      // Display-only evidence; admission is re-derived from the next hello.
+      setUnavailableDeadline("suspensionPhase", suspensionPhase ? 0 : undefined);
+      const transient =
+        !error ||
+        restartPending ||
+        Boolean(suspensionPhase) ||
+        isRetryableGatewayStartupUnavailableError(error);
+      return { restartPending, suspensionPhase, transient };
+    },
     clearOfflineIndicatorTimer,
     setUnavailableDeadline,
     scheduleOfflineIndicator,

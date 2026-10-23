@@ -1,41 +1,7 @@
-function readDiscordChannelPropertySafe(channel: unknown, key: string): unknown {
-  if (!channel || typeof channel !== "object") {
-    return undefined;
-  }
-  try {
-    if (!(key in channel)) {
-      return undefined;
-    }
-    return (channel as Record<string, unknown>)[key];
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveDiscordChannelStringPropertySafe(
-  channel: unknown,
-  key: string,
-): string | undefined {
-  const value = readDiscordChannelPropertySafe(channel, key);
-  return typeof value === "string" ? value : undefined;
-}
-
-function resolveDiscordChannelStringWithAliasSafe(
-  channel: unknown,
-  camelKey: string,
-  snakeKey: string,
-): string | undefined {
-  return (
-    resolveDiscordChannelStringPropertySafe(channel, camelKey) ??
-    resolveDiscordChannelStringPropertySafe(channel, snakeKey) ??
-    resolveDiscordChannelStringPropertySafe(
-      readDiscordChannelPropertySafe(channel, "rawData"),
-      snakeKey,
-    )
-  );
-}
+import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type DiscordChannelInfoSafe = {
+  id?: string;
   name?: string;
   topic?: string;
   type?: number;
@@ -45,36 +11,25 @@ type DiscordChannelInfoSafe = {
 };
 
 export function resolveDiscordChannelNameSafe(channel: unknown): string | undefined {
-  return resolveDiscordChannelStringPropertySafe(channel, "name");
-}
-
-export function resolveDiscordChannelIdSafe(channel: unknown): string | undefined {
-  return resolveDiscordChannelStringPropertySafe(channel, "id");
+  return readStringField(asOptionalObjectRecord(channel), "name");
 }
 
 export function resolveDiscordChannelTopicSafe(channel: unknown): string | undefined {
-  return resolveDiscordChannelStringPropertySafe(channel, "topic");
-}
-
-export function resolveDiscordChannelParentIdSafe(channel: unknown): string | undefined {
-  return resolveDiscordChannelStringWithAliasSafe(channel, "parentId", "parent_id");
-}
-
-export function resolveDiscordChannelParentSafe(channel: unknown): unknown {
-  return readDiscordChannelPropertySafe(channel, "parent");
+  return readStringField(asOptionalObjectRecord(channel), "topic");
 }
 
 export function resolveDiscordChannelInfoSafe(channel: unknown): DiscordChannelInfoSafe {
-  const parent = resolveDiscordChannelParentSafe(channel);
-  const name = resolveDiscordChannelNameSafe(channel);
-  const topic = resolveDiscordChannelTopicSafe(channel);
-  const type = readDiscordChannelPropertySafe(channel, "type");
+  const record = asOptionalObjectRecord(channel);
+  const raw = asOptionalObjectRecord(record?.rawData);
+  const readAlias = (camel: string, snake: string) =>
+    readStringField(record, camel) ?? readStringField(record, snake) ?? readStringField(raw, snake);
   return {
-    name,
-    topic,
-    type: typeof type === "number" ? type : undefined,
-    parentId: resolveDiscordChannelParentIdSafe(channel),
-    ownerId: resolveDiscordChannelStringWithAliasSafe(channel, "ownerId", "owner_id"),
-    parentName: resolveDiscordChannelNameSafe(parent),
+    id: readStringField(record, "id"),
+    name: readStringField(record, "name"),
+    topic: readStringField(record, "topic"),
+    type: typeof record?.type === "number" ? record.type : undefined,
+    parentId: readAlias("parentId", "parent_id"),
+    ownerId: readAlias("ownerId", "owner_id"),
+    parentName: readStringField(asOptionalObjectRecord(record?.parent), "name"),
   };
 }

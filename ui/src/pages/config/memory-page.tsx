@@ -1,16 +1,23 @@
 import type { JSX } from "@solidjs/web";
-// Controller for the Memory destination page. The URL owns the active tab;
-// this element projects Settings agent selection into Overview status and
-// consumes the global configuration controllers used by Settings.
-import { createEffect, createSignal, onCleanup, onSettled, Show, untrack } from "solid-js";
-import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
+// The URL owns the active tab; Settings owners supply agent and configuration state.
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  createStore,
+  onSettled,
+  Show,
+} from "solid-js";
+import type { ControlUiSettingsSnapshot } from "../../../../src/plugin-sdk/control-ui-settings.js";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   loadPluginCatalog,
   runPluginConfigMutation,
@@ -18,22 +25,21 @@ import {
 } from "../../lib/plugins/index.ts";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
-import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
+import { t, getLocale, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
+import { ControlUiSettingsPresentation } from "../../plugins/control-ui-settings-view.solid.tsx";
 import {
   resolveConfiguredDreaming,
   resolveDreamingConfigPathSupport,
   type DreamingConfigPathSupport,
 } from "../agents/memory/dreaming.ts";
 import { AgentMemoryPanel } from "../agents/memory/memory-panel.tsx";
-import { dreamingConfigPath } from "./memory-defaults.ts";
-import { MemoryDreamingControls } from "./memory-dreaming.tsx";
-import { MemoryMemories } from "./memory-memories.tsx";
-import { MemoryOverview, type MemoryOverviewStatus } from "./memory-overview.tsx";
+import { createCuratedSettingsEditor } from "./curated-settings-editor.ts";
+import { curatedSettingsPresentation } from "./curated-settings-presentation.ts";
+import { CuratedSettingsPanel } from "./curated-settings.tsx";
+import { memoryAddonPresentations } from "./memory-addon-presentation.ts";
 import {
-  canonicalMemoryRouteLocation,
   memoryTabForRoute,
   resolveMemoryEngineSelection,
   selectedEngineId,
@@ -41,8 +47,6 @@ import {
   type MemoryTab,
 } from "./memory-schema.ts";
 import {
-  buildMemoryAddonRows,
-  buildMemoryEngineOptions,
   Memory,
   findMemoryCatalogPlugin as findMemoryPlugin,
   resolveMemoryPluginState as pluginState,
@@ -50,13 +54,16 @@ import {
   type MemoryEngineOutcome,
   type MemoryPluginState,
 } from "./memory.tsx";
-import type { ConfigRouteData } from "./route-data.ts";
+import type { ConfigRouteData, ConfigRouteSource } from "./route-data.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 /** Explicit-off sentinel; resolveSlotSelection maps it to an `off` selection. */
 const MEMORY_SLOT_OFF = "none";
 const MEMORY_SLOT_PATH = ["plugins", "slots", "memory"];
+// This compatible Dreaming placement is owned by Memory Core; the current engine
+// remains the config owner, including custom engines and same-ID overrides.
+const DREAMING_SETTINGS = curatedSettingsPresentation("memory-dreaming-settings");
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 
@@ -78,51 +85,109 @@ export type MemorySettingsPageProps = {
   pluginsHref: string;
   memoryImportHref: string;
   routeData: ConfigRouteData | null;
+  admittedRoute: ConfigRouteSource;
   buildEditor: () => JSX.Element;
 };
 
-function MemorySettingsContent(props: MemorySettingsPageProps) {
+export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const application = useApplication();
   const gateway = projectGateway(application.gateway);
   const agentSelection = projectAgentSelection(application.settingsAgentSelection);
   const runtime = projectRuntimeConfig(application.runtimeConfig);
-  const agents = projectAgents(application.agents);
-  const [catalog, setCatalog] = createSignal<MemoryCatalog>({
-    kind: "unavailable",
+  const dreamingConfigOwner = createMemo(
+    () => resolveConfiguredDreaming(currentConfigObject(runtime.read().state)).pluginId,
+  );
+  // The accepted receipt serves synchronous mutation and plugin-settings policy.
+  // Rendering observes only the owner-issued read, never a second data cache.
+  const initialCatalog: MemoryCatalog = { kind: "unavailable" };
+  const catalogState: {
+    value: MemoryCatalog;
+    read: MemoryCatalog | Promise<MemoryCatalog>;
+  } = { value: initialCatalog, read: initialCatalog };
+  const catalogSource = projectMutableSource(catalogState, (state) => state);
+  const catalog = createMemo(async () => catalogSource.read().read);
+  let pageConnection: CatalogConnection | null = null;
+  let mutationPresentationLifetime = Promise.withResolvers<void>();
+  function retireMutationPresentation() {
+    mutationPresentationLifetime.resolve();
+    mutationPresentationLifetime = Promise.withResolvers<void>();
+  }
+  const catalogScope = createMemo(() => {
+    catalogSource.revision();
+    return pageConnection;
   });
 
-  const [engineBusy, setEngineBusy] = createSignal(false);
+  function createMutation<T extends string | boolean>() {
+    const presentation = createMemo(() => {
+      const connection = catalogScope();
+      const [preview, setPreview] = createOptimistic<T>();
+      const [saving, setSaving] = createOptimistic(false);
+      return { connection, preview, setPreview, saving, setSaving };
+    });
+    const current = () => {
+      const view = presentation();
+      return view.connection === pageConnection ? view.preview() : undefined;
+    };
+    return {
+      current,
+      capture: presentation,
+      busy: () => {
+        const view = presentation();
+        return view.connection === pageConnection && view.saving();
+      },
+      run: action(function* (
+        view: ReturnType<typeof presentation>,
+        value: T,
+        pending: Promise<void>,
+        retired: Promise<void>,
+      ) {
+        if (view.connection === pageConnection) {
+          view.setPreview(() => value);
+          view.setSaving(true);
+        }
+        yield Promise.race([pending, retired]);
+      }),
+    };
+  }
+  const engineMutation = createMutation<string>();
+  const addonMutations = new Map(
+    memoryAddonPresentations.map(({ id }) => [id, createMutation<boolean>()]),
+  );
 
   const [engineOutcome, setEngineOutcome] = createSignal<MemoryEngineOutcome | null>(null);
 
-  const [addonBusy, setAddonBusy] = createSignal(new Set<string>());
+  const [addonOutcomes, setAddonOutcomes] = createStore<{
+    errors: Partial<Record<string, string>>;
+    notices: Partial<Record<string, MemoryAddonNotice>>;
+    refreshWarnings: Partial<Record<string, string>>;
+  }>({ errors: {}, notices: {}, refreshWarnings: {} });
 
-  const [addonErrors, setAddonErrors] = createSignal(new Map<string, string>());
+  let settingsEpoch = 0;
+  const settingsListeners = new Set<() => void>();
+  function publishSettings() {
+    for (const notify of settingsListeners) {
+      notify();
+    }
+  }
+  function retireSettingsReads() {
+    settingsEpoch += 1;
+    publishSettings();
+  }
 
-  const [addonNotices, setAddonNotices] = createSignal(new Map<string, MemoryAddonNotice>());
-
-  const [addonRefreshWarnings, setAddonRefreshWarnings] = createSignal(new Map<string, string>());
-
-  let previousSelectedAgentId: string | null = null;
-
-  const [overviewStatus, setOverviewStatus] = createSignal<MemoryOverviewStatus>({
-    kind: "idle",
+  const supportState: {
+    value: DreamingConfigPathSupport;
+    read: DreamingConfigPathSupport | Promise<DreamingConfigPathSupport>;
+  } = { value: "unknown", read: "unknown" };
+  const supportSource = projectMutableSource(supportState, (state) => state.read);
+  const support = createMemo(() => {
+    const read = supportSource.read();
+    // Each admitted read starts unknown without replacing the editable panel.
+    return createMemo<DreamingConfigPathSupport>(() => read, { loadingValue: "unknown" });
   });
-
-  const [probingEmbeddings, setProbingEmbeddings] = createSignal(false);
-
-  const [support, setSupport] = createSignal<DreamingConfigPathSupport>("unknown");
-
-  let pageConnection: CatalogConnection | null = null;
 
   let pagePluginGeneration: number | undefined = undefined;
 
   let pageCatalogRequest = 0;
-
-  let pageOverviewRequest: {
-    connection: CatalogConnection;
-    agentId: string;
-  } | null = null;
 
   let pageSupportPluginId: string | null = null;
 
@@ -132,48 +197,17 @@ function MemorySettingsContent(props: MemorySettingsPageProps) {
 
   const addonNoticeOperations = new Map<string, object>();
 
-  let normalizedLocation = "";
-  let active = true;
-
-  function syncRouteAgent() {
-    const routeAgentId = new URLSearchParams(props.routeData?.search).get("agent")?.trim();
-    const intent = props.routeData?.agentSelectionIntent;
-    const selection = application.settingsAgentSelection;
-    if (
-      routeAgentId &&
-      intent?.owner === selection &&
-      intent.revision === selection.intentRevision
-    ) {
-      selection.set(normalizeAgentId(routeAgentId));
-    }
-  }
+  let active = false;
 
   function activeTab(routeData = props.routeData): MemoryTab {
     return memoryTabForRoute(routeData ?? {}, application?.basePath ?? "") ?? "overview";
   }
 
-  function syncCanonicalLocation() {
-    const routeData = props.routeData;
-    if (!routeData) {
-      return;
-    }
-    const canonical = canonicalMemoryRouteLocation(routeData, application.basePath);
-    if (!canonical) {
-      normalizedLocation = "";
-      return;
-    }
-    const source = `${routeData.pathname}${routeData.search}${routeData.hash}`;
-    if (normalizedLocation === source) {
-      return;
-    }
-    // One source location gets one replace. Route-data updates clear the guard
-    // once the canonical path arrives, so returning to an old link still works.
-    normalizedLocation = source;
-    application.replace("memory", canonical);
-  }
-
   function syncGateway(snapshot: ApplicationGatewaySnapshot) {
     const { client } = snapshot;
+    if (!readGatewayOperatorAccess(snapshot).canAdmin) {
+      retireMutationPresentation();
+    }
     const connected = snapshot.phase === "connected";
     const bootId = snapshot.hello?.server?.bootId;
     const generation = snapshot.pluginCapabilities?.generation;
@@ -194,59 +228,59 @@ function MemorySettingsContent(props: MemorySettingsPageProps) {
       connected,
       bootId,
     };
+    retireMutationPresentation();
     pageConnection = connection;
-    setEngineBusy(false);
     setEngineOutcome(null);
-    setAddonBusy(new Set<string>());
-    setAddonRefreshWarnings(new Map());
-    pageOverviewRequest = null;
-    setProbingEmbeddings(false);
+    setAddonOutcomes((draft) => {
+      draft.refreshWarnings = {};
+    });
+    retireSettingsReads();
     if (!client || !connected) {
-      setCatalog({
-        kind: "unavailable",
-      });
-      if (activeTab() === "overview") {
-        setOverviewStatus({
-          kind: "error",
-          message: t("memoryPage.overview.hero.gatewayOffline"),
-        });
-      }
+      catalogState.value = { kind: "unavailable" };
+      catalogState.read = catalogState.value;
+      catalogSource.publish();
+      onSettled(publishSettings);
       return;
     }
-    setCatalog({
-      kind: "loading",
+    catalogState.value = { kind: "loading" };
+    catalogState.read = catalogState.value;
+    catalogSource.publish();
+    onSettled(publishSettings);
+    setAddonOutcomes((draft) => {
+      for (const [pluginId, notice] of Object.entries(draft.notices)) {
+        if (!notice?.bootId || notice.bootId !== bootId) {
+          delete draft.notices[pluginId];
+        }
+      }
     });
-    setAddonNotices(
-      (current) =>
-        new Map([...current].filter(([, notice]) => notice.bootId && notice.bootId === bootId)),
-    );
     refreshPluginReads(client, connection);
   }
 
   function refreshPluginReads(client: GatewayClient, connection: CatalogConnection) {
     // Publication supersedes reads, not the connection or a mutation waiting on its receipt.
-    pageOverviewRequest = null;
-    setProbingEmbeddings(false);
+    retireSettingsReads();
     pageSupportPluginId = null;
     pageSupportProbe = null;
     syncSupport(application.runtimeConfig);
     void loadCatalog(client, connection);
-    void loadOverviewStatus();
   }
 
   async function loadCatalog(client: GatewayClient, connection: CatalogConnection) {
     const request = ++pageCatalogRequest;
-    try {
+    const read = (async (): Promise<MemoryCatalog> => {
       const result = await loadPluginCatalog(client);
-      applyCatalog(connection, request, {
+      return {
         kind: "ready",
         plugins: result.plugins,
         mutationAllowed: result.mutationAllowed,
-      });
+      };
+    })();
+    catalogState.read = read;
+    catalogSource.publish();
+    try {
+      applyCatalog(connection, request, await read);
     } catch {
-      applyCatalog(connection, request, {
-        kind: "unavailable",
-      });
+      applyCatalog(connection, request, { kind: "unavailable" }, read);
     }
   }
 
@@ -254,112 +288,25 @@ function MemorySettingsContent(props: MemorySettingsPageProps) {
     connection: CatalogConnection,
     request: number,
     nextCatalog: MemoryCatalog,
+    read: MemoryCatalog | Promise<MemoryCatalog> = nextCatalog,
   ) {
     if (!active || pageConnection !== connection || pageCatalogRequest !== request) {
       return;
     }
-    setCatalog(nextCatalog);
-  }
-
-  function selectAgent(agentId: string | null) {
-    if (previousSelectedAgentId === agentId) {
-      return;
+    if (nextCatalog.kind === "ready" && !nextCatalog.mutationAllowed) {
+      retireMutationPresentation();
     }
-    previousSelectedAgentId = agentId;
-    pageOverviewRequest = null;
-    setOverviewStatus({
-      kind: "idle",
-    });
-    setProbingEmbeddings(false);
-    void loadOverviewStatus();
-  }
-
-  async function loadOverviewStatus(
-    options: {
-      force?: boolean;
-      probeEmbeddings?: boolean;
-    } = {},
-  ) {
-    if (activeTab() !== "overview") {
-      return;
-    }
-    if (resolveMemoryEngineSelection(props.configObject).kind === "off") {
-      pageOverviewRequest = null;
-      setOverviewStatus({
-        kind: "idle",
-      });
-      setProbingEmbeddings(false);
-      return;
-    }
-    const connection = pageConnection;
-    const client = connection?.connected ? connection.client : null;
-    const agentId = application.settingsAgentSelection.state.selectedId;
-    if (!connection || !client) {
-      setOverviewStatus({
-        kind: "error",
-        message: t("memoryPage.overview.hero.gatewayOffline"),
-      });
-      setProbingEmbeddings(false);
-      return;
-    }
-    if (!agentId) {
-      return;
-    }
-    if (
-      !options.force &&
-      pageOverviewRequest?.connection === connection &&
-      pageOverviewRequest.agentId === agentId
-    ) {
-      return;
-    }
-    const probeEmbeddings = options.probeEmbeddings === true;
-    const request = {
-      connection,
-      agentId,
-    };
-    pageOverviewRequest = request;
-    setProbingEmbeddings(probeEmbeddings);
-    if (!probeEmbeddings) {
-      setOverviewStatus({
-        kind: "loading",
-      });
-    }
-    try {
-      const payload = await client.request<DoctorMemoryStatusPayload>("doctor.memory.status", {
-        agentId,
-        ...(probeEmbeddings
-          ? {
-              probe: true,
-            }
-          : {}),
-      });
-      if (!active || pageOverviewRequest !== request) {
-        return;
-      }
-      setOverviewStatus({
-        kind: "ready",
-        payload,
-      });
-    } catch (error) {
-      if (!active || pageOverviewRequest !== request) {
-        return;
-      }
-      setOverviewStatus({
-        kind: "error",
-        message: formatUiError(error),
-      });
-    } finally {
-      if (pageOverviewRequest === request) {
-        setProbingEmbeddings(false);
-      }
-    }
+    catalogState.value = nextCatalog;
+    catalogState.read = read;
+    catalogSource.publish();
+    onSettled(publishSettings);
   }
 
   function engineState(selection: MemoryEngineSelection): MemoryPluginState {
     const engineId = selectedEngineId(selection);
     return engineId === null
       ? "unknown"
-      : pluginState(catalog(), findMemoryPlugin(catalog(), engineId));
+      : pluginState(catalogState.value, findMemoryPlugin(catalogState.value, engineId));
   }
 
   function applyPluginRefreshOutcome(
@@ -371,7 +318,9 @@ function MemorySettingsContent(props: MemorySettingsPageProps) {
       return;
     }
     if (!refreshError) {
-      setAddonRefreshWarnings(new Map());
+      setAddonOutcomes((draft) => {
+        draft.refreshWarnings = {};
+      });
       if (engineOutcome()?.kind === "warning") {
         setEngineOutcome(null);
       }
@@ -381,7 +330,9 @@ function MemorySettingsContent(props: MemorySettingsPageProps) {
       error: refreshError,
     });
     if (pluginId) {
-      setAddonRefreshWarnings((current) => new Map(current).set(pluginId, message));
+      setAddonOutcomes((draft) => {
+        draft.refreshWarnings[pluginId] = message;
+      });
     } else {
       setEngineOutcome({
         kind: "warning",
@@ -391,17 +342,19 @@ function MemorySettingsContent(props: MemorySettingsPageProps) {
   }
 
   async function changeAddon(pluginId: string, enabled: boolean) {
+    const addonMutation = addonMutations.get(pluginId);
     if (
-      addonBusy().has(pluginId) ||
+      !addonMutation ||
+      addonMutation.busy() ||
       props.mutationDisabled ||
-      catalog().kind !== "ready" ||
+      catalogState.value.kind !== "ready" ||
       !catalogCanMutate() ||
       !readGatewayOperatorAccess(application.gateway.snapshot).canAdmin
     ) {
       return;
     }
-    const entry = findMemoryPlugin(catalog(), pluginId);
-    const addonState = pluginState(catalog(), entry);
+    const entry = findMemoryPlugin(catalogState.value, pluginId);
+    const addonState = pluginState(catalogState.value, entry);
     const connection = pageConnection;
     const client = connection?.connected ? connection.client : null;
     if (!connection || !client || (addonState !== "enabled" && addonState !== "disabled")) {
@@ -409,79 +362,74 @@ function MemorySettingsContent(props: MemorySettingsPageProps) {
     }
     const noticeOperation = {};
     addonNoticeOperations.set(pluginId, noticeOperation);
-    setAddonBusy((current) => new Set(current).add(pluginId));
-    setAddonErrors((current) => {
-      const errors = new Map(current);
-      errors.delete(pluginId);
-      return errors;
+    setAddonOutcomes((draft) => {
+      delete draft.errors[pluginId];
+      delete draft.refreshWarnings[pluginId];
     });
-    setAddonRefreshWarnings((current) => {
-      const warnings = new Map(current);
-      warnings.delete(pluginId);
-      return warnings;
-    });
-    try {
-      const mutation = await runPluginConfigMutation(
-        application.runtimeConfig,
-        client,
-        async (current) => {
-          const bootId = application.gateway.snapshot.hello?.server?.bootId;
-          return {
-            result: await setPluginEnabled(current, pluginId, enabled),
-            bootId,
-          };
-        },
-        {
-          canDispatch: () => canDispatchPluginMutation(connection),
-        },
-      );
-      const { result, bootId } = mutation.value;
-      const warnings = "warnings" in result ? (result.warnings ?? []) : [];
-      const notice = warnings.join(" ");
-      if (addonNoticeOperations.get(pluginId) === noticeOperation) {
-        applyPluginRefreshOutcome(connection, mutation.refreshError, pluginId);
-        const currentBootId = application.gateway.snapshot.hello?.server?.bootId;
-        const keepNotice =
-          notice &&
-          (bootId && currentBootId ? bootId === currentBootId : pageConnection === connection);
-        setAddonNotices((current) => {
-          const notices = new Map(current);
-          if (keepNotice) {
-            notices.set(pluginId, { message: notice, bootId });
-          } else {
-            notices.delete(pluginId);
+    const view = addonMutation.capture();
+    const retired = mutationPresentationLifetime.promise;
+    const pending = (async () => {
+      try {
+        const mutation = await runPluginConfigMutation(
+          application.runtimeConfig,
+          client,
+          async (current) => {
+            const bootId = application.gateway.snapshot.hello?.server?.bootId;
+            return {
+              result: await setPluginEnabled(current, pluginId, enabled),
+              bootId,
+            };
+          },
+          {
+            canDispatch: () => canDispatchPluginMutation(connection),
+          },
+        );
+        const { result, bootId } = mutation.value;
+        const warnings = "warnings" in result ? (result.warnings ?? []) : [];
+        const notice = warnings.join(" ");
+        if (addonNoticeOperations.get(pluginId) === noticeOperation) {
+          if (retired === mutationPresentationLifetime.promise) {
+            applyPluginRefreshOutcome(connection, mutation.refreshError, pluginId);
           }
-          return notices;
-        });
+          const currentBootId = application.gateway.snapshot.hello?.server?.bootId;
+          const keepNotice =
+            notice &&
+            (bootId && currentBootId ? bootId === currentBootId : pageConnection === connection);
+          setAddonOutcomes((draft) => {
+            if (keepNotice) {
+              draft.notices[pluginId] = { message: notice, bootId };
+            } else {
+              delete draft.notices[pluginId];
+            }
+          });
+        }
+        const currentConnection = pageConnection;
+        if (currentConnection?.connected && currentConnection.client) {
+          await loadCatalog(currentConnection.client, currentConnection);
+        }
+      } catch (error) {
+        if (pageConnection === connection && retired === mutationPresentationLifetime.promise) {
+          setAddonOutcomes((draft) => {
+            draft.errors[pluginId] = formatUiError(error);
+          });
+        }
+      } finally {
+        if (addonNoticeOperations.get(pluginId) === noticeOperation) {
+          addonNoticeOperations.delete(pluginId);
+        }
       }
-      const currentConnection = pageConnection;
-      if (currentConnection?.connected && currentConnection.client) {
-        await loadCatalog(currentConnection.client, currentConnection);
-      }
-    } catch (error) {
-      if (pageConnection === connection) {
-        setAddonErrors((current) => new Map(current).set(pluginId, formatUiError(error)));
-      }
-    } finally {
-      if (addonNoticeOperations.get(pluginId) === noticeOperation) {
-        addonNoticeOperations.delete(pluginId);
-      }
-      if (pageConnection === connection) {
-        setAddonBusy((current) => {
-          const busy = new Set(current);
-          busy.delete(pluginId);
-          return busy;
-        });
-      }
-    }
+    })();
+    // Publish the configuration owner's admission before starting optimistic presentation.
+    await Promise.resolve();
+    await addonMutation.run(view, enabled, pending, retired);
   }
 
   function catalogCanMutate() {
-    const current = catalog();
+    const current = catalogState.value;
     return current.kind === "ready" && current.mutationAllowed;
   }
   function catalogBlocksMutation() {
-    const current = catalog();
+    const current = catalogState.value;
     return current.kind === "ready" && !current.mutationAllowed;
   }
   function canDispatchPluginMutation(connection: CatalogConnection) {
@@ -494,7 +442,7 @@ function MemorySettingsContent(props: MemorySettingsPageProps) {
   }
 
   async function changeEngine(engineId: string | null, currentSelection: MemoryEngineSelection) {
-    if (engineBusy() || props.mutationDisabled || catalogBlocksMutation()) {
+    if (engineMutation.busy() || props.mutationDisabled || catalogBlocksMutation()) {
       return;
     }
     if (engineId === selectedEngineId(currentSelection)) {
@@ -512,42 +460,47 @@ function MemorySettingsContent(props: MemorySettingsPageProps) {
     if (!connection || !client) {
       return;
     }
-    setEngineBusy(true);
-    try {
-      const mutation = await runPluginConfigMutation(
-        application.runtimeConfig,
-        client,
-        (current) => setPluginEnabled(current, engineId, true),
-        {
-          canDispatch: () => canDispatchPluginMutation(connection),
-        },
-      );
-      applyPluginRefreshOutcome(connection, mutation.refreshError);
-      const currentConnection = pageConnection;
-      if (currentConnection?.connected && currentConnection.client) {
-        await loadCatalog(currentConnection.client, currentConnection);
+    const view = engineMutation.capture();
+    const retired = mutationPresentationLifetime.promise;
+    const pending = (async () => {
+      try {
+        const mutation = await runPluginConfigMutation(
+          application.runtimeConfig,
+          client,
+          (current) => setPluginEnabled(current, engineId, true),
+          {
+            canDispatch: () => canDispatchPluginMutation(connection),
+          },
+        );
+        if (retired === mutationPresentationLifetime.promise) {
+          applyPluginRefreshOutcome(connection, mutation.refreshError);
+        }
+        const currentConnection = pageConnection;
+        if (currentConnection?.connected && currentConnection.client) {
+          await loadCatalog(currentConnection.client, currentConnection);
+        }
+      } catch (error) {
+        if (pageConnection === connection && retired === mutationPresentationLifetime.promise) {
+          setEngineOutcome({
+            kind: "error",
+            message: formatUiError(error),
+          });
+        }
       }
-    } catch (error) {
-      if (pageConnection === connection) {
-        setEngineOutcome({
-          kind: "error",
-          message: formatUiError(error),
-        });
-      }
-    } finally {
-      if (pageConnection === connection) {
-        setEngineBusy(false);
-      }
-    }
+    })();
+    await Promise.resolve();
+    await engineMutation.run(view, engineId, pending, retired);
   }
 
   function syncSupport(runtimeConfig: ApplicationContext["runtimeConfig"]) {
     const pluginId = resolveConfiguredDreaming(currentConfigObject(runtimeConfig.state)).pluginId;
-    let currentSupport = support();
+    let currentSupport = supportState.value;
     if (pluginId !== pageSupportPluginId) {
       pageSupportPluginId = pluginId;
       currentSupport = "unknown";
-      setSupport("unknown");
+      supportState.value = "unknown";
+      supportState.read = "unknown";
+      supportSource.publish();
     }
     const connected = runtimeConfig.state.connected;
     if (pageSupportProbe && (pageSupportProbe.pluginId !== pluginId || !connected)) {
@@ -560,182 +513,185 @@ function MemorySettingsContent(props: MemorySettingsPageProps) {
       pluginId,
     };
     pageSupportProbe = probe;
-    void resolveDreamingConfigPathSupport(runtimeConfig, pluginId).then((resolvedSupport) => {
+    const read = resolveDreamingConfigPathSupport(runtimeConfig, pluginId).then((resolved) =>
+      active && pageSupportProbe === probe ? resolved : supportState.value,
+    );
+    supportState.read = read;
+    supportSource.publish();
+    void read.then((resolvedSupport) => {
       if (pageSupportProbe !== probe) {
         return;
       }
       pageSupportProbe = null;
       if (active) {
-        setSupport(resolvedSupport);
+        supportState.value = resolvedSupport;
+        supportState.read = resolvedSupport;
+        supportSource.publish();
       }
     });
   }
 
-  function patchDreaming(path: readonly string[], value: unknown) {
-    if (props.mutationDisabled) {
-      return;
-    }
-    const config = currentConfigObject(application.runtimeConfig.state);
-    const writePath = dreamingConfigPath(resolveConfiguredDreaming(config).pluginId, path);
-    if (value === undefined) {
-      application.runtimeConfig.removeFormValue(writePath);
-      return;
-    }
-    application.runtimeConfig.patchForm(writePath, value);
-  }
+  const editCuratedSettings = createCuratedSettingsEditor(DREAMING_SETTINGS, {
+    read: () => currentConfigObject(application.runtimeConfig.state),
+    parameters: (config) => ({ configOwner: resolveConfiguredDreaming(config).pluginId }),
+    canEdit: () =>
+      active &&
+      !props.mutationDisabled &&
+      application.runtimeConfig.state.connected &&
+      application.gateway.snapshot.phase === "connected" &&
+      readGatewayOperatorAccess(application.gateway.snapshot).canAdmin,
+    patch: (path, value) => application.runtimeConfig.patchForm(path, value),
+    remove: (path) => application.runtimeConfig.removeFormValue(path),
+  });
 
   function navigateTab(tab: MemoryTab) {
     application.navigate("memory", {
       pathname: pathForMemoryTab(tab, application.basePath),
     });
   }
-  let previousTab: MemoryTab | undefined;
-  createEffect(
-    () => props.routeData,
-    () => {
-      const nextTab = activeTab();
-      const changed = previousTab !== undefined && previousTab !== nextTab;
-      previousTab = nextTab;
-      if (changed) {
-        pageOverviewRequest = null;
-        setProbingEmbeddings(false);
-      }
-      syncRouteAgent();
-      syncCanonicalLocation();
-      if (changed) {
-        void loadOverviewStatus();
-      }
-    },
-  );
-  // Owner notifications are synchronous: a disconnect/reconnect pair must retire
-  // pending reads even when Solid batches both publications into one render.
   onSettled(() => {
+    active = true;
     const unsubscribe = [
-      agentSelection.subscribe(() =>
-        untrack(() => selectAgent(agentSelection.read().state.selectedId)),
-      ),
-      gateway.subscribe(() => untrack(() => syncGateway(gateway.read().snapshot))),
-      runtime.subscribe(() => untrack(() => syncSupport(application.runtimeConfig))),
-      agents.subscribe(() => untrack(() => void loadOverviewStatus())),
+      // Retire pending reads on every connection transition, even within one render.
+      gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
+      // Config receipts retire obsolete support probes before their results can settle.
+      runtime.subscribe(() => syncSupport(application.runtimeConfig)),
+      // Route receipts retire the plugin's settings scope before its pending reads settle.
+      props.admittedRoute.subscribe(publishSettings),
     ];
-    syncRouteAgent();
-    selectAgent(agentSelection.read().state.selectedId);
     syncGateway(gateway.read().snapshot);
     return () => {
-      for (const stop of unsubscribe) {
-        stop();
-      }
+      retireMutationPresentation();
+      active = false;
+      pageConnection = null;
+      pageSupportProbe = null;
+      addonNoticeOperations.clear();
+      unsubscribe.forEach((stop) => stop());
     };
-  });
-  let previousEngine: string | null | undefined;
-  createEffect(
-    () => selectedEngineId(resolveMemoryEngineSelection(props.configObject)),
-    (engine) => {
-      const changed = previousEngine !== undefined && engine !== previousEngine;
-      previousEngine = engine;
-      if (!changed) {
-        return;
-      }
-      pageOverviewRequest = null;
-      setProbingEmbeddings(false);
-      void loadOverviewStatus();
-    },
-  );
-  onCleanup(() => {
-    active = false;
-    pageConnection = null;
-    pageOverviewRequest = null;
-    pageSupportProbe = null;
-    addonNoticeOperations.clear();
   });
 
   const engineSelection = () => resolveMemoryEngineSelection(props.configObject);
-  const currentEngineState = () => engineState(engineSelection());
+  const displayedEngineSelection = (): MemoryEngineSelection => {
+    const next = engineMutation.current();
+    return next !== undefined ? { kind: "pinned", pluginId: next } : engineSelection();
+  };
   const agentId = () => agentSelection.read().state.selectedId;
-  const agentError = () => (agentId() ? null : agents.read().agentsError);
+  function readSettingsSnapshot(): ControlUiSettingsSnapshot {
+    // Read authority directly from each live owner.
+    const selection = resolveMemoryEngineSelection(
+      currentConfigObject(application.runtimeConfig.state) ?? {},
+    );
+    const id = selectedEngineId(selection);
+    const entry = findMemoryPlugin(catalogState.value, id);
+    const routeData = props.admittedRoute.read();
+    return {
+      agentId: application.settingsAgentSelection.state.selectedId,
+      agentsLoading: application.agents.state.agentsLoading,
+      agentsError: application.agents.state.agentsError,
+      engine: {
+        kind: selection.kind,
+        id,
+        availability:
+          catalogState.value.kind === "ready" && id && !entry?.installed
+            ? "missing"
+            : engineState(selection),
+      },
+      connected: application.gateway.snapshot.phase === "connected",
+      advertisedMethods: application.gateway.snapshot.hello?.features?.methods,
+      connectionEpoch: settingsEpoch,
+      routeIntent: JSON.stringify([routeData?.pathname, routeData?.search, routeData?.hash]),
+      locale: getLocale(),
+    };
+  }
+
+  function subscribeSettings(listener: () => void) {
+    settingsListeners.add(listener);
+    // The plugin bridge must retire its request scope synchronously, before a batched render.
+    const stops = [agentSelection, gateway, runtime, application.agents, i18n].map((source) =>
+      source.subscribe(listener),
+    );
+    return () => {
+      settingsListeners.delete(listener);
+      stops.forEach((stop) => stop());
+    };
+  }
 
   return (
-    <Memory
-      activeTab={activeTab()}
-      onTabChange={navigateTab}
-      engineOptions={buildMemoryEngineOptions(catalog(), engineSelection())}
-      engineSelection={engineSelection()}
-      engineState={currentEngineState()}
-      engineBusy={engineBusy() || props.mutationDisabled || catalogBlocksMutation()}
-      engineOutcome={engineOutcome()}
-      onEngineChange={(nextEngineId) => void changeEngine(nextEngineId, engineSelection())}
-      addons={buildMemoryAddonRows(catalog(), {
-        busy: addonBusy(),
-        errors: addonErrors(),
-        notices: addonNotices(),
-        refreshWarnings: addonRefreshWarnings(),
-      })}
-      canToggleAddons={
-        catalogCanMutate() &&
-        !props.mutationDisabled &&
-        readGatewayOperatorAccess(gateway.read().snapshot).canAdmin
-      }
-      onAddonChange={(pluginId, enabled) => void changeAddon(pluginId, enabled)}
-      pluginsHref={props.pluginsHref}
-      memoryImportHref={props.memoryImportHref}
-      canImportMemory={readGatewayOperatorAccess(gateway.read().snapshot).canAdmin}
-      overview={
-        <MemoryOverview
-          agentId={agentId()}
-          engineSelection={engineSelection()}
-          engineDisabled={currentEngineState() === "disabled"}
-          status={agentError() ? { kind: "error", message: agentError()! } : overviewStatus()}
-          probingEmbeddings={probingEmbeddings()}
-          onRefresh={() =>
-            agentId()
-              ? void loadOverviewStatus({ force: true })
-              : void application.agents.ensureList()
-          }
-          onProbeEmbeddings={() => void loadOverviewStatus({ force: true, probeEmbeddings: true })}
-          onNavigate={navigateTab}
-        />
-      }
-      memories={
-        <MemoryMemories
-          client={gateway.read().snapshot.client}
-          connected={gateway.read().snapshot.phase === "connected"}
-          methodAdvertised={
-            isGatewayMethodAdvertised(gateway.read().snapshot, "memory.search") === true
-          }
-          agentId={agentId()}
-        />
-      }
-      dreams={
-        <Show when={agentId()} keyed>
-          {(id) => <AgentMemoryPanel agentId={id} />}
-        </Show>
-      }
-      editor={activeTab() === "settings" ? props.buildEditor() : null}
-      dreamingSettings={
-        activeTab() === "settings" ? (
-          <MemoryDreamingControls
-            config={currentConfigObject(runtime.read().state)}
-            support={support()}
-            disabled={props.mutationDisabled}
-            onPatch={patchDreaming}
-          />
-        ) : null
-      }
-    />
+    <openclaw-memory-settings>
+      <Memory
+        activeTab={activeTab()}
+        onTabChange={navigateTab}
+        catalog={catalog()}
+        catalogScope={catalogScope()}
+        addonOutcomes={addonOutcomes}
+        readAddonExpected={(id) => addonMutations.get(id)?.current()}
+        readAddonBusy={(id) => addonMutations.get(id)?.busy() ?? false}
+        engineSelection={displayedEngineSelection()}
+        enginePending={engineMutation.current() !== undefined}
+        engineBusy={engineMutation.busy() || props.mutationDisabled}
+        engineOutcome={engineOutcome()}
+        onEngineChange={(nextEngineId) => void changeEngine(nextEngineId, engineSelection())}
+        canToggleAddons={
+          !props.mutationDisabled && readGatewayOperatorAccess(gateway.read().snapshot).canAdmin
+        }
+        onAddonChange={(pluginId, enabled) => void changeAddon(pluginId, enabled)}
+        pluginsHref={props.pluginsHref}
+        memoryImportHref={props.memoryImportHref}
+        canImportMemory={readGatewayOperatorAccess(gateway.read().snapshot).canAdmin}
+        overview={
+          <ShellLayoutBoundary traits={{ settingsPage: true }}>
+            <ControlUiSettingsPresentation
+              application={application}
+              placement={{ section: "memory", panel: "overview" }}
+              readSnapshot={readSettingsSnapshot}
+              subscribe={subscribeSettings}
+              navigate={navigateTab}
+              refreshAgents={() => {
+                void application.agents.ensureList();
+              }}
+            />
+          </ShellLayoutBoundary>
+        }
+        memories={
+          <ShellLayoutBoundary traits={{ settingsPage: true }}>
+            <ControlUiSettingsPresentation
+              application={application}
+              placement={{ section: "memory", panel: "memories" }}
+              readSnapshot={readSettingsSnapshot}
+              subscribe={subscribeSettings}
+              navigate={navigateTab}
+              refreshAgents={() => {
+                void application.agents.ensureList();
+              }}
+            />
+          </ShellLayoutBoundary>
+        }
+        dreams={
+          <Show when={agentId()} keyed>
+            {(id) => {
+              const agentTarget = {
+                read: () => id,
+                subscribe: () => () => {},
+              };
+              return <AgentMemoryPanel initialAgentTarget={agentTarget} />;
+            }}
+          </Show>
+        }
+        editor={activeTab() === "settings" ? props.buildEditor() : null}
+        dreamingSettings={
+          activeTab() === "settings" ? (
+            <CuratedSettingsPanel
+              presentation={DREAMING_SETTINGS}
+              parameters={{ configOwner: dreamingConfigOwner() }}
+              messageParameters={{ plugin: dreamingConfigOwner() }}
+              config={currentConfigObject(runtime.read().state)}
+              support={support()()}
+              disabled={props.mutationDisabled}
+              onPatch={editCuratedSettings}
+            />
+          ) : null
+        }
+      />
+    </openclaw-memory-settings>
   );
 }
-
-export const MemorySettingsPage = defineSolidBridge<MemorySettingsPageProps>(
-  "openclaw-memory-settings",
-  (props) => <MemorySettingsContent {...props} />,
-  {
-    properties: {
-      configObject: { default: {}, attribute: false },
-      mutationDisabled: { default: false, type: Boolean },
-      pluginsHref: { default: "" },
-      memoryImportHref: { default: "" },
-      routeData: { default: null, attribute: false },
-      buildEditor: { default: () => null, attribute: false },
-    },
-  },
-);

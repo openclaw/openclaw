@@ -21,7 +21,6 @@
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   background: var(--composer-attached-surface, var(--chat-composer-surface));
-  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
 
@@ -244,11 +243,7 @@
 .chat-queue__edit-cancel svg {
   width: 14px;
   height: 14px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.75px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .chat-queue__item--failed .chat-queue__leading {
@@ -393,11 +388,7 @@
 .chat-queue__retry svg {
   width: 12px;
   height: 12px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.75px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .chat-queue__action:hover:not(:disabled),
@@ -423,16 +414,7 @@
 .chat-queue__more,
 .chat-queue__edit-submit,
 .chat-queue__edit-cancel {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
   background: none;
-  color: var(--muted);
   cursor: var(--cursor-action);
 }
 
@@ -459,23 +441,18 @@
   height: 15px;
 }
 
-.chat-queue__overflow::part(panel) {
-  width: 132px;
+.chat-queue__overflow .oc-menu {
   min-width: 132px;
 }
 
-.chat-queue__overflow wa-dropdown-item {
+.chat-queue__overflow .oc-menu-item {
   width: 100%;
   min-height: 32px;
   padding: 5px 8px;
   font-size: 12px;
 }
 
-.chat-queue__overflow wa-dropdown-item span[slot="icon"] {
-  display: inline-flex;
-}
-
-.chat-queue__overflow wa-dropdown-item svg {
+.chat-queue__overflow .oc-menu-item svg {
   width: 14px;
   height: 14px;
 }

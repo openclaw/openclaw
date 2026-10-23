@@ -587,15 +587,6 @@ export async function runInstallerFreshSuite(
       });
     }
 
-    logLanePhase(lane, "models-set");
-    await runInstalledModelsSet({
-      cliPath: freshShell.cliPath,
-      env,
-      providerConfig: params.providerConfig,
-      cwd: lane.homeDir,
-      logPath: join(params.logsDir, "installer-fresh-models-set.log"),
-    });
-
     // Keep the Windows installer lane validating Scheduled Task registration during
     // onboarding and lifecycle commands, but use a manual gateway for the runtime
     // checks after that so the installer validation does not depend on the more
@@ -623,6 +614,17 @@ export async function runInstallerFreshSuite(
         logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed-status.log"),
       });
     }
+    // `config set` refuses while a Gateway owns local state, so model setup runs only
+    // after the managed service has stopped and before the manual Gateway starts.
+    logLanePhase(lane, "models-set");
+    await runInstalledModelsSet({
+      cliPath: freshShell.cliPath,
+      env,
+      providerConfig: params.providerConfig,
+      cwd: lane.homeDir,
+      logPath: join(params.logsDir, "installer-fresh-models-set.log"),
+    });
+
     await gatewayPortReservation?.release();
     const { agent, discordStatus } = await runInstalledGatewaySmoke({
       ...params,

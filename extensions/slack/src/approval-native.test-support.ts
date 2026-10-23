@@ -1,5 +1,21 @@
 import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { afterEach } from "vitest";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
+
+export function useSlackInstallations() {
+  const registrations: Array<ReturnType<typeof registerSlackInstallationState>> = [];
+  afterEach(() => {
+    for (const registration of registrations.splice(0)) {
+      registration.release();
+    }
+  });
+  return (...args: Parameters<typeof registerSlackInstallationState>) => {
+    const registration = registerSlackInstallationState(...args);
+    registrations.push(registration);
+    return registration;
+  };
+}
 
 export function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>>,
@@ -32,12 +48,7 @@ export function buildPluginRequest(
   };
 }
 
-export function createExecApprovalRequest(
-  overrides: Partial<{
-    turnSourceThreadId: string;
-    sessionKey: string;
-  }> = {},
-) {
+export function createExecApprovalRequest() {
   return {
     id: "req-1",
     request: {
@@ -45,8 +56,8 @@ export function createExecApprovalRequest(
       turnSourceChannel: "slack",
       turnSourceTo: "channel:C123",
       turnSourceAccountId: "default",
-      turnSourceThreadId: overrides.turnSourceThreadId ?? "1712345678.123456",
-      sessionKey: overrides.sessionKey ?? "agent:main:slack:channel:c123:thread:1712345678.123456",
+      turnSourceThreadId: "1712345678.123456",
+      sessionKey: "agent:main:slack:channel:c123:thread:1712345678.123456",
     },
     createdAtMs: 0,
     expiresAtMs: 1000,

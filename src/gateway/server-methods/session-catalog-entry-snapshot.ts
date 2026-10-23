@@ -7,7 +7,10 @@ import {
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionEntrySummary } from "../../config/sessions/session-accessor.js";
-import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
+import {
+  resolveSessionCreatorActor,
+  sessionCreatorProfileId,
+} from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   SessionCatalogEntrySnapshot,
@@ -139,7 +142,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
             ? new Set([...(selectedKeysByAgentId.get(agentId) ?? [])].filter(Boolean))
             : undefined,
         },
-      ).entries;
+      ).entries("all");
       entriesByAgentId.set(
         agentId,
         Object.freeze(entries.map(([sessionKey, entry]) => Object.freeze({ sessionKey, entry }))),
@@ -197,7 +200,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
     }
     const entry = entryForSession(sessionKey);
     const actor = projectSessionActor(
-      entry?.createdActor,
+      resolveSessionCreatorActor(entry?.createdActor),
       userProfileIdentityById,
       params.cfg,
       Boolean(sessionCreatorProfileId(entry?.createdActor)),

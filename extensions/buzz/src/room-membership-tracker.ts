@@ -1,5 +1,6 @@
 import type { Event, Filter, Relay } from "nostr-tools";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isNewerBuzzRevision } from "./event-order.js";
 import { catchUpBuzzRoomHistory } from "./history-catchup.js";
@@ -23,18 +24,6 @@ const MEMBERSHIP_READY_TIMEOUT_MS = 10_000;
 const BUZZ_ROOM_METADATA_EDIT_KIND = 9_002;
 const MEMBERSHIP_REFRESH_DELAYS_MS = [100, 500, 1_500, 3_000] as const;
 const MEMBERSHIP_EVENT_CACHE_MAX_ENTRIES = 10_000;
-
-async function sleepWithSignal(delayMs: number, signal?: AbortSignal): Promise<void> {
-  signal?.throwIfAborted();
-  try {
-    await sleepWithAbort(delayMs, signal);
-  } catch {
-    const error = signal?.reason ?? new Error("Buzz room membership refresh aborted");
-    throw error instanceof Error
-      ? error
-      : new Error("Buzz room membership refresh failed", { cause: error });
-  }
-}
 
 export async function createBuzzRoomMembershipTracker(params: {
   relay: Relay;
@@ -108,12 +97,7 @@ export async function createBuzzRoomMembershipTracker(params: {
       return false;
     }
     seenEventIds.set(eventId, true);
-    if (seenEventIds.size > MEMBERSHIP_EVENT_CACHE_MAX_ENTRIES) {
-      const oldestEventId = seenEventIds.keys().next().value;
-      if (oldestEventId) {
-        seenEventIds.delete(oldestEventId);
-      }
-    }
+    pruneMapToMaxSize(seenEventIds, MEMBERSHIP_EVENT_CACHE_MAX_ENTRIES);
     return true;
   };
   const reportSystemEventError = (error: unknown) => {
@@ -151,7 +135,7 @@ export async function createBuzzRoomMembershipTracker(params: {
     for (const delayMs of MEMBERSHIP_REFRESH_DELAYS_MS) {
       const generation = state.generation;
       state.lastAttemptedGeneration = generation;
-      await sleepWithSignal(delayMs, params.signal);
+      await sleepWithAbort(delayMs, params.signal);
       if (state.generation !== generation) {
         continue;
       }

@@ -15,13 +15,7 @@ import {
   loadEnabledBundleConfig,
   readBundleJsonObject,
 } from "./bundle-config-shared.js";
-import {
-  AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
-  CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
-  CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
-  CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
-  resolveBundleComponentPaths,
-} from "./bundle-manifest.js";
+import { BUNDLE_MANIFEST_PATHS, resolveBundleComponentPaths } from "./bundle-manifest.js";
 import type {
   BundleMcpConfig,
   BundleMcpDataDirOwnership,
@@ -45,12 +39,6 @@ type BundleMcpRuntimeSupport = {
   diagnostics: string[];
 };
 
-const MANIFEST_PATH_BY_FORMAT: Record<PluginBundleFormat, string> = {
-  agent: AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
-  claude: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
-  codex: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
-  cursor: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
-};
 const CLAUDE_PLUGIN_ROOT_PLACEHOLDER = "${CLAUDE_PLUGIN_ROOT}";
 const AGENT_PLUGIN_ROOT_PLACEHOLDER = "${PLUGIN_ROOT}";
 const AGENT_PLUGIN_DATA_PLACEHOLDER = "${PLUGIN_DATA}";
@@ -433,7 +421,7 @@ function loadBundleMcpConfig(params: {
   rootDir: string;
   bundleFormat: PluginBundleFormat;
 }): { config: BundleMcpRuntimeConfig; diagnostics: string[] } {
-  const manifestRelativePath = MANIFEST_PATH_BY_FORMAT[params.bundleFormat];
+  const manifestRelativePath = BUNDLE_MANIFEST_PATHS[params.bundleFormat];
   const manifestLoaded = readBundleJsonObject({
     rootDir: params.rootDir,
     relativePath: manifestRelativePath,

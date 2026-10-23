@@ -88,6 +88,10 @@ Runtime events include:
 - `trace.artifacts`
 - `session.ended`
 
+Native tool results include `success` only for a settled outcome. A tool that is
+still running or has an unknown outcome omits `success`; it is not recorded as a
+successful completion.
+
 Transcript events are reconstructed from the active session branch: user
 messages, assistant messages, tool calls, tool results, compactions, model
 changes, labels, and custom session entries.
@@ -121,7 +125,10 @@ omitted when the session did not capture the corresponding runtime data.
 
 Runtime trajectory events are stored with the session in the per-agent SQLite
 database. Runtime batches carry the captured JSON bytes to the database worker
-for persistence. Cleanup drains the final batch.
+for persistence. Normal turns keep their events together until cleanup drains the
+final batch. Long turns also flush in the background at 32 pending events or when
+the pending queue overflows the session's rolling byte limit. A process crash
+before a flush can lose the pending diagnostic events.
 Queued events follow the same rolling byte limit while the database writer is busy.
 Exporting a trajectory materializes a redacted JSONL support bundle;
 the live runtime capture is not a session-adjacent JSONL sidecar.
@@ -183,6 +190,11 @@ The exporter also bounds input size:
 - runtime events per export: 200,000
 - total exported events: 250,000
 - individual runtime event lines are truncated above 256 KiB
+
+Runtime capture preserves structured results within its field limits, including
+explicit truncation markers. If a tool result exceeds the event size limit,
+capture keeps its tool identity and outcome while dropping oversized payload
+fields.
 
 The source byte limits are checked before parsing events. SQLite sources use
 UTF-8 JSONL size, including separators between rows, regardless of the database

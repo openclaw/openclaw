@@ -84,40 +84,27 @@ function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQue
   return a.runId.localeCompare(b.runId);
 }
 
-function listPendingAgentSteeringItemsFromSubagentRuns(params: {
-  runs: ReadonlyMap<string, SubagentRunRecord>;
-  requesterSessionKey: string;
-  now?: number;
-}): AgentSteeringQueueItem[] {
-  const requesterSessionKey = params.requesterSessionKey.trim();
-  if (!requesterSessionKey) {
-    return [];
+function pendingSteeringPayload(
+  entry: SubagentRunRecord,
+  requesterSessionKey: string,
+  now: number,
+) {
+  const { delivery, requesterStorePath, requesterAgentId } = entry;
+  const payload = delivery?.payload;
+  if (!delivery || !payload) {
+    return undefined;
   }
-  const now = params.now ?? Date.now();
-  const items: AgentSteeringQueueItem[] = [];
-  for (const [runId, entry] of params.runs.entries()) {
-    const { delivery, requesterStorePath, requesterAgentId } = entry;
-    const payload = delivery?.payload;
-    if (!delivery || !payload) {
-      continue;
-    }
-    const staleLease = isStaleLease(delivery, now);
-    if (entry.cleanupHandled === true && !staleLease) {
-      continue;
-    }
-    if (
-      payload.requesterSessionKey !== requesterSessionKey ||
-      !isSystemEventStoreCurrent(requesterSessionKey, requesterStorePath, requesterAgentId)
-    ) {
-      continue;
-    }
+  const staleLease = isStaleLease(delivery, now);
+  if (
+    (entry.cleanupHandled === true && !staleLease) ||
+    payload.requesterSessionKey !== requesterSessionKey ||
+    !isSystemEventStoreCurrent(requesterSessionKey, requesterStorePath, requesterAgentId) ||
     // Suspension requires explicit retry; only an already leased generation may recover.
-    if (delivery.status !== "pending" && !staleLease) {
-      continue;
-    }
-    items.push({ runId, entry, payload });
+    (delivery.status !== "pending" && !staleLease)
+  ) {
+    return undefined;
   }
-  return items.toSorted(sortPendingSteeringItems);
+  return payload;
 }
 
 /** Format a pending completion once using its final deterministic prompt position. */
@@ -183,7 +170,6 @@ export async function preparePendingAgentSteeringLease(params: {
   runs: ReadonlyMap<string, SubagentRunRecord>;
   requesterSessionKey: string;
   leaseId: string;
-  now?: number;
   readResult: (entry: SubagentRunRecord) => Promise<PreparedAnnounceResult>;
 }): Promise<
   | {
@@ -195,8 +181,20 @@ export async function preparePendingAgentSteeringLease(params: {
     }
   | undefined
 > {
+  const requesterSessionKey = params.requesterSessionKey.trim();
+  if (!requesterSessionKey) {
+    return undefined;
+  }
+  const selectionNow = Date.now();
+  const pending: AgentSteeringQueueItem[] = [];
+  for (const entry of params.runs.values()) {
+    const payload = pendingSteeringPayload(entry, requesterSessionKey, selectionNow);
+    if (payload) {
+      pending.push({ runId: entry.runId, entry, payload });
+    }
+  }
   const selection = await selectPromptBoundedItems(
-    listPendingAgentSteeringItemsFromSubagentRuns(params),
+    pending.toSorted(sortPendingSteeringItems),
     params.readResult,
   );
   if (!selection) {
@@ -221,19 +219,15 @@ export async function preparePendingAgentSteeringLease(params: {
     runIds,
     isCurrent,
     plan(rows) {
-      const now = params.now ?? Date.now();
-      const pending = new Set(
-        listPendingAgentSteeringItemsFromSubagentRuns({ ...params, runs: rows, now }).map(
-          (item) => item.runId,
-        ),
-      );
-      if (items.some((item) => !pending.has(item.runId) || !item.isCurrent(rows.get(item.runId)))) {
-        return undefined;
-      }
+      const now = Date.now();
       const postimages = new Map<string, SubagentRunRecord>();
       for (const item of items) {
         const current = rows.get(item.runId);
-        if (!current?.delivery) {
+        if (
+          !current ||
+          !pendingSteeringPayload(current, requesterSessionKey, now) ||
+          !item.isCurrent(current)
+        ) {
           return undefined;
         }
         postimages.set(item.runId, {
@@ -305,9 +299,9 @@ function planAgentSteeringSettlement(
 
 /** Acknowledge only the lease that actually supplied this requester prompt. */
 export function planAgentSteeringAcknowledgment(
-  params: AgentSteeringLease & { now?: number },
+  params: AgentSteeringLease,
 ): SubagentRunMutation<number> {
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   return planAgentSteeringSettlement(params, () => ({
     status: "delivered",
     deliveredAt: now,

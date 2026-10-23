@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
@@ -57,8 +57,6 @@ const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 // no idempotency key; item identity lives in the dispatch-scope fingerprint.
 const HOOK_FAN_OUT_DERIVED_IDEMPOTENCY = "hook-fanout-item";
 const HOOK_CONFIG_CHANGED_ERROR = "hook configuration changed; retry request";
-
-const hashReplay = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 
 export type HookClientIpConfig = Readonly<{
   trustedProxies?: string[];
@@ -154,7 +152,7 @@ export function createHooksRequestHandler(
       pathKey: params.pathKey,
       dispatchScope: params.dispatchScope,
     });
-    return `${hashReplay(params.token ?? "")}:${hashReplay(scope)}:${hashReplay(idem)}`;
+    return `${sha256Hex(params.token ?? "")}:${sha256Hex(scope)}:${sha256Hex(idem)}`;
   };
 
   const resolveHookReplay = (key: string | undefined) => {
@@ -187,32 +185,23 @@ export function createHooksRequestHandler(
     const pending = Promise.resolve()
       .then(dispatch)
       .then((result) => {
-        const current = hookReplayCache.get(key);
-        if (current?.state === "pending" && current.dispatch === pending) {
-          if (result.ok) {
-            const active = { state: "active", dispatch: result } as const;
-            hookReplayCache.set(key, active);
-            const settle = () => {
-              if (hookReplayCache.get(key) !== active) {
-                return;
-              }
-              const terminal = { state: "terminal", ts: Date.now(), dispatch: result } as const;
-              hookReplayCache.delete(key);
-              hookReplayCache.set(key, terminal);
-              pruneHookReplayCache(terminal.ts);
-            };
-            void result.completion.then(settle, settle);
-          } else {
+        // Pending/active entries cannot be pruned or replaced by another request.
+        if (result.ok) {
+          hookReplayCache.set(key, { state: "active", dispatch: result });
+          const settle = () => {
+            const terminal = { state: "terminal", ts: Date.now(), dispatch: result } as const;
             hookReplayCache.delete(key);
-          }
+            hookReplayCache.set(key, terminal);
+            pruneHookReplayCache(terminal.ts);
+          };
+          void result.completion.then(settle, settle);
+        } else {
+          hookReplayCache.delete(key);
         }
         return result;
       })
       .catch((err: unknown) => {
-        const current = hookReplayCache.get(key);
-        if (current?.state === "pending" && current.dispatch === pending) {
-          hookReplayCache.delete(key);
-        }
+        hookReplayCache.delete(key);
         throw err;
       });
     hookReplayCache.set(key, { state: "pending", dispatch: pending });

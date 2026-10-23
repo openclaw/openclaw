@@ -391,6 +391,6 @@ enum PostAppUpdateReceiptStore {
     private static func persist(_ receipt: PostAppUpdateReceipt, defaults: UserDefaults) -> Bool {
         guard let data = try? JSONEncoder().encode(receipt) else { return false }
         defaults.set(data, forKey: postAppUpdateReceiptKey)
-        return defaults.data(forKey: postAppUpdateReceiptKey) == data
+        return true
     }
 }

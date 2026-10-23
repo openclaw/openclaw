@@ -1,5 +1,6 @@
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { cardBoardId, cardRunId, cardSessionKey } from "./store-card-helpers.js";
+import { DEFAULT_WORKBOARD_DISPATCH_OWNER } from "./store-constants.js";
 
 function sanitizeSessionSegment(value: string | undefined, fallback: string): string {
   const sanitized = (value ?? fallback)
@@ -46,5 +47,14 @@ export function workboardCardMatchesLifecycleLink(
 }
 
 export function workboardCardSessionLookupKey(card: WorkboardCard): string {
-  return cardSessionKey(card) ?? workboardSessionKeyForCard(card);
+  const linked = cardSessionKey(card);
+  if (linked) {
+    return linked;
+  }
+  const key = workboardSessionKeyForCard(card);
+  // The dispatcher claim is not a session owner before acceptance records a link.
+  return card.agentId === DEFAULT_WORKBOARD_DISPATCH_OWNER &&
+    card.metadata?.claim?.ownerId === DEFAULT_WORKBOARD_DISPATCH_OWNER
+    ? key.slice(key.indexOf("subagent:workboard-"))
+    : key;
 }

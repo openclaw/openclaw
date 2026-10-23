@@ -8,7 +8,71 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+
+const sessionKey = "agent:main:current";
+const unreadRow = (extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
+  key: sessionKey,
+  kind: "direct",
+  updatedAt: 20,
+  unread: true,
+  ...extra,
+});
+const activeStatus = () => ({ note: "Working", expiresAt: Date.now() + 60_000 });
+function authorize(
+  pane: ReturnType<typeof createTestChatPane>["pane"],
+  scopes: string[],
+  methods = ["sessions.patch"],
+) {
+  pane.context.gateway.snapshot.hello = {
+    auth: { role: "operator", scopes },
+    features: { methods },
+  } as ApplicationGatewaySnapshot["hello"];
+}
+function expectRead(
+  patch: ReturnType<typeof vi.fn>,
+  key = sessionKey,
+  marked: number | null = null,
+) {
+  expect(patch).toHaveBeenCalledWith(
+    key,
+    { unread: false },
+    { agentId: "main", expectedMarkedUnreadAt: marked },
+  );
+}
+const observedSessions = (rows: GatewaySessionRow[]) => ({
+  result: sessionsResult(rows, 20),
+  agentId: "main",
+  loading: false,
+  error: null,
+  deletedSessions: [],
+  modelOverrides: {},
+  groups: [],
+  groupSettings: [],
+  sectionOrder: [],
+});
+
+function commitReadMarkerHistory(
+  pane: ReturnType<typeof createTestChatPane>["pane"],
+  row: GatewaySessionRow = unreadRow({ sessionId: "read-marker-session" }),
+) {
+  const state = pane.state;
+  const client = state.client;
+  if (!client) {
+    throw new Error("Read-marker fixture requires a connected client");
+  }
+  state.currentSessionId = row.sessionId;
+  setChatHistoryLoad(state, {
+    phase: "committed",
+    sessions: state.sessions,
+    client,
+    connectionEpoch: state.connectionEpoch,
+    sessionKey: state.sessionKey,
+    requestAgentId: undefined,
+    sessionInfo: row,
+  });
+}
 
 function createReadMarkerPane(result: Record<string, never> | null = null) {
   const patch = vi.fn().mockResolvedValue(result);
@@ -16,6 +80,7 @@ function createReadMarkerPane(result: Record<string, never> | null = null) {
     client: {} as GatewayBrowserClient,
     sessions: createSessionCapabilityFixture({ patch }),
   });
+  commitReadMarkerHistory(pane);
   return { pane, state, patch };
 }
 
@@ -29,13 +94,7 @@ describe("chat pane read markers", () => {
     });
     const rejected = createDeferred<unknown>();
     const trailing = createDeferred<unknown>();
-    const row: GatewaySessionRow = {
-      key: "agent:main:current",
-      sessionId: "read-restart-session",
-      kind: "direct",
-      updatedAt: 20,
-      unread: true,
-    };
+    const row = unreadRow({ sessionId: "read-restart-session" });
     const patch = vi.fn().mockReturnValueOnce(rejected.promise).mockReturnValue(trailing.promise);
     const { pane, sessions } = createTestChatPane({
       client: createTestGatewayClient((method) => {
@@ -49,6 +108,7 @@ describe("chat pane read markers", () => {
       }),
     });
     onTestFinished(() => sessions.dispose());
+    commitReadMarkerHistory(pane, row);
     await sessions.refresh({ force: true });
     onTestFinished(sessions.subscribe((state) => pane.applySessionsState(state)));
     pane.applySessionsState(sessions.state);
@@ -83,38 +143,35 @@ describe("chat pane read markers", () => {
     expect(patch).toHaveBeenCalledTimes(2);
   });
 
-  it.each([{ restartPending: true }])(
-    "pauses parent and hidden-run acknowledgements while unavailable: %j",
-    (unavailable) => {
-      const { pane, state, patch } = createReadMarkerPane({});
-      const row: GatewaySessionRow = { key: state.sessionKey, kind: "direct", unread: true };
-      state.sessionsResult = sessionsResult(
-        [
-          row,
-          {
-            key: "agent:main:subagent:background",
-            kind: "direct",
-            spawnedBy: row.key,
-            status: "done",
-            unread: true,
-            updatedAt: 20,
-          },
-        ],
-        20,
-      );
-      Object.assign(pane.context.gateway.snapshot, unavailable);
-      for (let update = 0; update < 40; update += 1) {
-        pane.markSessionRead(row);
-      }
-      expect(patch).not.toHaveBeenCalled();
-      Object.assign(pane.context.gateway.snapshot, {
-        restartPending: false,
-        suspensionPhase: "accepting",
-      });
+  it("pauses parent and hidden-run acknowledgements during restart", () => {
+    const { pane, state, patch } = createReadMarkerPane({});
+    const row: GatewaySessionRow = { key: state.sessionKey, kind: "direct", unread: true };
+    state.sessionsResult = sessionsResult(
+      [
+        row,
+        {
+          key: "agent:main:subagent:background",
+          kind: "direct",
+          spawnedBy: row.key,
+          status: "done",
+          unread: true,
+          updatedAt: 20,
+        },
+      ],
+      20,
+    );
+    Object.assign(pane.context.gateway.snapshot, { restartPending: true });
+    for (let update = 0; update < 40; update += 1) {
       pane.markSessionRead(row);
-      expect(patch).toHaveBeenCalledTimes(2);
-    },
-  );
+    }
+    expect(patch).not.toHaveBeenCalled();
+    Object.assign(pane.context.gateway.snapshot, {
+      restartPending: false,
+      suspensionPhase: "accepting",
+    });
+    pane.markSessionRead(row);
+    expect(patch).toHaveBeenCalledTimes(2);
+  });
 
   it("marks an unread failure read even when its regular unread flag is false", () => {
     const { pane, patch } = createReadMarkerPane();
@@ -129,11 +186,7 @@ describe("chat pane read markers", () => {
       unread: false,
     });
 
-    expect(patch).toHaveBeenCalledWith(
-      "agent:main:current",
-      { unread: false },
-      { agentId: "main", expectedMarkedUnreadAt: null },
-    );
+    expectRead(patch);
   });
 
   it.each([
@@ -161,20 +214,16 @@ describe("chat pane read markers", () => {
       scopes: ["operator.write"],
       session: { visibility: "draft" as const, sharingRole: "member" as const },
     },
+    {
+      name: "foreign session with narrow write scope",
+      methods: ["sessions.patch"],
+      scopes: ["operator.sessions.write"],
+      session: { visibility: "shared" as const, sharingRole: "member" as const },
+    },
   ])("does not mutate unread state with $name", ({ methods, scopes, session }) => {
     const { pane, state, patch } = createReadMarkerPane();
-    pane.context.gateway.snapshot.hello = {
-      auth: { role: "operator", scopes },
-      features: { methods },
-    } as ApplicationGatewaySnapshot["hello"];
-    const row = {
-      key: "agent:main:current",
-      kind: "direct" as const,
-      updatedAt: 20,
-      unread: true,
-      agentStatus: { note: "Working", expiresAt: Date.now() + 60_000 },
-      ...session,
-    };
+    authorize(pane, scopes, methods);
+    const row = unreadRow({ agentStatus: activeStatus(), ...session });
 
     pane.markSessionRead(row);
     pane.markSessionRead(row);
@@ -187,20 +236,11 @@ describe("chat pane read markers", () => {
   it.each([
     { visibility: "read-only", sharingRole: "member", scopes: ["operator.write"] },
     { visibility: "draft", sharingRole: "owner", scopes: ["operator.write"] },
+    { visibility: "draft", sharingRole: "owner", scopes: ["operator.sessions.write"] },
   ] as const)("acknowledges unread state for $visibility $sharingRole", (session) => {
     const { pane, patch } = createReadMarkerPane({});
-    pane.context.gateway.snapshot.hello = {
-      auth: { role: "operator", scopes: [...session.scopes] },
-      features: { methods: ["sessions.patch"] },
-    } as ApplicationGatewaySnapshot["hello"];
-    const row = {
-      key: "agent:main:current",
-      kind: "direct" as const,
-      updatedAt: 20,
-      unread: true,
-      visibility: session.visibility,
-      sharingRole: session.sharingRole,
-    };
+    authorize(pane, [...session.scopes]);
+    const row = unreadRow({ visibility: session.visibility, sharingRole: session.sharingRole });
 
     pane.markSessionRead(row);
     pane.markSessionRead(row);
@@ -217,13 +257,7 @@ describe("chat pane read markers", () => {
     // scope is lost; the guard must unlatch like a failure or the badge
     // stays lit until navigation.
     const { pane, patch } = createReadMarkerPane();
-    const row = {
-      key: "agent:main:current",
-      kind: "direct" as const,
-      label: "Unread",
-      updatedAt: 20,
-      unread: true,
-    };
+    const row = unreadRow({ label: "Unread" });
 
     pane.markSessionRead(row);
     await Promise.resolve();
@@ -253,6 +287,7 @@ describe("chat pane read markers", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const { pane } = createTestChatPane({ client: createTestGatewayClient(request) });
+    commitReadMarkerHistory(pane);
     const { context } = pane;
     const errors = vi.fn();
     onTestFinished(
@@ -262,13 +297,7 @@ describe("chat pane read markers", () => {
         }
       }),
     );
-    const row: GatewaySessionRow = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 20,
-      unread: true,
-      agentStatus: { note: "Working", expiresAt: Date.now() + 60_000 },
-    };
+    const row = unreadRow({ agentStatus: activeStatus() });
 
     pane.markSessionRead(row);
     await vi.waitFor(() => expect(errors).toHaveBeenCalledTimes(1));
@@ -287,28 +316,11 @@ describe("chat pane read markers", () => {
     const { pane, patch } = createReadMarkerPane();
     const sessionsState = (presented: boolean) => {
       pane.presented = presented;
-      pane.applySessionsState({
-        result: sessionsResult(
-          [
-            {
-              key: "agent:main:current",
-              kind: "direct",
-              label: "Background activity",
-              updatedAt: 20,
-              unread: true,
-            },
-          ],
-          20,
-        ),
-        agentId: "main",
-        loading: false,
-        error: null,
-        deletedSessions: [],
-        modelOverrides: {},
-        groups: [],
-        groupSettings: [],
-        sectionOrder: [],
-      });
+      Object.assign(
+        pane.context.sessions.state,
+        observedSessions([unreadRow({ label: "Background activity" })]),
+      );
+      pane.applySessionsState(pane.context.sessions.state);
     };
 
     // Hidden retained panes keep the subscription alive but must not mark
@@ -317,46 +329,23 @@ describe("chat pane read markers", () => {
     expect(patch).not.toHaveBeenCalled();
 
     sessionsState(true);
-    expect(patch).toHaveBeenCalledWith(
-      "agent:main:current",
-      { unread: false },
-      { agentId: "main", expectedMarkedUnreadAt: null },
-    );
+    expectRead(patch);
   });
 
   it("acknowledges a manual unread marker when a retained pane is presented again", () => {
     const { pane, patch } = createReadMarkerPane({});
-    const row = {
-      key: "agent:main:current",
-      kind: "direct" as const,
-      markedUnreadAt: 20,
-      updatedAt: 20,
-      unread: true,
-    };
+    const row = unreadRow({ markedUnreadAt: 20 });
 
     pane.markSessionRead({ ...row, markedUnreadAt: undefined, unread: false });
     pane.markSessionRead(row);
     expect(patch).not.toHaveBeenCalled();
 
     pane.presented = false;
-    pane.applySessionsState({
-      result: sessionsResult([row], 20),
-      agentId: "main",
-      loading: false,
-      error: null,
-      deletedSessions: [],
-      modelOverrides: {},
-      groups: [],
-      groupSettings: [],
-      sectionOrder: [],
-    });
+    Object.assign(pane.context.sessions.state, observedSessions([row]));
+    pane.applySessionsState(pane.context.sessions.state);
     pane.presented = true;
 
-    expect(patch).toHaveBeenCalledWith(
-      "agent:main:current",
-      { unread: false },
-      { agentId: "main", expectedMarkedUnreadAt: 20 },
-    );
+    expectRead(patch, sessionKey, 20);
   });
 
   describe("hidden runs folded into the parent", () => {
@@ -423,39 +412,42 @@ describe("chat pane read markers", () => {
       expect(patch).not.toHaveBeenCalled();
     });
 
-    it("acknowledges newer run activity only on a later read", () => {
-      const { pane, state, patch } = createParentPane([run("done", { unread: false })]);
+    it.each(["operator.write", "operator.sessions.write"])(
+      "acknowledges newer owned run activity only on a later read with %s",
+      (scope) => {
+        const { pane, state, patch } = createParentPane([run("done", { unread: false })]);
+        authorize(pane, [scope]);
+        const ownedParent = { ...parent, sharingRole: "owner" as const };
 
-      pane.markSessionRead(parent);
-      expect(patch).not.toHaveBeenCalled();
+        pane.markSessionRead(ownedParent);
+        expect(patch).not.toHaveBeenCalled();
 
-      state.sessionsResult = sessionsResult([parent, run("done", { updatedAt: 30 })], 30);
-      pane.markSessionRead(parent);
+        state.sessionsResult = sessionsResult(
+          [ownedParent, run("done", { updatedAt: 30, sharingRole: "owner" })],
+          30,
+        );
+        pane.markSessionRead(ownedParent);
 
-      expect(patch).toHaveBeenCalledOnce();
-      expect(patch).toHaveBeenCalledWith(
-        "agent:main:subagent:done",
-        { unread: false },
-        { agentId: "main", expectedMarkedUnreadAt: null },
-      );
-    });
-
-    it.each([{ code: ErrorCodes.UNAVAILABLE, calls: 2 }])(
-      "retries a hidden run after a $code failure only when transient",
-      async ({ code, calls }) => {
-        const clock = vi.spyOn(Date, "now").mockReturnValue(0);
-        onTestFinished(() => clock.mockRestore());
-        const { pane, patch } = createParentPane([run("done")]);
-        patch.mockRejectedValueOnce(new GatewayRequestError({ code, message: "ack failed" }));
-
-        pane.markSessionRead(parent);
-        await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
-        await Promise.resolve();
-        clock.mockReturnValue(600);
-        pane.markSessionRead(parent);
-
-        expect(patch).toHaveBeenCalledTimes(calls);
+        expect(patch).toHaveBeenCalledOnce();
+        expectRead(patch, "agent:main:subagent:done");
       },
     );
+
+    it("retries a hidden run after a transient UNAVAILABLE failure", async () => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+      onTestFinished(() => clock.mockRestore());
+      const { pane, patch } = createParentPane([run("done")]);
+      patch.mockRejectedValueOnce(
+        new GatewayRequestError({ code: ErrorCodes.UNAVAILABLE, message: "ack failed" }),
+      );
+
+      pane.markSessionRead(parent);
+      await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
+      await Promise.resolve();
+      clock.mockReturnValue(600);
+      pane.markSessionRead(parent);
+
+      expect(patch).toHaveBeenCalledTimes(2);
+    });
   });
 });

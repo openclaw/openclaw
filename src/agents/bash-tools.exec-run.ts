@@ -1,6 +1,3 @@
-/**
- * Exec tool policy, host dispatch, and process lifecycle pipeline.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
@@ -9,7 +6,6 @@ import {
   maxAsk,
   minSecurity,
   normalizeExecAsk,
-  requireValidExecTarget,
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
@@ -49,7 +45,6 @@ import {
   type ExecProcessHandle,
   normalizePathPrepend,
   resolveApprovalRunningNoticeMs,
-  resolveExecTarget,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import {
@@ -59,10 +54,9 @@ import {
 import {
   attachExecApprovalReview,
   buildExecForegroundResult,
-  createExecHostResolver,
-  resolveExecElevatedMode,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
+import { resolveExecElevatedMode, resolveExecHost } from "./bash-tools.exec-target.js";
 import type {
   ExecToolApprovalReview,
   ExecToolDefaults,
@@ -70,7 +64,7 @@ import type {
 } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
-import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
+import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import {
   createExecToolExecutionTimeoutResolver,
   resolveExecDefaultTimeoutSec,
@@ -84,9 +78,8 @@ import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context
 type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>;
 
 const BACKGROUND_EXEC_FOLLOW_UP =
-  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
+  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up. Automatic completion wake, when enabled, occurs only after exit. New output while this command is running does not automatically start another turn. Ending the turn does not stop it; use process kill when it is no longer needed. Completion and the configured timeout still apply; this is not a saved, restartable automation.";
 
-/** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(defaults?: ExecToolDefaults) {
   const secretEgressEnabled = isSecretEgressProxyActive();
   const cleanupMs = defaults?.cleanupMs;
@@ -99,6 +92,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
   let subagentExecutionPromise: Promise<boolean> | undefined;
   const resolveSubagentExecution = () =>
+    defaults?.preparedSubagentExecution ??
     (subagentExecutionPromise ??= withPreparedSessionCapabilityRead(
       () =>
         resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
@@ -164,7 +158,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
-    notifyFromConversationTurn,
   } = resolveExecNotificationDefaults(defaults);
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
@@ -172,7 +165,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
-  const resolveHostForParams = createExecHostResolver(defaults);
   const buildUnavailableWorkdirResult = (params: {
     cwd: string;
     startedAt?: number;
@@ -190,7 +182,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const requestPreparation = createExecRequestPreparation({
     defaults,
     agentId,
-    resolveHostForParams,
+    resolveHostForParams: (params) => resolveExecHost(params, defaults),
   });
   const tool: AgentToolWithMeta<typeof execSchema, ExecToolDetails> = {
     name: "exec",
@@ -291,14 +283,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             .join("\n"),
         );
       }
-      const target = resolveExecTarget({
-        configuredTarget: defaults?.host,
-        requestedTarget: requireValidExecTarget(params.host),
-        elevatedRequested,
-        sandboxAvailable: Boolean(defaults?.sandbox),
-        sandboxRequired: defaults?.sandboxRequired,
-      });
-      const host = target.effectiveHost;
+      const host = resolveExecHost(params, defaults);
       const foregroundFallbackWarning =
         (host === "node" || !backgroundAvailable) &&
         (params.background === true || typeof params.yieldMs === "number")
@@ -355,7 +340,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const autoReview = modePolicy.autoReview && ask === modePolicy.ask && !bypassApprovals;
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      if (target.selectedTarget === "sandbox" && !sandbox) {
+      if (host === "sandbox" && !sandbox) {
         throw new Error(
           [
             "exec host=sandbox requires a sandbox runtime for this session.",
@@ -415,7 +400,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
       try {
         if (elevatedRequested) {
-          logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
+          logInfo("exec: elevated command");
         }
         if (!resolveExecEnvPrepared) {
           params = await requestPreparation.prepareParamsWithResolvedExecEnv(params, {
@@ -585,7 +570,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           agentId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
-          notifyFromConversationTurn,
           timeoutSec: effectiveTimeout,
           processContinuationAvailable: allowBackground,
           startupSignal: signal,
@@ -598,6 +582,8 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             settled = true;
           },
         });
+        // Completion wakes need the backgrounding below, so this precedes any wake.
+        run.session.originRunId = defaults?.runId;
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
         gatewayApproval?.releaseSpawn?.();
@@ -677,7 +663,16 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         yielded = true;
         run.disableUpdates();
         markBackgrounded(run.session);
-        backgrounded.resolve({ status: "backgrounded" });
+        void Promise.resolve(run.session.exitNotificationPersistence).then(
+          () => backgrounded.resolve({ status: "backgrounded" }),
+          (error: unknown) =>
+            backgrounded.reject(
+              new Error(
+                `Process ${run.session.id} started, but its restart notification could not be saved. Use process poll before retrying.`,
+                { cause: error },
+              ),
+            ),
+        );
       };
 
       try {
@@ -692,6 +687,11 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         if (toolAborted) {
           throw createAbortError("Tool execution was aborted", { cause: signal?.reason });
         }
+        const deadlineAtMs = run.session.processActivity?.deadlineAtMs;
+        const followUp =
+          deadlineAtMs === undefined
+            ? backgroundFollowUp
+            : `Automatic stop will be requested at ${new Date(deadlineAtMs).toISOString()}; the process may exit earlier. ${backgroundFollowUp}`;
         return attachExecApprovalReview(
           completed.status === "settled"
             ? buildExecForegroundResult({
@@ -707,7 +707,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                     type: "text",
                     text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                       run.session.pid ?? "n/a"
-                    }). ${backgroundFollowUp}`,
+                    }). ${followUp}`,
                   },
                 ],
                 details: {
@@ -715,10 +715,11 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                   sessionId: run.session.id,
                   pid: run.session.pid ?? undefined,
                   startedAt: run.startedAt,
+                  ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
                   cwd: run.session.cwd,
                   tail: run.session.tail,
                   // Structured callers receive details without the visible content.
-                  followUp: backgroundFollowUp,
+                  followUp,
                 },
               },
           approvalReview,
@@ -740,5 +741,4 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   });
 }
 
-/** Default exec tool instance used by agent tool registries. */
 export const execTool = createExecTool();

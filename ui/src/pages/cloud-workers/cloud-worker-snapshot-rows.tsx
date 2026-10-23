@@ -29,7 +29,7 @@ type SnapshotActions = {
 };
 
 function SnapshotMenu(props: SnapshotActions & { image: SnapshotImage }) {
-  const menu = createMemo<MenuItem[]>(() => {
+  const menu = (): MenuItem[] => {
     const current = props.image;
     const blocked = props.busy || Boolean(current.capture || current.retirement);
     const items: MenuItem[] = [];
@@ -68,7 +68,7 @@ function SnapshotMenu(props: SnapshotActions & { image: SnapshotImage }) {
       });
     }
     return items;
-  });
+  };
   return (
     <Show when={menu().length}>
       <Menu
@@ -209,7 +209,9 @@ export function CloudWorkerEnvironmentSheet(
     props.environment.defaultProfile ??
     selectedImage()?.profileId ??
     props.environment.workers[0]?.worker?.profileId;
-  const profile = () => props.profiles.find((candidate) => candidate.id === profileId());
+  const profile = createMemo(() =>
+    props.profiles.find((candidate) => candidate.id === profileId()),
+  );
   const rebuildReason = () =>
     !selectedImage()?.projectRoot
       ? t("cloudWorkersPage.environments.localOnly")
@@ -225,10 +227,12 @@ export function CloudWorkerEnvironmentSheet(
         (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0),
     );
   });
-  const setup = () =>
-    props.environment.images
-      .toSorted((a, b) => (b.recipePreparationAtMs ?? 0) - (a.recipePreparationAtMs ?? 0))
-      .find((candidate) => candidate.recipePreparation)?.recipePreparation;
+  const setup = createMemo(
+    () =>
+      props.environment.images
+        .toSorted((a, b) => (b.recipePreparationAtMs ?? 0) - (a.recipePreparationAtMs ?? 0))
+        .find((candidate) => candidate.recipePreparation)?.recipePreparation,
+  );
   const phases = createMemo(() => {
     const durations = setup()?.phaseDurationsMs;
     return (["onCreate", "updateContent", "detectedInstall"] as const).flatMap((name) =>
@@ -353,17 +357,12 @@ export function CloudWorkerEnvironmentSheet(
         repository={props.environment.label}
         profileId={profileId()}
         defaultProfileId={props.environment.defaultProfile}
-        machineFacts={[
-          selectedImage()?.profileId === profileId()
-            ? (selectedImage()?.backend ?? profile()?.backend)
-            : profile()?.backend,
-          selectedImage()?.profileId === profileId()
-            ? (selectedImage()?.machineClass ?? profile()?.machineClass)
-            : profile()?.machineClass,
-          selectedImage()?.profileId === profileId()
-            ? (selectedImage()?.os ?? profile()?.os)
-            : profile()?.os,
-        ]
+        machineFacts={(["backend", "machineClass", "os"] as const)
+          .map((key) =>
+            selectedImage()?.profileId === profileId()
+              ? (selectedImage()?.[key] ?? profile()?.[key])
+              : profile()?.[key],
+          )
           .filter(Boolean)
           .join(" · ")}
       />

@@ -34,33 +34,24 @@ beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
 it.each([
-  {
-    label: "monitor without source key",
-    idempotencyKey: undefined,
-    hidden: false,
-    recovery: "available",
-  },
-  {
-    label: "hidden subagent announcement",
-    idempotencyKey: "announce:child:user",
-    hidden: true,
-    recovery: "available",
-  },
-  {
-    label: "removed admitted prompt",
-    idempotencyKey: "removed:user",
-    hidden: false,
-    recovery: "removed",
-  },
-  {
-    label: "closed consultation",
-    idempotencyKey: "closed-consult:user",
-    hidden: true,
-    recovery: "closed",
-  },
-])(
-  "preserves host prompt ownership for an admitted $label",
-  async ({ idempotencyKey, hidden, recovery }) => {
+  ["monitor without source key", undefined, false, "available"],
+  ["hidden subagent announcement", "announce:child:user", true, "available"],
+  ["removed admitted prompt", "removed:user", false, "removed"],
+  ["closed consultation", "closed-consult:user", true, "closed"],
+] as const)(
+  "preserves host prompt ownership for an admitted %s",
+  async (_label, idempotencyKey, hidden, recovery) => {
+    const admittedContent = "Check the admitted monitor.";
+    const upstreamUserText = "Check the monitor.";
+    const promptMetadata = {
+      content: admittedContent,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      __openclaw: {
+        mirrorIdentity: "turn-1:prompt",
+        mirrorOrigin: "codex-app-server",
+        upstreamUserText,
+      },
+    };
     const createUserTurnTranscriptRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
     const base = await createParams();
     const target = {
@@ -72,36 +63,33 @@ it.each([
     await upsertSessionEntry({ ...target, entry: { sessionId: target.sessionId, updatedAt: 1 } });
     const recorder = createUserTurnTranscriptRecorder({
       input: {
-        text: "Check the monitor.",
+        text: upstreamUserText,
         provenance: hidden
           ? { kind: "inter_session", sourceChannel: "internal", sourceTool: "agent_harness_task" }
           : { kind: "internal_system", sourceTool: "heartbeat" },
         ...(hidden ? { display: false } : {}),
-        ...(recovery === "excluded" || recovery === "closed" ? { excludeFromContext: true } : {}),
+        ...(recovery === "closed" ? { excludeFromContext: true } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
       },
       target: { ...target, sessionEntry: undefined },
-      beforeMessageWrite: ({ message }) => message,
+      beforeMessageWrite: ({ message }) => ({ ...message, content: admittedContent }),
     });
     await recorder.persistApproved();
     const admitted = structuredClone(recorder.getPersistedMessage?.());
     const runtimeAcknowledgement = vi.spyOn(recorder, "markRuntimePersisted");
     const onUserMessagePersisted = vi.fn();
-    const attempt = {
+    const params = {
       ...base,
       ...target,
       sessionTarget: target,
       userTurnTranscriptRecorder: recorder,
       onUserMessagePersisted,
     };
-    const host = await createAdmittedHostCapabilityTestFixture(attempt);
-    const params = {
-      ...attempt,
-      hostCapabilities:
-        recovery === "unavailable" || recovery === "removed"
-          ? { ...host.hostCapabilities, annotateCurrentUserTurn: undefined }
-          : host.hostCapabilities,
-    };
+    const host = await createAdmittedHostCapabilityTestFixture(params);
+    params.hostCapabilities =
+      recovery === "removed"
+        ? { ...host.hostCapabilities, annotateCurrentUserTurn: undefined }
+        : host.hostCapabilities;
     try {
       if (recovery === "removed") {
         const manager = SessionManager.open(target, base.workspaceDir);
@@ -118,10 +106,7 @@ it.each([
       };
       const beforeMirror =
         recovery === "closed" ? await readSessionTranscriptEvents(target) : undefined;
-      const promptMirror = mirrorPromptAtTurnStartBestEffort({
-        ...mirror,
-        upstreamUserText: "Check the monitor.",
-      });
+      const promptMirror = mirrorPromptAtTurnStartBestEffort({ ...mirror, upstreamUserText });
       if (recovery === "closed") {
         host.closeHost();
       }
@@ -133,16 +118,12 @@ it.each([
         return;
       }
       const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1", {
-        upstreamUserText: "Check the monitor.",
+        upstreamUserText,
       });
-      projector.recordDynamicToolCall({
-        callId: "result",
-        tool: "heartbeat_respond",
-        arguments: {},
-      });
+      const tool = { callId: "result", tool: "heartbeat_respond" };
+      projector.recordDynamicToolCall({ ...tool, arguments: {} });
       projector.recordDynamicToolResult({
-        callId: "result",
-        tool: "heartbeat_respond",
+        ...tool,
         success: true,
         terminalType: "completed",
         contentItems: [{ type: "inputText", text: "Monitor completed." }],
@@ -169,21 +150,18 @@ it.each([
         expect(recorder.getPersistedMessage?.()).toEqual(admitted);
       }
       const events = await readSessionTranscriptEvents(target);
-      const prompts = events.filter((event) => {
-        const message = asOptionalRecord(asOptionalRecord(event)?.message);
-        return message?.role === "user";
-      });
+      const prompts = events.filter(
+        (event) => asOptionalRecord(asOptionalRecord(event)?.message)?.role === "user",
+      );
       expect(prompts).toHaveLength(recovery === "removed" ? 0 : 1);
       if (recovery === "available") {
         expect(prompts[0]).toMatchObject({
           message: {
-            content: "Check the monitor.",
+            ...promptMetadata,
             ...(hidden ? { display: false } : {}),
-            __openclaw: { mirrorIdentity: "turn-1:prompt" },
           },
         });
-      } else if (recovery !== "removed") {
-        expect(asOptionalRecord(prompts[0])?.message).toEqual(admitted);
+        expect(recorder.getPersistedMessage?.()).toMatchObject(promptMetadata);
       }
       if (idempotencyKey) {
         expect(recorder.getPersistedMessage?.()?.idempotencyKey).toBe(idempotencyKey);

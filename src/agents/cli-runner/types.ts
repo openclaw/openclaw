@@ -6,7 +6,6 @@ import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/sessi
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
@@ -19,35 +18,18 @@ import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types
 import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { AdmittedRunContext } from "../admitted-run-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
-import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { CliSessionReuseResult } from "../cli-session.js";
-import type {
-  AgentRunClientContext,
-  AgentRunMessageContext,
-  AgentRunChannelContext,
-  AgentRunModelOptions,
-  AgentRunInputContext,
-  AgentRunTranscriptContext,
-  AgentRunLifecycle,
-} from "../command/shared-types.js";
+import type { AgentRunExecutionContext } from "../command/shared-types.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
-import type {
-  CurrentInboundPromptContext,
-  ResolvedToolPromptFinalizer,
-} from "../embedded-agent-runner/run/params.js";
+import type { RunEmbeddedAgentParams } from "../embedded-agent-runner/run/params.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { AgentExecutionAuthBinding } from "../execution-auth-binding.js";
 import type { FailoverReason } from "../failover/signal.js";
 import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
-import type { RuntimeContextFragment } from "../internal-runtime-context.js";
-import type { ReplyExpectation } from "../reply-completion.js";
-import type { EmbeddedRunTrigger, IsolatedCompletionPurpose } from "../run-trigger.js";
-import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
-import type { SilentReplyPromptMode } from "../system-prompt.types.js";
+import type { IsolatedCompletionPurpose } from "../isolated-completion-purpose.js";
 import type { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import type { CliSessionBindingFacts } from "./session-binding.types.js";
 
@@ -64,22 +46,31 @@ type CliSessionRetryParams = {
   sessionId: string;
 };
 
-/** Input contract for one CLI-backed agent run. */
-export type RunCliAgentParams = {
-  /** Effective tool policy prepared by the trusted channel ingress owner. */
-  conversationToolPolicy?: GroupToolPolicyConfig;
+export type RunCliAgentParams = Pick<
+  RunEmbeddedAgentParams,
+  | "conversationToolPolicy"
+  | "trustedInternalHandoff"
+  | "trigger"
+  | "finalizePromptForResolvedTools"
+  | "currentInboundContext"
+  | "runtimeContextFragments"
+  | "silentReplyPromptMode"
+  | "allowEmptyAssistantReplyAsSilent"
+  | "terminalReplyExpectation"
+  | "streamParams"
+  | "bootstrapContextMode"
+  | "chatId"
+  | "bashElevated"
+  | "toolsAllow"
+  | "skillLibraryAuthoring"
+> & {
   preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
-  /** Verified in-process completion authority; never supplied by native CLI input. */
-  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Core lifecycle owner; never forwarded to the plugin execution context. */
   diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   sessionTarget?: SessionTranscriptRuntimeTarget;
   /** Session identity used only for sandbox and tool-policy resolution. */
   runtimePolicySessionKey?: string;
   sessionEntry?: SessionEntry;
-  trigger?: EmbeddedRunTrigger;
-  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
-  continuesConversation?: boolean;
   sessionFile: string;
   /** Start a fresh CLI process so per-turn MCP authority is reloaded from this run. */
   disableCliLiveSession?: boolean;
@@ -88,8 +79,6 @@ export type RunCliAgentParams = {
    * turn so those identities stay out of the native system prompt shared across runs.
    */
   runtimeFactsInTurn?: true;
-  /** Finalizes caller-owned guidance after backend tool projection is known. */
-  finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
   /** Undecorated current-turn prompt used to merge inline and offloaded images. */
   imagePrompt?: string;
   /**
@@ -112,8 +101,6 @@ export type RunCliAgentParams = {
   expectedLifecycleRevision?: string;
   /** Exact admitted run allowed to append to the durable transcript. */
   expectedWriterRunId?: string;
-  currentInboundContext?: CurrentInboundPromptContext;
-  runtimeContextFragments?: RuntimeContextFragment[];
   /** Selected model provider used for tool policy; distinct from a CLI runtime id. */
   modelProvider?: string;
   /** Resolved logical model selected by this run's owner, before CLI transport mapping. */
@@ -123,13 +110,9 @@ export type RunCliAgentParams = {
   /** Effective context cap resolved by the run owner from its prepared model catalog. */
   modelContextTokens?: number;
   provider: string;
-  silentReplyPromptMode?: SilentReplyPromptMode;
-  allowEmptyAssistantReplyAsSilent?: boolean;
-  terminalReplyExpectation?: ReplyExpectation;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   cliSessionBindingFacts?: CliSessionBindingFacts;
-  streamParams?: import("../command/shared-types.js").AgentStreamParams;
   cliSessionId?: string;
   cliSessionBinding?: CliSessionBinding;
   /** Consume the backend fork argument on this resume invocation only. */
@@ -146,16 +129,11 @@ export type RunCliAgentParams = {
   onBeforeForkedCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */
   onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
+  /** An unbound scheduled run may use native login, never a host credential profile. */
+  nativeAuthOnly?: true;
   onBeforeFreshCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
-  bootstrapContextMode?: BootstrapContextMode;
-  chatId?: string;
   /** Effective turn-local exec policy resolved before entering the CLI runtime. */
   execOverrides?: ExecPolicyOverrides;
-  /** Effective elevated-exec defaults resolved before entering the CLI runtime. */
-  bashElevated?: ExecElevatedDefaults;
-  /** Runtime tool allow-list. CLI harnesses need a backend-owned exact translation. */
-  toolsAllow?: string[];
-  skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   /** Server-authored origin for fresh automation mutations from this CLI run. */
   cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
   /** Exact native plus canonical OpenClaw surface for a selectable CLI backend. */
@@ -183,13 +161,7 @@ export type RunCliAgentParams = {
    * handles alive after returning.
    */
   cleanupCliLiveSessionOnRunEnd?: boolean;
-} & AgentRunClientContext &
-  AgentRunMessageContext &
-  AgentRunChannelContext &
-  AgentRunModelOptions &
-  AgentRunInputContext &
-  AgentRunTranscriptContext &
-  AgentRunLifecycle;
+} & AgentRunExecutionContext;
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */
 export type CliSecretInput = SpawnSecretInput & {
@@ -232,7 +204,6 @@ export function captureCliRunStartTime() {
   return { started: Date.now(), startedMonotonicMs: performance.now() };
 }
 
-/** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
   /** Original host policy, retained before native tool translation consumes runtime caps. */
@@ -278,7 +249,7 @@ export type PreparedCliRunContext = {
   nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;
   /** Live owner of the transcript account-coverage checkpoint, independent of native continuity. */
-  cliHistoryWriter?: import("../../config/sessions/cli-history-boundary.js").CliHistoryWriter;
+  cliHistoryWriter?: import("../../config/sessions/cli-history-boundary.js").CliExecutionHistoryWriter;
   authEpoch?: string;
   /** Strict owner fingerprint captured for live inference verification only. */
   authBindingFingerprint?: string;

@@ -132,6 +132,29 @@ enum AuthenticatedControlUI {
         """
     }
 
+    /// Basic proxy credentials stay native and are reread from their existing owner for each challenge.
+    static func basicProxyCredential(config: GatewayConnectConfig?) -> URLCredential? {
+        guard let config,
+              config.ingressAuthorization == nil,
+              ["wss", "https"].contains(config.url.scheme?.lowercased() ?? "")
+        else { return nil }
+        let authorizations = GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: config.effectiveStableID)
+            .filter { $0.key.caseInsensitiveCompare("Authorization") == .orderedSame }
+            .map(\.value)
+        guard authorizations.count == 1 else { return nil }
+        let fields = authorizations[0].split(whereSeparator: { $0.isWhitespace })
+        guard fields.count == 2,
+              fields[0].caseInsensitiveCompare("Basic") == .orderedSame,
+              let data = Data(base64Encoded: String(fields[1])),
+              let decoded = String(data: data, encoding: .utf8),
+              let separator = decoded.firstIndex(of: ":")
+        else { return nil }
+        return URLCredential(
+            user: String(decoded[..<separator]),
+            password: String(decoded[decoded.index(after: separator)...]),
+            persistence: .none)
+    }
+
     static func storedOperatorToken(config: GatewayConnectConfig?) -> String? {
         self.storedOperatorAuthorization(config: config)?.entry.token
     }
@@ -341,12 +364,14 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
     private let allowedMainFramePathPrefix: String?
     private let onMainFrameNavigationOutsideScope: (() -> Void)?
     private let tls: GatewayTLSParams?
+    private let basicProxyCredentialProvider: (() -> URLCredential?)?
     private var hasExitedNavigationScope = false
     private var activeNavigation: WKNavigation?
 
     init(
         url: URL,
         tls: GatewayTLSParams?,
+        basicProxyCredentialProvider: (() -> URLCredential?)? = nil,
         allowedMainFramePathPrefix: String? = nil,
         onMainFrameNavigationOutsideScope: (() -> Void)? = nil,
         authScript: String? = nil,
@@ -363,6 +388,7 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         self.allowedMainFramePathPrefix = allowedMainFramePathPrefix.map(Self.normalizedPath)
         self.onMainFrameNavigationOutsideScope = onMainFrameNavigationOutsideScope
         self.tls = tls
+        self.basicProxyCredentialProvider = basicProxyCredentialProvider
     }
 
     func installUserScripts(in controller: WKUserContentController) {
@@ -446,6 +472,21 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
             URLSession.AuthChallengeDisposition,
             URLCredential?) -> Void)
     {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodHTTPBasic,
+           self.url.scheme?.lowercased() == "https",
+           challenge.protectionSpace.protocol?.lowercased() == "https",
+           !challenge.protectionSpace.isProxy(),
+           self.matchesExpectedAuthority(
+               host: challenge.protectionSpace.host,
+               port: challenge.protectionSpace.port),
+           challenge.previousFailureCount == 0,
+           let credential = self.basicProxyCredentialProvider?()
+        {
+            // Let WebKit authenticate document, resource, and WebSocket requests. Injecting
+            // Authorization into a navigation or a page script would miss those boundaries.
+            completionHandler(.useCredential, credential)
+            return
+        }
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let tls
         else {
@@ -525,6 +566,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
     let url: URL
     let authScript: String?
     let tls: GatewayTLSParams?
+    let basicProxyCredentialProvider: (() -> URLCredential?)?
     let allowedMainFramePathPrefix: String?
     let onMainFrameNavigationOutsideScope: (() -> Void)?
     let deviceSettingsBridge: IOSDeviceSettingsBridge?
@@ -535,6 +577,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         url: URL,
         authScript: String?,
         tls: GatewayTLSParams?,
+        basicProxyCredentialProvider: (() -> URLCredential?)? = nil,
         allowedMainFramePathPrefix: String? = nil,
         onMainFrameNavigationOutsideScope: (() -> Void)? = nil,
         deviceSettingsBridge: IOSDeviceSettingsBridge? = nil,
@@ -544,6 +587,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         self.url = url
         self.authScript = authScript
         self.tls = tls
+        self.basicProxyCredentialProvider = basicProxyCredentialProvider
         self.allowedMainFramePathPrefix = allowedMainFramePathPrefix
         self.onMainFrameNavigationOutsideScope = onMainFrameNavigationOutsideScope
         self.deviceSettingsBridge = deviceSettingsBridge
@@ -555,6 +599,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         AuthenticatedControlUIWebViewCoordinator(
             url: self.url,
             tls: self.tls,
+            basicProxyCredentialProvider: self.basicProxyCredentialProvider,
             allowedMainFramePathPrefix: self.allowedMainFramePathPrefix,
             onMainFrameNavigationOutsideScope: self.onMainFrameNavigationOutsideScope,
             authScript: self.authScript,

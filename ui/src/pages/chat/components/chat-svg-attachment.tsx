@@ -1,6 +1,6 @@
-import { Show, createEffect, createMemo, createSignal, onCleanup, runWithOwner } from "solid-js";
+import { Errored, Loading, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { isCrossOriginHttpSource } from "./chat-attachment-href.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
@@ -32,67 +32,75 @@ type ChatSvgAttachmentElement = SolidBridgeElement<SvgAttachmentProps>;
 export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
   "openclaw-chat-svg-attachment",
   (props, host) => {
-    const [renderSource, setRenderSource] = createSignal<SvgRenderSource>();
-    const [failed, setFailed] = createSignal(false);
-    let source: SvgRenderSource | undefined;
-    let loadVersion = 0;
-    let abortController: AbortController | undefined;
-
-    const retireSource = () => {
-      if (source) {
-        source.retired = true;
-        if (source.retainCount === 0) {
-          URL.revokeObjectURL(source.url);
-        }
-        source = undefined;
-        setRenderSource(undefined);
-      }
-    };
-    const releaseSource = () =>
-      runWithOwner(null, () => {
-        loadVersion += 1;
-        abortController?.abort();
-        abortController = undefined;
-        retireSource();
-      });
-    const showFallback = () => {
-      setFailed(true);
-      host.onMediaLoaded?.();
-    };
-
     const loadKey = createMemo(() => [props.src, props.sourceIdentity, props.sizeBytes] as const, {
       equals: (previous, next) => previous.every((value, index) => Object.is(value, next[index])),
     });
-    createEffect(loadKey, ([src, identity, sizeBytes]) =>
-      runWithOwner(null, () => {
-        releaseSource();
-        setFailed(false);
-        const version = loadVersion;
-        const current = () =>
-          host.isConnected &&
-          version === loadVersion &&
-          src === host.src &&
-          identity === host.sourceIdentity &&
-          sizeBytes === host.sizeBytes;
-        const loadSource = async () => {
-          if (!current()) {
-            return;
+    const renderAttachment = ([src, identity, sizeBytes]: ReturnType<typeof loadKey>) => {
+      const [admitted, setAdmitted] = createSignal(false);
+      let active = true;
+      const current = () =>
+        host.isConnected &&
+        active &&
+        src === host.src &&
+        identity === host.sourceIdentity &&
+        sizeBytes === host.sizeBytes;
+
+      onSettled(() => {
+        let stopObserving: (() => void) | undefined;
+        if (src.trim()) {
+          // The exported Solid component attaches its host after this nested render settles.
+          queueMicrotask(() => {
+            if (current()) {
+              stopObserving = observeChatAttachmentViewport(host.parentElement ?? host, () => {
+                if (current()) {
+                  setAdmitted(true);
+                }
+              });
+            }
+          });
+        }
+        return () => {
+          active = false;
+          stopObserving?.();
+        };
+      });
+
+      const Fallback = () => {
+        onSettled(() => {
+          if (current()) {
+            host.onMediaLoaded?.();
           }
+        });
+        return (
+          <CompactAttachmentCard
+            kind="document"
+            label={props.label}
+            mimeType={props.mimeType}
+            sizeBytes={props.sizeBytes}
+            downloadHref={props.downloadHref}
+            onExpand={props.onExpand}
+          />
+        );
+      };
+      const Preview = () => {
+        const bytes = createMemo(async () => {
           // The served Control UI CSP does not admit arbitrary remote image origins.
           if (
             (sizeBytes !== undefined && sizeBytes > SVG_PREVIEW_MAX_BYTES) ||
             isCrossOriginHttpSource(src)
           ) {
-            showFallback();
-            return;
+            throw new Error("SVG attachment exceeds the preview budget or origin policy");
           }
           const controller = new AbortController();
-          abortController = controller;
           const timeout = setTimeout(
             () =>
               controller.abort(new DOMException("SVG attachment fetch timed out", "TimeoutError")),
             SVG_PREVIEW_FETCH_TIMEOUT_MS,
           );
+          onCleanup(() => {
+            clearTimeout(timeout);
+            controller.abort();
+          });
           try {
             const response = await fetch(src, {
               credentials: "same-origin",
@@ -104,110 +112,110 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
               await response.body?.cancel().catch(() => undefined);
               throw new Error("SVG attachment is unavailable");
             }
-            const bytes = await readResponseBytesWithinLimit(response, SVG_PREVIEW_MAX_BYTES);
-            if (!bytes) {
+            const content = await readResponseBytesWithinLimit(response, SVG_PREVIEW_MAX_BYTES);
+            if (!content) {
               throw new Error("SVG attachment exceeds the preview budget");
             }
-            const url = URL.createObjectURL(new Blob([bytes], { type: "image/svg+xml" }));
-            if (!current()) {
-              URL.revokeObjectURL(url);
-              return;
-            }
-            source = { url, retainCount: 0, retired: false };
-            setRenderSource(source);
-          } catch {
-            if (current()) {
-              showFallback();
-            }
+            return content;
           } finally {
             clearTimeout(timeout);
-            if (abortController === controller) {
-              abortController = undefined;
-            }
           }
-        };
-        let stopObserving: (() => void) | undefined;
-        if (src.trim()) {
-          // The exported Solid component attaches its host after this nested render settles.
-          queueMicrotask(() => {
-            if (current()) {
-              stopObserving = observeChatAttachmentViewport(
-                host.parentElement ?? host,
-                () => void loadSource(),
-              );
+        });
+        const renderImage = (data: ArrayBuffer) => {
+          // Object URLs belong to the committed image, never a discardable async result.
+          const [result, setResult] = createSignal<SvgRenderSource | Error>();
+          const renderSource = createMemo(() => {
+            const value = result();
+            if (value instanceof Error) {
+              throw value;
             }
+            return value;
           });
-        }
-        return () => {
-          stopObserving?.();
-          releaseSource();
+          let source: SvgRenderSource | undefined;
+          const retireSource = () => {
+            if (source) {
+              source.retired = true;
+              if (source.retainCount === 0) {
+                URL.revokeObjectURL(source.url);
+              }
+              source = undefined;
+            }
+          };
+          onSettled(() => {
+            if (!current()) {
+              return undefined;
+            }
+            source = {
+              url: URL.createObjectURL(new Blob([data], { type: "image/svg+xml" })),
+              retainCount: 0,
+              retired: false,
+            };
+            setResult(source);
+            return retireSource;
+          });
+          const handleOpen = () => {
+            if (!source || !host.onOpen) {
+              return;
+            }
+            const opened = source;
+            opened.retainCount += 1;
+            let released = false;
+            host.onOpen(opened.url, () => {
+              if (released) {
+                return;
+              }
+              released = true;
+              opened.retainCount -= 1;
+              if (opened.retired && opened.retainCount === 0) {
+                URL.revokeObjectURL(opened.url);
+              }
+            });
+          };
+          return (
+            <Show when={renderSource()} keyed>
+              {(image) => (
+                <button
+                  type="button"
+                  class="chat-message-image-button"
+                  aria-label={t("chat.imageLightbox.open", { title: props.label })}
+                  onClick={handleOpen}
+                >
+                  <img
+                    src={image.url}
+                    alt={props.label}
+                    class="chat-message-image"
+                    onLoad={() => props.onMediaLoaded?.()}
+                    onError={() => {
+                      if (source === image) {
+                        retireSource();
+                        setResult(new Error("SVG attachment could not be decoded"));
+                      }
+                    }}
+                  />
+                </button>
+              )}
+            </Show>
+          );
         };
-      }),
-    );
-    onCleanup(releaseSource);
-
-    const handleOpen = () => {
-      if (!source || !host.onOpen) {
-        return;
-      }
-      const opened = source;
-      opened.retainCount += 1;
-      let released = false;
-      const release = () => {
-        if (released) {
-          return;
-        }
-        released = true;
-        opened.retainCount -= 1;
-        if (opened.retired && opened.retainCount === 0) {
-          URL.revokeObjectURL(opened.url);
-        }
+        return (
+          <Errored fallback={() => <Fallback />}>
+            <Loading>
+              <Show when={bytes()} keyed>
+                {renderImage}
+              </Show>
+            </Loading>
+          </Errored>
+        );
       };
-      try {
-        host.onOpen(opened.url, release);
-      } catch (error) {
-        release();
-        throw error;
-      }
-    };
-
-    return (
-      <Show
-        when={!failed()}
-        fallback={
-          <CompactAttachmentCard
-            kind="document"
-            label={props.label}
-            mimeType={props.mimeType}
-            sizeBytes={props.sizeBytes}
-            downloadHref={props.downloadHref}
-            onExpand={props.onExpand}
-          />
-        }
-      >
-        <Show when={renderSource()} keyed>
-          {(image) => (
-            <button
-              type="button"
-              class="chat-message-image-button"
-              aria-label={t("chat.imageLightbox.open", { title: props.label })}
-              onClick={handleOpen}
-            >
-              <img
-                src={image.url}
-                alt={props.label}
-                class="chat-message-image"
-                onLoad={() => props.onMediaLoaded?.()}
-                onError={() => {
-                  if (source === image) {
-                    retireSource();
-                    showFallback();
-                  }
-                }}
-              />
-            </button>
-          )}
+      return (
+        <Show when={admitted()}>
+          <Preview />
         </Show>
+      );
+    };
+    return (
+      <Show when={loadKey()} keyed>
+        {renderAttachment}
       </Show>
     );
   },

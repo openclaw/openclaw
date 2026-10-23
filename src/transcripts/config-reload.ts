@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { TranscriptsConfig } from "./config.js";
 
 function withoutTitles(config: TranscriptsConfig | undefined) {
@@ -19,9 +18,4 @@ export function hasSameTranscriptCaptureIntent(
   candidate: TranscriptsConfig | undefined,
 ): boolean {
   return isDeepStrictEqual(withoutTitles(previous), withoutTitles(candidate));
-}
-
-/** Bounded process diagnostic correlation only, never admission or resume authority. */
-export function transcriptCaptureConfigHash(config: TranscriptsConfig | undefined): string {
-  return hashRuntimeConfigValue({ transcripts: withoutTitles(config) });
 }

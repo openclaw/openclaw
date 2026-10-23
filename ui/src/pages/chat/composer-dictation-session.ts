@@ -10,7 +10,7 @@ import {
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,
 } from "./talk/audio.ts";
-import { describeRealtimeTalkInputError, RealtimeTalkInputController } from "./talk/input.ts";
+import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/input.ts";
 
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
@@ -28,7 +28,7 @@ type DictationSessionResult = {
 
 type ComposerDictationSessionCallbacks = {
   onError: (message: string, preservesText: boolean) => void;
-  onLevel: (level: number) => void;
+  onLevel?: (level: number) => void;
   onTranscriptChange: () => void;
   onReady: () => void;
   onSilence?: () => void;
@@ -55,7 +55,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 export class ComposerDictationSession {
-  private readonly input = new RealtimeTalkInputController((detail) => this.reportFailure(detail));
+  private readonly input = new RealtimeTalkInputOwner((detail) => this.reportFailure(detail));
   private context: AudioContext | null = null;
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
@@ -112,8 +112,10 @@ export class ComposerDictationSession {
     if (this.context.sampleRate !== DICTATION_SAMPLE_RATE_HZ) {
       throw new Error(t("chat.composer.dictationBrowserAudioUnsupported"));
     }
-    this.inputMeter = new RealtimeTalkMediaStreamMeter(this.callbacks.onLevel);
-    this.inputMeter.start(media, this.context);
+    if (this.callbacks.onLevel) {
+      this.inputMeter = new RealtimeTalkMediaStreamMeter(this.callbacks.onLevel);
+      this.inputMeter.start(media, this.context);
+    }
     this.inputPump.start(media, this.context, (samples) => this.appendAudio(samples));
     this.callbacks.onReady();
 
@@ -150,16 +152,12 @@ export class ComposerDictationSession {
     return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
   }
 
-  async finish(drainFinalTranscript = false): Promise<string> {
-    const lateFinal =
-      drainFinalTranscript && !this.gatewayDisconnected ? this.waitForLateFinal() : null;
-    const cleanup = this.stopAndClose(true);
-    if (lateFinal) {
-      // Bound admission separately; a started close uses the media provider timeout.
-      void cleanup.catch(() => undefined);
-      return lateFinal;
-    }
-    return cleanup.then(() => this.transcriptSnapshot());
+  async finish(): Promise<string> {
+    const transcript =
+      this.gatewayDisconnected || this.failed ? this.transcriptSnapshot() : this.waitForLateFinal();
+    // Bound admission separately; a started close uses the media provider timeout.
+    void this.stopAndClose(true).catch(() => undefined);
+    return transcript;
   }
 
   async cancel(): Promise<void> {
@@ -295,6 +293,7 @@ export class ComposerDictationSession {
       return;
     }
     this.failed = true;
+    this.settleLateFinalDrain?.(false);
     this.callbacks.onError(message, this.hasTranscript());
   }
 
@@ -342,7 +341,9 @@ export class ComposerDictationSession {
 
   private waitForLateFinal(): Promise<string> {
     return new Promise((resolve) => {
+      const initialTranscript = this.transcriptSnapshot();
       const transcripts: string[] = [...this.finalTranscripts];
+      let partial = this.currentPartial;
       let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
       let unsubscribe = () => {};
       const finish = (text: string) => {
@@ -353,7 +354,7 @@ export class ComposerDictationSession {
         this.resumeFinalDrain = null;
         resolve(text);
       };
-      const transcript = () => transcripts.join(" ").trim();
+      const transcript = () => [...transcripts, partial].filter(Boolean).join(" ").trim();
       this.pauseFinalDrain = () => globalThis.clearTimeout(timer);
       this.resumeFinalDrain = () => {
         timer = globalThis.setTimeout(() => finish(transcript()), FINAL_TRANSCRIPT_MAX_WAIT_MS);
@@ -371,6 +372,7 @@ export class ComposerDictationSession {
           payload.text.trim()
         ) {
           transcripts.push(payload.text.trim());
+          partial = "";
         } else if (payload.type === "error" || payload.type === "close") {
           if (payload.type === "error" || payload.reason === "error") {
             this.reportFailure(
@@ -379,11 +381,14 @@ export class ComposerDictationSession {
                 t("chat.composer.dictationFailed"),
               ),
             );
+          } else {
+            finish(transcript());
           }
-          finish(transcript());
         }
       });
-      this.settleLateFinalDrain = (discard) => finish(discard ? "" : transcript());
+      // Failed finalization retains the preview, not its provisional result.
+      this.settleLateFinalDrain = (discard) =>
+        finish(discard ? "" : this.failed ? initialTranscript : transcript());
     });
   }
 }

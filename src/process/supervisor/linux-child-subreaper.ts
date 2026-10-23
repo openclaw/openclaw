@@ -6,7 +6,7 @@ import {
   isChildSubreaper,
   reapChild,
 } from "@openclaw/proc-safe/reaper";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../../infra/errno.js";
 
 function childPids(): number[] {
   const children = new Set<number>();
@@ -16,10 +16,8 @@ function childPids(): number[] {
       value = readFileSync("/proc/self/task/" + thread + "/children", "utf8");
     } catch (error) {
       // A thread can retire during enumeration. This is not extinction evidence.
-      if (hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
+      ignoreMissingPath(error);
+      continue;
     }
     for (const pid of value.trim().split(/\s+/u).filter(Boolean)) {
       if (!/^\d+$/u.test(pid) || !Number.isSafeInteger(Number(pid)) || Number(pid) <= 0) {
@@ -33,8 +31,8 @@ function childPids(): number[] {
 
 /** One dedicated process acquires adoption before launching any application work. */
 export function acquireLinuxChildSubreaper() {
-  if (process.platform !== "linux" || process.versions.bun) {
-    throw new Error("Linux child ownership requires the Node runtime");
+  if (process.platform !== "linux") {
+    throw new Error("Linux child ownership requires Linux");
   }
   if (/\.[cm]?ts$/u.test(new URL(import.meta.url).pathname)) {
     throw new Error(
@@ -45,29 +43,34 @@ export function acquireLinuxChildSubreaper() {
   if (!isChildSubreaper()) {
     throw new Error("Linux child ownership admission verification failed");
   }
-  const libuvChildren = new Set<number>();
+  const spawnedChildren = new Set<number>();
   const signaledChildren = new Map<number, "SIGTERM" | "SIGKILL">();
-  const retainLibuvChild = (pid: number, child: Pick<ChildProcess, "pid" | "once">) => {
+  let observingChildExits = false;
+  const retainSpawnedChild = (pid: number, child: Pick<ChildProcess, "pid" | "once">) => {
     if (child.pid !== pid || !Number.isSafeInteger(pid) || pid <= 0) {
       throw new Error("Linux child ownership requires a spawned root");
     }
-    libuvChildren.add(pid);
-    // libuv reaps before emitting exit, in this same event-loop turn. Retire the
+    spawnedChildren.add(pid);
+    if (!observingChildExits) {
+      process.on("SIGCHLD", reapExitedChildren);
+      observingChildExits = true;
+    }
+    // The runtime reaps before emitting exit, in this same event-loop turn. Retire the
     // signal reservation here so a newly adopted reuse of this PID gets its own signal.
     child.once("exit", () => {
-      libuvChildren.delete(pid);
+      spawnedChildren.delete(pid);
       signaledChildren.delete(pid);
     });
   };
   // A loader thread can reap its compiler concurrently with this thread. That
   // would invalidate numeric-PID pinning. Admit only the dedicated built owner,
-  // before its one libuv-owned application root has been spawned.
+  // before its one runtime-owned application root has been spawned.
   if (childPids().length > 0) {
     throw new Error("Linux child ownership requires a dedicated owner without existing children");
   }
   let closed = false;
-  return {
-    retainLibuvChild,
+  const owner = {
+    retainSpawnedChild,
     /** Discovery selects candidates; a retained kernel wait pins every signal target. */
     drain(signal?: "SIGTERM" | "SIGKILL"): boolean {
       if (closed) {
@@ -96,7 +99,7 @@ export function acquireLinuxChildSubreaper() {
           }
           signaledChildren.set(pid, signal);
         }
-        if (state.kind === "exited" && !libuvChildren.has(pid) && reapChild(pid)) {
+        if (state.kind === "exited" && !spawnedChildren.has(pid) && reapChild(pid)) {
           signaledChildren.delete(pid);
         }
       }
@@ -105,7 +108,17 @@ export function acquireLinuxChildSubreaper() {
         return false;
       }
       closed = true;
+      process.off("SIGCHLD", reapExitedChildren);
       return true;
     },
   };
+  // The live root can itself be waiting for an adopted child's process group to disappear.
+  const reapExitedChildren = () => {
+    try {
+      owner.drain();
+    } catch {
+      // The final explicit drain remains authoritative if this observation fails.
+    }
+  };
+  return owner;
 }

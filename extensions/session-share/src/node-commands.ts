@@ -204,7 +204,6 @@ export function createSessionShareNodeCommands(
           }
         }
         const sourceAssertions = new Set(selected.map((session) => session.assertSourceCurrent));
-        sourceAssertions.forEach((assertCurrent) => assertCurrent());
         const projectCreator = await prepareSessionCatalogSourceActorProjector({
           ...source,
           actors: selected.map(({ entry }) => entry.createdActor),
@@ -286,7 +285,6 @@ export function createSessionShareNodeCommands(
             "Session is not shared. The source operator must select its group and keep it non-draft.",
           );
         }
-        session.assertSourceCurrent();
         const page = await readSessionTranscriptCatalogPage({
           ...source,
           agentId: session.agentId,

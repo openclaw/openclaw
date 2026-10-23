@@ -1,6 +1,6 @@
-import { createMemo, For, Show } from "solid-js";
+import { action, createOptimistic, For, Show, until } from "solid-js";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
@@ -9,8 +9,10 @@ import type {
   DevicePairSetupLifecycle,
 } from "../../lib/device-pair-setup.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatCountdown } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { showToast } from "../../lib/toast.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
 
@@ -28,7 +30,7 @@ export type DevicePairSetupProps = {
   lifecycle: DevicePairSetupLifecycle;
   nowMs: number;
   pendingCount: number;
-  onRefresh: () => void;
+  onRefresh: () => Promise<void>;
   onAccessChange: (access: DevicePairSetupAccess) => void;
   onClose: () => void;
   onManageDevices: () => void;
@@ -40,28 +42,11 @@ type PairingOutcomeLifecycle = Extract<
   { phase: "success" | "delivery-uncertain" | "expired" }
 >;
 
-function PairingOutcome(props: {
-  lifecycle: PairingOutcomeLifecycle;
-  description: string;
-  onClose: () => void;
-  onRefresh: () => void;
-}) {
+function PairingOutcome(props: { lifecycle: PairingOutcomeLifecycle; description: string }) {
   const success = () => props.lifecycle.phase === "success";
   const uncertain = () => props.lifecycle.phase === "delivery-uncertain";
   const deviceName = () =>
     props.lifecycle.phase === "success" ? props.lifecycle.deviceName : undefined;
-  const action = () => (
-    <button
-      class="btn primary"
-      type="button"
-      onClick={() => (success() ? props.onClose() : props.onRefresh())}
-    >
-      <Show when={!success()}>
-        <Icon name="refresh" />{" "}
-      </Show>
-      {t(success() ? "devices.pairing.done" : "devices.pairing.generateNewCode")}
-    </button>
-  );
   return (
     <div
       class="device-pair-setup__state"
@@ -95,26 +80,52 @@ function PairingOutcome(props: {
           )}
         </p>
       </Show>
-      <Show when={uncertain()} fallback={action()}>
-        <div class="device-pair-setup__actions">{action()}</div>
-      </Show>
     </div>
   );
 }
 
 export function DevicePairSetup(props: DevicePairSetupProps) {
-  const setup = createMemo(() =>
-    props.lifecycle.phase === "waiting" ? props.lifecycle.setup : undefined,
-  );
-  const outcome = createMemo(() => {
+  const [refreshing, setRefreshing] = createOptimistic(false);
+  const presentRefresh = action(function* (
+    operation: Promise<void>,
+    lifecycle: DevicePairSetupLifecycle,
+  ) {
+    const retired = new AbortController();
+    try {
+      setRefreshing(true);
+      // Read staged owner changes so closing the dialog never waits for the RPC.
+      yield Promise.race([
+        operation,
+        until(() => !props.open || props.lifecycle !== lifecycle, { signal: retired.signal }),
+      ]);
+    } finally {
+      retired.abort();
+    }
+  });
+  async function refresh() {
+    let lifecycle = props.lifecycle;
+    try {
+      const operation = props.onRefresh();
+      // Commit the owner's admission before the optimistic presentation joins it.
+      await Promise.resolve();
+      lifecycle = props.lifecycle;
+      await presentRefresh(operation, lifecycle);
+    } catch (error) {
+      if (props.open && props.lifecycle === lifecycle) {
+        showToast({ message: formatUiError(error), severity: "error" });
+      }
+    }
+  }
+  const setup = () => (props.lifecycle.phase === "waiting" ? props.lifecycle.setup : undefined);
+  const outcome = () => {
     const lifecycle = props.lifecycle;
     return lifecycle.phase === "success" ||
       lifecycle.phase === "delivery-uncertain" ||
       lifecycle.phase === "expired"
       ? lifecycle
       : undefined;
-  });
-  const error = createMemo(() => (props.lifecycle.phase === "error" ? props.lifecycle : undefined));
+  };
+  const error = () => (props.lifecycle.phase === "error" ? props.lifecycle : undefined);
   // Terminal states reuse their headline so the dialog description follows the visible state.
   const description = () =>
     t(
@@ -133,7 +144,7 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
     props.lifecycle.phase !== "reconciling" &&
     error()?.source !== "status";
   const canSelectAccess = () =>
-    props.lifecycle.phase === "selection" || error()?.source === "create";
+    !refreshing() && (props.lifecycle.phase === "selection" || error()?.source === "create");
   const copyLabel = () => t("devices.pairing.copySetupCode");
   return (
     <Show when={props.open}>
@@ -190,14 +201,12 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 </For>
               </fieldset>
             </Show>
-            <Show when={props.lifecycle.phase === "selection"}>
-              <button class="btn primary" type="button" onClick={() => props.onRefresh()}>
-                <Icon name={isNodeSetup() ? "server" : "smartphone"} />
-                {t("devices.pairing.generateCode")}
-              </button>
-            </Show>
             <Show
-              when={props.lifecycle.phase === "loading" || props.lifecycle.phase === "reconciling"}
+              when={
+                refreshing() ||
+                props.lifecycle.phase === "loading" ||
+                props.lifecycle.phase === "reconciling"
+              }
             >
               <div class="device-pair-setup__loading" role="status" aria-live="polite">
                 <span class="device-pair-setup__spinner" aria-hidden="true" />
@@ -212,21 +221,16 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
             </Show>
             <Show when={error()}>
               {(failure) => (
-                <>
-                  <div class="callout danger device-pair-setup__error" role="alert">
-                    <strong>
-                      {t(
-                        failure().source === "status"
-                          ? "devices.pairing.statusFailed"
-                          : "devices.pairing.failed",
-                      )}
-                    </strong>
-                    <span>{failure().message}</span>
-                  </div>
-                  <button class="btn primary" type="button" onClick={() => props.onRefresh()}>
-                    <Icon name="refresh" /> {t("common.reload")}
-                  </button>
-                </>
+                <div class="callout danger device-pair-setup__error" role="alert">
+                  <strong>
+                    {t(
+                      failure().source === "status"
+                        ? "devices.pairing.statusFailed"
+                        : "devices.pairing.failed",
+                    )}
+                  </strong>
+                  <span>{failure().message}</span>
+                </div>
               )}
             </Show>
             <Show when={setup()}>
@@ -301,24 +305,6 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                         <span>{t("devices.pairing.transportLimitedHint")}</span>
                       </div>
                     </Show>
-                    <div class="device-pair-setup__actions">
-                      <Show when={!isNodeSetup()}>
-                        <For each={[current().setupCode]}>
-                          {(code) => (
-                            <button
-                              class="btn primary"
-                              type="button"
-                              onClick={(event) => void handleCopyButton(event, code, copyLabel())}
-                            >
-                              <Icon name="copy" /> <span data-copy-label>{copyLabel()}</span>
-                            </button>
-                          )}
-                        </For>
-                      </Show>
-                      <button class="btn" type="button" onClick={() => props.onRefresh()}>
-                        <Icon name="refresh" /> {t("devices.pairing.newCode")}
-                      </button>
-                    </div>
                     <details class="device-pair-setup__fallback">
                       <summary>{t("devices.pairing.showSetupCode")}</summary>
                       <code>{current().setupCode}</code>
@@ -339,9 +325,6 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                         <span>
                           {t("devices.pairing.pending", { count: String(props.pendingCount) })}
                         </span>
-                        <button class="btn btn--sm" onClick={() => props.onManageDevices()}>
-                          {t("devices.pairing.review")}
-                        </button>
                       </div>
                     </Show>
                   </>
@@ -351,19 +334,12 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
             <Show when={outcome()}>
               {(result) => (
                 <For each={[result().phase]}>
-                  {() => (
-                    <PairingOutcome
-                      lifecycle={result()}
-                      description={description()}
-                      onClose={() => props.onClose()}
-                      onRefresh={() => props.onRefresh()}
-                    />
-                  )}
+                  {() => <PairingOutcome lifecycle={result()} description={description()} />}
                 </For>
               )}
             </Show>
           </div>
-          <footer class="device-pair-setup__footer">
+          <openclaw-modal-actions class="device-pair-setup__footer device-pair-setup__actions">
             <a
               href={isNodeSetup() ? NODE_PAIRING_DOCS_URL : MOBILE_PAIRING_DOCS_URL}
               target={EXTERNAL_LINK_TARGET}
@@ -378,7 +354,95 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
             <button class="btn btn--ghost" type="button" onClick={() => props.onManageDevices()}>
               {t("devices.pairing.manageDevices")}
             </button>
-          </footer>
+            <Show when={props.lifecycle.phase === "selection"}>
+              <button
+                class="btn primary"
+                type="button"
+                disabled={refreshing()}
+                onClick={() => void refresh()}
+              >
+                <Icon name={isNodeSetup() ? "server" : "smartphone"} />
+                {t("devices.pairing.generateCode")}
+              </button>
+            </Show>
+            <Show when={error()}>
+              <button
+                class="btn primary"
+                type="button"
+                disabled={refreshing()}
+                onClick={() => void refresh()}
+              >
+                <Icon name="refresh" /> {t("common.reload")}
+              </button>
+            </Show>
+            <Show when={setup()}>
+              {(current) => (
+                <>
+                  <Show when={props.pendingCount > 0}>
+                    <button
+                      class="btn btn--sm"
+                      type="button"
+                      onClick={() => props.onManageDevices()}
+                    >
+                      {t("devices.pairing.review")}
+                    </button>
+                  </Show>
+                  <button
+                    class="btn"
+                    type="button"
+                    disabled={refreshing()}
+                    onClick={() => void refresh()}
+                  >
+                    <Icon name="refresh" /> {t("devices.pairing.newCode")}
+                  </button>
+                  <Show when={!isNodeSetup()}>
+                    <For each={[current().setupCode]}>
+                      {(code) => {
+                        let label!: HTMLSpanElement;
+                        return (
+                          <button
+                            class="btn primary"
+                            type="button"
+                            onClick={(event) =>
+                              void handleCopyButton(event, code, copyLabel(), { label })
+                            }
+                          >
+                            <Icon name="copy" />{" "}
+                            <span ref={(element) => (label = element)} data-copy-label>
+                              {copyLabel()}
+                            </span>
+                          </button>
+                        );
+                      }}
+                    </For>
+                  </Show>
+                </>
+              )}
+            </Show>
+            <Show when={outcome()}>
+              {(result) => (
+                <For each={[result().phase]}>
+                  {(phase) => (
+                    <button
+                      class="btn primary"
+                      type="button"
+                      disabled={phase !== "success" && refreshing()}
+                      onClick={() => (phase === "success" ? props.onClose() : void refresh())}
+                    >
+                      <Show when={phase !== "success"}>
+                        <Icon name="refresh" />{" "}
+                      </Show>
+                      {t(
+                        phase === "success"
+                          ? "devices.pairing.done"
+                          : "devices.pairing.generateNewCode",
+                      )}
+                    </button>
+                  )}
+                </For>
+              )}
+            </Show>
+          </openclaw-modal-actions>
         </section>
       </openclaw-modal-dialog>
     </Show>

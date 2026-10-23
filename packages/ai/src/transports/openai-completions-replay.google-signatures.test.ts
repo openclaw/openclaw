@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Model } from "../types.js";
-import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
-import { processCompletionsStream } from "./openai-completions-stream.js";
+import { streamFixture } from "./openai-completions-suite.test-support.js";
 import {
   createAssistantOutput,
   expectRecordFields,
+  getAssistantMessage,
   makeCompletionsChunk,
   makeCompletionsModel,
-  streamChunks,
 } from "./openai-completions.test-support.js";
 
 function geminiToolReplayContext(
@@ -21,11 +20,8 @@ function geminiToolReplayContext(
   } = {},
 ) {
   const assistant = {
-    role: "assistant",
+    ...createAssistantOutput(model),
     api: options.sourceApi ?? model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createZeroUsage(),
     stopReason: "toolUse",
     timestamp: 1,
     content: [
@@ -52,192 +48,124 @@ function geminiToolReplayContext(
           },
         ]
       : [assistant],
-    tools: [],
+    tools: [{ name: "echo_value", description: "Echo", parameters: { type: "object" } }],
   } as never;
 }
 
-describe("openai completions params", () => {
-  describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
-    const geminiModel = makeCompletionsModel({
-      id: "gemini-3-flash-preview",
-      name: "Gemini 3 Flash Preview",
-      provider: "google",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      contextWindow: 1_000_000,
-    });
+function replayedTool(
+  model: Model<"openai-completions">,
+  options?: Parameters<typeof geminiToolReplayContext>[1],
+) {
+  const assistant = getAssistantMessage(
+    buildOpenAICompletionsParams(model, geminiToolReplayContext(model, options), undefined),
+  ) as { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> };
+  return assistant.tool_calls?.[0]?.extra_content;
+}
 
-    it("captures thought_signature from streamed Google tool_calls", async () => {
-      const output = createAssistantOutput(geminiModel);
-      const chunks = [
+async function expectStreamedSignature(
+  model: Model<"openai-completions">,
+  chunks: readonly unknown[],
+  thoughtSignature: string,
+) {
+  const { output, run } = streamFixture(model);
+  await run(chunks);
+  expectRecordFields(output.content[0], {
+    type: "toolCall",
+    id: "call_abc",
+    name: "echo_value",
+    arguments: { value: "repro" },
+    thoughtSignature,
+  });
+}
+
+describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
+  const geminiModel = makeCompletionsModel({
+    id: "gemini-3-flash-preview",
+
+    provider: "google",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+  });
+
+  it.each([false, true])("captures streamed signatures (top-level=%s)", async (topLevel) => {
+    const model = topLevel
+      ? makeCompletionsModel({
+          id: "gemini-3-6-flash",
+          provider: "venice",
+          baseUrl: "https://api.venice.ai/api/v1",
+        })
+      : geminiModel;
+    const signature = topLevel ? "SIG-VENICE-OPAQUE-ABC==" : "SIG-OPAQUE-ABC==";
+    await expectStreamedSignature(
+      model,
+      [
         makeCompletionsChunk({
           tool_calls: [
             {
               index: 0,
               id: "call_abc",
               type: "function",
-              function: { name: "echo_value", arguments: "" },
-              extra_content: { google: { thought_signature: "SIG-OPAQUE-ABC==" } },
+              function: { name: "echo_value", arguments: topLevel ? '{"value":"repro"}' : "" },
+              ...(topLevel
+                ? { thought_signature: signature }
+                : { extra_content: { google: { thought_signature: signature } } }),
             },
           ],
         }),
         makeCompletionsChunk(
-          {
-            tool_calls: [{ index: 0, function: { arguments: '{"value":"repro"}' } }],
-          },
-          "tool_calls" as const,
+          topLevel
+            ? {}
+            : { tool_calls: [{ index: 0, function: { arguments: '{"value":"repro"}' } }] },
+          "tool_calls",
         ),
-      ] as const;
-      await processCompletionsStream(streamChunks(chunks), output, geminiModel, {
-        push() {},
-      });
-
-      expectRecordFields(output.content[0], {
-        type: "toolCall",
-        id: "call_abc",
-        name: "echo_value",
-        arguments: { value: "repro" },
-        thoughtSignature: "SIG-OPAQUE-ABC==",
-      });
-    });
-
-    it("captures a top-level thought_signature from streamed OpenAI-compatible tool_calls", async () => {
-      const veniceGeminiModel = makeCompletionsModel({
-        id: "gemini-3-6-flash",
-        name: "Gemini 3.6 Flash",
-        provider: "venice",
-        baseUrl: "https://api.venice.ai/api/v1",
-        contextWindow: 1_000_000,
-      });
-      const output = createAssistantOutput(veniceGeminiModel);
-      const chunks = [
-        makeCompletionsChunk({
-          tool_calls: [
-            {
-              index: 0,
-              id: "call_abc",
-              type: "function",
-              function: { name: "echo_value", arguments: '{"value":"repro"}' },
-              thought_signature: "SIG-VENICE-OPAQUE-ABC==",
-            },
-          ],
-        }),
-        makeCompletionsChunk({}, "tool_calls" as const),
-      ] as const;
-      await processCompletionsStream(streamChunks(chunks), output, veniceGeminiModel, {
-        push() {},
-      });
-
-      expectRecordFields(output.content[0], {
-        type: "toolCall",
-        id: "call_abc",
-        name: "echo_value",
-        arguments: { value: "repro" },
-        thoughtSignature: "SIG-VENICE-OPAQUE-ABC==",
-      });
-    });
-
-    it("re-emits captured thought_signature for same Google route tool-call replay", () => {
-      const params = buildOpenAICompletionsParams(
-        geminiModel,
-        geminiToolReplayContext(geminiModel, {
-          thoughtSignature: "SIG-OPAQUE-ABC==",
-          arguments: { value: "repro" },
-          includeUserAndResult: true,
-        }),
-        undefined,
-      ) as { messages: Array<Record<string, unknown>> };
-
-      const assistant = params.messages.find((message) => message.role === "assistant") as
-        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
-        | undefined;
-      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
-        "SIG-OPAQUE-ABC==",
-      );
-    });
-
-    it("uses the Gemini skip-validator signature across a different API surface", () => {
-      const params = buildOpenAICompletionsParams(
-        geminiModel,
-        geminiToolReplayContext(geminiModel, {
-          sourceApi: "google-generative-ai",
-          thoughtSignature: "SIG-OPAQUE-ABC==",
-          arguments: { value: "repro" },
-        }),
-        undefined,
-      ) as { messages: Array<Record<string, unknown>> };
-
-      const assistant = params.messages.find((message) => message.role === "assistant") as
-        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
-        | undefined;
-      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
-        "skip_thought_signature_validator",
-      );
-    });
-
-    it.each(["gemini-3-flash-preview", "gemini-4-argon"])(
-      "uses the skip-validator signature for unsigned %s replay",
-      (id) => {
-        const target = { ...geminiModel, id };
-        const params = buildOpenAICompletionsParams(
-          target,
-          geminiToolReplayContext(target),
-          undefined,
-        ) as { messages: Array<Record<string, unknown>> };
-
-        const assistant = params.messages.find((message) => message.role === "assistant") as
-          | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
-          | undefined;
-        expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
-          "skip_thought_signature_validator",
-        );
-      },
+      ],
+      signature,
     );
+  });
 
-    it("drops the field when the model is not Gemini 3 and the captured same-route signature is truncated", () => {
-      // gemini-2.5-pro: requiresGoogleCompatToolCallThoughtSignature returns false,
-      // so fallbackSig is undefined and there is no sentinel to fall back to.
-      // A truncated same-route sig should cause the field to be dropped entirely.
-      const nonGemini3Model = {
-        ...geminiModel,
-        id: "gemini-2.5-pro",
-        name: "Gemini 2.5 Pro",
-      };
-      const params = buildOpenAICompletionsParams(
-        nonGemini3Model,
-        geminiToolReplayContext(nonGemini3Model, {
-          arguments: { value: "repro" },
-          thoughtSignature:
-            "CmcBjz1rX55U6JcpC2oZVTk40Kx6nVK8LKzbl61rOFztcvSdL7pdIvBEDyJLRqWrPVpdD+rj3GsJ3f9PG6b2Ry2UnK38+dInfGIlJbXHt++EC",
-        }),
-        undefined,
-      ) as { messages: Array<Record<string, unknown>> };
-
-      const assistant = params.messages.find((message) => message.role === "assistant") as
-        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
-        | undefined;
-      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBeUndefined();
+  it("re-emits captured thought_signature for same Google route tool-call replay", () => {
+    const extra = replayedTool(geminiModel, {
+      thoughtSignature: "SIG-OPAQUE-ABC==",
+      arguments: { value: "repro" },
+      includeUserAndResult: true,
     });
+    expect(extra?.google?.thought_signature).toBe("SIG-OPAQUE-ABC==");
+  });
 
-    it("does not trust cross-route thought_signature for non-Gemini-3 Google compat models", () => {
-      const nonGemini3Model = {
-        ...geminiModel,
-        id: "gemini-2.5-pro",
-        name: "Gemini 2.5 Pro",
-      };
-      const params = buildOpenAICompletionsParams(
-        nonGemini3Model,
-        geminiToolReplayContext(nonGemini3Model, {
-          sourceApi: "google-generative-ai",
-          thoughtSignature: "SIG-OPAQUE-ABC==",
-          arguments: { value: "repro" },
-        }),
-        undefined,
-      ) as { messages: Array<Record<string, unknown>> };
-
-      const assistant = params.messages.find((message) => message.role === "assistant") as
-        | { tool_calls?: Array<{ extra_content?: unknown }> }
-        | undefined;
-      expect(assistant?.tool_calls?.[0]?.extra_content).toBeUndefined();
+  it("uses the Gemini skip-validator signature across a different API surface", () => {
+    const extra = replayedTool(geminiModel, {
+      sourceApi: "google-generative-ai",
+      thoughtSignature: "SIG-OPAQUE-ABC==",
+      arguments: { value: "repro" },
     });
+    expect(extra?.google?.thought_signature).toBe("skip_thought_signature_validator");
+  });
+
+  it.each(["gemini-3-flash-preview", "gemini-3.8-flash", "gemini-4-argon"])(
+    "uses the skip-validator signature for unsigned %s replay",
+    (id) => {
+      const target = { ...geminiModel, id };
+      const extra = replayedTool(target);
+      expect(extra?.google?.thought_signature).toBe("skip_thought_signature_validator");
+    },
+  );
+
+  it("drops the field when the model is not Gemini 3 and the captured same-route signature is truncated", () => {
+    const nonGemini3Model = { ...geminiModel, id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" };
+    const extra = replayedTool(nonGemini3Model, {
+      arguments: { value: "repro" },
+      thoughtSignature:
+        "CmcBjz1rX55U6JcpC2oZVTk40Kx6nVK8LKzbl61rOFztcvSdL7pdIvBEDyJLRqWrPVpdD+rj3GsJ3f9PG6b2Ry2UnK38+dInfGIlJbXHt++EC",
+    });
+    expect(extra?.google?.thought_signature).toBeUndefined();
+  });
+
+  it("does not trust cross-route thought_signature for non-Gemini-3 Google compat models", () => {
+    const nonGemini3Model = { ...geminiModel, id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" };
+    const extra = replayedTool(nonGemini3Model, {
+      sourceApi: "google-generative-ai",
+      thoughtSignature: "SIG-OPAQUE-ABC==",
+      arguments: { value: "repro" },
+    });
+    expect(extra).toBeUndefined();
   });
 });

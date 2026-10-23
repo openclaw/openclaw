@@ -57,6 +57,8 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
 
     When returning a guarded response for streaming, use `responseWithRelease(response, release)` from `openclaw/plugin-sdk/fetch-runtime` to retain request ownership until its body completes, fails, or is cancelled. Consume or cancel bodies explicitly for prompt release; garbage collection of abandoned wrappers provides only best-effort cleanup.
 
+    Guarded fetch accepts `streamTimeoutMs` for header/body inactivity independently of the whole-request `timeoutMs`; when both are supplied, `timeoutMs` takes precedence. The existing `createPinnedDispatcher` helper also accepts `streamTimeoutMs` as its fifth argument. These stream settings retain TCP/TLS connection deadlines and default to the existing transport policy when omitted.
+
     `api.runtime.channel.mentions` is the shared inbound mention-policy surface for bundled channel plugins that use runtime injection:
 
     ```typescript
@@ -203,10 +205,9 @@ Lifecycle setters have explicit Promise-returning counterparts:
 Callers await their results before reporting the affected bindings.
 
 The existing synchronous lookup, touch, route resolver, and lifecycle setter contracts
-remain deprecated through the next Plugin SDK major. The resolver's staged
-migration is recorded here and in the compatibility registry; its broad barrel
-is already deprecated, while its per-function IDE annotation is deferred until
-the caller migration is complete. Synchronous entry points call only synchronous
+remain deprecated through 2026-12-31, with removal in the first January 2027
+stable release. See the [binding migration mapping](/plugins/sdk-migration/sqlite-async#conversation-and-native-session-bindings).
+Synchronous entry points call only synchronous
 implementations; they never start an async mutation whose result would be lost.
 An adapter exposing both variants keeps them under the same state owner.
 

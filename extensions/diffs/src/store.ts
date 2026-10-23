@@ -4,12 +4,17 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
-import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { sha256Hex as hashToken } from "openclaw/plugin-sdk/node-crypto-runtime";
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  resolveTimestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
-  PluginBlobEntry,
   PluginBlobEntryInfo,
-  PluginBlobStore,
+  PluginBlobRegistrationReceipt,
+  PluginBlobStoreWithReceipts,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -35,7 +40,7 @@ const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 
 type CreateArtifactParams = Pick<
-  DiffArtifactMeta,
+  DiffViewerArtifactMetadata,
   "title" | "inputKind" | "fileCount" | "context"
 > & {
   html: string;
@@ -48,18 +53,9 @@ type CreateStandaloneFileArtifactParams = {
   context?: DiffArtifactContext;
 };
 
-function isBlobLimitError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "PLUGIN_BLOB_LIMIT_EXCEEDED"
-  );
-}
-
 export class DiffArtifactStore {
   private readonly rootDir: string;
-  private readonly blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
+  private readonly blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
   private readonly logger?: PluginLogger;
   private readonly renderingFileIds = new Set<string>();
   private cleanupInFlight: Promise<void> | null = null;
@@ -68,7 +64,7 @@ export class DiffArtifactStore {
 
   constructor(params: {
     rootDir: string;
-    blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
+    blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
     logger?: PluginLogger;
   }) {
     this.rootDir = path.resolve(params.rootDir);
@@ -97,7 +93,7 @@ export class DiffArtifactStore {
     };
     const entry = await this.registerUnique(compressedHtml, metadata, ttlMs);
     this.scheduleCleanup();
-    return viewerEntryToMeta(entry, token);
+    return viewerEntryToMeta(entry, token, metadata);
   }
 
   async readAuthorizedViewer(id: string, token: string) {
@@ -124,7 +120,6 @@ export class DiffArtifactStore {
       throw new Error(`Diff artifact ${id} decoded size does not match its metadata.`);
     }
     return {
-      artifact: viewerEntryToMeta(entry, token),
       html,
     };
   }
@@ -155,7 +150,6 @@ export class DiffArtifactStore {
       id,
       filePath: path.join(artifactDir, `preview.${format}`),
       expiresAt: resolveEntryExpiresAt(entry),
-      ...(params.context ? { context: params.context } : {}),
     };
   }
 
@@ -211,7 +205,7 @@ export class DiffArtifactStore {
     const entries = await fs
       .readdir(this.rootDir, { withFileTypes: true })
       .catch((error: unknown) => {
-        if (isFileNotFound(error)) {
+        if (extractErrorCode(error) === "ENOENT") {
           return [];
         }
         throw error;
@@ -245,13 +239,11 @@ export class DiffArtifactStore {
     bytes: Uint8Array,
     metadata: DiffArtifactBlobMetadata,
     ttlMs: number,
-  ): Promise<PluginBlobEntry<DiffArtifactBlobMetadata>> {
+  ): Promise<PluginBlobRegistrationReceipt & { key: string }> {
     const id = crypto.randomBytes(10).toString("hex");
-    if (await this.registerIfAbsentWithCleanup(id, bytes, metadata, ttlMs)) {
-      const entry = await this.blobStore.lookup(id);
-      if (entry) {
-        return entry;
-      }
+    const receipt = await this.registerIfAbsentWithCleanup(id, bytes, metadata, ttlMs);
+    if (receipt) {
+      return { key: id, ...receipt };
     }
     throw new Error("Failed to allocate a unique diff artifact id.");
   }
@@ -261,17 +253,17 @@ export class DiffArtifactStore {
     bytes: Uint8Array,
     metadata: DiffArtifactBlobMetadata,
     ttlMs: number,
-  ): Promise<boolean> {
+  ): Promise<PluginBlobRegistrationReceipt | undefined> {
     try {
-      return await this.blobStore.registerIfAbsent(id, bytes, metadata, { ttlMs });
+      return await this.blobStore.registerIfAbsentWithReceipt(id, bytes, metadata, { ttlMs });
     } catch (error) {
-      if (!isBlobLimitError(error)) {
+      if (extractErrorCode(error) !== "PLUGIN_BLOB_LIMIT_EXCEEDED") {
         throw error;
       }
       // Expired rows retain cleanup metadata and count toward physical fuses.
       // Claim their cleanup before retrying a write that reached the quota.
       await this.cleanupExpired();
-      return await this.blobStore.registerIfAbsent(id, bytes, metadata, { ttlMs });
+      return await this.blobStore.registerIfAbsentWithReceipt(id, bytes, metadata, { ttlMs });
     }
   }
 
@@ -306,35 +298,22 @@ export class DiffArtifactStore {
 }
 
 function viewerEntryToMeta(
-  entry: PluginBlobEntry<DiffArtifactBlobMetadata>,
+  entry: PluginBlobRegistrationReceipt & { key: string },
   token: string,
+  metadata: DiffViewerArtifactMetadata,
 ): DiffArtifactMeta {
-  if (!isViewerMetadata(entry.metadata)) {
-    throw new Error(`Diff artifact ${entry.key} is not a viewer.`);
-  }
   return {
     id: entry.key,
-    token,
-    createdAt: timestampMsToIsoString(entry.createdAt) ?? "1970-01-01T00:00:00.000Z",
     expiresAt: resolveEntryExpiresAt(entry),
-    title: entry.metadata.title,
-    inputKind: entry.metadata.inputKind,
-    fileCount: entry.metadata.fileCount,
+    title: metadata.title,
+    inputKind: metadata.inputKind,
+    fileCount: metadata.fileCount,
     viewerPath: `${VIEWER_PREFIX}/${entry.key}/${token}`,
-    ...(entry.metadata.context ? { context: entry.metadata.context } : {}),
   };
 }
 
 function resolveEntryExpiresAt(entry: { expiresAt?: number }): string {
-  return (
-    timestampMsToIsoString(entry.expiresAt ?? MAX_DATE_TIMESTAMP_MS) ??
-    timestampMsToIsoString(MAX_DATE_TIMESTAMP_MS) ??
-    "1970-01-01T00:00:00.000Z"
-  );
-}
-
-function hashToken(token: string): string {
-  return crypto.createHash("sha256").update(token).digest("hex");
+  return resolveTimestampMsToIsoString(entry.expiresAt, MAX_DATE_TIMESTAMP_MS);
 }
 
 function normalizeTtlMs(value?: number): number {
@@ -393,8 +372,4 @@ function isArtifactContext(value: unknown): value is DiffArtifactContext | undef
   return Object.entries(context).every(
     ([key, entry]) => allowed.has(key) && (entry === undefined || typeof entry === "string"),
   );
-}
-
-function isFileNotFound(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

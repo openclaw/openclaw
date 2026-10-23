@@ -1,5 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import { isNativeError, isProxy } from "node:util/types";
 import type { MessagePort } from "node:worker_threads";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
@@ -33,13 +35,12 @@ export type SqliteWorkerAdmissionRequest = {
   deadlineMs?: number;
 };
 
-// Admission deadlines cross threads, so both sides keep the process monotonic
-// clock captured at import. Fake timers replace `process.hrtime` on one thread
-// with a clock that starts at zero; reading that replacement would expire, or
-// extend, every deadline the other thread set.
+// Each side measures admission deadlines on its own thread's monotonic clock
+// captured at import: fake timers replace `process.hrtime` with a clock that
+// starts at zero, and Bun's real `process.hrtime` origin differs per thread.
 const processMonotonicClock = process.hrtime;
 
-/** Monotonic nanoseconds shared by every thread of this process. */
+/** Monotonic nanoseconds for deadlines measured within the calling thread. */
 export function readSqliteWorkerMonotonicNs(): bigint {
   return processMonotonicClock.bigint();
 }
@@ -62,7 +63,7 @@ export type SqliteWorkerBackend<Operations extends SqliteWorkerOperations> = {
 export type SqliteWorkerCloseReceipt = {
   identity: DatabasePathIdentity;
   incarnation: string;
-  checkpoint: SqliteWalCheckpointSnapshot;
+  checkpoint?: SqliteWalCheckpointSnapshot;
 };
 
 // Source fixtures and compiled backends can load separate copies in the same Worker.
@@ -99,6 +100,8 @@ export type SqliteWorkerRequest = {
   actor: number;
   stateContext?: SqliteWorkerStateContext;
   operationAdmission?: MessagePort;
+  databaseAdmissionDeadlineAtMs?: number;
+  operationAttachment?: { value: unknown };
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   executionAuthority?: SqliteWorkerExecutionAuthority;
   stateDatabasePath?: string;
@@ -128,7 +131,6 @@ export type SqliteWorkerReply = {
   transactionCount?: number;
   timing?: DiagnosticWorkerRequestFields["timing"];
   cleanupFailure?: OpenClawStateWorkerErrorPayload;
-  databaseAdmissions?: SqliteDatabaseAdmissions;
 } & (
   | {
       ok: true;
@@ -197,6 +199,26 @@ export class SqliteWorkerError extends Error {
     this.name = "SqliteWorkerError";
     Object.defineProperty(this, retainedWorkerErrorCode, { value: code });
   }
+}
+
+/** Preserve distinct result and settlement failures when adding a worker diagnostic. */
+export function wrapSqliteWorkerError(
+  message: string,
+  code: SqliteWorkerError["code"] | undefined,
+  ...causes: unknown[]
+): Error {
+  const retained = causes
+    .filter((cause) => cause !== undefined)
+    .map((cause) => toErrorObject(cause, message))
+    .filter(
+      (cause, index, all) => all.findIndex((other) => isDeepStrictEqual(other, cause)) === index,
+    );
+  return Object.assign(
+    code === undefined ? new Error(message) : new SqliteWorkerError(message, code),
+    {
+      cause: retained.length > 1 ? new AggregateError(retained, message) : retained[0],
+    },
+  );
 }
 
 /** Carry only canonical worker classification through a local cleanup aggregate. */

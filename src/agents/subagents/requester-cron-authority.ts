@@ -6,8 +6,9 @@ import {
   type SessionFactsRead,
 } from "../../gateway/session-sharing-preparation.js";
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   captureActiveCronManagementAuthority,
   type CronCreatorAuthorityCapability,
@@ -23,6 +24,10 @@ import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./registry/subagent-run-generation.js";
+import {
+  matchesRequesterCronAuthorityAdmission,
+  type RequesterAdmissionTarget,
+} from "./requester-cron-authority-admission.js";
 
 type RequesterCronAuthority = {
   managementEntitlement?: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
@@ -376,7 +381,7 @@ type RequesterCronAuthorityDispatch = {
 };
 const activeDispatch = new AsyncLocalStorage<RequesterCronAuthorityDispatch>();
 
-export async function withRequesterCronAuthority<T>(
+async function withRequesterCronAuthority<T>(
   params: {
     requesterSessionKey: string;
     requesterSessionId: string;
@@ -445,6 +450,25 @@ export async function withRequesterCronAuthority<T>(
   }
 }
 
+/** Captures the exact requester identity reference for one yielded continuation source. */
+export function captureRequesterContinuationCaller(params: {
+  requesterSessionKey: string;
+  requesterSessionId: string;
+  requesterAgentId?: string;
+  batch: readonly SubagentRunRecord[];
+  rearmGeneration: number | undefined;
+  runId: string;
+  isCurrent: () => boolean;
+  deliveryRoute?: DeliveryContext;
+}): NonNullable<SessionControllerInput["continuationCaller"]> {
+  const deliveryRoute =
+    params.deliveryRoute && Object.freeze(structuredClone(params.deliveryRoute));
+  return Object.freeze({
+    deliveryRoute,
+    run: <T>(run: () => Promise<T>) => withRequesterCronAuthority(params, run),
+  });
+}
+
 /** Child followup results return the captured owner only to their exact requester. */
 export function captureRequesterFollowupAuthority(params: {
   requesterTurnRunId: string;
@@ -498,39 +522,12 @@ export function captureRequesterFollowupAuthority(params: {
   };
 }
 
-type RequesterAdmissionTarget = {
-  runId: string;
-  sessionKey: string | undefined;
-  sessionId: string | undefined;
-  inputProvenance: InputProvenance | undefined;
-};
-
-function matchesAdmissionTarget(
-  dispatch: RequesterCronAuthorityDispatch,
-  params: RequesterAdmissionTarget,
-): boolean {
-  const { authority } = dispatch;
-  return (
-    dispatch.runId === params.runId &&
-    authority.requesterSessionKey === params.sessionKey &&
-    authority.requesterSessionId === params.sessionId &&
-    params.inputProvenance?.kind === "inter_session" &&
-    (authority.kind === "yield"
-      ? params.inputProvenance.sourceTool === "subagent_settle" &&
-        authority.batch.some(
-          (entry) => entry.childSessionKey === params.inputProvenance?.sourceSessionKey,
-        )
-      : params.inputProvenance.sourceTool === "subagent_announce" &&
-        params.inputProvenance.sourceSessionKey === authority.sourceSessionKey)
-  );
-}
-
 export function captureRequesterCronAuthorityAdmissionAssertion(params: RequesterAdmissionTarget) {
   const dispatch = activeDispatch.getStore();
   if (!dispatch || dispatch.consumed || dispatch.authority.kind !== "yield") {
     return undefined;
   }
-  if (!matchesAdmissionTarget(dispatch, params)) {
+  if (!matchesRequesterCronAuthorityAdmission(dispatch, params)) {
     throw new Error("Requester authority does not own this continuation");
   }
   // Storage can invoke the pre-commit guard outside this dispatch's async context.
@@ -557,7 +554,7 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
     !dispatch ||
     dispatch.consumed ||
     dispatch.authority.admittedRunId !== undefined ||
-    !matchesAdmissionTarget(dispatch, params) ||
+    !matchesRequesterCronAuthorityAdmission(dispatch, params) ||
     !dispatch.isCurrent()
   ) {
     return undefined;
@@ -583,9 +580,7 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
             }
           },
         }
-      : dispatch.authority.kind === "followup"
-        ? { release: () => discard(dispatch.authority) }
-        : {}),
+      : { release: () => discard(dispatch.authority) }),
     bindRunScope: (scope) => {
       if (
         dispatch.authority.runScopeBound ||
@@ -606,8 +601,8 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
         dispatch.pause.scope = scope;
         return;
       }
-      // Queue acceptance can retire the child outbox before the parent finishes.
-      // Its fresh run scope now owns the entitlement and all per-operation grants.
+      // The admitted run scope now owns the entitlement and per-operation grants.
+      // Its lifetime is independent of later cohort cleanup; queue ACK alone is not delivery.
       dispatch.authority.runScopeBound = true;
       if (dispatch.authority.kind === "yield") {
         for (const entry of dispatch.authority.batch) {

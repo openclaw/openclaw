@@ -148,7 +148,7 @@ type WorkerNodeBootstrapAccess = {
     /** Core-owned POSIX prerequisite script, applied only to Linux before invoking Node. */
     linuxToolchainSetup?: string;
   };
-  /** Runtime/enrollment closure, including shutdown; provision's separate signal identifies explicit Stop. */
+  /** Runtime/enrollment closure, including shutdown; stop this work while preserving its allocation. */
   signal?: AbortSignal;
 };
 
@@ -270,6 +270,18 @@ export class WorkerProviderError extends Error {
   }
 }
 
+export type WorkerRecipePreparation = {
+  source: "devcontainer" | "script" | "detected" | "none";
+  ignoredPropertiesNote?: string;
+  note?: string;
+  phaseDurationsMs?: {
+    onCreate?: number;
+    updateContent?: number;
+    detectedInstall?: number;
+  };
+  failure?: { reason: string; outputTail?: string };
+};
+
 /** Cloud-worker lifecycle capability shared by plugin and internal providers. */
 export type WorkerProvider = {
   id: string;
@@ -344,7 +356,10 @@ export type WorkerProvider = {
       profileId?: string;
       /** Attempt-scoped display facts; the host rejects reports after provisioning closes. */
       reportStartStatus?: (status: WorkerEnvironmentStartStatus) => void;
-      /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
+      /**
+       * Stop this attempt, including on Gateway shutdown; settle active commands before rejecting.
+       * Preserve allocations on abort. Explicit cancellation/destroy requests record destruction intent separately.
+       */
       signal?: AbortSignal;
       /** Modern hosts supply authority; legacy optionality is source compatibility only. */
       assertCurrent?: () => void;
@@ -385,17 +400,7 @@ export type WorkerProvider = {
           ) => Promise<string>;
           upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
           /** Persist diagnostics before a declared recipe rejects preparation. */
-          recordRecipePreparation?: (value: {
-            source: "devcontainer" | "script" | "detected" | "none";
-            ignoredPropertiesNote?: string;
-            note?: string;
-            phaseDurationsMs?: {
-              onCreate?: number;
-              updateContent?: number;
-              detectedInstall?: number;
-            };
-            failure?: { reason: string; outputTail?: string };
-          }) => Promise<void>;
+          recordRecipePreparation?: (value: WorkerRecipePreparation) => Promise<void>;
         }) => Promise<{
           seedKey: string;
           cacheHit: boolean;
@@ -403,17 +408,7 @@ export type WorkerProvider = {
           captureRequired?: true;
           /** Detected setup is best effort; this allocation must remain cold on failure. */
           captureSkipped?: string;
-          recipePreparation?: {
-            source: "devcontainer" | "script" | "detected" | "none";
-            ignoredPropertiesNote?: string;
-            note?: string;
-            phaseDurationsMs?: {
-              onCreate?: number;
-              updateContent?: number;
-              detectedInstall?: number;
-            };
-            failure?: { reason: string; outputTail?: string };
-          };
+          recipePreparation?: WorkerRecipePreparation;
           preparedWorkspace?: {
             preparationKey: string;
             cacheKey: string;
@@ -505,7 +500,7 @@ export type SpeechProviderPlugin = {
     | SpeechProviderPreparedSynthesis
     | undefined
     | Promise<SpeechProviderPreparedSynthesis | undefined>;
-  /** @deprecated Use isConfiguredAsync. Retained until an announced stable removal window. */
+  /** @deprecated Use isConfiguredAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: SpeechProviderConfiguredContext) => Promise<boolean>;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
@@ -526,7 +521,7 @@ export type RealtimeTranscriptionProviderPlugin = {
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
   ) => RealtimeTranscriptionProviderConfig;
-  /** @deprecated Use isConfiguredAsync. Retained until an announced stable removal window. */
+  /** @deprecated Use isConfiguredAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   isConfigured: (ctx: RealtimeTranscriptionProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: RealtimeTranscriptionProviderConfiguredContext) => Promise<boolean>;
   createSession: (req: RealtimeTranscriptionSessionCreateRequest) => RealtimeTranscriptionSession;
@@ -544,12 +539,12 @@ export type RealtimeVoiceProviderPlugin = {
   voices?: readonly string[];
   autoSelectOrder?: number;
   capabilities?: RealtimeVoiceProviderCapabilities;
-  /** @deprecated Use resolveConfigAsync when config resolution needs credentials. */
+  /** @deprecated Use resolveConfigAsync when config resolution needs credentials. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
   resolveConfigAsync?: (
     ctx: RealtimeVoiceProviderResolveConfigContext,
   ) => Promise<RealtimeVoiceProviderConfig>;
-  /** @deprecated Use isConfiguredAsync. Retained until an announced stable removal window. */
+  /** @deprecated Use isConfiguredAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: RealtimeVoiceProviderConfiguredContext) => Promise<boolean>;
   createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;

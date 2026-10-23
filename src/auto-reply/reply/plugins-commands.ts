@@ -63,7 +63,7 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
       return {
         action: "error",
         message:
-          "Usage: /plugins install <path|archive|npm-spec|npm-pack:path|git:repo|clawhub:pkg> [--force] [--accept-capabilities]",
+          "Usage: /plugins install <package|npm:package|path|archive|npm-pack:path|git:repo|clawhub:pkg> [--force] [--accept-capabilities]",
       };
     }
     return { action: "install", acceptCapabilities, force, spec };

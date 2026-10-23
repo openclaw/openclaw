@@ -96,7 +96,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     }
     await settleDurableDelivery(
       params.deliveryCompletion,
-      result ? { result } : { platformSendStarted: platformSendStarted && !allPayloadsSuppressed },
+      result
+        ? { result, batch: { results: deliveredResults, payloadCount, payloadOutcomes } }
+        : { platformSendStarted: platformSendStarted && !allPayloadsSuppressed },
       platformQueueStateDir,
       params.deliveryQueueStateContext,
       params.conversationDeliveryTarget,
@@ -652,7 +654,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   } finally {
     writer?.release();
     generation?.release();
-    await producerLease?.stop();
     for (const outcome of payloadOutcomes) {
       if (outcome.status === "failed" && params.deliveryQueueOwner) {
         outcome.error = params.deliveryQueueOwner.project(outcome.error);

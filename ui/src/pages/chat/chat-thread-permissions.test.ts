@@ -3,12 +3,12 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import { buildItems } from "./chat-thread.test-support.ts";
-import { renderMessageGroup } from "./components/chat-message-group.test-support.ts";
-import { renderToolFixture } from "./components/chat-tool-render.test-support.ts";
+import { createMessageGroupHarness } from "./components/chat-message-native.test-support.tsx";
+import { settleToolBridges } from "./components/chat-tool-render.test-support.ts";
 import { agentEvent, createHost } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
@@ -19,6 +19,66 @@ const permissionMissing = {
   capabilities: ["screenRecording"],
   state: "denied",
 };
+
+it.each(["prepare_pr", "publish"])(
+  "keeps a sibling permission request when GitHub %s details are hidden",
+  (action) => {
+    const groups = buildItems({
+      showToolCalls: false,
+      messages: [
+        {
+          role: "assistant",
+          runId: "run",
+          timestamp: 1_000,
+          __openclaw: { id: "batched-calls", seq: 1, runId: "run" },
+          content: [
+            { type: "toolCall", id: "github", name: "github_publish", arguments: { action } },
+            {
+              type: "toolCall",
+              id: "capture",
+              name: "nodes",
+              arguments: { action: "screen_record" },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          runId: "run",
+          timestamp: 1_001,
+          toolCallId: "github",
+          toolName: "github_publish",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                action === "prepare_pr"
+                  ? { status: "started", async: true, yielded: true }
+                  : { status: "published" },
+              ),
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          runId: "run",
+          timestamp: 1_002,
+          toolCallId: "capture",
+          toolName: "nodes",
+          isError: true,
+          content: [{ type: "text", text: "Screen Recording permission is missing." }],
+          details: { permissionMissing },
+        },
+      ],
+    });
+    const cards = groups.flatMap((item) =>
+      item.kind === "group"
+        ? item.messages.flatMap(({ message }) => extractToolCardsCached(message))
+        : [],
+    );
+    expect(cards.map((card) => card.name)).toEqual(["nodes"]);
+    expect(cards[0]?.details).toEqual({ permissionMissing });
+  },
+);
 
 it("projects a scoped permission event and replaces it with its persisted tool result", () => {
   const host = createHost({ chatRunId: "run" });
@@ -74,17 +134,18 @@ it("renders a persisted standalone tool result as a Grant card without expanding
     isError: true,
   };
   const [group] = groupMessages([{ kind: "message", key: "capture", message: result }]);
-  // SAFETY: this transcript leaf consumes only the native settings owner.
-  const container = createApplicationContextProvider({
-    nativeDeviceSettings,
-  } as ApplicationContext);
+  const container = document.body.appendChild(document.createElement("div"));
+  onTestFinished(() => container.remove());
   if (!group || group.kind !== "group") {
     throw new Error("Expected a tool message group");
   }
-  await renderToolFixture(
-    renderMessageGroup(group, { assistantName: "OpenClaw", showReasoning: false }),
-    container,
-  );
+  const view = createMessageGroupHarness(container, {
+    // SAFETY: this transcript leaf consumes only the native settings owner.
+    wrapper: createSolidApplicationContextProvider({ nativeDeviceSettings } as ApplicationContext)
+      .wrapper,
+  });
+  view.render(group, { assistantName: "OpenClaw", showReasoning: false });
+  await settleToolBridges(container);
   expect(container.querySelector(".chat-permission-card")?.textContent).toContain(
     "Grant Screen Recording",
   );

@@ -3,9 +3,11 @@ import { buildConfigSchemaCore } from "./schema.js";
 import type { ConfigJsonSchemaObject } from "./schema.shared.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 
-function customSchema(properties: Record<string, ConfigJsonSchemaObject>): ConfigJsonSchemaObject {
-  return { type: "object", properties: { custom: { type: "object", properties } } };
-}
+const objectSchema = (
+  properties: Record<string, ConfigJsonSchemaObject>,
+): ConfigJsonSchemaObject => ({ type: "object", properties });
+const customSchema = (properties: Record<string, ConfigJsonSchemaObject>) =>
+  objectSchema({ custom: objectSchema(properties) });
 
 describe("config schema tiers", () => {
   let baseSchema: ReturnType<typeof buildConfigSchemaCore>;
@@ -48,79 +50,27 @@ describe("config schema tiers", () => {
   });
 
   it.each([
-    [
-      "leading wildcard specificity",
-      [
-        ["custom.*.*", false],
-        ["*.item.value", true],
-      ],
-      "custom.item.value",
-      true,
-    ],
-    [
-      "earlier leading wildcard",
-      [
-        ["*.item.value", true],
-        ["custom.item.*", false],
-      ],
-      "custom.item.value",
-      true,
-    ],
-    [
-      "earlier rooted wildcard",
-      [
-        ["custom.item.*", false],
-        ["*.item.value", true],
-      ],
-      "custom.item.value",
-      false,
-    ],
-    [
-      "exact before wildcard",
-      [
-        ["custom.item.*", true],
-        ["custom.item.value", false],
-      ],
-      "custom.item.value",
-      false,
-    ],
-    [
-      "last exact alias",
-      [
-        ["custom..item.value", true],
-        ["custom.item.value", false],
-      ],
-      "custom.item.value",
-      false,
-    ],
-    [
-      "first array alias",
-      [
-        ["custom.items[]", true],
-        ["custom.items.*", false],
-      ],
-      "custom.items.*",
-      true,
-    ],
-    [
-      "first wildcard alias",
-      [
-        ["custom.items.*", false],
-        ["custom.items[]", true],
-      ],
-      "custom.items.*",
-      false,
-    ],
-  ] as const)("preserves tier precedence for %s", (_name, entries, target, expected) => {
-    const hints = applyResolvedConfigTierHints(
-      customSchema({
-        item: { type: "object", properties: { value: { type: "string" } } },
-        items: { type: "array", items: { type: "string" } },
-      }),
-      Object.fromEntries(entries.map(([key, advanced]) => [key, { advanced }])),
-    );
-    expect(hints[target]?.advanced).toBe(expected);
-  });
+    ["leading wildcard specificity", "custom.*.*", false, "*.item.value", true, true],
+    ["earlier leading wildcard", "*.item.value", true, "custom.item.*", false, true],
+    ["earlier rooted wildcard", "custom.item.*", false, "*.item.value", true, false],
+    ["exact before wildcard", "custom.item.*", true, "custom.item.value", false, false],
+    ["last exact alias", "custom..item.value", true, "custom.item.value", false, false],
+    ["first array alias", "custom.items[]", true, "custom.items.*", false, true],
+    ["first wildcard alias", "custom.items.*", false, "custom.items[]", true, false],
+  ] as const)(
+    "preserves tier precedence for %s",
+    (_name, first, firstTier, second, secondTier, expected) => {
+      const hints = applyResolvedConfigTierHints(
+        customSchema({
+          item: { type: "object", properties: { value: { type: "string" } } },
+          items: { type: "array", items: { type: "string" } },
+        }),
+        { [first]: { advanced: firstTier }, [second]: { advanced: secondTier } },
+      );
+      const target = first.startsWith("custom.items") ? "custom.items.*" : "custom.item.value";
+      expect(hints[target]?.advanced).toBe(expected);
+    },
+  );
 
   it.each(["anyOf", "oneOf", "allOf"])(
     "resolves numeric %s branches before inheriting child tiers",
@@ -145,16 +95,12 @@ describe("config schema tiers", () => {
     (explicitCommon) => {
       const hints = applyResolvedConfigTierHints(
         customSchema({
-          group: {
-            type: "object",
-            properties: {
-              item: {
-                type: "object",
-                properties: { value: { type: "string" } },
-                additionalProperties: { type: "integer" },
-              },
+          group: objectSchema({
+            item: {
+              ...objectSchema({ value: { type: "string" } }),
+              additionalProperties: { type: "integer" },
             },
-          },
+          }),
         }),
         {
           custom: { advanced: false },

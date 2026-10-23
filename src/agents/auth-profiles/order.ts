@@ -25,6 +25,7 @@ import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import {
   clearExpiredCooldowns,
   isProfileInCooldown,
+  readAuthProfileUsageStats,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 
@@ -160,7 +161,7 @@ type ResolveAuthProfileOrderParams = {
   forModel?: string;
   /** Account-wide selection ignores windows limited to one model. */
   cooldownScope?: "all-models";
-  /** Read-only status keeps unresolved refs ordered so availability remains unknown. */
+  /** Read-only status keeps unresolved refs and leaves usage bookkeeping unchanged. */
   readinessMode?: "execution" | "read-only";
   /** Runtime resolvers may observe a durable pending refresh through settlement. */
   includePendingOAuthRefresh?: boolean;
@@ -197,7 +198,9 @@ export function resolveAuthProfileOrderWithMetadata(
   // Clear expired windows so profiles become eligible for a half-open probe.
   // Rate-limit counts persist until success to back off repeated failed probes;
   // other transient failures still receive a fresh counter. See #3604.
-  clearExpiredCooldowns(store, now);
+  if (params.readinessMode !== "read-only") {
+    clearExpiredCooldowns(store, now);
+  }
   const { order: explicitOrder, fromStore: explicitOrderFromStore } =
     resolveExplicitAuthOrderSelection({
       storeOrder: store.order,
@@ -253,7 +256,7 @@ export function resolveAuthProfileOrderWithMetadata(
   const isInCooldown = (profileId: string) =>
     isProfileInCooldown(store, profileId, now, cooldownModel);
   const unusableUntil = (profileId: string) =>
-    resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}, cooldownModel);
+    resolveProfileUnusableUntil(readAuthProfileUsageStats(store, profileId) ?? {}, cooldownModel);
 
   const available: string[] = [];
   const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];

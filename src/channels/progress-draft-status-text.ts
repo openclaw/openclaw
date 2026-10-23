@@ -114,11 +114,7 @@ export function formatReasoningProgressDisplayLine(text: string, maxChars: numbe
 }
 
 export function sanitizeProgressStatusText(text: string): string {
-  const cleaned = stripInlineDirectiveTagsForDelivery(text).text.trim();
-  if (!cleaned || isSilentCommentaryProgressText(cleaned)) {
-    return "";
-  }
-  return cleaned;
+  return stripInlineDirectiveTagsForDelivery(text).text.trim();
 }
 
 export function normalizeCommentaryProgressText(text: string): string {
@@ -132,11 +128,6 @@ export function normalizeCommentaryProgressText(text: string): string {
     .filter(Boolean)
     .map((line) => `_${line}_`)
     .join("\n");
-}
-
-function isSilentCommentaryProgressText(text: string): boolean {
-  const normalized = text.replace(/^[\s*_`~]+|[\s*_`~]+$/gu, "").trim();
-  return /^NO_REPLY$/iu.test(normalized);
 }
 
 function mergeReasoningProgressText(
@@ -203,7 +194,7 @@ export function resolveCommentaryLineId(commentary: {
     return `commentary:${commentary.itemId}`;
   }
   if (!commentary.normalized) {
-    // Sanitized to nothing (directive-only / NO_REPLY): no line to address, so
+    // Sanitized to nothing (directive-only): no line to address, so
     // it cannot retract the open one. Only an explicit itemId clears a line.
     return "";
   }

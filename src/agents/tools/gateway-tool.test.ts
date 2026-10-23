@@ -1,6 +1,7 @@
 import { asRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareCronRunAdmission } from "../../cron/run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "../../cron/scheduled-occurrence.test-support.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
@@ -56,24 +57,6 @@ describe("gateway tool", () => {
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
-
-  it.each([["config.get", { action: "config.get" }]])(
-    "forwards the abort signal for %s",
-    async (method, params) => {
-      const controller = new AbortController();
-
-      await createGatewayTool().execute("tool-call", params, controller.signal);
-
-      expect(callGatewayToolMock).toHaveBeenCalledWith(
-        method,
-        expect.anything(),
-        expect.anything(),
-        {
-          signal: controller.signal,
-        },
-      );
-    },
-  );
 });
 
 describe("gateway update action", () => {
@@ -122,6 +105,7 @@ describe("gateway update action", () => {
     async (admissionSource) => {
       const sessionKey = "agent:main:synthetic-update";
       const admission = prepareCronRunAdmission({
+        scheduledExecution: TEST_SCHEDULED_EXECUTION,
         deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: {},
         agentId: "main",

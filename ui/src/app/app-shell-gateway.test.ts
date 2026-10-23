@@ -252,7 +252,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
   });
 
   it("refuses profile hydration from a superseded config snapshot", async () => {
-    const { context, owner, snapshot, request, refreshTheme, requestUpdate } =
+    const { context, owner, snapshot, request, refreshTheme, invalidate } =
       createProfileAppearanceGateway("profile-owner");
     const readStarted = createDeferred();
     const reply = createDeferred<{
@@ -273,7 +273,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     await ready;
     expect(loadSettings().accent).not.toBe("#336699");
     expect(refreshTheme).not.toHaveBeenCalled();
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it("loads current agent discovery when hello lands", async () => {
@@ -307,7 +307,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
         context,
         owner,
         refreshTheme,
-        requestUpdate,
+        invalidate,
         request,
         snapshot,
       } = createProfileAppearanceGateway(mirrored ? "profile-owner" : null);
@@ -329,7 +329,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
       await vi.dynamicImportSettled();
       // Adoption publishes navigation, then hydration publishes profile/readiness.
       expect(refreshTheme).toHaveBeenCalledTimes(2);
-      expect(requestUpdate).toHaveBeenCalledOnce();
+      expect(invalidate).toHaveBeenCalledOnce();
       expect(refreshTheme).toHaveBeenCalledWith({ notify: true });
       expect(loadSettings().accent).toBe("#336699");
       expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {

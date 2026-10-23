@@ -92,7 +92,6 @@ export function handleMatrixSubagentDeliveryTarget(
       ? String(event.requesterOrigin.threadId).trim()
       : "";
 
-  // Search the targeted account when available; otherwise scan all accounts.
   const candidates = requesterAccountId
     ? listBindingsForAccount(requesterAccountId)
     : listAllBindings();

@@ -70,6 +70,14 @@ openclaw-modal-dialog {
   }
 }
 
+.oc-modal-dialog__focus-guard {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .oc-modal-dialog__body {
   flex: 1 1 auto;
   min-height: 0;
@@ -79,6 +87,49 @@ openclaw-modal-dialog {
 
 .oc-modal-dialog__overlay-content {
   display: contents;
+}
+
+/* Static light DOM keeps submit buttons in their native form in both renderers. */
+.oc-modal-dialog openclaw-modal-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  align-self: stretch;
+  justify-content: flex-end;
+  gap: 8px;
+  grid-column: 1 / -1;
+  min-width: 0;
+  flex-shrink: 0;
+  overflow-wrap: anywhere;
+}
+
+.oc-modal-dialog openclaw-modal-actions > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.oc-modal-dialog openclaw-modal-actions :is(button, .btn, a) {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Opted-in choice dialogs keep DOM, reading, and tab order aligned with the layout. */
+.oc-modal-dialog openclaw-modal-actions.confirm-dialog-actions--stacked {
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.oc-modal-dialog .confirm-dialog-choice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: inherit;
+  min-width: 0;
+  max-width: 100%;
 }
 
 openclaw-modal-dialog.fullscreen {

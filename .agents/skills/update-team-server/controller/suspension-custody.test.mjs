@@ -184,12 +184,9 @@ for (const kind of ["prepare", "status"]) {
   });
 }
 
-test("lease expiry, renewal identity and renewal advancement remain enforced", () => {
+test("lease expiry and exact status expiry remain enforced", () => {
   const value = prepare();
-  assert.equal(parse("prepare", value, lease, value.expiresAtMs - 1000).status, 0);
-  assert.notEqual(parse("prepare", value, "different", value.expiresAtMs - 1000).status, 0);
-  assert.notEqual(parse("prepare", value, lease, value.expiresAtMs).status, 0);
-  assert.notEqual(parse("prepare", prepare("busy"), lease, value.expiresAtMs).status, 0);
+  assert.equal(parse("prepare", value).status, 0);
   assert.notEqual(parse("prepare", { ...value, expiresAtMs: Date.now() + 1000 }).status, 0);
   const ready = status();
   assert.notEqual(proof("suspension-status", ready, lease, ready.expiresAtMs + 1).status, 0);

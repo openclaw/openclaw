@@ -8,13 +8,9 @@ export function installCronSchedulerSnapshot(
   snapshot: CronSchedulerSnapshot,
   databasePath: string,
 ): CronSchedulerSnapshot {
-  const key = JSON.stringify([databasePath, storeKey]);
-  const current = snapshots.get(key);
-  if (!current || snapshot.version > current.version) {
-    snapshots.set(key, snapshot);
-    return snapshot;
-  }
-  return current;
+  // Config changes are best effort: the last worker command's coherent facts win.
+  snapshots.set(JSON.stringify([databasePath, storeKey]), snapshot);
+  return snapshot;
 }
 
 export function getCronSchedulerSnapshot(

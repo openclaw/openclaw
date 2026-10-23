@@ -16,6 +16,7 @@ import {
 import {
   createBackupScratchDirectory,
   finishBackupScratch,
+  maintainBackupScratch,
   type BackupScratch,
 } from "../infra/backup-scratch.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
@@ -84,20 +85,52 @@ export async function createOffsiteBackupArchive(
   const location = await openBackupLocation(opts.to, namespace);
   let scratch: BackupScratch | undefined;
   let output: OffsiteBackupResult | undefined;
+  let scratchWarnings: string[] = [];
   try {
-    const { createBackupArchive } = await import("../infra/backup-create.js");
+    const { chooseBackupTempRoot, createBackupArchive } = await import("../infra/backup-create.js");
     if (opts.dryRun) {
       return await createBackupArchive(opts);
     }
     const { deviceId } = await loadOrCreateProcessDeviceIdentityAsync();
     await claimBackupNamespace(location, namespace, deviceId, opts.claimNamespace === true);
     if (!opts.output) {
-      scratch = await createBackupScratchDirectory(os.tmpdir());
+      // The scratch archive must live outside every backup source; os.tmpdir()
+      // can sit inside the state dir (TMPDIR=~/.openclaw/tmp under the Gateway).
+      // Discover sources only — do not dry-run createBackupArchive here, because
+      // that validates an unused local default output and can reject previously
+      // working layouts (home=workspace=cwd with a safe TMPDIR).
+      const { resolveBackupPlanFromDisk } = await import("./backup-shared.js");
+      const onlyConfig = Boolean(opts.onlyConfig);
+      const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
+      const plan = await resolveBackupPlanFromDisk({
+        includeWorkspace,
+        onlyConfig,
+        nowMs: opts.nowMs,
+      });
+      const chosenTempRoot = await chooseBackupTempRoot({ assets: plan.included });
+      // Offsite scratch can land outside os.tmpdir() (parent of a nested TMPDIR
+      // source). Maintain that chosen root before allocating so a later run
+      // reclaims abandoned outer scratch Doctor cannot discover from storage:// URLs.
+      const maintenance = await maintainBackupScratch({
+        roots: [chosenTempRoot],
+        repair: true,
+        log: opts.log,
+      });
+      scratchWarnings = maintenance.warnings;
+      for (const directory of maintenance.reclaimed) {
+        opts.log?.(`Removed abandoned backup scratch: ${directory}`);
+      }
+      scratch = await createBackupScratchDirectory(chosenTempRoot);
     }
     const result = await createBackupArchive({
       ...opts,
       output: scratch ? path.join(scratch.directory, "archive.tar.gz") : opts.output,
     });
+    if (scratchWarnings.length) {
+      // Fallback-root maintenance warnings belong in the archive JSON alongside
+      // the warnings createBackupArchive reports for its own scratch root.
+      result.warnings = [...scratchWarnings, ...(result.warnings ?? [])];
+    }
     const { verifyBackupArchive } = await import("./backup-verify.js");
     await verifyBackupArchive(result.archivePath);
     result.verified = true;
@@ -141,7 +174,6 @@ export async function createOffsiteBackupArchive(
         retention,
       );
       for (const expired of selected.deleted) {
-        await assertBackupNamespaceOwner(location, namespace, deviceId);
         await location.delete(expired, {
           precondition: () => assertBackupNamespaceOwner(location, namespace, deviceId),
         });

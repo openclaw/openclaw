@@ -1,5 +1,5 @@
 import { readOfflineStorageScope } from "./boot-record.ts";
-import type { ApplicationGateway } from "./gateway.ts";
+import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import type { AuthenticatedUser } from "./user-profile.ts";
 
 type GatewayPresentationScope = {
@@ -9,17 +9,22 @@ type GatewayPresentationScope = {
 };
 type OwnedPresentationScope = {
   scope: GatewayPresentationScope;
-  revision: number;
+  revision: number | undefined;
   userId?: string;
   recoveryScope?: string;
 };
+type GatewayPresentationSource = {
+  readonly snapshot: Pick<ApplicationGatewaySnapshot, "client" | "phase"> &
+    Partial<Pick<ApplicationGatewaySnapshot, "hello" | "selfUser">>;
+  readonly connectionRevision?: number;
+};
 
-const scopes = new WeakMap<ApplicationGateway, OwnedPresentationScope>();
+const scopes = new WeakMap<GatewayPresentationSource, OwnedPresentationScope>();
 let nextScopeKey = 0;
 
 /** Stable page scope and display identity; never an authentication source. */
 export function gatewayPresentationScope(
-  gateway: ApplicationGateway,
+  gateway: GatewayPresentationSource,
 ): Readonly<GatewayPresentationScope> {
   const revision = gateway.connectionRevision;
   const snapshot = gateway.snapshot;

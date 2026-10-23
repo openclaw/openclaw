@@ -1,6 +1,5 @@
 import Foundation
 import OpenClawProtocol
-import Speech
 import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
@@ -362,7 +361,7 @@ private func runtimeTestDependencies(
 {
     let live = TalkModeRuntime.Dependencies.live
     return .init(
-        permissions: .init(supported: { true }, granted: { true }, ensure: { _ in true }),
+        permissions: .init(granted: { true }, ensure: { _ in true }),
         audioCapture: audioCapture,
         pcmPlayer: { RuntimeTestPCMPlayer() },
         selectedSession: live.selectedSession,
@@ -382,16 +381,6 @@ struct TalkModeRuntimeSpeechTests {
         await TestIsolation.withUserDefaultsValues([talkRealtimeRelayEnabledKey: true]) {
             #expect(AppState(preview: true).talkRealtimeRelayEnabled)
         }
-    }
-
-    @Test func `speech request uses dictation defaults`() {
-        let request = SFSpeechAudioBufferRecognitionRequest()
-
-        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
-
-        #expect(request.shouldReportPartialResults)
-        #expect(request.taskHint == .dictation)
-        #expect(!request.requiresOnDeviceRecognition)
     }
 
     @Test func `playback plan routes unsupported local providers through gateway speak`() {
@@ -794,7 +783,7 @@ struct TalkModeRuntimeSpeechTests {
         let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: {
             throw RuntimeRelayStartError.failed
         }, dependencies: .init(
-            permissions: .init(supported: { true }, granted: { true }, ensure: { _ in true }),
+            permissions: .init(granted: { true }, ensure: { _ in true }),
             audioCapture: { RuntimeTestAudioCapture() },
             pcmPlayer: { RuntimeTestPCMPlayer() },
             selectedSession: { nil },

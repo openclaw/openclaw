@@ -35,7 +35,7 @@ import {
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
 import { replaceApprovalIdPlaceholder } from "./approval-text.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
-import { inferIMessageTargetChatType } from "./targets.js";
+import { parseIMessageTarget } from "./targets.js";
 
 const DEFAULT_PLUGIN_APPROVAL_DECISIONS: readonly ExecApprovalReplyDecision[] = [
   "allow-once",
@@ -50,6 +50,14 @@ function isIMessageApprovalTransportEnabled(params: {
   return resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
 }
 
+function isDirectHandleTarget(to: string): boolean {
+  try {
+    return parseIMessageTarget(to).kind === "handle";
+  } catch {
+    return false;
+  }
+}
+
 const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync({
   channel: "imessage",
   channelLabel: "iMessage",
@@ -61,10 +69,10 @@ const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
     resolveDefaultAccountId: resolveDefaultIMessageAccountId,
     normalizeTo: normalizeIMessageMessagingTarget,
     resolveApprovers: getIMessageApprovalApprovers,
-    // Group conversations require explicit approvers; implicit same-chat auth
-    // would otherwise let any participant approve the request.
+    // Selectors need explicit approvers: without resolved chat facts, implicit
+    // same-chat auth could let a group participant approve the request.
     isOriginTargetAllowed: ({ cfg, accountId, target }) =>
-      inferIMessageTargetChatType(target.to) !== "group" ||
+      isDirectHandleTarget(target.to) ||
       getIMessageApprovalApprovers({ cfg, accountId }).length > 0,
   },
   describeExecApprovalSetup: ({ accountId }) => {
@@ -134,7 +142,7 @@ function resolveIMessageSessionTargetFromSessionKey(sessionKey?: string | null) 
   }
 
   const to = normalizeIMessageMessagingTarget(route);
-  if (!to || inferIMessageTargetChatType(to) !== "direct") {
+  if (!to || !isDirectHandleTarget(to)) {
     return null;
   }
   return { to };
@@ -155,7 +163,7 @@ export function shouldSuppressLocalIMessageExecApprovalPrompt(params: {
           return true;
         }
         const sessionTarget = resolveIMessageSessionTargetFromSessionKey(metadata.sessionKey);
-        if (!sessionTarget || inferIMessageTargetChatType(sessionTarget.to) !== "direct") {
+        if (!sessionTarget || !isDirectHandleTarget(sessionTarget.to)) {
           return false;
         }
         const targetAccountId = normalizeOptionalString(sessionTarget.accountId);

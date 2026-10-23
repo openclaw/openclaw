@@ -13,7 +13,10 @@ import {
   runWithSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
 import {
   projectChatDisplayMessage,
   resolveEffectiveChatHistoryMaxChars,
@@ -29,6 +32,7 @@ import {
 } from "./chat-broadcast.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
+import { chatPredictionHandlers } from "./chat-prediction-handler.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -36,6 +40,7 @@ import { assertValidParams } from "./validation.js";
 export const chatHandlers: GatewayRequestHandlers = {
   ...chatHistoryHandlers,
   ...chatMessageGetHandlers,
+  ...chatPredictionHandlers,
   "chat.toolTitles": async ({ params, respond }) => {
     if (!assertValidParams(params, validateChatToolTitlesParams, "chat.toolTitles", respond)) {
       return;
@@ -123,11 +128,17 @@ async function injectChat(
 
   let appended: Awaited<ReturnType<typeof appendInjectedAssistantMessageToTranscript>>;
   try {
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       agentId,
-      scope: storePath,
-      identities: [sessionKey, sessionId],
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey,
+        agentId,
+        incarnation: sessionId,
+      }),
+      storeWriterIdentities: [sessionKey],
       assertAllowed: () => {
+        sessionMutationCommitGuard?.();
         const current = retained?.readCurrent();
         if (retained && !current) {
           throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);

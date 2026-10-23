@@ -10,12 +10,12 @@ import type {
 } from "../../agents/prepared-model-runtime.types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type {
-  hasSessionTranscriptEventsSync,
-  readTranscriptMutationStateSync,
+  SessionTranscriptReadScope,
   recordSessionParticipant,
   listSessionParticipantsReadOnly,
 } from "../../config/sessions/session-accessor.js";
 import type { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
+import type { readTranscriptMutationStateInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -33,8 +33,14 @@ const mocks = vi.hoisted(() => ({
   stageSessionPendingInput: vi.fn<typeof stageSessionPendingInput>(),
   recordSessionParticipant: vi.fn<typeof recordSessionParticipant>(async () => "inserted"),
   listSessionParticipantsReadOnly: vi.fn<typeof listSessionParticipantsReadOnly>(() => new Map()),
-  hasSessionTranscriptEventsSync: vi.fn<typeof hasSessionTranscriptEventsSync>(() => false),
-  readTranscriptMutationStateSync: vi.fn<typeof readTranscriptMutationStateSync>(() => ({
+  hasSessionTranscriptEventsSync: vi.fn<(scope: SessionTranscriptReadScope) => boolean>(
+    () => false,
+  ),
+  readTranscriptMutationStateSync: vi.fn<
+    (
+      scope: SessionTranscriptReadScope,
+    ) => ReturnType<typeof readTranscriptMutationStateInTransaction>
+  >(() => ({
     observedAt: null,
     updatedAt: null,
   })),
@@ -156,9 +162,9 @@ vi.mock("../../config/sessions.js", async () => {
     ...actual,
     updateSessionStore: mocks.updateSessionStore,
     resolveSessionLifecycleTimestamps: mocks.resolveSessionLifecycleTimestamps,
-    resolveAgentIdFromSessionKey: (sessionKey: string) => {
+    resolveAgentIdFromSessionKey: (sessionKey: string, configuredDefaultAgentId?: string) => {
       const m = /^agent:([^:]+):/.exec(sessionKey.trim());
-      return m?.[1] ?? "main";
+      return m?.[1] ?? configuredDefaultAgentId ?? "main";
     },
     resolveExplicitAgentSessionKey: mocks.resolveExplicitAgentSessionKey,
     resolveAgentMainSessionKey: ({
@@ -183,16 +189,21 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
     "../../config/sessions/session-accessor.js",
   );
+  // The accessor barrel is still initializing when this mock resolves (import cycle through the
+  // session controller), so take exact-read helpers from their defining module.
+  const exactRead = await import("../../config/sessions/session-accessor.sqlite-exact-read.js");
+  const listRead = await import("../../config/sessions/session-accessor.sqlite-entry-list.read.js");
   return {
     ...actual,
+    loadExactSessionEntryCandidates: exactRead.loadExactSessionEntryCandidates,
+    loadExactSessionEntryReadOnly: exactRead.loadExactSessionEntryReadOnly,
+    listSessionEntriesReadOnly: listRead.listSessionEntriesReadOnly,
     applySessionEntryReplacements: mocks.applySessionEntryReplacements,
     patchSessionEntryTarget: mocks.patchSessionEntryTarget,
     persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
     // These handler fixtures own an in-memory store; participant access must not reach shared /tmp SQLite.
     recordSessionParticipant: mocks.recordSessionParticipant,
     listSessionParticipantsReadOnly: mocks.listSessionParticipantsReadOnly,
-    hasSessionTranscriptEventsSync: mocks.hasSessionTranscriptEventsSync,
-    readTranscriptMutationStateSync: mocks.readTranscriptMutationStateSync,
   };
 });
 
@@ -446,6 +457,14 @@ vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOri
     typeof import("../../agents/subagents/registry/subagent-registry.js")
   >()),
   replaceSubagentRunAfterSteerCore: mocks.replaceSubagentRunAfterSteer,
+}));
+
+vi.mock("../session-lifecycle-plugin-hooks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-lifecycle-plugin-hooks.js")>()),
+  emitGatewaySessionEndPluginHook: (...args: unknown[]) =>
+    (mocks.emitGatewaySessionEndPluginHook as (...args: unknown[]) => unknown)(...args),
+  emitGatewaySessionStartPluginHook: (...args: unknown[]) =>
+    (mocks.emitGatewaySessionStartPluginHook as (...args: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../session-reset-service.js", () => ({

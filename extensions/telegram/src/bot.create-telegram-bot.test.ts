@@ -3,10 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  buildPluginBindingApprovalCustomId,
-  resolvePluginConversationBindingApproval,
-} from "openclaw/plugin-sdk/conversation-runtime";
+import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { expectDefined as requireValue } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -71,7 +68,7 @@ const {
 type BuildModelsProviderDataMock = ReturnType<
   typeof vi.fn<NonNullable<typeof telegramBotDepsForTest.buildModelsProviderData>>
 >;
-const { defaultTelegramNativeCommandDeps } = await import("./bot-native-command-deps.runtime.js");
+const providerAuth = await import("openclaw/plugin-sdk/provider-auth-login-flow-runtime");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 const {
@@ -122,6 +119,19 @@ function configureOpenDm(
     agents: params.userTimezone ? { defaults: { userTimezone: params.userTimezone } } : undefined,
     messages: { inbound: { debounceMs: params.debounceMs ?? 0 } },
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+  });
+}
+
+function configureNativeGroupStop(allowFrom: string[] = ["42"]): void {
+  loadConfig.mockReturnValue({
+    commands: { native: true, allowFrom: { telegram: allowFrom } },
+    messages: { inbound: { byChannel: { telegram: 3000 } } },
+    channels: {
+      telegram: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: false } },
+      },
+    },
   });
 }
 
@@ -333,7 +343,6 @@ describe("createTelegramBot", () => {
       createTelegramBotBase({
         botInfo: telegramBotInfoForTest,
         ...opts,
-        telegramDeps: telegramBotDepsForTest,
       });
     pluginStateTestRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
   });
@@ -380,14 +389,16 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("keeps poll registry preparation failures retryable during durable replay", async () => {
+  it.each([
+    { name: "keeps registry failures retryable", optionIds: [0], preparesRegistry: true },
+    { name: "skips the registry for vote retraction", optionIds: [], preparesRegistry: false },
+  ])("poll preparation $name", async ({ optionIds, preparesRegistry }) => {
     const readError = new Error("poll registry unavailable");
+    const lookup = vi.fn(async () => {
+      throw readError;
+    });
     const openKeyedStoreV2: TelegramRuntime["state"]["openKeyedStoreV2"] = <T>() =>
-      makeTelegramKeyedStoreTestMock<T>({
-        lookup: async () => {
-          throw readError;
-        },
-      });
+      makeTelegramKeyedStoreTestMock<T>({ lookup });
     setTelegramRuntime({
       state: { openKeyedStoreV2 },
       channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
@@ -397,48 +408,25 @@ describe("createTelegramBot", () => {
       update_id: 41,
       poll_answer: {
         poll_id: "poll-retry",
-        option_ids: [0],
+        option_ids: optionIds,
         user: { id: 9, first_name: "Ada" },
       },
     };
 
-    try {
-      await expect(
-        runWithTelegramSpooledReplayUpdate(update, async () => {
-          await runTelegramTestMiddlewareChain(middlewareUseSpy, { update }, async () => {});
-        }),
-      ).rejects.toMatchObject({
-        name: TelegramSpooledReplayProcessingError.name,
-        cause: readError,
-      });
-    } finally {
-      clearTelegramRuntimeForTest();
-    }
-  });
-
-  it("skips registry preparation for vote retraction", async () => {
-    const pollAnswer = {
-      poll_id: "poll-skip",
-      option_ids: [],
-      user: { id: 9, first_name: "Ada" },
-    };
-    const lookup = vi.fn(async () => {
-      throw new Error("registry should not be read");
-    });
-    const openKeyedStoreV2: TelegramRuntime["state"]["openKeyedStoreV2"] = <T>() =>
-      makeTelegramKeyedStoreTestMock<T>({ lookup });
-    setTelegramRuntime({
-      state: { openKeyedStoreV2 },
-      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
-    } as TelegramRuntime);
-    await createTelegramBot({ token: "tok" });
-    const update = { update_id: 42, poll_answer: pollAnswer };
     const reachedHandlers = vi.fn();
-
     try {
-      await runTelegramTestMiddlewareChain(middlewareUseSpy, { update }, reachedHandlers);
-      expect(lookup).not.toHaveBeenCalled();
-      expect(reachedHandlers).toHaveBeenCalledOnce();
+      const run = () =>
+        runTelegramTestMiddlewareChain(middlewareUseSpy, { update }, reachedHandlers);
+      if (preparesRegistry) {
+        await expect(runWithTelegramSpooledReplayUpdate(update, run)).rejects.toMatchObject({
+          name: TelegramSpooledReplayProcessingError.name,
+          cause: readError,
+        });
+      } else {
+        await run();
+        expect(lookup).not.toHaveBeenCalled();
+        expect(reachedHandlers).toHaveBeenCalledOnce();
+      }
     } finally {
       clearTelegramRuntimeForTest();
     }
@@ -729,16 +717,7 @@ describe("createTelegramBot", () => {
       message_thread_id: 99,
       is_topic_message: true,
     };
-    loadConfig.mockReturnValue({
-      commands: { native: true, allowFrom: { telegram: ["99"] } },
-      messages: { inbound: { byChannel: { telegram: 3000 } } },
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          groups: { "*": { requireMention: false } },
-        },
-      },
-    });
+    configureNativeGroupStop(["99"]);
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     replySpy.mockResolvedValue(undefined);
     let sourceWork: Promise<unknown> | undefined;
@@ -785,16 +764,7 @@ describe("createTelegramBot", () => {
     installTelegramTopicStateForTest();
     const chatId = nextForumCacheChatId();
     const chat = { id: chatId, type: "supergroup", title: "OpenClaw Ops", is_forum: true };
-    loadConfig.mockReturnValue({
-      commands: { native: true, allowFrom: { telegram: ["42"] } },
-      messages: { inbound: { byChannel: { telegram: 3000 } } },
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          groups: { "*": { requireMention: false } },
-        },
-      },
-    });
+    configureNativeGroupStop();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     replySpy.mockResolvedValue(undefined);
     const sourceWork: Promise<unknown>[] = [];
@@ -1017,11 +987,7 @@ describe("createTelegramBot", () => {
       message_thread_id: 42,
       is_topic_message: true,
     };
-    loadConfig.mockReturnValue({
-      commands: { native: true, allowFrom: { telegram: ["42"] } },
-      messages: { inbound: { byChannel: { telegram: 3000 } } },
-      channels: { telegram: { groupPolicy: "open", groups: { "*": { requireMention: false } } } },
-    });
+    configureNativeGroupStop();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     replySpy.mockResolvedValue(undefined);
     const preparationStarted = createDeferred<void>();
@@ -1160,7 +1126,7 @@ describe("createTelegramBot", () => {
         { kind: "completed" },
       ]);
       expect(commitSpy).toHaveBeenCalledTimes(2);
-      queuedLifecycle?.onSettled?.();
+      await queuedLifecycle?.onSettled?.();
     } finally {
       commitSpy.mockRestore();
       setTimeoutSpy.mockRestore();
@@ -1195,7 +1161,7 @@ describe("createTelegramBot", () => {
           throw queuedAbortSignal.reason;
         }
         modelTurnRan = true;
-        queuedLifecycle?.onSettled?.();
+        await queuedLifecycle?.onSettled?.();
       };
       queuedTurnReady.resolve();
       return undefined;
@@ -1842,7 +1808,7 @@ describe("createTelegramBot", () => {
 
   it("lets an owner start Codex login from a pairing-policy DM callback", async () => {
     const runModelsAuthLoginFlow = vi
-      .spyOn(defaultTelegramNativeCommandDeps, "runModelsAuthLoginFlow")
+      .fn<typeof providerAuth.runModelsAuthLoginFlow>()
       .mockImplementation(async (params) => {
         await params.prompter.deviceCode?.({
           title: "OpenAI Codex device code",
@@ -1856,6 +1822,12 @@ describe("createTelegramBot", () => {
           profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
         };
       });
+    const runProviderChannelLoginFlow = providerAuth.runProviderChannelLoginFlow;
+    const providerLogin = vi
+      .spyOn(providerAuth, "runProviderChannelLoginFlow")
+      .mockImplementation((params) =>
+        runProviderChannelLoginFlow({ ...params, runLoginFlow: runModelsAuthLoginFlow }),
+      );
     loadConfig.mockReturnValue({
       messages: { inbound: { debounceMs: 0 } },
       commands: { native: true, ownerAllowFrom: ["9"] },
@@ -1885,7 +1857,7 @@ describe("createTelegramBot", () => {
         expect.objectContaining({ parse_mode: "HTML" }),
       );
     } finally {
-      runModelsAuthLoginFlow.mockRestore();
+      providerLogin.mockRestore();
     }
   });
 
@@ -2232,7 +2204,7 @@ describe("createTelegramBot", () => {
     });
     const queuedLifecycle = await queuedLifecycleReady.promise;
     expect(queuedLifecycle?.onAbandoned).toEqual(expect.any(Function));
-    queuedLifecycle?.onAbandoned?.();
+    await queuedLifecycle?.onAbandoned?.();
     const firstReplay = await firstReplayPromise;
     const firstDeferredWork = requireValue(firstReplay.deferredWork, "first deferred spooled work");
     await expect(firstDeferredWork.task).resolves.toMatchObject({ kind: "failed-retryable" });
@@ -2670,7 +2642,10 @@ describe("createTelegramBot", () => {
     const runMiddlewareChain = (ctx: Record<string, unknown>) =>
       runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
-    const resolvePluginBindingApprovalSpy = vi.mocked(resolvePluginConversationBindingApproval);
+    const resolvePluginBindingApprovalSpy = vi.spyOn(
+      conversationRuntime,
+      "resolvePluginConversationBindingApproval",
+    );
     resolvePluginBindingApprovalSpy.mockRejectedValueOnce(new Error("binding boom"));
 
     const ctx = makeCallbackRetryContext({

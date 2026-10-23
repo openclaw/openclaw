@@ -21,11 +21,7 @@ import {
   loadVitestPerformanceConfig,
 } from "../test/vitest/vitest.performance-config.ts";
 import { createRedactingReporterPlugin } from "../test/vitest/vitest.reporters.ts";
-import {
-  jsdomOptimizedDeps,
-  nonIsolatedRunnerPath,
-  sharedVitestConfig,
-} from "../test/vitest/vitest.shared.config.ts";
+import { nonIsolatedRunnerPath, sharedVitestConfig } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
   resolveUiTypeScriptPath,
@@ -76,7 +72,7 @@ const sharedUiTestConfig = {
   testTimeout: 60_000,
   hookTimeout: 60_000,
 } as const;
-const nodeSetupFiles = ["./src/test-helpers/lit-warnings.setup.ts"];
+const nodeSetupFiles = ["./src/test-helpers/dom.setup.ts"];
 const nodeDrivenBrowserLayoutTests = relativizeScopedPatterns(uiNodeDrivenBrowserTestFiles, "ui");
 const timingTests = relativizeScopedPatterns(uiTimingTestFiles, "ui");
 const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length));
@@ -92,23 +88,25 @@ let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | nul
 // The accessibility-tree suite remains Chromium-only until its CDP probe is replaced.
 const webkitTestFiles = [
   "src/components/select-picker.behavior.browser.test.ts",
+  "src/components/select-picker.browser.test.tsx",
   "src/components/multi-select.browser.test.ts",
   "src/components/model-picker.browser.test.ts",
   "src/components/decision-model-picker.browser.test.tsx",
   "src/components/agent-select-opening.browser.test.ts",
   "src/components/app-sidebar-agent-menu-scroll.browser.test.ts",
+  "src/components/app-sidebar-rail-menus.browser.test.ts",
   "src/components/agent-emoji-picker.browser.test.ts",
   "src/components/appearance-picker.browser.test.ts",
   "src/components/confirm-dialog.browser.test.ts",
+  "src/pages/channels/view.detail.browser.test.tsx",
+  "src/pages/plugins/settings-lifecycle.browser.test.tsx",
+  "src/pages/new-session/project-chip.registration.browser.test.tsx",
+  "src/pages/agents/agent-file-preview.browser.test.ts",
+  "src/pages/skills/reader-shell.browser.test.tsx",
   "src/lib/toast.browser.test.ts",
   "src/components/session-menu.browser.test.ts",
-  "src/components/web-awesome-dropdown.browser.test.ts",
-  "src/components/web-awesome-dropdown-owner.browser.test.ts",
-  "src/components/web-awesome-select-controls.browser.test.ts",
-  "src/components/web-awesome-select.browser.test.ts",
-  "src/components/web-awesome.test.ts",
-  "src/components/web-awesome-theme.browser.test.ts",
-  "src/components/menu-surface.browser.test.ts",
+  "src/components/control-theme.browser.test.tsx",
+  "src/components/menu-surface.browser.test.tsx",
   "src/components/session-progress-hovercard.browser.test.ts",
   "src/components/modal-dialog.test.ts",
   "src/components/tooltip.test.ts",
@@ -117,21 +115,24 @@ const webkitTestFiles = [
   "src/components/panel-tab-strip.browser.test.ts",
   "src/components/hub-tabs.browser.test.tsx",
   "src/components/tooltip-title.browser.test.ts",
+  "src/pages/chat/chat-composer-mobile.browser.test.tsx",
   "src/pages/chat/chat-composer-context.browser.test.ts",
   "src/pages/chat/chat-composer-context.palette.browser.test.ts",
   "src/pages/chat/chat-composer-overflow.browser.test.tsx",
+  "src/pages/chat/chat-composer-queue.browser.test.tsx",
   "src/pages/chat/chat-queue-images.browser.test.ts",
   "src/pages/chat/components/chat-effort-picker.browser.test.tsx",
   "src/pages/chat/components/chat-details.browser.test.ts",
   "src/pages/chat/components/chat-message-reactions.browser.test.tsx",
   "src/pages/chat/components/chat-model-picker.browser.test.tsx",
-  "src/pages/chat/components/chat-pane-header.browser.test.ts",
+  "src/pages/chat/components/chat-pane-header.browser.test.tsx",
   "src/pages/chat/components/chat-pane-versions-menu.browser.test.ts",
   "src/components/overlay-anchor.browser.test.ts",
   "src/components/overlay-lifecycle.browser.test.ts",
   "src/components/overlay-shadow.browser.test.ts",
   "src/components/solid/*.browser.test.tsx",
   "src/components/image-lightbox.browser.test.ts",
+  "src/components/markdown-mermaid-expansion.browser.test.ts",
   "src/components/modal-dialog.browser.test.ts",
   "src/components/sessions-hub-header.browser.test.ts",
   "src/components/transient-container.browser.test.ts",
@@ -184,32 +185,12 @@ export function createUiBrowserVitestConfig(
     ],
     optimizeDeps: {
       include: [
-        // These controls share wa-popup's eager registration. Optimize them together
-        // so later test imports cannot re-register a rebuilt common chunk.
-        // Sidebar fixtures also load lazy dialogs, tabs, and narration. Prepare their
-        // dependency graph before tests rather than reloading the active Lit registry.
-        "@awesome.me/webawesome/dist/components/dialog/dialog.js",
-        "@awesome.me/webawesome/dist/components/tab-group/tab-group.js",
-        "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js",
-        "@awesome.me/webawesome/dist/components/tab/tab.js",
-        "@awesome.me/webawesome/dist/components/dropdown/dropdown.js",
-        "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js",
-        "@awesome.me/webawesome/dist/components/option/option.js",
-        "@awesome.me/webawesome/dist/components/popover/popover.js",
-        "@awesome.me/webawesome/dist/components/popup/popup.js",
-        "@awesome.me/webawesome/dist/components/radio-group/radio-group.js",
-        "@awesome.me/webawesome/dist/components/radio/radio.js",
-        "@awesome.me/webawesome/dist/components/select/select.js",
-        "@awesome.me/webawesome/dist/components/switch/switch.js",
-        "@awesome.me/webawesome/dist/components/tooltip/tooltip.js",
         "@codemirror/commands",
         "@codemirror/language",
         "@codemirror/language-data",
         "@codemirror/state",
         "@codemirror/view",
         "@lezer/highlight",
-        "@lit/context",
-        "@lit/task",
         "@noble/ed25519",
         "@noble/hashes/sha2.js",
         "@noble/hashes/utils.js",
@@ -219,11 +200,11 @@ export function createUiBrowserVitestConfig(
         "@panzoom/panzoom",
         "@solidjs/signals",
         "@solidjs/testing-library",
-        "@tanstack/lit-virtual",
         "@tanstack/virtual-core",
         "@zag-js/menu",
         "@zag-js/rect-utils",
         "@zag-js/vanilla",
+        "croner",
         "dompurify",
         "file-type",
         "highlight.js/lib/core",
@@ -231,22 +212,6 @@ export function createUiBrowserVitestConfig(
         "ipaddr.js",
         "json5",
         "jsonc-parser",
-        "lit",
-        "lit/decorators.js",
-        "lit/async-directive.js",
-        "lit/directive.js",
-        "lit/directive-helpers.js",
-        "lit/directives/guard.js",
-        "lit/directives/if-defined.js",
-        "lit/directives/keyed.js",
-        "lit/directives/live.js",
-        "lit/directives/ref.js",
-        "lit/directives/repeat.js",
-        "lit/directives/style-map.js",
-        "lit/directives/unsafe-html.js",
-        "lit/directives/unsafe-svg.js",
-        "lit/directives/until.js",
-        "lit/static-html.js",
         "markdown-it",
         "markdown-it-cjk-friendly",
         "markdown-it-emoji/lib/data/full.mjs",
@@ -274,7 +239,7 @@ export function createUiBrowserVitestConfig(
       // cannot load in browser mode. Browser files own their own teardown.
       include,
       exclude: [...nodeDrivenBrowserLayoutTests],
-      setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
+      setupFiles: ["./src/test-helpers/dom.setup.ts"],
       browser: {
         enabled: true,
         provider,
@@ -354,7 +319,6 @@ export default defineConfig({
         },
         test: {
           ...sharedUiTestConfig,
-          deps: jsdomOptimizedDeps,
           name: "unit",
           // isolate:false shares one worker module graph and jsdom window across
           // files, so the first file to evaluate a component owns it for the rest
@@ -394,7 +358,6 @@ export default defineConfig({
           // Reuse the canonical singleton-sensitive list so the package and
           // root runners isolate the same tests without slowing the main suite.
           isolate: true,
-          deps: jsdomOptimizedDeps,
           name: "unit-mock-registry",
           include: includeUiTests([...mockRegistryUnitTests]),
           environment: "jsdom",
@@ -413,9 +376,8 @@ export default defineConfig({
         },
         test: {
           ...sharedUiTestConfig,
-          deps: jsdomOptimizedDeps,
           name: "unit-node",
-          exclude: timingTests,
+          exclude: [...timingTests, ...mockRegistryUnitTests],
           // No cleanup runner: this project also carries the Playwright-driven
           // layout tests, whose browser lives in module scope. Resetting the
           // module graph between files churns that browser and flakes them.
@@ -442,7 +404,6 @@ export default defineConfig({
         resolve: { alias: workspaceSourceAliases },
         test: {
           ...sharedUiTestConfig,
-          deps: jsdomOptimizedDeps,
           name: "unit-timing",
           isolate: true,
           // Finish other UI tests before measuring full-render wall time.

@@ -12,6 +12,7 @@ const SCHEDULE_KIND_FILTER_LABELS: Record<CronJobsScheduleKindFilter, string> = 
   at: "cron.form.at",
   every: "cron.form.every",
   cron: "cron.form.cronOption",
+  event: "cron.events.label",
   "on-exit": "cron.form.repeatOnExit",
   stream: "cron.form.repeatStream",
 };
@@ -32,7 +33,7 @@ function JobsFilter(
         data-test-id={props.testId}
         value={props.value}
         onChange={(event) =>
-          void props.onJobsFiltersChange({
+          props.onJobsFiltersChange({
             [props.field]: event.currentTarget.value,
           })
         }
@@ -144,7 +145,7 @@ export function JobsFilterPopover(
             class="btn btn--sm"
             data-test-id="cron-jobs-filters-reset"
             disabled={!props.active}
-            onClick={() => void props.onJobsFiltersReset()}
+            onClick={() => props.onJobsFiltersReset()}
           >
             {t("cron.jobs.reset")}
           </button>

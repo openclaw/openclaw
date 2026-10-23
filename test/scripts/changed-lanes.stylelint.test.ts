@@ -19,9 +19,8 @@ describe("changed Stylelint targets", () => {
     ].flatMap(({ state, deleteTypeScript }) =>
       ["ts", "tsx"].map((extension) => ({ state, deleteTypeScript, extension })),
     ),
-  )("includes existing styles when the UI test is $state", ({ deleteTypeScript, extension }) => {
+  )("targets CSS with a $state .$extension UI test", ({ deleteTypeScript, extension }) => {
     const typescriptPath = `ui/src/e2e/composer-fixture.e2e.test.${extension}`;
-    const expectedTargets = [...(deleteTypeScript ? [] : [typescriptPath]), ...cssPaths];
     const cwd = tempDirs.make("openclaw-changed-stylelint-");
     for (const file of [typescriptPath, ...cssPaths]) {
       const target = path.join(cwd, file);
@@ -48,7 +47,7 @@ describe("changed Stylelint targets", () => {
     expect(
       result.stderr.split(/\r?\n/u).filter((line) => line.includes("scripts/run-stylelint.mts")),
     ).toEqual([
-      `[check:changed:dry-run] would run: node --import tsx scripts/run-stylelint.mts ${expectedTargets.join(" ")}`,
+      `[check:changed:dry-run] would run: node --import tsx scripts/run-stylelint.mts ${cssPaths.join(" ")}`,
     ]);
   });
 });

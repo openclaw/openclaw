@@ -30,6 +30,7 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
     endedAt: undefined,
     runtimeMs: undefined,
     lastRunError: undefined,
+    suppressErrorNotice: undefined,
     abortedLastRun: undefined,
   };
 }

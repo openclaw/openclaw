@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
@@ -28,6 +29,7 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
     using _ = vi.spyOn(Date, "now").mockReturnValue(now);
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = rolePolicyConfig();
+      cfg.agents = { defaults: { model: { primary: "openai/gpt-5.4" } } };
       cfg.gateway!.roles!.definitions.admin = {
         sessions: { others: "write" },
         agents: "*",
@@ -142,25 +144,43 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
               read.state.rowContext,
             );
             const presentations = vi.spyOn(projection, "present");
+            const runViews = vi.spyOn(read.state.rowContext.subagentRuns, "atTime");
             const message = {
               role: "assistant",
-              content: [{ type: "text", text: '"🦞"\n\\\ud800'.repeat(256) }],
+              content: [{ type: "text", text: '"🦞"\n\\\ud800' }],
             };
-            connection.broadcast(
-              "session.message",
-              {
-                sessionKey: query.key,
-                agentId: query.agentId,
-                message,
-                session: { key: query.key, sessionId: "publication-session" },
-              },
-              {
-                prepareSessionProjection: prepareSessionEventProjection(projection, read, {
-                  ancestors: projection.ancestorRows(record, read),
-                  encodeMessage: true,
-                }),
-              },
-            );
+            const stringify = JSON.stringify;
+            let envelopes = 0;
+            const serialization = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
+              const value: unknown = args[0];
+              if (
+                isRecord(value) &&
+                isRecord(value.payload) &&
+                value.payload.sessionKey === query.key
+              ) {
+                envelopes++;
+              }
+              return stringify(...args);
+            });
+            const publish = () =>
+              connection.broadcast(
+                "session.message",
+                {
+                  sessionKey: query.key,
+                  agentId: query.agentId,
+                  message,
+                  session: { key: query.key, sessionId: "publication-session" },
+                },
+                {
+                  prepareSessionProjection: prepareSessionEventProjection(projection, read, {
+                    ancestors: projection.ancestorRows(record, read),
+                    encodeMessage: true,
+                  }),
+                },
+              );
+            publish();
+            serialization.mockRestore();
+            expect(envelopes).toBe(restriction === "child and swarm links" ? 2 : 1);
             for (const [index, { send }] of peers.entries()) {
               const visible = index % 2 === 0 || restriction === "child and swarm links";
               expect(send).toHaveBeenCalledTimes(visible ? 1 : 0);
@@ -204,7 +224,32 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
             expect(presentations).toHaveBeenCalledTimes(
               restriction === "child and swarm links" ? 2 : 1,
             );
+            expect(runViews).toHaveBeenCalledTimes(restriction === "child and swarm links" ? 2 : 1);
+            runViews.mockRestore();
             presentations.mockRestore();
+            const capture = (phase: string) => {
+              // Profile IDs are generated at admission; all other wire bytes are the golden contract.
+              expect(
+                peers.map(({ send }) =>
+                  send.mock.lastCall
+                    ? String(send.mock.lastCall[0])
+                        .replaceAll(allowed!.id, "allowed-profile")
+                        .replaceAll(restricted!.id, "restricted-profile")
+                    : null,
+                ),
+              ).toMatchSnapshot(`${restriction}: ${phase}`);
+            };
+            capture("legacy");
+            for (const caps of [
+              ["session-row-deltas"],
+              ["session-row-deltas", "session-event-field-refs"],
+            ]) {
+              for (const { client } of peers) {
+                client.connect.caps = caps;
+              }
+              publish();
+              capture(caps.join(" + "));
+            }
           },
         );
       } finally {

@@ -12,6 +12,7 @@ import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
 import { inferKind } from "./oc-path/dispatch.js";
+import { OcPathEditError } from "./oc-path/edit-error.js";
 import { findOcPaths } from "./oc-path/find.js";
 import { MAX_JSONC_INPUT_BYTES, parseJsonc } from "./oc-path/jsonc/parse.js";
 import { parseJsonl } from "./oc-path/jsonl/parse.js";
@@ -66,7 +67,9 @@ function emit(mode: OutputMode, value: unknown, humanFallback: () => string): vo
 function emitError(mode: OutputMode, message: string, code = "ERR"): void {
   const scrubbed = scrubSentinel(message);
   if (mode === "json") {
-    process.stderr.write(`${JSON.stringify({ error: { code, message: scrubbed } })}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ ok: false, error: { type: "cli_error", code, message: scrubbed } })}\n`,
+    );
     return;
   }
   process.stderr.write(`${code}: ${scrubbed}\n`);
@@ -140,23 +143,24 @@ async function loadOcPathFile(
   }
   if (kind === "jsonc") {
     const result = parseJsonc(raw);
-    const sizeDiagnostic = result.diagnostics.find(
-      (diagnostic) => diagnostic.code === "OC_JSONC_INPUT_TOO_LARGE",
-    );
-    if (sizeDiagnostic) {
-      emitError(mode, sizeDiagnostic.message, sizeDiagnostic.code);
+    if (result.oversizedInputBytes !== undefined) {
+      emitError(
+        mode,
+        `input exceeds MAX_JSONC_INPUT_BYTES (${MAX_JSONC_INPUT_BYTES} bytes; got ${result.oversizedInputBytes})`,
+        "OC_JSONC_INPUT_TOO_LARGE",
+      );
       process.exitCode = 2;
       return null;
     }
-    return result.ast;
+    return result;
   }
   if (kind === "jsonl") {
-    return parseJsonl(raw).ast;
+    return parseJsonl(raw);
   }
   if (kind === "yaml") {
-    return parseYaml(raw).ast;
+    return parseYaml(raw);
   }
-  return parseMd(raw).ast;
+  return parseMd(raw);
 }
 
 function resolveFsPath(path: OcPath, options: PathCommandOptions): string {
@@ -275,10 +279,20 @@ async function pathSetCommand(
     return;
   }
 
-  let result: ReturnType<typeof setOcPath>;
+  let updated: OcAst;
   try {
-    result = setOcPath(ast, ocPath, value, { valueJson: options.valueJson === true });
+    updated = setOcPath(ast, ocPath, value, { valueJson: options.valueJson === true });
   } catch (err) {
+    if (err instanceof OcPathEditError) {
+      const detail = err.detail;
+      emit(
+        mode,
+        { ok: false, reason: err.reason, detail },
+        () => `set failed: ${err.reason}${detail !== undefined ? ` — ${detail}` : ""}`,
+      );
+      process.exitCode = 1;
+      return;
+    }
     // Keep sentinel errors inside the scrubbed --json error boundary.
     if (err instanceof OcEmitSentinelError) {
       emitError(mode, `set refused: ${err.message}`, "OC_EMIT_SENTINEL");
@@ -287,18 +301,8 @@ async function pathSetCommand(
     }
     throw err;
   }
-  if (!result.ok) {
-    const detail = result.detail;
-    emit(
-      mode,
-      { ok: false, reason: result.reason, detail },
-      () => `set failed: ${result.reason}${detail !== undefined ? ` — ${detail}` : ""}`,
-    );
-    process.exitCode = 1;
-    return;
-  }
   // Setters guard edits and publish the rebuilt bytes; round-trip emission reads them verbatim.
-  const newBytes = result.ast.raw;
+  const newBytes = updated.raw;
   const byteLength = Buffer.byteLength(newBytes, "utf8");
 
   if (options.dryRun === true) {

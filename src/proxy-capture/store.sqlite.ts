@@ -267,7 +267,7 @@ class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
   }
 }
 
-/** @deprecated Use AsyncDebugProxyCaptureStore for worker-backed shared-state access. */
+/** @deprecated Use AsyncDebugProxyCaptureStore for worker-backed shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export type DebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
   persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord;
 };
@@ -287,7 +287,7 @@ type DebugProxyCaptureStoreConstructor = {
 
 // The runtime implementation branches on constructor arguments; expose the
 // corresponding result type so both shipped constructor contracts stay exact.
-/** @deprecated Acquire shared-state storage with acquireDebugProxyCaptureStoreAsync. */
+/** @deprecated Acquire shared-state storage with acquireDebugProxyCaptureStoreAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export const DebugProxyCaptureStore =
   DebugProxyCaptureStoreImpl as unknown as DebugProxyCaptureStoreConstructor;
 
@@ -325,12 +325,12 @@ function getDebugProxyCaptureStoreImpl(
   return store;
 }
 
-/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function getDebugProxyCaptureStore(
   dbPath: string,
   blobDir: string,
 ): LegacyDebugProxyCaptureStore;
-/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function getDebugProxyCaptureStore(
   options?: DebugProxyCaptureStoreOptions,
 ): SharedDebugProxyCaptureStore;
@@ -346,7 +346,7 @@ export function getDebugProxyCaptureStore(
   return getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
 }
 
-/** @deprecated Await each async capture lease's release instead. */
+/** @deprecated Await each async capture lease's release instead. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function closeDebugProxyCaptureStore(): void {
   warnPluginSdkDeprecation({
     family: "proxy-capture-store",
@@ -372,7 +372,7 @@ export function closeDebugProxyCaptureStore(): void {
 
 // Lease API keeps one cached capture-store wrapper alive across related
 // operations, then releases it without closing the shared state database.
-/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function acquireDebugProxyCaptureStore(
   dbPath: string,
   blobDir: string,
@@ -380,7 +380,7 @@ export function acquireDebugProxyCaptureStore(
   store: LegacyDebugProxyCaptureStore;
   release: () => void;
 };
-/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function acquireDebugProxyCaptureStore(options?: DebugProxyCaptureStoreOptions): {
   store: SharedDebugProxyCaptureStore;
   release: () => void;

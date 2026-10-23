@@ -16,12 +16,11 @@ export const GATEWAY_DAEMON_RUNTIME_OPTIONS: Array<{
   },
   {
     value: "bun",
-    label: "Bun 1.4+",
-    hint: "Requires Bun 1.4 or newer with WAL-reset-safe node:sqlite.",
+    label: "Bun 1.4.3+",
+    hint: "Requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite.",
   },
 ];
 
-/** Narrow arbitrary input to a supported Gateway daemon runtime id. */
 export function isGatewayDaemonRuntime(value: string | undefined): value is GatewayDaemonRuntime {
   return value === "bun" || value === "node";
 }

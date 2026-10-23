@@ -25,7 +25,8 @@ export type MutableSession = {
     reset: () => void;
     state: {
       messages: unknown[];
-      systemPrompt?: string;
+      systemPrompt: string;
+      tools: Agent["state"]["tools"];
     };
   };
   prompt: (
@@ -98,15 +99,14 @@ export async function runPreparedTestPrompt(
     }
   };
   assertCurrent();
-  let running: Promise<PromiseSettledResult<void>> | undefined;
+  let running: Promise<void> | undefined;
   const start = (commit?: () => void) => {
     assertCurrent();
     commit?.();
     assertCurrent();
-    running = run().then(
-      (value) => ({ status: "fulfilled", value }),
-      (reason: unknown) => ({ status: "rejected", reason }),
-    );
+    running = run();
+    // Observe rejection while admission settles; await the original promise below.
+    void running.catch(() => {});
   };
   try {
     if (admit) {
@@ -115,14 +115,11 @@ export async function runPreparedTestPrompt(
       start();
     }
   } catch (error) {
-    await running;
+    await running?.catch(() => {});
     throw error;
   }
   if (!running) {
     throw new Error("Session prompt admission did not start the agent loop.");
   }
-  const result = await running;
-  if (result.status === "rejected") {
-    throw result.reason;
-  }
+  await running;
 }

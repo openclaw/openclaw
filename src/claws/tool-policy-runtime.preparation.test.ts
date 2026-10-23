@@ -35,22 +35,31 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("defers late-registered consent reads until awaited config preparation", async () => {
-  vi.stubEnv("OPENCLAW_STATE_DIR", "/claw-consent-late-registration");
-  const tools = { profile: "full" as const, allow: ["read"] };
-  const config = { agents: { entries: { worker: { tools } } } };
-  const candidate = collectClawToolPolicyCandidates(config)[0]!;
-  setRuntimeConfigSnapshot(config);
-
+async function consentFixture(stateDir: string, lateRegistration = false) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const params = {
+    agentId: "worker",
+    agentTools: { profile: "full" as const, allow: ["read"] },
+    hasAgentAllowlist: true,
+    ownsProfile: true,
+    profile: "full",
+  };
+  const config = { agents: { entries: { worker: { tools: params.agentTools } } } };
+  if (lateRegistration) {
+    setRuntimeConfigSnapshot(config);
+  }
   const { resolveClawToolPolicyConsent } = await import("./tool-policy-runtime.js");
-  const resolve = () =>
-    resolveClawToolPolicyConsent({
-      agentId: "worker",
-      agentTools: tools,
-      hasAgentAllowlist: true,
-      ownsProfile: true,
-      profile: "full",
-    });
+  return { config, resolve: () => resolveClawToolPolicyConsent(params) };
+}
+const installRow = (schemaVersion: string, agentConfigDigest: string) => ({
+  agentId: "worker",
+  schemaVersion,
+  agentConfigDigest,
+});
+
+it("defers late-registered consent reads until awaited config preparation", async () => {
+  const { config, resolve } = await consentFixture("/claw-consent-late-registration", true);
+  const candidate = collectClawToolPolicyCandidates(config)[0]!;
   expect(worker.mainRead).not.toHaveBeenCalled();
   expect(worker.read).not.toHaveBeenCalled();
   expect(resolve).toThrow("Cannot verify the installed tool authority");
@@ -60,15 +69,19 @@ it("defers late-registered consent reads until awaited config preparation", asyn
   const preparing = setAppliedRuntimeConfigSnapshot(config, config);
   expect(worker.read).toHaveBeenCalledOnce();
   expect(resolve).toThrow("Cannot verify the installed tool authority");
-  rows.resolve([
-    {
-      agentId: "worker",
-      schemaVersion: CLAW_INSTALL_RECORD_SCHEMA_VERSION,
-      agentConfigDigest: candidate.agentConfigDigest,
-    },
-  ]);
+  rows.resolve([installRow(CLAW_INSTALL_RECORD_SCHEMA_VERSION, candidate.agentConfigDigest)]);
   await preparing;
 
   expect(resolve()).toEqual({ frozen: true });
+  expect(worker.mainRead).not.toHaveBeenCalled();
+});
+
+it("keeps legacy installed-Claw tool authority fail-closed without an update command", async () => {
+  const { config, resolve } = await consentFixture("/claw-consent-legacy");
+  worker.read.mockResolvedValueOnce([installRow("openclaw.clawInstallRecord.v1", "old-grant")]);
+
+  await setAppliedRuntimeConfigSnapshot(config, config);
+
+  expect(resolve).toThrow("Add the Claw again to create an ordinary agent");
   expect(worker.mainRead).not.toHaveBeenCalled();
 });

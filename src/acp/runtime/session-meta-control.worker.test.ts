@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { renameSync } from "node:fs";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -14,10 +15,7 @@ import {
 import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { storageProcessTestEntrypoints } from "../../infra/storage-process-runtime.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -25,46 +23,43 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareAcpSessionControlRead } from "./session-meta-control.js";
 import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support.js";
 import { buildAcpDatabaseSessionKey, selectAcpSessionRow } from "./session-meta-keys.js";
+import { createAcpMeta, interceptAcpCommit } from "./session-meta-lifecycle.test-support.js";
 import { readAcpSessionControlInWorker } from "./session-meta-source.worker.js";
 import { upsertAcpSessionMeta, upsertAcpSessionMetaForControl } from "./session-meta-write.js";
 
-const meta: SessionAcpMeta = {
-  backend: "fixture",
-  agent: "fixture",
-  runtimeSessionName: "fixture-runtime",
-  mode: "persistent",
-  state: "idle",
-  lastActivityAt: 100,
+const meta = createAcpMeta({ agent: "fixture", runtimeSessionName: "fixture-runtime" });
+const controlEntry = {
+  sessionId: "same-id",
+  lifecycleRevision: "original",
+  updatedAt: 100,
+  spawnedBy: "agent:main:parent",
 };
+const controlConfig: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-});
+async function seedControl(sessionId = controlEntry.sessionId, skipMaintenance = false) {
+  const cfg = controlConfig;
+  setRuntimeConfigSnapshot(cfg);
+  const scope = {
+    cfg,
+    sessionKey: "agent:main:acp:control",
+    agentId: "main",
+    ...(skipMaintenance ? { skipMaintenance: true } : {}),
+  };
+  await replaceSessionEntry(scope, { ...controlEntry, sessionId });
+  await upsertAcpSessionMeta({ ...scope, mutate: () => meta, skipMaintenance: true });
+  return scope;
+}
 
-it("rechecks same-binding metadata updates and clear through fresh joins without host data SQL", async () => {
-  await withOpenClawTestState({ label: "acp-control-fresh" }, async () => {
-    const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const scope = {
-      cfg,
-      sessionKey: "agent:main:acp:control",
-      agentId: "main",
-      skipMaintenance: true,
-    };
-    await replaceSessionEntry(scope, {
-      sessionId: "session",
-      lifecycleRevision: "original",
-      updatedAt: 100,
-      spawnedBy: "agent:main:parent",
-    });
-    await upsertAcpSessionMeta({ ...scope, mutate: () => meta });
+afterEach(() => vi.restoreAllMocks());
+
+it("rechecks same-binding metadata updates and clear through fresh joins without host data SQL", () =>
+  withOpenClawTestState({ label: "acp-control-fresh" }, async () => {
+    const scope = await seedControl("session", true);
+    const { cfg } = scope;
     const observe = observeHostDataSql();
     let prepared: Awaited<ReturnType<typeof prepareAcpSessionControlRead>> | undefined;
     try {
@@ -88,24 +83,14 @@ it("rechecks same-binding metadata updates and clear through fresh joins without
       prepared?.release();
       observe.restore();
     }
-  });
-});
+  }));
 
 it.each(["owner", "lifecycle", "shared-source"] as const)(
   "refuses retained control after same-ID %s replacement",
-  async (replacement) => {
-    await withOpenClawTestState({ label: "acp-control-replacement" }, async (state) => {
-      const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
-      setRuntimeConfigSnapshot(cfg);
-      const scope = { cfg, sessionKey: "agent:main:acp:control", agentId: "main" };
-      const entry = {
-        sessionId: "same-id",
-        lifecycleRevision: "original",
-        updatedAt: 100,
-        spawnedBy: "agent:main:parent",
-      };
-      await replaceSessionEntry(scope, entry);
-      await upsertAcpSessionMeta({ ...scope, mutate: () => meta, skipMaintenance: true });
+  (replacement) =>
+    withOpenClawTestState({ label: "acp-control-replacement" }, async (state) => {
+      const scope = await seedControl();
+      const { cfg } = scope;
       const prepared = await prepareAcpSessionControlRead(scope);
       try {
         if (replacement === "shared-source") {
@@ -114,12 +99,12 @@ it.each(["owner", "lifecycle", "shared-source"] as const)(
           renameSync(databasePath, `${databasePath}.retired`);
           seedCanonicalAcpSessionMeta({
             sessionKey: buildAcpDatabaseSessionKey(scope.sessionKey, scope.agentId),
-            lifecycleRevision: entry.lifecycleRevision,
+            lifecycleRevision: controlEntry.lifecycleRevision,
             meta,
           });
         } else {
           await replaceSessionEntry(scope, {
-            ...entry,
+            ...controlEntry,
             ...(replacement === "owner"
               ? { spawnedBy: "agent:main:successor" }
               : { lifecycleRevision: "successor" }),
@@ -129,12 +114,11 @@ it.each(["owner", "lifecycle", "shared-source"] as const)(
       } finally {
         prepared.release();
       }
-    });
-  },
+    }),
 );
 
-it("keeps the physical shared-store owner and validates canonical ACP aliases in the worker kernel", async () => {
-  await withOpenClawTestState({ label: "acp-control-shared-owner" }, async (state) => {
+it("keeps the physical shared-store owner and validates canonical ACP aliases in the worker kernel", () =>
+  withOpenClawTestState({ label: "acp-control-shared-owner" }, async (state) => {
     const storePath = state.statePath("shared.sqlite");
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
@@ -144,12 +128,8 @@ it("keeps the physical shared-store owner and validates canonical ACP aliases in
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     const sessionKey = "agent:worker:acp:control";
     const scope = { cfg, storePath, sessionKey, agentId: "worker" };
-    await replaceSessionEntry(scope, {
-      sessionId: "worker-session",
-      lifecycleRevision: "original",
-      updatedAt: 100,
-      spawnedBy: "agent:main:parent",
-    });
+    const workerEntry = { ...controlEntry, sessionId: "worker-session" };
+    await replaceSessionEntry(scope, workerEntry);
     seedCanonicalAcpSessionMeta({
       sessionKey: "agent:WORKER:acp:CONTROL",
       lifecycleRevision: "original",
@@ -158,15 +138,16 @@ it("keeps the physical shared-store owner and validates canonical ACP aliases in
     const prepared = await prepareAcpSessionControlRead(scope);
     try {
       const current = await prepared.readCurrent(cfg);
-      expect(current.session.acp).toMatchObject({ state: "idle" });
+      expect(current).toMatchObject({
+        session: { acp: { state: "idle" } },
+        constraint: { source: { agentId: "main" }, agentId: "worker" },
+      });
       const constraint = current.constraint!;
-      expect(constraint.source.agentId).toBe("main");
-      expect(constraint.agentId).toBe("worker");
       const database = openOpenClawStateDatabase();
       const context = captureOpenClawStateWorkerContext();
-      const read = () =>
+      const read = (input = constraint) =>
         runWithSqliteWorkerStateContext(context, () =>
-          runOpenClawStateWriteTransaction((db) => readAcpSessionControlInWorker(db, constraint), {
+          runOpenClawStateWriteTransaction((db) => readAcpSessionControlInWorker(db, input), {
             database,
           }),
         );
@@ -179,19 +160,13 @@ it("keeps the physical shared-store owner and validates canonical ACP aliases in
         meta,
       });
       expect(
-        runWithSqliteWorkerStateContext(context, () =>
-          runOpenClawStateWriteTransaction(
-            (db) =>
-              readAcpSessionControlInWorker(db, {
-                ...constraint,
-                sessionKey: missingKey,
-                entry: undefined,
-                ownerKey: undefined,
-                read: { keys: [missingMetadataKey] },
-              }),
-            { database },
-          ),
-        ).row,
+        read({
+          ...constraint,
+          sessionKey: missingKey,
+          entry: undefined,
+          ownerKey: undefined,
+          read: { keys: [missingMetadataKey] },
+        }).row,
       ).toBeUndefined();
       seedCanonicalAcpSessionMeta({
         sessionKey: "agent:WORKER:acp:CONTROL",
@@ -199,23 +174,31 @@ it("keeps the physical shared-store owner and validates canonical ACP aliases in
         meta,
       });
       expect(read().row).toBeUndefined();
-      await replaceSessionEntry(scope, {
-        sessionId: "worker-session",
-        lifecycleRevision: "successor",
-        updatedAt: 100,
-        spawnedBy: "agent:main:parent",
-      });
-      expect(read).toThrow(/changed/);
+      await replaceSessionEntry(scope, { ...workerEntry, lifecycleRevision: "successor" });
+      expect(() => read()).toThrow(/changed/);
     } finally {
       prepared.release();
     }
-  });
-});
+  }));
 
-it.each(["clear", "rebind", "same-binding", "runtime-rebind"] as const)(
+const originalLifecycle = "original-lifecycle";
+it.each([
+  ["clear", undefined],
+  ["rebind", { session_id: "replacement-lifecycle", state: "running" }],
+  ["same-binding", { session_id: originalLifecycle, state: "idle", last_activity_at: 300 }],
+  [
+    "runtime-rebind",
+    {
+      session_id: originalLifecycle,
+      runtime_session_name: "replacement-runtime",
+      state: "running",
+      last_activity_at: 200,
+    },
+  ],
+] as const)(
   "rechecks global metadata at controlled commit after an independent %s write",
-  async (change) => {
-    await withOpenClawTestState({ label: `acp-control-commit-${change}` }, async (state) => {
+  (change, expected) =>
+    withOpenClawTestState({ label: `acp-control-commit-${change}` }, async (state) => {
       const storePath = state.statePath("shared-agent.sqlite");
       const cfg: OpenClawConfig = {
         agents: {
@@ -230,17 +213,12 @@ it.each(["clear", "rebind", "same-binding", "runtime-rebind"] as const)(
       const scope = { cfg, agentId: "main", sessionKey: "global", skipMaintenance: true };
       await replaceSessionEntry(
         { ...scope, storePath },
-        {
-          sessionId: "original-id",
-          lifecycleRevision: "original-lifecycle",
-          updatedAt: 100,
-          spawnedBy: "agent:main:parent",
-        },
+        { ...controlEntry, sessionId: "original-id", lifecycleRevision: originalLifecycle },
       );
       const aliasKey = buildAcpDatabaseSessionKey("global", "main");
       seedCanonicalAcpSessionMeta({
         sessionKey: aliasKey,
-        lifecycleRevision: "original-lifecycle",
+        lifecycleRevision: originalLifecycle,
         meta,
       });
       const prepared = await prepareAcpSessionControlRead(scope);
@@ -250,30 +228,15 @@ it.each(["clear", "rebind", "same-binding", "runtime-rebind"] as const)(
       };
       const reached = createDeferredCore();
       const release = createDeferredCore();
-      const original = stateWorker.runOpenClawStateWorkerOperation;
       let paused = false;
-      const intercepted = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation((context, operation, options) =>
-          original(
-            context,
-            (worker) =>
-              operation({
-                ...worker,
-                execute: new Proxy(worker.execute, {
-                  apply(execute, receiver, args: Parameters<typeof worker.execute>) {
-                    if (args[0].type === "acp.commitMutation" && !paused) {
-                      paused = true;
-                      reached.resolve();
-                      return release.promise.then(() => Reflect.apply(execute, receiver, args));
-                    }
-                    return Reflect.apply(execute, receiver, args);
-                  },
-                }),
-              }),
-            options,
-          ),
-        );
+      const intercepted = interceptAcpCommit(async (execute) => {
+        if (!paused) {
+          paused = true;
+          reached.resolve();
+          await release.promise;
+        }
+        return execute();
+      });
       const mutate = vi.fn((current: SessionAcpMeta | undefined) => {
         if (!current) {
           throw new Error("Expected a current ACP row at preparation");
@@ -281,47 +244,35 @@ it.each(["clear", "rebind", "same-binding", "runtime-rebind"] as const)(
         return { ...current, state: "idle" as const, lastActivityAt: 300 };
       });
       const observe = observeHostDataSql();
-      const pending = upsertAcpSessionMetaForControl({ ...scope, mutate }, constraint);
-      const outcome = pending.then(
+      const outcome = upsertAcpSessionMetaForControl({ ...scope, mutate }, constraint).then(
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error }),
       );
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           reached.promise,
-          outcome.then(() => {
-            throw new Error("Controlled update settled before its commit gate");
-          }),
-        ]);
+          outcome,
+          "Controlled update settled before its commit gate",
+        );
         const moduleUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.acpMetadataWriter);
+        const lifecycleRevision = change === "rebind" ? "replacement-lifecycle" : originalLifecycle;
+        const runtimeSessionName =
+          change === "runtime-rebind" ? "replacement-runtime" : meta.runtimeSessionName;
+        const replacementMeta: SessionAcpMeta = {
+          ...meta,
+          runtimeSessionName,
+          state: "running",
+          lastActivityAt: 200,
+        };
+        const rows = [{ sessionKey: aliasKey, lifecycleRevision, meta: replacementMeta }];
+        if (change === "rebind") {
+          rows.push({ sessionKey: "global", lifecycleRevision: originalLifecycle, meta });
+        }
         const input = {
           mutation:
             change === "clear"
               ? { kind: "upsert", scope, clear: true }
-              : {
-                  kind: "migration",
-                  rows: [
-                    {
-                      sessionKey: aliasKey,
-                      lifecycleRevision:
-                        change === "same-binding" || change === "runtime-rebind"
-                          ? "original-lifecycle"
-                          : "replacement-lifecycle",
-                      meta: {
-                        ...meta,
-                        runtimeSessionName:
-                          change === "runtime-rebind"
-                            ? "replacement-runtime"
-                            : meta.runtimeSessionName,
-                        state: "running",
-                        lastActivityAt: 200,
-                      },
-                    },
-                    ...(change === "rebind"
-                      ? [{ sessionKey: "global", lifecycleRevision: "original-lifecycle", meta }]
-                      : []),
-                  ],
-                },
+              : { kind: "migration", rows },
         } satisfies Parameters<
           typeof import("./session-meta-process.test-support.js").writeAcpMetadataFromProcess
         >[0];
@@ -366,24 +317,10 @@ it.each(["clear", "rebind", "same-binding", "runtime-rebind"] as const)(
       }
       const { db } = openOpenClawStateDatabase();
       const canonical = selectAcpSessionRow(db, buildAcpDatabaseSessionKey("global", "main"));
-      if (change === "same-binding") {
-        expect(canonical).toMatchObject({
-          session_id: "original-lifecycle",
-          state: "idle",
-          last_activity_at: 300,
-        });
-      } else if (change === "runtime-rebind") {
-        expect(canonical).toMatchObject({
-          session_id: "original-lifecycle",
-          runtime_session_name: "replacement-runtime",
-          state: "running",
-          last_activity_at: 200,
-        });
-      } else if (change === "rebind") {
-        expect(canonical).toMatchObject({ session_id: "replacement-lifecycle", state: "running" });
+      if (expected) {
+        expect(canonical).toMatchObject(expected);
       } else {
         expect(canonical).toBeUndefined();
       }
-    });
-  },
+    }),
 );

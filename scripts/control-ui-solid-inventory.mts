@@ -1,9 +1,9 @@
-// Shared syntax census for the migration report and the Lit growth ratchet.
+// On-demand syntax census for the remaining Solid migration work.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 
@@ -74,7 +74,6 @@ function emptyMetrics() {
     svgTemplates: 0,
     cssTemplates: 0,
     waTags: 0,
-    requestUpdate: 0,
     stateDecorators: 0,
     propertyDecorators: 0,
     tasks: 0,
@@ -348,9 +347,6 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
         if (isLitLoad(node)) {
           metrics.litImports++;
         }
-        if (nameOf(node.expression) === "requestUpdate") {
-          metrics.requestUpdate++;
-        }
         if (
           ts.isPropertyAccessExpression(expression) &&
           nameOf(expression.expression) === "customElements" &&
@@ -433,7 +429,7 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
 }
 
 export function isTest(file: string) {
-  return /(?:\.(?:test|spec|fixture|test-support)\.|-test-(?:support|harness)\.)|(?:^|\/)(?:__tests__|test-helpers|fixtures|e2e)\//u.test(
+  return /(?:\.(?:test|spec|fixture|test-support|test-helpers|test-harness)\.|-test-(?:support|harness)\.)|(?:^|\/)(?:__tests__|test-helpers|fixtures|e2e)\//u.test(
     file,
   );
 }
@@ -522,7 +518,6 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       "litImportFiles",
       "htmlTemplates",
       "waTags",
-      "requestUpdate",
       "stateDecorators",
       "tasks",
       "reactiveControllers",

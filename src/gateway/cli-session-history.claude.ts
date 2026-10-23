@@ -1,7 +1,5 @@
-// Claude CLI session history importer.
 // Converts Claude project JSONL into OpenClaw transcript-compatible messages.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
   asFiniteNumber,
@@ -15,6 +13,7 @@ import {
 } from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import { stripCliSessionDriftNote } from "../agents/cli-session.js";
+import { resolveClaudeCliProjectsDir } from "../agents/command/claude-cli-project-dir.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
 import { HEARTBEAT_PROMPT, HEARTBEAT_RESPONSE_TOOL_PROMPT } from "../auto-reply/heartbeat.js";
@@ -33,7 +32,6 @@ import { stripCliPromptDecorations } from "./cli-session-history.prompt-text.js"
 import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
-const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
 
 export type ClaudeCliProjectEntry = {
   type?: unknown;
@@ -84,13 +82,6 @@ export function redactClaudeCliHistoryMessage(
   return sanitizeTranscriptMessage(
     message as unknown as AgentMessage,
   ) as unknown as TranscriptLikeMessage;
-}
-
-function resolveClaudeProjectsDir(homeDir?: string): string {
-  return path.join(
-    normalizeOptionalString(homeDir) || process.env.HOME || os.homedir(),
-    CLAUDE_PROJECTS_RELATIVE_DIR,
-  );
 }
 
 function normalizeClaudeCliSessionId(value: string): string | undefined {
@@ -243,6 +234,28 @@ type ClaudeCliPromptTextCandidate = {
 // context. isMeta rows are private injections and never reach this projection.
 function isClaudeCliVisibleHarnessContext(entry: ClaudeCliProjectEntry): boolean {
   return entry.isCompactSummary === true || entry.isVisibleInTranscriptOnly === true;
+}
+
+function isClaudeCliInterrupt(entry: ClaudeCliProjectEntry, content: string | unknown[]): boolean {
+  // Native interrupts have one text block and no prompt-origin fields. Human
+  // strings or attributed prompts with the same words must remain user turns.
+  if (
+    !Array.isArray(content) ||
+    content.length !== 1 ||
+    "promptSource" in entry ||
+    "turnOrigin" in entry ||
+    "turnPosition" in entry ||
+    "permissionMode" in entry
+  ) {
+    return false;
+  }
+  const block = content[0];
+  return (
+    isRecord(block) &&
+    block.type === "text" &&
+    (block.text === "[Request interrupted by user]" ||
+      block.text === "[Request interrupted by user for tool use]")
+  );
 }
 
 function isClaudeCliTaskNotification(
@@ -443,6 +456,11 @@ export function parseClaudeCliHistoryEntry(
   }
 
   if (type === "user") {
+    // Omit before reseed inspection and indexing: a harness marker must neither
+    // consume a canonical human duplicate nor occupy a visible-history page.
+    if (isClaudeCliInterrupt(entry, content)) {
+      return null;
+    }
     const reseedState = options.reseedState;
     const promptTextCandidates = resolveClaudeCliPromptTextCandidates(entry, content);
     if (
@@ -552,7 +570,7 @@ export async function resolveClaudeCliSessionFilePathAsync(params: {
   if (!sessionId) {
     return undefined;
   }
-  const projectsDir = resolveClaudeProjectsDir(params.homeDir);
+  const projectsDir = resolveClaudeCliProjectsDir(params.homeDir);
   let projectEntries: fs.Dirent[];
   try {
     projectEntries = await fs.promises.readdir(projectsDir, { withFileTypes: true });

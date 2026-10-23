@@ -20,18 +20,25 @@ turn's dynamic-tool output budget cannot hold them. These tools do not change
 Codex's native `skills` namespace or install marketplace skills. See
 [installed skill search](/tools/skills#search-installed-skills).
 
-Codex dynamic tools default to `searchable` loading. OpenClaw normally does
+Codex dynamic tools default to `searchable` loading when the native surface is
+enabled. When it is disabled, OpenClaw publishes allowed dynamic tools directly,
+including session UI tools and managed shell paths. Tool policy, argument
+validation, session authority, and effect ownership still apply. Dashboard and
+widget actions use these session-bound tools; a shell CLI connection and device
+pairing do not replace them. OpenClaw normally does
 not expose dynamic tools that duplicate Codex-native workspace operations:
 `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
 `get_goal`, `create_goal`, `update_goal`, `dispatch_action`, `tool_describe`,
 and `tool_search`. Goal operations stay native to Codex,
 so OpenClaw does not project a second goal store into Codex turns. Most
 remaining OpenClaw integration tools, such as messaging, media, cron,
-browser, nodes, gateway, `progress_card`, and `heartbeat_respond` are available through
+browser, nodes, gateway, and `progress_card` are available through
 Codex tool search under the `openclaw` namespace, keeping the initial model
 context smaller. The restricted-turn shell fallback is the exception for
 `exec` and `process` when a finite allowlist disables native Code Mode;
 runtime allowlists and `codexDynamicToolsExclude` still apply.
+Strict [`agent exec`](/cli/agent#agent-exec) runs also use OpenClaw's tools so
+their process cleanup stays with the one-shot run owner.
 When native shell remains active and Gateway access is policy-eligible,
 OpenClaw instead publishes the distinct `gateway_exec` and `gateway_process`
 names so native shell and the OpenClaw-managed environment path cannot be
@@ -57,20 +64,39 @@ native `allowedDomains` are set so the allowlist cannot be bypassed.
 Persistent effective search-policy changes rotate the bound Codex thread
 before the next turn; transient per-turn restrictions use a temporary
 restricted thread and preserve the existing binding for later resume.
+Requester policy and parent lineage remain bound to preparation: revoking or
+reassigning the requester before native thread or turn dispatch rejects the
+operation before that request reaches Codex. This also applies to `/btw`. Hosted
+search runs inside Codex; OpenClaw validates admission of the search-enabled
+native turn, rather than receiving a separate callback for each hosted search.
+Pending native supervision without a selected model has no hosted search tool.
+Retry after the native session selects a model to prepare its search policy.
+Missing prepared policy also disables hosted search; Codex does not resolve it
+later while building native tools.
+
+When a binding preserves its native model, `/btw` prepares model, credentials,
+and search policy for that bound provider and model, even if the chat's outer
+model differs. A native model change after preparation rejects the side question
+before dispatch; retry to prepare for the current model.
+Supervised native models use Codex's model and authentication ownership, including
+models configured only in Codex; they do not require a host catalog entry or host
+credentials. Side questions use reasoning capabilities from their selected model.
 
 `sessions_yield`, `sessions_spawn`, and message-tool-only source replies stay
-direct because they are turn-control or delegation contracts. Guidance still
-prefers Codex's native `spawn_agent` as the primary Codex subagent surface,
-while explicit OpenClaw or ACP delegation remains directly callable through
-`sessions_spawn`. In Codex Code Mode, generic OpenClaw
+direct because they are turn-control or delegation contracts. Guidance uses
+Codex's native `spawn_agent` for work using only Codex-native tools. New work
+requiring OpenClaw tools goes through the available managed `sessions_spawn`
+route from the start; existing native children stay with native collaboration.
+See [dynamic tools](/plugins/codex-harness-reference/dynamic-tools) for runtime
+selection. In Codex Code Mode, generic OpenClaw
 dynamic-tool results are JSON text rather than JavaScript objects, so parse
 JSON-looking results before reading fields. Codex also serializes nested
 dynamic calls; submit several `sessions_spawn` calls in a bounded loop rather
 than expecting `Promise.all` to launch them concurrently. Already-accepted
 children can still overlap while later calls are submitted. See
 [Swarm](/tools/swarm#use-swarm-from-other-harnesses) for a complete pattern.
-Scheduled heartbeat user messages identify `heartbeat_respond` when structured
-responses are enabled; the tool remains discoverable through Codex tool search.
+Migrated heartbeat monitors use ordinary scheduled automation turns and their
+configured delivery policy. The retired `heartbeat_respond` tool is not exposed.
 
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when
@@ -178,8 +204,17 @@ to the app-server normally.
 Failed app-server startup waits for child shutdown before returning its error.
 If startup times out or is canceled during process registration, cleanup joins
 that registration and closes any late child. Cleanup can extend beyond the
-startup deadline. A canceled caller leaves startup running when another caller
-still owns it.
+startup deadline. A registration failure keeps its specific error when it settles
+during that cleanup, instead of becoming a generic initialization timeout.
+Shared startup has its own deadline. Canceling a shared-client waiter leaves
+service-owned startup running even if it was the only waiter. Later callers can
+join it; once ready, an unused client retires after the idle grace. Isolated
+startup remains caller-owned. See
+[startup budgets](/plugins/codex-harness-reference/timeouts#timeouts).
+
+Temporary capability, native-hook, and tool-catalog probes wait for their isolated
+app-server to close before returning, including after a failed or timed-out read.
+Probes using a shared connection release their lease so other work can continue.
 
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.
@@ -271,6 +306,28 @@ When native interruption and subscription cleanup are confirmed, stopping one
 chat leaves other chats running on the shared client. A follow-up can resume the
 stopped thread without waiting for those chats to finish.
 
+If native children are still running when their parent stops or calls
+`sessions_yield`, OpenClaw keeps the parent's subscription to observe their
+results. The same conversation can accept another message after Codex confirms
+that exact parent turn has ended. Child results stay attached to the original
+session lifecycle; a reset, replaced binding, or revoked source cannot inherit
+its retained authority.
+
+Native child completion delivery stops permanently when its retry budget is
+exhausted or requester recovery blocks it. OpenClaw retires that child turn's
+pending assignment and follow-up receipt together, so later parent registrations
+and Gateway restarts do not restart delivery. A bounded system note in the parent
+transcript identifies the child, its status, and its result session key; a warning
+records retirement even if the transcript note cannot be written. Other pending
+turns of the same child remain independent. Parent subscription retention during
+ordinary completion retries is unchanged.
+
+If a chat's previous client was retired while other chats still use it, the
+next turn waits for that client to exit before resuming. Stopping that turn
+ends the wait without closing a healthy new client. A startup deadline also
+ends the wait, but retires the startup client; neither path resumes the thread
+while its old writer remains alive.
+
 Managed local connections share a bounded inference relay. Up to 16 request
 preparations and uploads run at once, with another 16 waiting in arrival order.
 Responses keep streaming after their upload capacity is released, so a long
@@ -319,6 +376,11 @@ same native thread through multiple controllers; observing native teardown alone
 does not reserve it against a subsequent native reload.
 
 ## Runtime boundaries
+
+Native provider throttling and overload retain their structured status whether
+Codex rejects turn startup or reports a failed turn. Both paths use OpenClaw's
+shared retry and failure guidance in channel chats and the Control UI. Temporary
+throttling does not inherit a subscription usage-limit reset cooldown.
 
 The Codex harness changes the low-level embedded agent executor only.
 

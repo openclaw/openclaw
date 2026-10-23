@@ -3,6 +3,7 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import type { WebSocketServer } from "ws";
 import { disposeAcpSessionManager } from "../acp/control-plane/manager.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { disposeAllCliLiveSessions } from "../agents/cli-runner/cli-live-session-registry.js";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
@@ -12,7 +13,7 @@ import { memorySessionActorOwners } from "../config/sessions/session-actor-memor
 import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
-import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
@@ -24,6 +25,7 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { clearArtifactDownloads } from "./artifact-download-grants.js";
 import {
   collectGatewayProcessMemoryUsageMb,
   measureGatewayCloseStep,
@@ -171,11 +173,10 @@ export type GatewayCloseParams = {
   closeProviderTransportDispatcherPool: () => Promise<void>;
   cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
   stopCronMaintenance?: () => Promise<void>;
-  heartbeatRunner: HeartbeatRunner;
+  stopScheduledServices: () => Promise<void>;
   maintenance: GatewayMaintenanceHandles | null;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   agentUnsub: (() => Promise<void> | void) | null;
-  heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
   clients: Set<{
@@ -226,9 +227,6 @@ export async function prepareGatewayClose(
   const { measureCloseStep, shutdownStep } = createCloseSteps(reason, warnings);
   // Fence async session-state writes before the first awaited shutdown step.
   fenceSessionSuspensionWritesForGatewayShutdown();
-  // Debug-level: the signal handler already announced the stop/restart at
-  // info, and the completion line below reports duration and outcome.
-  shutdownLog.debug(`shutdown started: ${reason}`);
 
   const triggerLifecycleHook = (action: "shutdown" | "pre-restart", timeoutMs: number) => {
     const hookName = `gateway:${action}` as const;
@@ -252,32 +250,43 @@ export async function prepareGatewayClose(
     );
   };
 
+  const prepareRuns = async () => {
+    const admissions = await measureCloseStep("reply-drain", () =>
+      prepareGatewayRunShutdown({
+        ...params,
+        timeoutMs:
+          typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
+            ? Math.max(0, Math.floor(opts.drainTimeoutMs))
+            : 0,
+        warnings,
+      }),
+    );
+    // Track settlement immediately: ordinary-stop hooks may still be running
+    // when an admission releases or its cancellation callback fails.
+    const settlement = cleanupWork.track(() =>
+      measureCloseStep("session-admissions", () => admissions.released),
+    );
+    void settlement.catch((error: unknown) => {
+      shutdownLog.warn(`session admission settlement failed: ${formatErrorMessage(error)}`);
+      recordShutdownWarning(warnings, "session-admissions");
+    });
+  };
+
   try {
+    // Ordinary stop already spent its grace period. Cancel received work before
+    // hooks can join it; restart hooks run before recovery marking instead.
+    if (!restart) {
+      await prepareRuns();
+    }
     await shutdownStep("update-check", () => params.updateCheckStop?.());
     await shutdownStep("config-reloader", () => params.configReloader.stop());
     await triggerLifecycleHook("shutdown", GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
     if (restart) {
       await triggerLifecycleHook("pre-restart", GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
     }
-    const drainTimeoutMs =
-      typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
-        ? Math.max(0, Math.floor(opts.drainTimeoutMs))
-        : 0;
-    const admissions = await measureCloseStep("reply-drain", () =>
-      prepareGatewayRunShutdown({
-        ...params,
-        restart,
-        timeoutMs: drainTimeoutMs,
-        warnings,
-      }),
-    );
-    const admissionSettlement = cleanupWork.track(() =>
-      measureCloseStep("session-admissions", () => admissions.released),
-    );
-    void admissionSettlement.catch((error: unknown) => {
-      shutdownLog.warn(`session admission settlement failed: ${formatErrorMessage(error)}`);
-      recordShutdownWarning(warnings, "session-admissions");
-    });
+    if (restart) {
+      await prepareRuns();
+    }
     // Cancel code cells before received work joins their pending bridge calls.
     await shutdownStep("code-mode-runs", () => params.disposeAllCodeModeRuns());
     // ACPX owns agent-process cleanup; memory retirement must not overtake its drain.
@@ -336,6 +345,7 @@ async function closeGatewayResources(
   const disposeRuntime = async (
     label:
       | "plugin-services"
+      | "cli-live-sessions"
       | "agent-harnesses"
       | "bundle-mcp"
       | "bundle-lsp"
@@ -393,6 +403,7 @@ async function closeGatewayResources(
         await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId));
       }
     });
+    await disposeRuntime("cli-live-sessions", disposeAllCliLiveSessions);
     await disposeRuntime("agent-harnesses", disposeRegisteredAgentHarnesses);
     await shutdownStep("ai-session-resources", () => cleanupSessionResources());
     await shutdownStep("provider-transport-dispatchers", () =>
@@ -404,6 +415,7 @@ async function closeGatewayResources(
         disposeRuntime("bundle-lsp", params.disposeAllBundleLspRuntimes),
       ]);
     });
+    await shutdownStep("artifact-downloads", clearArtifactDownloads);
     await shutdownStep("periodic-maintenance", () => params.maintenance?.stopPeriodicTasks());
     await shutdownStep("skill-usage", () => params.maintenance?.skillUsageCleanup());
     try {
@@ -420,9 +432,7 @@ async function closeGatewayResources(
       recordShutdownWarning(warnings, "media-cleanup");
     }
     await shutdownStep("gmail-watcher", () => params.stopGmailWatcher());
-    // Cron heartbeat runs await this owner's queued wakes after handing off cancellation.
-    // Settle those waiters before joining cron so shutdown cannot wait on its own next step.
-    await shutdownStep("heartbeat-runner", () => params.heartbeatRunner.stop());
+    await shutdownStep("scheduled-services", params.stopScheduledServices);
     await shutdownStep("cron", () =>
       params.cron.stopAndDrain ? params.cron.stopAndDrain() : params.cron.stop(),
     );
@@ -430,9 +440,7 @@ async function closeGatewayResources(
     if (params.agentUnsub) {
       await shutdownStep("agent-unsub", () => params.agentUnsub!());
     }
-    if (params.heartbeatUnsub) {
-      await shutdownStep("heartbeat-unsub", () => params.heartbeatUnsub!());
-    }
+    heartbeatNotifications.onEvent = () => {};
     if (params.transcriptUnsub) {
       await shutdownStep("transcript-unsub", () => params.transcriptUnsub!());
     }

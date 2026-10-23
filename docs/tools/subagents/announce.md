@@ -41,6 +41,14 @@ building nested completion findings, preventing stale prior-run child
 outputs from leaking into the current announce. Announce replies preserve
 thread/topic routing when available on channel adapters.
 
+When a completion or settle turn has only a source-bound `message` grant, it can
+send the completed work's photos and files using `media`, `attachments`, or media
+directives, with or without text. Normal outbound media validation still applies,
+including local-file roots. The grant cannot change the destination, channel,
+account, or thread, or perform actions other than `send`. Explicit `replyTo` stays
+limited to the current message or thread; inline reply and audio directives remain
+restricted. See [message tool access](/tools#configure-access-and-approvals).
+
 After `sessions_yield`, the frozen batch waits for its own children and their
 descendants to settle. A still-running child from an earlier requester turn does
 not delay that batch's result; the earlier batch retains its own completion wake.
@@ -50,10 +58,21 @@ context messages. If transcript persistence rejects a completion because its
 keyed input belongs to a closed turn, delivery records a permanent failure with
 the error. It does not retry other models or keep scheduling the same completion.
 
+Direct child-result delivery records its transcript mirror after work already
+queued on the requester session. The send settles without waiting for that
+append, so a requester waiting on its child can resume. These tagged mirrors
+record history without closing an open keyed input; ordinary final replies still
+close the turn. Mirrors remain best-effort bookkeeping after a successful send.
+
 Blocked completion warnings identify the child run and retain the concrete delivery
 error across retries. A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. Failures before
 a delivery result is reported follow the same retryability policy as direct sends.
+
+Restart checkpoint reconciliation retains the confirmed delivery evidence before
+clearing the active recovery claim. Delivered replies, intentionally suppressed
+delivery, and handled silent checkpoints remain distinct. A terminal run ID alone
+is not proof that the requester received its result.
 
 Transcript writer-claim changes remain retryable when no send is confirmed. If
 local retries are exhausted, the completion stays eligible for bounded requester
@@ -69,8 +88,10 @@ child's result remains available for recovery.
 
 Set `completionTarget: "parent"` on `sessions_spawn` to return the result in a
 private turn of the original requester session. The parent reviews the result,
-continues unfinished work, and records the reviewed outcome in its internal final
-reply. OpenClaw does not automatically send the child result, parent final, or
+continues unfinished work, and settles the reviewed input. Private processing that
+the input owner marks optional may finish silently; it does not by itself satisfy
+an outstanding user reply.
+OpenClaw does not automatically send the child result, parent final, or
 generated media to a channel. The parent can still choose to send a message
 through its permitted tools.
 
@@ -105,6 +126,13 @@ retry window. A normal parent finish starts that window when it releases the
 result. After `sessions_yield`, the yielded batch owns delivery; individual child
 cleanup cannot expire or suspend that batch's result.
 
+Session controls still require the current caller’s authority. A completion report
+does not transfer the original human’s permissions. Keep authorized cleanup with
+the original requester turn and use after-turn self-archive when appropriate,
+rather than asking a notification-only turn to acquire owner privileges.
+Use `sessions_send` with `mode: "notify"` for context-only updates; a normal peer
+follow-up still follows the destination conversation’s reply requirements.
+
 Use a build that supports this option throughout the run. Older builds cannot
 resume private completion handoffs and may discard them after a downgrade;
 existing session transcripts remain separate.
@@ -124,16 +152,28 @@ Announce context is normalized to a stable internal event block:
 
 The result is the child's complete visible final answer for the completed run,
 including ACP-backed runs and CLI fallback transcripts. A later turn in the same
-child session does not replace that run's answer.
+child session does not replace that run's answer. Once cleanup and requester obligations
+have settled, the in-memory registry keeps a short task preview and lifecycle
+metadata. Full task and result text remain in SQLite and are loaded for selected
+reads or later mutations. Pending delivery, suspended delivery, cancellation, and
+yielded work keep their payloads until those obligations settle.
 
 If completion receipts for the same run arrive out of order, the receipt with
 the newer producer end time owns the reply. Equal end times retain the first
 accepted reply; a correction with a newer end time can replace it.
 
 OpenClaw preserves prompt-data escaping and stable order when it delivers several
-results together. It does not shorten an answer to fit the former announce
-projection limits. The bounded lifecycle snapshot remains separate from the
-complete answer sent to the parent.
+results together. Completion findings have a strict shared 160,000-character cap,
+including escaping and framing. Small answers stay intact; larger answers keep
+their beginning and an explicit truncation marker pointing to `sessions_history`
+with the child session key. `sessions_history` truncates text fields to 4,000
+characters; this pointer does not provide lossless retrieval of an omitted tail.
+Each shown child keeps its task and status, with result heads sharing the remaining
+space above a small floor. If even floor-sized blocks would exceed the cap, the
+remaining children become one bounded summary line with their count, the first few
+session keys, and guidance to inspect them with the session tools. Ordering stays
+deterministic. The bounded lifecycle snapshot and retained complete transcript
+stay separate from these prompt limits.
 
 A successful child with an empty final reply remains in the batch with its task
 identity, `ok` status, and `(no output)` result. Its successful execution status

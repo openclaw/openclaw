@@ -8,224 +8,133 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createBedrockAwsSdkConfig } from "./config-fixtures.test-support.js";
 import { authProfilesLog } from "./constants.js";
-import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createOAuthRefreshCredential,
+} from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
   configureProviderRoutes,
-  createAuthStoreWithProfiles,
-  createAutomaticSessionEntry,
+  createAutomaticSessionEntry as automaticSession,
   prepareCooldownAuthState,
   resolveSession,
-  TEST_PRIMARY_PROFILE_ID,
-  TEST_SECONDARY_PROFILE_ID,
+  TEST_PRIMARY_PROFILE_ID as PRIMARY,
+  TEST_SECONDARY_PROFILE_ID as SECONDARY,
   withAuthState,
 } from "./session-override.test-support.js";
+import { isProfileInCooldown } from "./usage-state.js";
+
+const sessionKey = "agent:main:main";
+const readSession = (scope: { storePath: string }) =>
+  loadSessionEntry({ ...scope, sessionKey, readConsistency: "latest" });
+
+async function persistSession(state: OpenClawTestState, initial: SessionEntry) {
+  const scope = { storePath: path.join(state.sessionsDir(), "sessions.json"), sessionKey };
+  await replaceSessionEntry(scope, initial);
+  const sessionEntry = readSession(scope)!;
+  expect(sessionEntry).toBeDefined();
+  return { ...scope, sessionEntry, sessionStore: { [sessionKey]: sessionEntry } };
+}
 
 describe("resolveSessionAuthProfileOverride", () => {
-  it("returns early when no auth sources exist", async () => {
-    await withAuthState(async (state) => {
+  it("returns early when no auth sources exist", () =>
+    withAuthState(async (state) => {
       const agentDir = state.agentDir();
       await fs.mkdir(agentDir, { recursive: true });
 
-      const sessionEntry: SessionEntry = {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-      };
-      const sessionStore = { "agent:main:main": sessionEntry };
+      const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1 };
 
       const resolved = await resolveSession({
-        cfg: {} as OpenClawConfig,
         provider: "openrouter",
         agentDir,
         sessionEntry,
-        sessionStore,
-        sessionKey: "agent:main:main",
-        storePath: undefined,
-        isNewSession: false,
       });
 
       expect(resolved).toBeUndefined();
       expect(authStoreMocks.ensureAuthProfileStoreAsync).not.toHaveBeenCalled();
-      try {
-        await fs.access(`${agentDir}/auth-profiles.json`);
-      } catch (error) {
-        expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-        return;
+      await expect(fs.access(`${agentDir}/auth-profiles.json`)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }));
+
+  it.each([false, true])(
+    "retains an aws-sdk pin unless its stored provider drifted: %s",
+    (drifted) =>
+      withAuthState(async (state) => {
+        const agentDir = state.agentDir();
+        await fs.mkdir(agentDir, { recursive: true });
+        const profileId = "amazon-bedrock:default";
+        if (drifted) {
+          authStoreMocks.state.hasSource = true;
+          authStoreMocks.state.store = {
+            version: 1,
+            profiles: { [profileId]: createApiKeyCredential("openrouter", "sk-drifted") },
+          };
+        }
+        const sessionEntry = automaticSession({
+          authProfileOverride: profileId,
+          authProfileOverrideSource: "user",
+        });
+        const resolved = await resolveSession({
+          cfg: createBedrockAwsSdkConfig(),
+          provider: "amazon-bedrock",
+          agentDir,
+          sessionEntry,
+        });
+        expect(resolved).toBe(drifted ? undefined : profileId);
+        expect(sessionEntry.authProfileOverride).toBe(drifted ? undefined : profileId);
+        if (drifted) {
+          expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+        }
+      }),
+  );
+
+  it.each([
+    ["rotates to an available profile", true],
+    ["clears when all profiles are in cooldown", false],
+  ] as const)("%s without restoring concurrent session metadata", (_label, rotates) =>
+    withAuthState(async (state) => {
+      const agentDir = await prepareCooldownAuthState(state, { profileIds: [PRIMARY, SECONDARY] });
+      if (rotates) {
+        authStoreMocks.isProfileInCooldown.mockImplementation((_store, id) => id === PRIMARY);
       }
-      throw new Error("Expected auth-profiles.json to be absent");
-    });
-  });
-
-  it("keeps config-only aws-sdk user overrides", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      authStoreMocks.state.hasSource = false;
-      authStoreMocks.state.store = { version: 1, profiles: {} };
-
-      const sessionEntry: SessionEntry = {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        authProfileOverride: "amazon-bedrock:default",
-        authProfileOverrideSource: "user",
-      };
-      const sessionStore = { "agent:main:main": sessionEntry };
-
-      const resolved = await resolveSession({
-        cfg: createBedrockAwsSdkConfig(),
-        provider: "amazon-bedrock",
-        agentDir,
-        sessionEntry,
-        sessionStore,
-        sessionKey: "agent:main:main",
-        storePath: undefined,
-        isNewSession: false,
-      });
-
-      expect(resolved).toBe("amazon-bedrock:default");
-      expect(sessionEntry.authProfileOverride).toBe("amazon-bedrock:default");
-    });
-  });
-
-  it("clears aws-sdk config override when stored profile drifted to another provider", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      authStoreMocks.state.hasSource = true;
-      authStoreMocks.state.store = createAuthStoreWithProfiles({
-        profiles: {
-          "amazon-bedrock:default": createApiKeyCredential("openrouter", "sk-drifted"),
-        },
-      });
-
-      const sessionEntry: SessionEntry = {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        authProfileOverride: "amazon-bedrock:default",
-        authProfileOverrideSource: "user",
-      };
-      const sessionStore = { "agent:main:main": sessionEntry };
-
-      const resolved = await resolveSession({
-        cfg: createBedrockAwsSdkConfig(),
-        provider: "amazon-bedrock",
-        agentDir,
-        sessionEntry,
-        sessionStore,
-        sessionKey: "agent:main:main",
-        storePath: undefined,
-        isNewSession: false,
-      });
-
-      expect(resolved).toBeUndefined();
-      expect(sessionEntry.authProfileOverride).toBeUndefined();
-      expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
-    });
-  });
-
-  it("rotates unavailable auth state without restoring concurrent session management fields", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      authStoreMocks.state.hasSource = true;
-      authStoreMocks.state.store = createAuthStoreWithProfiles({
-        profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-primary"),
-          [TEST_SECONDARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-secondary"),
-        },
-        order: {
-          openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
-        },
-      });
-      authStoreMocks.isProfileInCooldown.mockImplementation(
-        (_store, profileId) => profileId === TEST_PRIMARY_PROFILE_ID,
+      const session = await persistSession(
+        state,
+        automaticSession({
+          label: "before",
+          pinnedAt: 1,
+          ...(rotates ? { compactionCount: 1 } : {}),
+          authProfileOverrideCompactionCount: rotates ? 0 : 3,
+        }),
       );
-
-      const sessionKey = "agent:main:main";
-      const storePath = path.join(state.sessionsDir(), "sessions.json");
-      const scope = { storePath, sessionKey };
-      await replaceSessionEntry(scope, {
-        sessionId: "s1",
-        updatedAt: 1,
-        label: "before",
-        pinnedAt: 1,
-        compactionCount: 1,
-        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
-        authProfileOverrideSource: "auto",
-        authProfileOverrideCompactionCount: 0,
-      });
-      const sessionEntry = loadSessionEntry({ ...scope, readConsistency: "latest" });
-      expect(sessionEntry).toBeDefined();
-      const sessionStore = { [sessionKey]: sessionEntry! };
-
-      await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
-      const resolved = await resolveSession({
-        agentDir,
-        sessionEntry: sessionEntry!,
-        sessionStore,
-        sessionKey,
-        storePath,
-      });
-
-      expect(resolved).toBe(TEST_SECONDARY_PROFILE_ID);
-      const persisted = loadSessionEntry({ ...scope, readConsistency: "latest" });
-      expect(persisted?.label).toBe("renamed");
-      expect(persisted?.pinnedAt).toBeUndefined();
-      expect(persisted?.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
-      expect(persisted?.authProfileOverrideCompactionCount).toBe(1);
-      expect(sessionStore[sessionKey]?.label).toBe("renamed");
-      expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
-    });
-  });
-
-  it("clears a persisted automatic override when every auth profile is in cooldown", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = await prepareCooldownAuthState(state, {
-        profileIds: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
-      });
-
-      const sessionKey = "agent:main:main";
-      const storePath = path.join(state.sessionsDir(), "sessions.json");
-      const scope = { storePath, sessionKey };
-      await replaceSessionEntry(scope, {
-        sessionId: "s1",
-        updatedAt: 1,
-        label: "before",
-        pinnedAt: 1,
-        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
-        authProfileOverrideSource: "auto",
-        authProfileOverrideCompactionCount: 3,
-      });
-      const sessionEntry = loadSessionEntry({ ...scope, readConsistency: "latest" });
-      expect(sessionEntry).toBeDefined();
-      const sessionStore = { [sessionKey]: sessionEntry! };
-      await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
-
-      const resolved = await resolveSession({
-        agentDir,
-        sessionEntry: sessionEntry!,
-        sessionStore,
-        sessionKey,
-        storePath,
-      });
-
-      expect(resolved).toBeUndefined();
-      for (const entry of [
-        sessionEntry,
-        sessionStore[sessionKey],
-        loadSessionEntry({ ...scope, readConsistency: "latest" }),
-      ]) {
-        expect(entry?.authProfileOverride).toBeUndefined();
-        expect(entry?.authProfileOverrideSource).toBeUndefined();
-        expect(entry?.authProfileOverrideCompactionCount).toBeUndefined();
+      await patchSessionEntryCore(session, () => ({ label: "renamed", pinnedAt: undefined }));
+      expect(await resolveSession({ agentDir, ...session })).toBe(rotates ? SECONDARY : undefined);
+      const persisted = readSession(session);
+      if (rotates) {
+        expect(persisted).toMatchObject({
+          label: "renamed",
+          authProfileOverride: SECONDARY,
+          authProfileOverrideCompactionCount: 1,
+        });
+        expect(persisted?.pinnedAt).toBeUndefined();
+      } else {
+        for (const entry of [session.sessionEntry, session.sessionStore[sessionKey], persisted]) {
+          expect([
+            entry?.authProfileOverride,
+            entry?.authProfileOverrideSource,
+            entry?.authProfileOverrideCompactionCount,
+          ]).toEqual([undefined, undefined, undefined]);
+        }
       }
-      expect(sessionStore[sessionKey]?.label).toBe("renamed");
-      expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
-    });
-  });
+      expect(session.sessionStore[sessionKey]?.label).toBe("renamed");
+      expect(session.sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
+    }),
+  );
 
   it.each([
     ["persisted", true, false, "user"],
@@ -237,18 +146,17 @@ describe("resolveSessionAuthProfileOverride", () => {
     async (_label, persisted, crossProvider, source) => {
       await withAuthState(async (state) => {
         const agentDir = await prepareCooldownAuthState(state, {
-          profileIds: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
+          profileIds: [PRIMARY, SECONDARY],
         });
-        const latestProfileId = crossProvider ? "anthropic:manual" : TEST_SECONDARY_PROFILE_ID;
+        const latestProfileId = crossProvider ? "anthropic:manual" : SECONDARY;
         if (crossProvider) {
           authStoreMocks.state.store.profiles[latestProfileId] = createApiKeyCredential(
             "anthropic",
             "sk-anthropic",
           );
         }
-        const sessionKey = "agent:main:main";
         const scope = { storePath: path.join(state.sessionsDir(), "sessions.json"), sessionKey };
-        let sessionEntry = createAutomaticSessionEntry({
+        let sessionEntry = automaticSession({
           label: "before",
           pinnedAt: 1,
           authProfileOverrideCompactionCount: 3,
@@ -258,7 +166,7 @@ describe("resolveSessionAuthProfileOverride", () => {
           updatedAt: 2,
           label: "manually selected",
           authProfileOverride: latestProfileId,
-          ...(source ? { authProfileOverrideSource: source } : {}),
+          authProfileOverrideSource: source,
         };
         if (persisted) {
           await replaceSessionEntry(scope, sessionEntry);
@@ -279,9 +187,7 @@ describe("resolveSessionAuthProfileOverride", () => {
           storePath: persisted ? scope.storePath : undefined,
         });
 
-        expect(resolved).toBe(
-          crossProvider || source === "auto" ? undefined : TEST_SECONDARY_PROFILE_ID,
-        );
+        expect(resolved).toBe(crossProvider || source === "auto" ? undefined : SECONDARY);
         const entries = [sessionEntry, sessionStore[sessionKey]];
         if (persisted) {
           entries.push(loadSessionEntry({ ...scope, readConsistency: "latest" })!);
@@ -296,11 +202,11 @@ describe("resolveSessionAuthProfileOverride", () => {
     },
   );
 
-  it("preserves newer in-memory session metadata when an automatic override snapshot still matches", async () => {
-    await withAuthState(async (state) => {
+  it("preserves newer in-memory session metadata when an automatic override snapshot still matches", () =>
+    withAuthState(async (state) => {
       const agentDir = await prepareCooldownAuthState(state);
-      const sessionEntry = createAutomaticSessionEntry({ label: "stale", pinnedAt: 1 });
-      const latestEntry = createAutomaticSessionEntry({ label: "latest", pinnedAt: 2 });
+      const sessionEntry = automaticSession({ label: "stale", pinnedAt: 1 });
+      const latestEntry = automaticSession({ label: "latest", pinnedAt: 2 });
       const sessionStore = { "agent:main:main": latestEntry };
 
       const resolved = await resolveSession({ agentDir, sessionEntry, sessionStore });
@@ -308,62 +214,47 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(resolved).toBeUndefined();
       expect(sessionStore["agent:main:main"]).toBe(latestEntry);
       for (const entry of [sessionEntry, latestEntry]) {
-        expect(entry.label).toBe("latest");
-        expect(entry.pinnedAt).toBe(2);
+        expect(entry).toMatchObject({ label: "latest", pinnedAt: 2 });
         expect(entry.authProfileOverride).toBeUndefined();
         expect(entry.authProfileOverrideSource).toBeUndefined();
       }
-    });
-  });
+    }));
 
-  it("does not recreate a concurrently deleted in-memory session", async () => {
-    await withAuthState(async (state) => {
+  it("does not recreate a concurrently deleted in-memory session", () =>
+    withAuthState(async (state) => {
       const agentDir = await prepareCooldownAuthState(state);
-      const sessionEntry = createAutomaticSessionEntry();
+      const sessionEntry = automaticSession();
       const sessionStore: Record<string, SessionEntry> = {};
 
       expect(await resolveSession({ agentDir, sessionEntry, sessionStore })).toBeUndefined();
       expect(Object.hasOwn(sessionStore, "agent:main:main")).toBe(false);
-      expect(sessionEntry.authProfileOverride).toBe(TEST_PRIMARY_PROFILE_ID);
-    });
-  });
+      expect(sessionEntry.authProfileOverride).toBe(PRIMARY);
+    }));
 
-  it("does not recreate a concurrently deleted session while clearing its automatic override", async () => {
-    await withAuthState(async (state) => {
+  it("does not recreate a concurrently deleted session while clearing its automatic override", () =>
+    withAuthState(async (state) => {
       const agentDir = await prepareCooldownAuthState(state);
-      const sessionKey = "agent:main:main";
-      const storePath = path.join(state.sessionsDir(), "sessions.json");
-      const scope = { storePath, sessionKey };
-      await replaceSessionEntry(
-        scope,
-        createAutomaticSessionEntry({ sessionId: "deleted-session" }),
+      const session = await persistSession(
+        state,
+        automaticSession({ sessionId: "deleted-session" }),
       );
-      const sessionEntry = loadSessionEntry({ ...scope, readConsistency: "latest" })!;
-      const sessionStore = { [sessionKey]: sessionEntry };
       await deleteSessionEntryLifecycle({
         archiveTranscript: false,
-        storePath,
+        storePath: session.storePath,
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       });
 
-      const resolved = await resolveSession({
-        agentDir,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        storePath,
-      });
+      const resolved = await resolveSession({ agentDir, ...session });
 
       expect(resolved).toBeUndefined();
-      expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toBeUndefined();
-    });
-  });
+      expect(readSession(session)).toBeUndefined();
+    }));
 
-  it("clears an automatic override when a model-scoped cooldown also has a profile-wide disable", async () => {
-    await withAuthState(async (state) => {
+  it("clears an automatic override when a model-scoped cooldown also has a profile-wide disable", () =>
+    withAuthState(async (state) => {
       const agentDir = await prepareCooldownAuthState(state, {
         usageStats: {
-          [TEST_PRIMARY_PROFILE_ID]: {
+          [PRIMARY]: {
             cooldownUntil: Date.now() + 60_000,
             cooldownReason: "rate_limit",
             cooldownModel: "model-x",
@@ -373,22 +264,62 @@ describe("resolveSessionAuthProfileOverride", () => {
         },
       });
 
-      const sessionEntry = createAutomaticSessionEntry({
+      const sessionEntry = automaticSession({
         model: "model-y",
         authProfileOverrideCompactionCount: 0,
       });
-      const sessionStore = { "agent:main:main": sessionEntry };
 
-      const resolved = await resolveSession({ agentDir, sessionEntry, sessionStore });
+      const resolved = await resolveSession({ agentDir, sessionEntry });
 
       expect(resolved).toBeUndefined();
       expect(sessionEntry.authProfileOverride).toBeUndefined();
       expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
-    });
-  });
+    }));
 
-  it("does not persist an automatic override when every auth profile is in cooldown", async () => {
-    await withAuthState(async (state) => {
+  it("keeps an automatic pin for a sibling of a managed provider's blocked model", () =>
+    withAuthState(async (state) => {
+      const profileId = "openrouter:manual";
+      const agentDir = await prepareCooldownAuthState(state, { profileIds: [profileId] });
+      authStoreMocks.state.store = {
+        version: 1,
+        profiles: { [profileId]: createApiKeyCredential("openrouter", "sk-test") },
+        order: { openrouter: [profileId] },
+        usageStats: {
+          [profileId]: {
+            cooldownUntil: Date.now() + 60_000,
+            cooldownReason: "rate_limit",
+            blockedUntil: Date.now() + 60_000,
+            blockedScope: "model",
+            blockedModel: "model-x",
+            blockedReason: "subscription_limit",
+          },
+        },
+      };
+      authStoreMocks.isProfileInCooldown.mockImplementation(isProfileInCooldown);
+      const sessionEntry = automaticSession({
+        authProfileOverride: profileId,
+        model: "model-y",
+      });
+      const snapshot = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "openrouter", providers: ["openrouter"], managesOwnAvailability: true }],
+      });
+      const resolved = await withPluginMetadataSnapshotScope(
+        snapshot,
+        () =>
+          resolveSession({
+            agentDir,
+            provider: "openrouter",
+            sessionEntry,
+            sessionStore: { "agent:main:main": sessionEntry },
+          }),
+        { trustConfigIdentity: true },
+      );
+      expect(resolved).toBe(profileId);
+      expect(sessionEntry.authProfileOverride).toBe(profileId);
+    }));
+
+  it("does not persist an automatic override when every auth profile is in cooldown", () =>
+    withAuthState(async (state) => {
       const agentDir = await prepareCooldownAuthState(state);
 
       const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1 };
@@ -398,191 +329,123 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(resolved).toBeUndefined();
       expect(sessionEntry).toEqual({ sessionId: "s1", updatedAt: 1 });
       expect(sessionStore["agent:main:main"]).toBe(sessionEntry);
-    });
-  });
+    }));
 
-  it.each([
-    { name: "missing", profile: undefined },
-    {
-      name: "provider-mismatched",
-      profile: { type: "api_key" as const, provider: "anthropic", key: "sk-mismatched" },
-    },
-  ])(
-    "does not replace a $name user override with an auth profile in cooldown",
-    async ({ profile }) => {
-      await withAuthState(async (state) => {
-        const warn = profile
-          ? undefined
-          : vi.spyOn(authProfilesLog, "warn").mockImplementation(() => {});
-        const agentDir = await prepareCooldownAuthState(state);
-        if (profile) {
-          authStoreMocks.state.store.profiles["anthropic:stale"] = profile;
-        }
+  it("does not replace a missing user override with an auth profile in cooldown", () =>
+    withAuthState(async (state) => {
+      const warn = vi.spyOn(authProfilesLog, "warn").mockImplementation(() => {});
+      const agentDir = await prepareCooldownAuthState(state);
 
-        const sessionEntry: SessionEntry = {
-          sessionId: "s1",
-          updatedAt: 1,
-          authProfileOverride: profile ? "anthropic:stale" : "openai:missing",
-          authProfileOverrideSource: "user",
-          authProfileOverrideCompactionCount: 2,
-        };
-        const sessionStore = { "agent:main:main": sessionEntry };
-        const resolved = await resolveSession({ agentDir, sessionEntry, sessionStore });
-
-        const expectedProfile = profile ? undefined : "openai:missing";
-        expect(resolved).toBe(expectedProfile);
-        expect(sessionEntry.authProfileOverride).toBe(expectedProfile);
-        expect(sessionEntry.authProfileOverrideSource).toBe(profile ? undefined : "user");
-        expect(sessionEntry.authProfileOverrideCompactionCount).toBe(profile ? undefined : 2);
-        if (!profile) {
-          expect(warn).toHaveBeenCalledWith(
-            expect.any(String),
-            expect.objectContaining({
-              event: "session_auth_profile_unavailable",
-              profileId: "openai:missing",
-            }),
-          );
-        }
+      const sessionEntry = automaticSession({
+        authProfileOverride: "openai:missing",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
       });
-    },
-  );
+      const resolved = await resolveSession({ agentDir, sessionEntry });
+
+      expect(resolved).toBe("openai:missing");
+      expect(sessionEntry).toMatchObject({
+        authProfileOverride: "openai:missing",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
+      });
+      expect(warn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          event: "session_auth_profile_unavailable",
+          profileId: "openai:missing",
+        }),
+      );
+    }));
 });
 
-const OPENAI_MODEL_ID = "gpt-5.6-sol";
-const API_PRIMARY_PROFILE_ID = "openai:api-primary";
-const API_BACKUP_PROFILE_ID = "openai:api-backup";
-const OAUTH_PROFILE_ID = "openai:subscription";
+const MODEL = "gpt-5.6-sol";
+const API_PRIMARY = "openai:api-primary";
+const API_BACKUP = "openai:api-backup";
+const OAUTH = "openai:subscription";
 
-function configureMixedOpenAiAuthStore(): void {
+async function prepareMixedAuth(state: OpenClawTestState): Promise<string> {
+  const agentDir = state.agentDir();
+  await fs.mkdir(agentDir, { recursive: true });
   authStoreMocks.state.hasSource = true;
   authStoreMocks.state.store = {
     version: 1,
     profiles: {
-      [API_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-primary"),
-      [API_BACKUP_PROFILE_ID]: createApiKeyCredential("openai", "sk-backup"),
-      [OAUTH_PROFILE_ID]: {
-        type: "oauth",
-        provider: "openai",
-        access: "test-access",
-        refresh: "test-refresh",
-        expires: Date.now() + 60_000,
-      },
-    },
-    order: {
-      openai: [API_PRIMARY_PROFILE_ID, OAUTH_PROFILE_ID, API_BACKUP_PROFILE_ID],
+      [API_PRIMARY]: createApiKeyCredential("openai", "sk-primary"),
+      [API_BACKUP]: createApiKeyCredential("openai", "sk-backup"),
+      [OAUTH]: createOAuthRefreshCredential(),
     },
   };
+  return agentDir;
 }
 
 describe("session auth-profile rotation", () => {
-  it("retries preferred OAuth after cooldown when compaction also advanced", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      configureMixedOpenAiAuthStore();
-      authStoreMocks.state.store.order = undefined;
-      const cfg = {
-        auth: { order: { openai: [OAUTH_PROFILE_ID, API_PRIMARY_PROFILE_ID] } },
-      };
-      configureProviderRoutes({
-        provider: "openai",
-        modelId: OPENAI_MODEL_ID,
-        requirements: ["subscription", "api-key"],
-      });
+  it("retries preferred OAuth after cooldown when compaction also advanced", () =>
+    withAuthState(async (state) => {
+      const agentDir = await prepareMixedAuth(state);
+      const cfg = { auth: { order: { openai: [OAUTH, API_PRIMARY] } } };
+      configureProviderRoutes(["subscription", "api-key"]);
       authStoreMocks.state.store.usageStats = {
-        [OAUTH_PROFILE_ID]: {
+        [OAUTH]: {
           cooldownUntil: Date.now() + 60_000,
           cooldownReason: "rate_limit",
-          failureCounts: { rate_limit: 1 },
+          lastRateLimitAt: Date.now(),
         },
       };
-      const sessionEntry: SessionEntry = {
-        sessionId: "s1",
-        updatedAt: 1,
-        model: OPENAI_MODEL_ID,
-      };
+      const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1, model: MODEL };
       const sessionStore = { "agent:main:main": sessionEntry };
 
-      expect(await resolveSession({ agentDir, sessionEntry, sessionStore, cfg })).toBe(
-        API_PRIMARY_PROFILE_ID,
-      );
+      expect(await resolveSession({ agentDir, sessionEntry, sessionStore, cfg })).toBe(API_PRIMARY);
       expect(sessionEntry.authProfileOverrideSource).toBe("auto");
 
-      authStoreMocks.state.store.usageStats[OAUTH_PROFILE_ID] = {
-        cooldownUntil: Date.now() - 1,
-        cooldownReason: "rate_limit",
-        failureCounts: { rate_limit: 1 },
-      };
+      authStoreMocks.state.store.usageStats[OAUTH]!.cooldownUntil = Date.now() - 1;
       sessionEntry.compactionCount = 1;
 
-      expect(await resolveSession({ agentDir, sessionEntry, sessionStore, cfg })).toBe(
-        OAUTH_PROFILE_ID,
-      );
-      expect(sessionEntry.authProfileOverride).toBe(OAUTH_PROFILE_ID);
+      expect(await resolveSession({ agentDir, sessionEntry, sessionStore, cfg })).toBe(OAUTH);
+      expect(sessionEntry.authProfileOverride).toBe(OAUTH);
       expect(sessionEntry.authProfileOverrideSource).toBe("auto");
       expect(sessionEntry.authProfileOverrideCompactionCount).toBe(1);
-    });
-  });
+    }));
 
-  it("keeps a healthy automatic profile across compaction when auth order is implicit", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      configureMixedOpenAiAuthStore();
-      authStoreMocks.state.store.order = undefined;
-      const sessionEntry = createAutomaticSessionEntry({
-        model: OPENAI_MODEL_ID,
-        authProfileOverride: API_PRIMARY_PROFILE_ID,
+  it("keeps a healthy automatic profile across compaction when auth order is implicit", () =>
+    withAuthState(async (state) => {
+      const agentDir = await prepareMixedAuth(state);
+      const sessionEntry = automaticSession({
+        model: MODEL,
+        authProfileOverride: API_PRIMARY,
         compactionCount: 1,
         authProfileOverrideCompactionCount: 0,
       });
-      const sessionStore = { "agent:main:main": sessionEntry };
 
-      expect(await resolveSession({ agentDir, sessionEntry, sessionStore })).toBe(
-        API_PRIMARY_PROFILE_ID,
-      );
-      expect(sessionEntry.authProfileOverride).toBe(API_PRIMARY_PROFILE_ID);
+      expect(await resolveSession({ agentDir, sessionEntry })).toBe(API_PRIMARY);
+      expect(sessionEntry.authProfileOverride).toBe(API_PRIMARY);
       expect(sessionEntry.authProfileOverrideCompactionCount).toBe(0);
       expect(sessionEntry.updatedAt).toBe(1);
-    });
-  });
+    }));
 
-  it("rotates a cooled multi-route OpenAI session within its physical route", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      configureMixedOpenAiAuthStore();
-      authStoreMocks.state.store.order = {
-        openai: [OAUTH_PROFILE_ID, API_PRIMARY_PROFILE_ID, API_BACKUP_PROFILE_ID],
-      };
-      configureProviderRoutes({
-        provider: "openai",
-        modelId: OPENAI_MODEL_ID,
-        requirements: ["api-key", "subscription"],
-      });
+  it("rotates a cooled multi-route OpenAI session within its physical route", () =>
+    withAuthState(async (state) => {
+      const agentDir = await prepareMixedAuth(state);
+      authStoreMocks.state.store.order = { openai: [OAUTH, API_PRIMARY, API_BACKUP] };
+      configureProviderRoutes(["api-key", "subscription"]);
       authStoreMocks.state.store.usageStats = {
-        [API_PRIMARY_PROFILE_ID]: {
-          cooldownUntil: Date.now() + 60_000,
-          cooldownReason: "rate_limit",
-        },
+        [API_PRIMARY]: { cooldownUntil: Date.now() + 60_000, cooldownReason: "rate_limit" },
       };
       authStoreMocks.isProfileInCooldown.mockImplementation(
-        (_store, profileId) => profileId === API_PRIMARY_PROFILE_ID,
+        (_store, profileId) => profileId === API_PRIMARY,
       );
-      const sessionEntry = createAutomaticSessionEntry({
-        authProfileOverride: API_PRIMARY_PROFILE_ID,
-        model: OPENAI_MODEL_ID,
+      const sessionEntry = automaticSession({
+        authProfileOverride: API_PRIMARY,
+        model: MODEL,
         compactionCount: 0,
         authProfileOverrideCompactionCount: 0,
       });
-      const sessionStore = { "agent:main:main": sessionEntry };
 
-      const resolved = await resolveSession({ agentDir, sessionEntry, sessionStore });
+      const resolved = await resolveSession({ agentDir, sessionEntry });
 
-      expect(resolved).toBe(API_BACKUP_PROFILE_ID);
-      expect(sessionEntry.authProfileOverride).toBe(API_BACKUP_PROFILE_ID);
+      expect(resolved).toBe(API_BACKUP);
+      expect(sessionEntry.authProfileOverride).toBe(API_BACKUP);
       expect(sessionEntry.authProfileOverrideSource).toBe("auto");
       expect(sessionEntry.authProfileOverrideCompactionCount).toBe(0);
-    });
-  });
+    }));
 });

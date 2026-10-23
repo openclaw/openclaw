@@ -7,28 +7,21 @@ import type { SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
+  loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { projectCronSessionEntry } from "../../config/sessions/session-entry-patch-operation.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-
-const resetBoundaryMocks = vi.hoisted(() => ({
-  clearBootstrap: vi.fn(),
-}));
-
-vi.mock("../../agents/bootstrap-cache.js", () => ({
-  clearBootstrapSnapshotOnSessionBoundary: resetBoundaryMocks.clearBootstrap,
-}));
+import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import {
   adoptCronRunSessionMetadata,
-  CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
   syncCronSessionLiveSelection,
@@ -59,14 +52,12 @@ function makeCronSession(
   } as MutableCronSession;
 }
 
-/**
- * Guarded-persist seam backed by an in-memory persisted row, mirroring the
- * accessor contract: `update` sees the freshest persisted entry (undefined
- * when absent), may throw to reject a stale claim, and its return is committed.
- */
+/** In-memory adapter for the same closed operation used by the session writer. */
 function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEntry>) {
   return vi.fn<CronSessionRowWriter>(async (params) => {
-    persistedStore[params.sessionKey] = params.update(persistedStore[params.sessionKey]);
+    const entry = projectCronSessionEntry(params.operation, persistedStore[params.sessionKey]);
+    persistedStore[params.sessionKey] = entry;
+    return entry;
   });
 }
 
@@ -142,7 +133,6 @@ describe("createPersistCronSessionEntry", () => {
   // transcript used to create the header from process.cwd(), so the window
   // persisted the gateway process directory as its workspace.
   it("records the cron workspace in the header when a stale reset lands on an empty window", async () => {
-    resetBoundaryMocks.clearBootstrap.mockClear();
     const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     const agentSessionKey = "agent:main:cron:stale-empty-window";
@@ -176,11 +166,12 @@ describe("createPersistCronSessionEntry", () => {
         sessionKey,
         storePath: rowStorePath,
         resetBoundary,
-        update,
+        operation,
       }) => {
         if (!resetBoundary) {
           throw new Error("expected a pending cron reset boundary");
         }
+        let entry = operation.next;
         await applySessionEntryLifecycleMutation({
           activeSessionKey: sessionKey,
           agentId: "main",
@@ -189,11 +180,13 @@ describe("createPersistCronSessionEntry", () => {
             {
               sessionKey,
               resetBoundary,
-              buildEntry: ({ currentEntry }) => update(currentEntry),
+              buildEntry: ({ currentEntry }) =>
+                (entry = projectCronSessionEntry(operation, currentEntry)),
             },
           ],
           skipMaintenance: true,
         });
+        return entry;
       },
     })();
 
@@ -219,10 +212,6 @@ describe("createPersistCronSessionEntry", () => {
     }
     expect(cronSession.store[agentSessionKey]?.sessionId).toBe("cron-next-window");
     expect(cronSession.resetBoundaryPending).toBeUndefined();
-    expect(resetBoundaryMocks.clearBootstrap).toHaveBeenCalledWith({
-      boundaryAppended: true,
-      sessionKey: agentSessionKey,
-    });
   });
 
   it("keeps a pending reset boundary when the guarded row commit fails", async () => {
@@ -250,7 +239,9 @@ describe("createPersistCronSessionEntry", () => {
   it("owns an exact hidden continuation row without colliding with another run", async () => {
     const runSessionKey = "agent:main:cron:job:run:run-session-id";
     const lifecycleRevision = crypto.randomUUID();
-    const replacementLifecycleRevision = crypto.randomUUID();
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const scope = { storePath, sessionKey: runSessionKey };
+    const read = () => loadSessionEntry(scope);
     const cronSession = {
       ...makeCronSession(
         makeSessionEntry({
@@ -261,11 +252,10 @@ describe("createPersistCronSessionEntry", () => {
           previousSessionId: "base-prior-generation",
           forkSource: { sessionKey: "agent:main:other", sessionId: "other-generation" },
         }),
+        storePath,
       ),
       lifecycleRevision,
     } as MutableCronSession;
-    const store: Record<string, SessionEntry> = {};
-    const persistSessionEntry = makeGuardedPersistSessionEntry(store);
     const continuation = createCronRunContinuationSession({
       cronSession,
       runSessionKey,
@@ -286,40 +276,33 @@ describe("createPersistCronSessionEntry", () => {
         target: { version: 1, host: "gateway", ask: "always" },
         grantIndex: 1,
       },
-      persistSessionEntry,
     });
 
     await continuation.initialize();
     await continuation.sync();
-    expect(persistSessionEntry).toHaveBeenCalledTimes(1);
-    expect(persistSessionEntry).toHaveBeenCalledWith({
-      fallbackEntry: expect.objectContaining({ sessionId: "run-session-id" }),
-      sessionKey: runSessionKey,
-      storePath: cronSession.storePath,
-      update: expect.any(Function),
-    });
-    expect(store[runSessionKey]?.previousSessionId).toBeUndefined();
-    expect(store[runSessionKey]?.forkSource).toBeUndefined();
-    expect(store[runSessionKey]?.cronRunContinuation?.toolsAllowExecTarget).toEqual({
+    let persisted = read();
+    expect(persisted?.previousSessionId).toBeUndefined();
+    expect(persisted?.forkSource).toBeUndefined();
+    expect(persisted?.cronRunContinuation?.toolsAllowExecTarget).toEqual({
       version: 1,
       host: "gateway",
       ask: "always",
     });
-    expect(store[runSessionKey]?.cronRunContinuation?.toolsAllowExecTargetRequirement).toEqual({
+    expect(persisted?.cronRunContinuation?.toolsAllowExecTargetRequirement).toEqual({
       version: 1,
       target: { version: 1, host: "gateway", ask: "always" },
       grantIndex: 1,
     });
-    expect(store[runSessionKey]?.cronRunContinuation?.scheduledToolPolicy).toEqual({
+    expect(persisted?.cronRunContinuation?.scheduledToolPolicy).toEqual({
       version: 1,
       mode: "account",
       ownerSessionKey: "agent:main:discord:group:ops",
       ownerAccountId: "work",
     });
-    expect(store[runSessionKey]?.cronRunContinuation?.scheduledToolCallerOrigin).toEqual({
+    expect(persisted?.cronRunContinuation?.scheduledToolCallerOrigin).toEqual({
       kind: "local",
     });
-    expect(store[runSessionKey]).toMatchObject({
+    expect(persisted).toMatchObject({
       createdVia: "cron",
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
       createdAt: expect.any(Number),
@@ -337,72 +320,73 @@ describe("createPersistCronSessionEntry", () => {
 
     const cliBinding = { sessionId: "native-claude-session", forceReuse: true };
     cronSession.sessionEntry.cliSessionBindings = { "claude-cli": cliBinding };
-    const writesBeforeSelection = persistSessionEntry.mock.calls.length;
     await continuation.sync(undefined, { cliExecutionProvider: "claude-cli" });
-    expect(persistSessionEntry.mock.calls.length).toBe(writesBeforeSelection + 1);
-    expect(store[runSessionKey]?.cronRunContinuation?.cliExecutionProvider).toBe("claude-cli");
-    expect(store[runSessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
+    persisted = read();
+    expect(persisted?.cronRunContinuation?.cliExecutionProvider).toBe("claude-cli");
+    expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({
       sessionId: "native-claude-session",
       forceReuse: true,
     });
     await continuation.sync(undefined, { cliExecutionProvider: "claude-cli" });
-    expect(persistSessionEntry.mock.calls.length).toBe(writesBeforeSelection + 1);
 
     cliBinding.sessionId = "updated-native-session";
-    persistSessionEntry.mockRejectedValueOnce(new Error("write failed"));
-    await expect(continuation.sync()).rejects.toThrow("write failed");
+    await expect(
+      continuation.sync(() => {
+        throw new Error("write failed");
+      }),
+    ).rejects.toThrow("write failed");
     await continuation.sync();
-    expect(store[runSessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
-      "updated-native-session",
-    );
+    persisted = read();
+    expect(persisted?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("updated-native-session");
 
     await continuation.sync(undefined, {});
-    expect(store[runSessionKey]?.cronRunContinuation?.cliExecutionProvider).toBeUndefined();
-    expect(store[runSessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
-      "updated-native-session",
-    );
+    persisted = read();
+    expect(persisted?.cronRunContinuation?.cliExecutionProvider).toBeUndefined();
+    expect(persisted?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("updated-native-session");
+
+    const current = persisted!;
+    await replaceSessionEntry(scope, { ...current, label: "owner metadata" });
+    delete cronSession.sessionEntry.cliSessionBindings;
+    await continuation.sync();
+    persisted = read();
+    expect(persisted?.label).toBe("owner metadata");
+    expect(persisted?.cliSessionBindings).toBeUndefined();
 
     await continuation.seal({ basePersisted: true });
-    expect(store[runSessionKey]?.cronRunContinuation).toMatchObject({
+    persisted = read();
+    expect(persisted?.cronRunContinuation).toMatchObject({
       phase: "ready",
       basePersisted: true,
     });
     cronSession.sessionEntry.model = "newer-owner-model";
     await expect(continuation.sync()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
-    expect(store[runSessionKey]?.model).toBe("claude-opus-4-8");
+    expect(read()?.model).toBe("claude-opus-4-8");
 
-    store[runSessionKey] = makeSessionEntry({
-      sessionId: "continued-session-id",
-      modelProvider: "anthropic",
-      model: "claude-sonnet-4-6",
-      cronRunContinuation: {
-        lifecycleRevision,
-        phase: "continuing",
-        ownerRunId: "completion-run",
-      },
-    });
-    await expect(continuation.sync()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
-    const writesAfterSeal = persistSessionEntry.mock.calls.length;
-    await continuation.seal();
-    expect(persistSessionEntry.mock.calls.length).toBe(writesAfterSeal);
-    expect(store[runSessionKey]).toMatchObject({
-      sessionId: "continued-session-id",
-      modelProvider: "anthropic",
-      model: "claude-sonnet-4-6",
-      cronRunContinuation: {
-        lifecycleRevision,
-        phase: "continuing",
-        ownerRunId: "completion-run",
-      },
-    });
-
-    store[runSessionKey] = makeSessionEntry({
-      cronRunContinuation: { lifecycleRevision: replacementLifecycleRevision, phase: "ready" },
-    });
-    await expect(continuation.sync()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
-    expect(store[runSessionKey]?.cronRunContinuation?.lifecycleRevision).toBe(
-      replacementLifecycleRevision,
+    await replaceSessionEntry(
+      scope,
+      makeSessionEntry({
+        sessionId: "continued-session-id",
+        modelProvider: "anthropic",
+        model: "claude-sonnet-4-6",
+        cronRunContinuation: {
+          lifecycleRevision,
+          phase: "continuing",
+          ownerRunId: "completion-run",
+        },
+      }),
     );
+    await expect(continuation.sync()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
+    await continuation.seal();
+    expect(read()).toMatchObject({
+      sessionId: "continued-session-id",
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      cronRunContinuation: {
+        lifecycleRevision,
+        phase: "continuing",
+        ownerRunId: "completion-run",
+      },
+    });
   });
 
   it("retains the required base creator when a continuation is created after job ownership changes", async () => {
@@ -415,143 +399,129 @@ describe("createPersistCronSessionEntry", () => {
         sandbox: "required",
         lifecycleRevision,
       }),
+      path.join(sessionDirs.make(), "sessions.json"),
     );
     cronSession.lifecycleRevision = lifecycleRevision;
     const runSessionKey = "agent:main:cron:job:run:required";
-    const store: Record<string, SessionEntry> = {};
     const continuation = createCronRunContinuationSession({
       cronSession,
       runSessionKey,
       createdActor: { type: "human", source: "profile", id: "profile-current-job-owner" },
-      persistSessionEntry: makeGuardedPersistSessionEntry(store),
     });
     await continuation.initialize();
     await continuation.sync();
-    expect(store[runSessionKey]).toMatchObject({ createdActor: creator, sandbox: "required" });
+    expect(
+      loadSessionEntry({ storePath: cronSession.storePath, sessionKey: runSessionKey }),
+    ).toMatchObject({
+      createdActor: creator,
+      sandbox: "required",
+    });
   });
 
-  it("retains resume fields for a message transcript without caller SQL", async () => {
-    const dir = sessionDirs.make();
-    const storePath = path.join(dir, "sessions.json");
-    const scope = {
-      agentId: "main",
-      sessionId: "run-session-id",
-      sessionKey: "agent:main:cron:completed",
-      storePath,
-    };
-    await appendTranscriptMessage(scope, { message: { role: "user", content: "cron prompt" } });
+  it("does not overwrite a continuation handed to another owner", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const runSessionKey = "agent:main:cron:job:run:handoff";
+    const lifecycleRevision = crypto.randomUUID();
+    const cronSession = makeCronSession(makeSessionEntry({ lifecycleRevision }), storePath);
+    cronSession.lifecycleRevision = lifecycleRevision;
+    const continuation = createCronRunContinuationSession({ cronSession, runSessionKey });
+    await continuation.initialize();
+    const scope = { storePath, sessionKey: runSessionKey };
+    const ready = makeSessionEntry({
+      label: "already sealed",
+      cronRunContinuation: { lifecycleRevision, phase: "ready", basePersisted: true },
+    });
+    await replaceSessionEntry(scope, ready);
+    await continuation.seal();
+    expect(loadSessionEntry(scope)).toMatchObject(ready);
+    const staleOwner = createCronRunContinuationSession({ cronSession, runSessionKey });
+    const handedOff = makeSessionEntry({
+      label: "detached owner",
+      cronRunContinuation: { lifecycleRevision, phase: "continuing", ownerRunId: "detached" },
+    });
+    await replaceSessionEntry(scope, handedOff);
+    cronSession.sessionEntry.label = "stale cron owner";
+    await expect(staleOwner.initialize()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
+    expect(loadSessionEntry(scope)).toMatchObject(handedOff);
+  });
+
+  it("retains embedded attempt timestamps before a transcript exists", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const sessionKey = "agent:main:cron:embedded-attempt";
     const cronSession = makeCronSession(
-      makeSessionEntry({
-        label: "Cron: completed",
-        sessionStartedAt: 1000,
-        cliSessionIds: { "claude-cli": "retained-cli-session" },
-      }),
+      makeSessionEntry({ sessionStartedAt: 1000, lastInteractionAt: 1000 }),
       storePath,
     );
-
+    const persistedStore: Record<string, SessionEntry> = {};
     const persist = createPersistCronSessionEntry({
       cronSession,
-      agentSessionKey: "agent:main:cron:completed",
-      workspaceDir: "/tmp/workspace",
-      persistSessionEntry: vi.fn(async () => {}),
-    });
-
-    const reads = observeHostDataSql();
-    try {
-      await persist();
-      expect(reads.queries).toEqual([]);
-    } finally {
-      reads.restore();
-    }
-
-    expect(cronSession.store["agent:main:cron:completed"]).toEqual({
-      sessionId: "run-session-id",
-      label: "Cron: completed",
-      sessionStartedAt: 1000,
-      cliSessionIds: { "claude-cli": "retained-cli-session" },
-      updatedAt: 1000,
-      systemSent: true,
-    });
-  });
-
-  it("does not let an older concurrent run reclaim a persisted lifecycle revision", async () => {
-    const sessionKey = "agent:main:session";
-    const initialSessionEntry = makeSessionEntry({ lifecycleRevision: "initial-revision" });
-    const persistedStore: Record<string, SessionEntry> = {
-      [sessionKey]: initialSessionEntry,
-    };
-    const makeConcurrentSession = (lifecycleRevision: string): MutableCronSession =>
-      ({
-        ...makeCronSession(
-          makeSessionEntry({
-            lifecycleRevision,
-            label: lifecycleRevision,
-          }),
-        ),
-        initialSessionEntry,
-        lifecycleRevision,
-      }) as MutableCronSession;
-    const persistSessionEntry = makeGuardedPersistSessionEntry(persistedStore);
-    const olderSession = makeConcurrentSession("older-revision");
-    const newerSession = makeConcurrentSession("newer-revision");
-    const persistOlder = createPersistCronSessionEntry({
-      cronSession: olderSession,
-      agentSessionKey: sessionKey,
-      workspaceDir: "/tmp/workspace",
-      persistSessionEntry,
-    });
-    const persistNewer = createPersistCronSessionEntry({
-      cronSession: newerSession,
-      agentSessionKey: sessionKey,
-      workspaceDir: "/tmp/workspace",
-      persistSessionEntry,
-    });
-
-    await persistNewer();
-    await expect(persistOlder()).rejects.toThrow(
-      `Session "${sessionKey}" changed while starting work. Retry.`,
-    );
-
-    expect(persistedStore[sessionKey]).toStrictEqual(newerSession.sessionEntry);
-    expect(olderSession.store[sessionKey]).toBeUndefined();
-  });
-
-  it("does not replace a lifecycle revision while its owner is admitted", async () => {
-    const sessionKey = "agent:main:session";
-    const storePath = "/tmp/sessions-active-lifecycle.json";
-    const activeRevision = crypto.randomUUID();
-    const nextRevision = crypto.randomUUID();
-    const activeEntry = makeSessionEntry({ lifecycleRevision: activeRevision });
-    const persistedStore: Record<string, SessionEntry> = { [sessionKey]: activeEntry };
-    const nextSession = {
-      ...makeCronSession(makeSessionEntry({ lifecycleRevision: nextRevision })),
-      initialSessionEntry: activeEntry,
-      lifecycleRevision: nextRevision,
-      storePath,
-    } as MutableCronSession;
-    const persistNext = createPersistCronSessionEntry({
-      cronSession: nextSession,
       agentSessionKey: sessionKey,
       workspaceDir: "/tmp/workspace",
       persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
     });
-    const activeLease = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [`cron-lifecycle-revision:${activeRevision}`],
-      assertAllowed: () => {},
-    });
 
-    try {
-      await expect(persistNext()).rejects.toThrow(
-        `Session "${sessionKey}" changed while starting work. Retry.`,
-      );
-      expect(persistedStore[sessionKey]).toBe(activeEntry);
-    } finally {
-      activeLease.release();
-    }
-    await expect(persistNext()).resolves.toBeUndefined();
-    expect(persistedStore[sessionKey]).toStrictEqual(nextSession.sessionEntry);
+    await persist();
+    cronSession.sessionEntry.lastInteractionAt = 2000;
+    await persist();
+
+    expect(persistedStore[sessionKey]).toMatchObject({
+      sessionStartedAt: 1000,
+      lastInteractionAt: 2000,
+    });
   });
+
+  it.each([false, true])(
+    "persists native resume fields only with a transcript (present: %s) without caller SQL",
+    async (transcriptPresent) => {
+      const dir = sessionDirs.make();
+      const storePath = path.join(dir, "sessions.json");
+      const scope = {
+        agentId: "main",
+        sessionId: "run-session-id",
+        sessionKey: "agent:main:cron:completed",
+        storePath,
+      };
+      if (transcriptPresent) {
+        await appendTranscriptMessage(scope, { message: { role: "user", content: "cron prompt" } });
+      }
+      const cronSession = makeCronSession(
+        makeSessionEntry({
+          label: "Cron: completed",
+          sessionStartedAt: 1000,
+          cliSessionIds: { "claude-cli": "retained-cli-session" },
+        }),
+        storePath,
+      );
+
+      const persist = createPersistCronSessionEntry({
+        cronSession,
+        agentSessionKey: "agent:main:cron:completed",
+        workspaceDir: "/tmp/workspace",
+        persistSessionEntry: vi.fn<CronSessionRowWriter>(async ({ operation }) => operation.next),
+      });
+
+      const reads = observeHostDataSql();
+      try {
+        await persist();
+        expect(reads.queries).toEqual([]);
+      } finally {
+        reads.restore();
+      }
+
+      expect(cronSession.store["agent:main:cron:completed"]).toEqual({
+        sessionId: "run-session-id",
+        label: "Cron: completed",
+        ...(transcriptPresent
+          ? {
+              sessionStartedAt: 1000,
+              cliSessionIds: { "claude-cli": "retained-cli-session" },
+            }
+          : {}),
+        updatedAt: 1000,
+        systemSent: true,
+      });
+    },
+  );
 
   it("claims an initial row after a benign concurrent same-generation field write", async () => {
     // Repro for the session-store claim race: under a large, busy store a
@@ -803,7 +773,9 @@ describe("createPersistCronSessionEntry", () => {
         sessionFile: "/tmp/bound-session-rotated.jsonl",
       },
     });
-    const persistSessionEntry = vi.fn(async () => {});
+    const persistSessionEntry = vi.fn<CronSessionRowWriter>(
+      async ({ operation }) => operation.next,
+    );
 
     expect(changed).toBe(true);
     const persist = createPersistCronSessionEntry({
@@ -821,18 +793,6 @@ describe("createPersistCronSessionEntry", () => {
       usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
       updatedAt: 1000,
       systemSent: true,
-    });
-    expect(persistSessionEntry).toHaveBeenCalledWith({
-      storePath: "/tmp/sessions.json",
-      sessionKey: "agent:main:telegram:direct:42",
-      fallbackEntry: {
-        sessionId: "bound-session-rotated",
-        usageFamilyKey: "agent:main:telegram:direct:42",
-        usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
-        updatedAt: 1000,
-        systemSent: true,
-      },
-      update: expect.any(Function),
     });
   });
 });

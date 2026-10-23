@@ -608,7 +608,7 @@ async function configureProvidersInteractive(
           continue;
         }
       }
-      setSecretProvider(config, preset.providerAlias, structuredClone(preset.providerConfig));
+      setSecretProvider(config, preset.providerAlias, preset.providerConfig);
       continue;
     }
 

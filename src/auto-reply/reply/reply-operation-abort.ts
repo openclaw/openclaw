@@ -7,8 +7,8 @@ import {
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
-import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 
 export function buildRestartLifecycleReplyText(): string {
   return "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
@@ -73,24 +73,23 @@ export function resolveReplyOperationAbortReason(
   error?: unknown,
   signal: AbortSignal | undefined = replyOperation?.abortSignal,
 ): "user" | "restart" | "superseded" | undefined {
+  const errorStopReason = resolveAgentRunErrorLifecycleFields(error, undefined).stopReason;
   // Operation-owned settlement precedes the caller signal, which precedes thrown markers.
   return hasReplyOperationAbort(replyOperation, "aborted_for_restart", isAgentRunRestartAbortReason)
     ? "restart"
     : isReplyOperationSuperseded(replyOperation)
       ? "superseded"
       : (resolveSignalAbortReason(signal) ??
-        (isAgentRunRestartAbortReason(error)
+        (errorStopReason === "restart"
           ? "restart"
-          : isAgentRunSupersededAbortReason(error)
+          : errorStopReason === "superseded"
             ? "superseded"
             : isAgentRunDirectAbortReason(error) || isReplyOperationUserAbort(replyOperation)
               ? "user"
               : undefined));
 }
 
-export function resolveRestartLifecycleError(
-  error: unknown,
-): GatewayDrainingError | CommandLaneClearedError | undefined {
+export function resolveRestartLifecycleError(error: unknown): GatewayDrainingError | undefined {
   const pending = [error];
   const seen = new Set<unknown>();
   for (const candidate of pending) {
@@ -98,7 +97,7 @@ export function resolveRestartLifecycleError(
       continue;
     }
     seen.add(candidate);
-    if (candidate instanceof GatewayDrainingError || candidate instanceof CommandLaneClearedError) {
+    if (candidate instanceof GatewayDrainingError) {
       return candidate;
     }
     if (isFallbackSummaryError(candidate)) {

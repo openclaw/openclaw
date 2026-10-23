@@ -9,13 +9,13 @@ import {
   type PlainTextToolCallMessageNormalization,
   type PlainTextToolCallNameMatcher,
 } from "../../../../packages/tool-call-repair/src/index.js";
+import { mapAssistantMessageStream } from "../../../llm/utils/stream-wrapper.js";
 import { findCodeRegions } from "../../../shared/text/code-regions.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { isThinkingLikeBlock } from "../../thinking-block.js";
 import { couldNormalizeToolNamePrefixToAllowedTool } from "../../tool-policy.js";
 import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
-import { mapAssistantMessageStream } from "./stream-wrapper.js";
 
 type AssistantStream = Awaited<ReturnType<StreamFn>>;
 
@@ -86,12 +86,8 @@ function wrapStreamPromoteStandaloneTextToolCalls(
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    const reason =
-      message && typeof message === "object"
-        ? (message as { stopReason?: unknown }).stopReason
-        : undefined;
     return (normalizeTerminalMessage({
-      allowPromotion: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS.has(reason),
+      allowPromotion: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS.has(message.stopReason),
       message,
     })?.message ?? message) as Awaited<ReturnType<typeof originalResult>>;
   };

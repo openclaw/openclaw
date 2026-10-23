@@ -33,6 +33,7 @@ export function scopeCodexRunBindingStore(params: {
     ...params.bindingStore,
     read: (identity) => params.bindingStore.read(mapIdentity(identity)),
     readAsync: (identity) => params.bindingStore.readAsync(mapIdentity(identity)),
+    prepareRead: (identity) => params.bindingStore.prepareRead(mapIdentity(identity)),
     readMany: (identities) => params.bindingStore.readMany(identities.map(mapIdentity)),
     readNativeSubagentAssignments: async (identity, owner) =>
       (

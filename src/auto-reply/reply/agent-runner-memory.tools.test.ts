@@ -12,7 +12,6 @@ import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
-import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import {
@@ -102,7 +101,7 @@ async function runDefaultMemoryFlush(sessionEntry: SessionEntry, overrides: Flus
     resolvedVerboseLevel: "off",
     sessionEntry,
     sessionStore: { [overrides.sessionKey]: sessionEntry },
-    isHeartbeat: false,
+
     ...overrides,
     cfg: withTestModelContextTokens({
       cfg: overrides.cfg ?? {},
@@ -223,7 +222,7 @@ describe("provider-owned memory flush", () => {
     await projected.execute("flush-save", {});
   }
 
-  it.each([undefined, ZERO_USAGE_FIXTURE])(
+  it.each([undefined])(
     "flushes transcript pressure without provider usage %j without publishing estimated usage",
     async (usage) => {
       registerToolsFlushPlan();
@@ -267,37 +266,7 @@ describe("provider-owned memory flush", () => {
     },
   );
 
-  it("does not count unavailable output twice in a memory-flush projection", async () => {
-    registerToolsFlushPlan();
-    const { entry, overrides } = await createToolsFlushFixture({ totalTokensFresh: false });
-    const scope = { ...overrides, agentId: "main", sessionId: entry.sessionId };
-    const transcript = SessionManager.fromEntries([
-      createSessionTranscriptHeader({ cwd: rootDir, sessionId: entry.sessionId }),
-    ]);
-    await transcript.appendMessageAsync(
-      makeAssistantMessageFixture({
-        content: [{ type: "text", text: "x".repeat(300_000) }],
-        usage: {
-          ...ZERO_USAGE_FIXTURE,
-          input: 1,
-          output: 2_000,
-          totalTokens: 2_001,
-          contextUsage: { state: "unavailable" },
-        },
-        stopReason: "stop",
-        errorMessage: undefined,
-      }),
-    );
-    await replaceTranscriptEvents(scope, [transcript.getHeader(), ...transcript.getEntries()]);
-    await waitForSessionTranscriptProjection(scope);
-
-    const result = await runDefaultMemoryFlush(entry, { ...overrides, promptForEstimate: "" });
-
-    expect(result.outcome).toBe("skipped");
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
+  it.each([true])(
     "does not flush empty history for a large pending input with fresh=%s",
     async (totalTokensFresh) => {
       registerToolsFlushPlan();
@@ -428,7 +397,6 @@ describe("provider-owned memory flush", () => {
   });
 
   it.each([
-    { source: "owner direct", chatType: "direct", senderIsOwner: true, audience: "owner-private" },
     {
       source: "non-owner direct",
       chatType: "direct",

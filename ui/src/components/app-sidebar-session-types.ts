@@ -14,6 +14,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus } from "../api/types.ts";
+import type { SidebarZoneEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import type { SessionRowAttention } from "../lib/session-attention.ts";
@@ -30,7 +31,7 @@ import {
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
-import type { SessionPlacementState } from "./session-row-badges.ts";
+import type { SessionPlacementState } from "./session-row-badge-presentation.ts";
 
 type SidebarAttentionRequest = {
   kind: "question" | "approval";
@@ -91,11 +92,12 @@ export type SidebarToolActivity = {
   text?: string;
 };
 
-export type SidebarRecentSession = {
+export type SidebarRecentSession = Readonly<{
   key: string;
   agentId?: string;
   sessionId?: string;
   displayName?: string;
+  titlePending?: boolean;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
   owner?: SessionOwner;
@@ -116,6 +118,8 @@ export type SidebarRecentSession = {
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
+  /** Defaults to logical activity for rows without a live activity projection. */
+  isRunVisuallyActive?: boolean;
   /** Raw Gateway liveness used for operations even when display status is terminal. */
   gatewayHasActiveRun?: boolean;
   hasActiveSubagentRun?: boolean;
@@ -203,7 +207,7 @@ export type SidebarRecentSession = {
   containsActiveDescendant: boolean;
   runningChildCount: number;
   failedChildCount: number;
-};
+}>;
 
 export type SidebarSessionHovercardRow = Pick<
   SidebarRecentSession,
@@ -256,6 +260,20 @@ export function rowDemandsVisibility(
         row.attention.kind !== "none";
 }
 
+const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
+export function visibleSessionChildren(params: {
+  session: SidebarRecentSession;
+  fullyShown: boolean;
+}): readonly SidebarRecentSession[] {
+  // Active, running, and attention-bearing branches must bypass the quiet-child cap.
+  return params.fullyShown
+    ? params.session.children
+    : params.session.children.filter(
+        (child, index) =>
+          index < SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT || rowDemandsVisibility(child),
+      );
+}
+
 export type SidebarSessionMenuState = {
   session: SidebarRecentSession;
   x: number;
@@ -284,6 +302,7 @@ export type SidebarSectionDropTarget = {
 
 export type SidebarSessionMutationScope = {
   epoch: number;
+  allowDeferred?: boolean;
   context: ApplicationContext;
   gateway: ApplicationContext["gateway"];
   sessions: SessionCapability;
@@ -544,3 +563,16 @@ export const SIDEBAR_SESSION_STATUS_OPTIONS = ["active", "snoozed", "archived", 
 export function sessionCatalogHostKey(catalogId: string, hostId: string): string {
   return `${catalogId}\u0000${hostId}`;
 }
+
+/** Archived pins leave Pinned so the archived view can still list them in place. */
+export function isListedInPinnedSection(
+  row: Pick<SidebarRecentSession, "key" | "archived">,
+  pinnedKeys: ReadonlySet<string>,
+): boolean {
+  return pinnedKeys.has(row.key) && row.archived !== true;
+}
+
+export type SidebarPinZone = {
+  entries: readonly SidebarZoneEntry[];
+  sessionRows: ReadonlyMap<string, SidebarRecentSession>;
+};

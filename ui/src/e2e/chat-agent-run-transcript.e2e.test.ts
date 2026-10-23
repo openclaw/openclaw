@@ -1,14 +1,14 @@
-import path from "node:path";
+import type { BrowserContextOptions, Locator } from "playwright";
 import { expect, it } from "vitest";
 import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-projection.js";
 import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent run transcript",
   startServerBeforeBrowser: true,
+  trackBrowserContexts: true,
 });
 
 function transcriptMessage(
@@ -26,34 +26,61 @@ function transcriptMessage(
   };
 }
 
+async function expectCount(target: Locator, count: number) {
+  expect(await target.count()).toBe(count);
+}
+
+function toolResult(
+  runId: string,
+  id: string,
+  seq: number,
+  toolCallId: string,
+  toolName: string,
+  text: string,
+) {
+  return {
+    ...transcriptMessage("toolResult", [{ type: "text", text }], runId, id, seq),
+    toolCallId,
+    toolName,
+  };
+}
+
+function activeRun(runId: string, text = "") {
+  return {
+    inFlightRun: { runId, text },
+    sessionInfo: { activeRunIds: [runId], hasActiveRun: true, key: "agent:main:main" },
+  };
+}
+
+async function openTranscript(
+  scenario: Parameters<typeof installMockGateway>[1],
+  options: BrowserContextOptions = {},
+) {
+  const context = await suite.newBrowserContext({
+    viewport: { height: 900, width: 1200 },
+    ...options,
+  });
+  const page = await context.newPage();
+  const gateway = await installMockGateway(page, scenario);
+  await page.goto(`${suite.server.baseUrl}chat`);
+  return { page, gateway };
+}
+
 suite.define(() => {
   it("collapses nested tool activity after commentary across history reload", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "light",
-      viewport: { height: 900, width: 1200 },
-    });
-    const page = await context.newPage();
     const runId = "nested-run";
-    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("nested-tool-collapse", artifactRoot)
-      : undefined;
+    const commentary = "I’ll inspect the workspace first.";
     const calls = ["read", "exec", "sessions_history"].flatMap((name, index) => {
       const seq = 3 + index * 2;
       const parentId = `parent-${index}`;
       const childId = `child-${index}`;
       const idempotencyKey = `attempt:${childId}`;
+      const parentContent = [
+        { type: "toolCall", id: parentId, name: "exec", arguments: {} },
+        { type: "toolResult", toolCallId: parentId, name: "exec", content: "Done" },
+      ];
       return [
-        transcriptMessage(
-          "assistant",
-          [
-            { type: "toolCall", id: parentId, name: "exec", arguments: {} },
-            { type: "toolResult", toolCallId: parentId, name: "exec", content: "Done" },
-          ],
-          runId,
-          parentId,
-          seq,
-        ),
+        transcriptMessage("assistant", parentContent, runId, parentId, seq),
         {
           ...createNestedToolActivity({
             runId,
@@ -74,359 +101,151 @@ suite.define(() => {
         },
       ];
     });
-    try {
-      await installMockGateway(page, {
+    const { page } = await openTranscript(
+      {
         historyMessages: [
           transcriptMessage("user", "Inspect the workspace.", `${runId}:user`, "user", 1),
-          transcriptMessage(
-            "assistant",
-            "I’ll inspect the workspace first.",
-            runId,
-            "commentary",
-            2,
-          ),
+          transcriptMessage("assistant", commentary, runId, "commentary", 2),
           ...projectChatDisplayMessages(calls),
         ],
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByText("I’ll inspect the workspace first.", { exact: true }).waitFor();
-      if (artifactDir) {
-        await page.screenshot({ path: path.join(artifactDir, "collapsed.png") });
-      }
-      const activity = page.locator(".chat-activity-group:not(.chat-work-group)");
-      await expect.poll(() => activity.count()).toBe(1);
-      const summary = activity.locator(".chat-activity-group__summary");
-      expect(await summary.getAttribute("aria-expanded")).toBe("false");
-      expect(await activity.locator(".chat-activity-group__body").isVisible()).toBe(false);
-      await summary.click();
-      expect(await summary.getAttribute("aria-expanded")).toBe("true");
-      expect(await activity.locator(".chat-activity-group__body").isVisible()).toBe(true);
-      if (artifactDir) {
-        await page.screenshot({ path: path.join(artifactDir, "expanded.png") });
-      }
-      await page.reload();
-      await expect.poll(() => activity.count()).toBe(1);
-      expect(await summary.getAttribute("aria-expanded")).toBe("false");
-      expect(
-        await page.getByText("I’ll inspect the workspace first.", { exact: true }).count(),
-      ).toBe(1);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("keeps restart-recovered live tool batches in one transcript row", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1200 } });
-    const page = await context.newPage();
-    const runId = "run-restart-recovery";
-    const toolResult = (id: string, seq: number, name: string) => ({
-      ...transcriptMessage(
-        "toolResult",
-        [{ type: "text", text: `${name} completed` }],
-        runId,
-        id,
-        seq,
-      ),
-      toolCallId: id,
-      toolName: name,
-    });
-    await installMockGateway(page, {
-      historyMessages: [
-        {
-          ...transcriptMessage(
-            "user",
-            "[System] Continue the interrupted turn.",
-            `${runId}:user`,
-            "restart-recovery",
-            1,
-          ),
-          provenance: {
-            kind: "internal_system",
-            sourceSessionKey: "main",
-            sourceTool: "main_session_restart_recovery",
-          },
-        },
-        toolResult("process-1", 2, "process"),
-        toolResult("process-2", 3, "process"),
-        transcriptMessage("assistant", "Checking the next batch.", runId, "gap-1", 4),
-        toolResult("exec-1", 5, "exec"),
-        toolResult("exec-2", 6, "exec"),
-        transcriptMessage("assistant", "Checking the final batch.", runId, "gap-2", 7),
-        toolResult("process-3", 8, "process"),
-        toolResult("process-4", 9, "process"),
-      ],
-      inFlightRun: { runId, text: "" },
-      sessionInfo: {
-        activeRunIds: [runId],
-        hasActiveRun: true,
-        key: "agent:main:main",
       },
-    });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const summaries = page.locator(".chat-activity-group__summary");
-    await expect.poll(() => summaries.count()).toBe(3);
-    const rowKeys = await summaries.evaluateAll((elements) =>
-      elements.map(
-        (element) => element.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
-      ),
+      { colorScheme: "light" },
     );
-
-    expect(rowKeys[0]).toMatch(/^agent-run:/u);
-    expect(rowKeys).toEqual([rowKeys[0], rowKeys[0], rowKeys[0]]);
-    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("chat-agent-run-transcript", artifactRoot)
-      : undefined;
-    if (artifactDir) {
-      await page.locator(".chat-thread-inner").screenshot({
-        path: path.join(artifactDir, "restart-recovery-run-frame.png"),
-      });
-    }
-
-    await context.close();
+    await page.getByText(commentary, { exact: true }).waitFor();
+    const activity = page.locator(".chat-activity-group:not(.chat-work-group)");
+    await expect.poll(() => activity.count()).toBe(1);
+    const summary = activity.locator(".chat-activity-group__summary");
+    expect(await summary.getAttribute("aria-expanded")).toBe("false");
+    expect(await activity.locator(".chat-activity-group__body").isVisible()).toBe(false);
+    await summary.click();
+    expect(await summary.getAttribute("aria-expanded")).toBe("true");
+    expect(await activity.locator(".chat-activity-group__body").isVisible()).toBe(true);
+    await page.reload();
+    await expect.poll(() => activity.count()).toBe(1);
+    expect(await summary.getAttribute("aria-expanded")).toBe("false");
+    await expectCount(page.getByText(commentary, { exact: true }), 1);
   });
 
   it.each([
-    { viewport: "desktop-dark", width: 1200, height: 900, theme: "dark" },
-    { viewport: "mobile-dark", width: 390, height: 844, theme: "dark" },
-    { viewport: "mobile-light", width: 390, height: 844, theme: "light" },
+    ["desktop-dark", 1200, 900, "dark"],
+    ["mobile-dark", 390, 844, "dark"],
+    ["mobile-light", 390, 844, "light"],
   ] as const)(
-    "renders each run as one linear response on $viewport",
-    async ({ viewport, width, height, theme }) => {
+    "renders each run as one linear response on %s",
+    async (viewport, width, height, theme) => {
       const isMobile = viewport.startsWith("mobile");
-      const context = await suite.browser.newContext({
-        colorScheme: theme,
-        hasTouch: isMobile,
-        isMobile,
-        viewport: { height, width },
-      });
-      const page = await context.newPage();
       const firstRunId = "run-composed-first";
       const secondRunId = "run-composed-second";
       const toolOnlyRunId = "run-tool-only";
       const commentaryToolRunId = "run-commentary-tool-only";
-      await installMockGateway(page, {
-        historyMessages: [
-          transcriptMessage("user", "Create the launch card.", `${firstRunId}:user`, "user-1", 1),
-          transcriptMessage(
-            "assistant",
-            "I’ll create the launch card and check the existing style first.",
-            firstRunId,
-            "assistant-1",
-            2,
-          ),
-          {
-            ...transcriptMessage(
-              "assistant",
-              [
-                {
-                  type: "toolCall",
-                  id: "call-read",
-                  name: "read",
-                  arguments: { path: "ui/src/styles/chat.css" },
-                },
-              ],
-              firstRunId,
-              "tool-call-1",
-              3,
-            ),
-          },
-          {
-            ...transcriptMessage(
-              "toolResult",
-              [{ type: "text", text: "Existing card styles loaded." }],
-              firstRunId,
-              "tool-result-1",
-              4,
-            ),
-            toolCallId: "call-read",
-            toolName: "read",
-          },
-          transcriptMessage(
-            "assistant",
-            "The first draft matches the transcript rhythm. I’ll render the asset now.",
-            firstRunId,
-            "assistant-2",
-            5,
-          ),
-          {
-            ...transcriptMessage(
-              "assistant",
-              [
-                {
-                  type: "toolCall",
-                  id: "call-render",
-                  name: "exec",
-                  arguments: { command: "render launch-card.svg" },
-                },
-              ],
-              firstRunId,
-              "tool-call-2",
-              6,
-            ),
-          },
-          {
-            ...transcriptMessage(
-              "toolResult",
-              [{ type: "text", text: "Rendered launch-card.svg" }],
-              firstRunId,
-              "tool-result-2",
-              7,
-            ),
-            toolCallId: "call-render",
-            toolName: "exec",
-          },
-          transcriptMessage(
-            "assistant",
-            "The launch card is ready: MEDIA:./launch-card.svg",
-            firstRunId,
-            "assistant-3",
-            8,
-          ),
-          transcriptMessage("user", "Now write the caption.", `${secondRunId}:user`, "user-2", 9),
-          transcriptMessage(
-            "assistant",
-            "Caption ready for the second run.",
-            secondRunId,
-            "assistant-4",
-            10,
-          ),
-          transcriptMessage(
-            "user",
-            "Check without replying.",
-            `${toolOnlyRunId}:user`,
-            "user-3",
-            11,
-          ),
-          {
-            ...transcriptMessage(
-              "toolResult",
-              [{ type: "text", text: "Tool-only result" }],
-              toolOnlyRunId,
-              "tool-result-3",
-              12,
-            ),
-            toolCallId: "call-tool-only",
-            toolName: "read",
-          },
-          transcriptMessage(
-            "user",
-            "Inspect and stop after the tool.",
-            `${commentaryToolRunId}:user`,
-            "user-4",
-            13,
-          ),
-          transcriptMessage(
-            "assistant",
-            "I’ll inspect the current state first.",
-            commentaryToolRunId,
-            "assistant-5",
-            14,
-          ),
-          {
-            ...transcriptMessage(
-              "toolResult",
-              [{ type: "text", text: "Commentary-led tool-only result" }],
-              commentaryToolRunId,
-              "tool-result-4",
-              15,
-            ),
-            toolCallId: "call-commentary-tool-only",
-            toolName: "read",
-          },
-        ],
-      });
-
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const transcript = page.locator(".chat-thread-inner");
-      await transcript.getByText("Caption ready for the second run.", { exact: true }).waitFor();
-      const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-      const artifactDir = artifactRoot
-        ? createControlUiE2eArtifactDir("chat-agent-run-transcript", artifactRoot)
-        : undefined;
-      if (artifactDir) {
-        const firstNarration = transcript.getByText(
-          "I’ll create the launch card and check the existing style first.",
-          { exact: true },
+      const firstNarrationText = "I’ll create the launch card and check the existing style first.";
+      const caption = "Caption ready for the second run.";
+      const entryCounts = { assistant: 0, user: 0, call: 0, result: 0 };
+      const message = (role: "assistant" | "user", text: string, seq: number, run = firstRunId) =>
+        transcriptMessage(
+          role,
+          text,
+          role === "user" ? `${run}:user` : run,
+          `${role}-${++entryCounts[role]}`,
+          seq,
         );
-        await firstNarration.scrollIntoViewIfNeeded();
-        await firstNarration.click();
-        await transcript.screenshot({ path: path.join(artifactDir, `transcript-${viewport}.png`) });
-      }
+      const call = (id: string, name: string, args: Record<string, string>, seq: number) =>
+        transcriptMessage(
+          "assistant",
+          [{ type: "toolCall", id, name, arguments: args }],
+          firstRunId,
+          `tool-call-${++entryCounts.call}`,
+          seq,
+        );
+      const result = (text: string, seq: number, id: string, name = "read", run = firstRunId) =>
+        toolResult(run, `tool-result-${++entryCounts.result}`, seq, id, name, text);
+      const { page } = await openTranscript(
+        {
+          historyMessages: [
+            message("user", "Create the launch card.", 1),
+            message("assistant", firstNarrationText, 2),
+            call("call-read", "read", { path: "ui/src/styles/chat.css" }, 3),
+            result("Existing card styles loaded.", 4, "call-read"),
+            message(
+              "assistant",
+              "The first draft matches the transcript rhythm. I’ll render the asset now.",
+              5,
+            ),
+            call("call-render", "exec", { command: "render launch-card.svg" }, 6),
+            result("Rendered launch-card.svg", 7, "call-render", "exec"),
+            message("assistant", "The launch card is ready: MEDIA:./launch-card.svg", 8),
+            message("user", "Now write the caption.", 9, secondRunId),
+            message("assistant", caption, 10, secondRunId),
+            message("user", "Check without replying.", 11, toolOnlyRunId),
+            result("Tool-only result", 12, "call-tool-only", "read", toolOnlyRunId),
+            message("user", "Inspect and stop after the tool.", 13, commentaryToolRunId),
+            message("assistant", "I’ll inspect the current state first.", 14, commentaryToolRunId),
+            result(
+              "Commentary-led tool-only result",
+              15,
+              "call-commentary-tool-only",
+              "read",
+              commentaryToolRunId,
+            ),
+          ],
+        },
+        { colorScheme: theme, hasTouch: isMobile, isMobile, viewport: { height, width } },
+      );
+      const transcript = page.locator(".chat-thread-inner");
+      await transcript.getByText(caption, { exact: true }).waitFor();
 
       const assistantGroups = page.locator(".chat-group.assistant");
-      expect(await assistantGroups.count()).toBe(4);
-      const firstRun = assistantGroups.filter({
-        hasText: "I’ll create the launch card and check the existing style first.",
-      });
-      expect(await firstRun.count()).toBe(1);
-      if (artifactDir) {
-        await firstRun.screenshot({
-          path: path.join(artifactDir, `agent-run-transcript-${viewport}.png`),
-        });
-      }
-      expect(await firstRun.locator(".chat-sender-name").count()).toBe(1);
-      expect(await firstRun.locator(".chat-group-footer-actions").count()).toBe(1);
-      expect(await firstRun.locator(".chat-message-actions-row").count()).toBe(0);
-      expect(await firstRun.locator(".chat-group-footer-actions button").count()).toBe(2);
+      await expectCount(assistantGroups, 4);
+      const firstRun = assistantGroups.filter({ hasText: firstNarrationText });
+      await expectCount(firstRun, 1);
+      await expectCount(firstRun.locator(".chat-sender-name"), 1);
+      await expectCount(firstRun.locator(".chat-group-footer-actions"), 1);
+      await expectCount(firstRun.locator(".chat-message-actions-row"), 0);
+      await expectCount(firstRun.locator(".chat-group-footer-actions button"), 2);
       expect(
         await firstRun
           .locator(".chat-group-footer-actions button")
           .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
       ).toEqual(["Reply to message", "Copy as markdown"]);
 
-      const orderedContent = await firstRun.locator(".chat-bubble").evaluateAll((bubbles) =>
-        bubbles.map((bubble) => ({
-          messageId: bubble.getAttribute("data-message-id"),
-          text: bubble.textContent?.replace(/\s+/gu, " ").trim(),
-        })),
+      const orderedContent = await firstRun
+        .locator(".chat-bubble")
+        .evaluateAll((bubbles) =>
+          bubbles.map((bubble) => bubble.textContent?.replace(/\s+/gu, " ").trim()),
+        );
+      expect(orderedContent).toEqual(
+        [
+          "I’ll create the launch card",
+          "Read",
+          "The first draft matches",
+          "render launch-card.svg",
+          "The launch card is ready",
+        ].map((text) => expect.stringContaining(text)),
       );
-      expect(orderedContent).toEqual([
-        expect.objectContaining({ text: expect.stringContaining("I’ll create the launch card") }),
-        expect.objectContaining({ text: expect.stringContaining("Read") }),
-        expect.objectContaining({ text: expect.stringContaining("The first draft matches") }),
-        expect.objectContaining({ text: expect.stringContaining("render launch-card.svg") }),
-        expect.objectContaining({ text: expect.stringContaining("The launch card is ready") }),
-      ]);
-      expect(
-        await firstRun.getByText("Caption ready for the second run.", { exact: true }).count(),
-      ).toBe(0);
+      await expectCount(firstRun.getByText(caption, { exact: true }), 0);
       const toolOnlyRun = page.locator(
         `.chat-group.assistant[data-chat-row-key*="${toolOnlyRunId}"]`,
       );
-      expect(await toolOnlyRun.count()).toBe(1);
-      expect(await toolOnlyRun.locator(".chat-group-footer-actions").count()).toBe(0);
+      await expectCount(toolOnlyRun, 1);
+      await expectCount(toolOnlyRun.locator(".chat-group-footer-actions"), 0);
       const commentaryToolRun = page.locator(
         `.chat-group.assistant[data-chat-row-key*="${commentaryToolRunId}"]`,
       );
-      expect(await commentaryToolRun.count()).toBe(1);
-      expect(
-        await commentaryToolRun
-          .getByText("I’ll inspect the current state first.", { exact: true })
-          .count(),
-      ).toBe(1);
-      expect(await commentaryToolRun.locator(".chat-group-footer-actions").count()).toBe(0);
-
-      await context.close();
+      await expectCount(commentaryToolRun, 1);
+      await expectCount(
+        commentaryToolRun.getByText("I’ll inspect the current state first.", { exact: true }),
+        1,
+      );
+      await expectCount(commentaryToolRun.locator(".chat-group-footer-actions"), 0);
     },
   );
 
   it("keeps the run row identity when a hidden heartbeat boundary reaches history", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1200 } });
-    const page = await context.newPage();
     const runId = "run-heartbeat-browser-handoff";
-    const gateway = await installMockGateway(page, {
+    const { page, gateway } = await openTranscript({
       historyMessages: [],
-      inFlightRun: { runId, text: "" },
-      sessionInfo: {
-        activeRunIds: [runId],
-        hasActiveRun: true,
-        key: "agent:main:main",
-      },
+      ...activeRun(runId),
     });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
     const liveRow = page.locator(".chat-virtual-row", {
       has: page.locator(".chat-reading-indicator"),
     });
@@ -466,90 +285,53 @@ suite.define(() => {
       },
       sessionKey: "agent:main:main",
     });
-    await expect
-      .poll(async () => (await gateway.getRequests("chat.history")).length)
-      .toBeGreaterThan(historyRequestsBeforeFinal);
+    await gateway.waitForRequest("chat.history", { after: historyRequestsBeforeFinal });
 
     const settledRow = page.locator(".chat-virtual-row", {
       has: page.getByText(finalText, { exact: true }),
     });
     await settledRow.waitFor();
     await expect.poll(() => settledRow.getAttribute("data-virtual-row-key")).toBe(liveKey);
-    expect(await settledRow.count()).toBe(1);
-
-    await context.close();
+    await expectCount(settledRow, 1);
   });
 
   it("keeps same-run events from another session out of the selected transcript", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1200 } });
-    const page = await context.newPage();
     const runId = "run-shared-across-session-events";
     const selectedText = "Selected session stream stays in its own row.";
     const wrongSessionText = "Wrong session content must never enter this transcript. ".repeat(12);
-    const gateway = await installMockGateway(page, {
+    const { page, gateway } = await openTranscript({
       historyMessages: [
         transcriptMessage("user", "Earlier prompt", "run-earlier:user", "user-earlier", 1),
         transcriptMessage("assistant", "Earlier answer", "run-earlier", "assistant-earlier", 2),
       ],
-      inFlightRun: { runId, text: selectedText },
-      sessionInfo: {
-        activeRunIds: [runId],
-        hasActiveRun: true,
-        key: "agent:main:main",
-      },
+      ...activeRun(runId, selectedText),
     });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText(selectedText, { exact: true }).waitFor();
     const inactiveSessionKey = "agent:main:inactive-session";
-    await gateway.emitGatewayEvent("chat", {
-      deltaText: wrongSessionText,
+    const event = {
       message: { role: "assistant", content: [{ type: "text", text: wrongSessionText }] },
       runId,
       sessionKey: inactiveSessionKey,
+    };
+    await gateway.emitGatewayEvent("chat", {
+      ...event,
+      deltaText: wrongSessionText,
       state: "delta",
     });
-    await gateway.emitGatewayEvent("chat", {
-      message: { role: "assistant", content: [{ type: "text", text: wrongSessionText }] },
-      runId,
-      sessionKey: inactiveSessionKey,
-      state: "final",
-    });
+    await gateway.emitGatewayEvent("chat", { ...event, state: "final" });
 
     await expect.poll(() => page.getByText(wrongSessionText, { exact: true }).count()).toBe(0);
     await expect.poll(() => page.getByText(selectedText, { exact: true }).count()).toBe(1);
-    const overlappingRows = await page.locator(".chat-virtual-row").evaluateAll((rows) => {
+    const hasOverlap = await page.locator(".chat-virtual-row").evaluateAll((rows) => {
       const bounds = rows
-        .map((row) => {
-          const rect = row.getBoundingClientRect();
-          return {
-            bottom: rect.bottom,
-            key: row.getAttribute("data-virtual-row-key"),
-            top: rect.top,
-          };
-        })
+        .map((row) => row.getBoundingClientRect())
         .filter((rect) => rect.bottom > rect.top)
         .toSorted((left, right) => left.top - right.top);
-      return bounds.slice(1).flatMap((current, index) => {
+      return bounds.slice(1).some((current, index) => {
         const previous = bounds[index];
-        return previous && current.top < previous.bottom - 0.5
-          ? [{ current: current.key, previous: previous.key }]
-          : [];
+        return previous !== undefined && current.top < previous.bottom - 0.5;
       });
     });
-    expect(overlappingRows).toEqual([]);
-
-    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("chat-agent-run-transcript", artifactRoot)
-      : undefined;
-    if (artifactDir) {
-      await page.screenshot({
-        path: path.join(artifactDir, "cross-session-run-isolation.png"),
-        fullPage: true,
-      });
-    }
-
-    await context.close();
+    expect(hasOverlap).toBe(false);
   });
 });

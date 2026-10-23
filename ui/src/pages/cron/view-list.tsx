@@ -1,19 +1,34 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For } from "solid-js";
-import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
+import {
+  createMemo,
+  createProjection,
+  Errored,
+  For,
+  isPending,
+  latest,
+  Loading,
+  Reveal,
+  Show,
+} from "solid-js";
 import type { CronJobsEnabledFilter, CronJob } from "../../api/types.ts";
+import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
-import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
 import {
+  AdminRequired,
+  ErrorBanner,
+  EnabledSwitch,
+  JobMenu,
+  NoticeBanner,
+} from "./view-controls.tsx";
+import {
+  describeJobSchedule,
   JobStateIndicator,
   TriggerIndicator,
   DisabledNote,
@@ -21,7 +36,7 @@ import {
 } from "./view-job-status.tsx";
 import { JobsFilterPopover } from "./view-jobs-filter.tsx";
 import { RunsSection } from "./view-runs.tsx";
-import type { CronProps } from "./view-types.ts";
+import type { CronJobActionProps, CronProps } from "./view-types.ts";
 const ENABLED_TABS: Array<{
   value: CronJobsEnabledFilter;
   labelKey: string;
@@ -31,6 +46,14 @@ const ENABLED_TABS: Array<{
   { value: "disabled", labelKey: "cron.tabs.paused" },
 ];
 export function ListView(props: CronProps) {
+  const scope = createMemo(() => props.reads?.scope() ?? true);
+  // Retry readiness without recreating the table or erroring its row projection.
+  const readJobs = () => {
+    if (props.reads) {
+      latest(props.reads.jobs);
+    }
+    return null;
+  };
   const hasAdvancedJobsFilters = () =>
     props.jobsScheduleKindFilter !== "all" ||
     props.jobsLastStatusFilter !== "all" ||
@@ -52,76 +75,127 @@ export function ListView(props: CronProps) {
   return (
     <section class="cron-page" data-panel-mode="overview">
       <SettingsPage wide>
-        <div class="cron-overview-header">
-          <AdminRequired {...props} />
-          {props.status && !props.status.enabled ? (
-            <div class="cron-error-banner" data-test-id="cron-scheduler-banner">
-              <strong>{t("cron.list.schedulerOff")}</strong>
-              {t("cron.runNotStarted.stopped")}
+        <Errored
+          fallback={(error, reset) => (
+            <div class="cron-error-banner" role="alert">
+              {String(error())}
+              <button
+                class="btn btn--sm"
+                onClick={() => {
+                  props.onRefresh();
+                  reset();
+                }}
+              >
+                {t("common.retry")}
+              </button>
             </div>
-          ) : undefined}
-          <ErrorBanner error={props.listError} /> <ErrorBanner error={props.error} />
-          <Toolbar {...props} hasAdvancedJobsFilters={hasAdvancedJobsFilters()} />
-        </div>
-        <div
-          id="cron-list-panel"
-          class="cron-tab-panel"
-          role="tabpanel"
-          aria-labelledby={`cron-list-tab-${props.listTab === "activity" ? "activity" : props.jobsEnabledFilter}`}
-        >
-          {props.listTab === "activity" ? (
-            <SettingsSection>
-              <div class="cron-activity">
-                <RunsSection {...props} />
-              </div>
-            </SettingsSection>
-          ) : (
-            <>
-              <SettingsSection>
-                <JobsTable {...props} hasAnyJobsFilters={hasAnyJobsFilters()} />
-              </SettingsSection>
-              {showStarterAutomations() ? <Suggestions {...props} /> : undefined}
-            </>
           )}
-        </div>
+        >
+          <Reveal order="natural">
+            <div class="cron-overview-header">
+              <AdminRequired {...props} />
+              <Loading on={latest(scope)}>
+                <SchedulerStatus {...props} />
+              </Loading>
+              <ErrorBanner error={props.listError} />{" "}
+              <ErrorBanner error={props.error} reads={props.reads} />
+              <NoticeBanner notice={props.notice} />
+              <Toolbar {...props} hasAdvancedJobsFilters={hasAdvancedJobsFilters()} />
+            </div>
+            <div
+              id="cron-list-panel"
+              class="cron-tab-panel"
+              role="tabpanel"
+              aria-labelledby={`cron-list-tab-${props.listTab === "activity" ? "activity" : props.jobsEnabledFilter}`}
+            >
+              {props.listTab === "activity" ? (
+                <SettingsSection>
+                  <div class="cron-activity">
+                    <RunsSection {...props} />
+                  </div>
+                </SettingsSection>
+              ) : (
+                <>
+                  <SettingsSection>
+                    <Show when={latest(scope)} keyed>
+                      {(_scope) => (
+                        <Loading
+                          fallback={
+                            <JobsTableFrame canManage={props.canManage} busy>
+                              <JobsLoading />
+                            </JobsTableFrame>
+                          }
+                        >
+                          {readJobs()}
+                          <JobsTable {...props} hasAnyJobsFilters={hasAnyJobsFilters()} />
+                        </Loading>
+                      )}
+                    </Show>
+                  </SettingsSection>
+                  {showStarterAutomations() ? <Suggestions {...props} /> : undefined}
+                </>
+              )}
+            </div>
+          </Reveal>
+        </Errored>
       </SettingsPage>
     </section>
   );
 }
+function SchedulerStatus(props: CronProps) {
+  const status = () => (props.reads ? props.reads.status() : props.status);
+  return (
+    <>
+      {status() && !status()?.enabled ? (
+        <div class="cron-error-banner" data-test-id="cron-scheduler-banner">
+          <strong>{t("cron.list.schedulerOff")}</strong>
+          {t("cron.runNotStarted.stopped")}
+        </div>
+      ) : undefined}
+    </>
+  );
+}
+
+function JobsLoading() {
+  return (
+    <div class="cron-empty-state" role="status" aria-live="polite" data-test-id="cron-jobs-loading">
+      <div class="cron-empty-state__title">{t("cron.list.loading")}</div>
+    </div>
+  );
+}
+
 function ListTabs(props: CronProps) {
   return (
-    <LitContent
-      render={() =>
-        renderHubTabs({
-          id: "cron-list",
-          panelId: "cron-list-panel",
-          className: "cron-tabs",
-          active: props.listTab === "activity" ? "activity" : props.jobsEnabledFilter,
-          tabs: [
-            ...ENABLED_TABS.map((tab) => ({
-              value: tab.value,
-              label: t(tab.labelKey),
-              testId: `cron-tab-${tab.value}`,
-            })),
-            {
-              value: "activity",
-              label: t("cron.list.activityTab"),
-              testId: "cron-list-tab-activity",
-            },
-          ],
-          ariaLabel: t("cron.list.viewLabel"),
-          onSelect: (value) => {
-            if (value === "activity") {
-              props.onListTabChange("activity");
-              return;
-            }
-            props.onListTabChange("tasks");
-            if (value !== props.jobsEnabledFilter) {
-              void props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
-            }
+    <HubTabs<CronJobsEnabledFilter | "activity">
+      {...{
+        id: "cron-list",
+        panelId: "cron-list-panel",
+        class: "cron-tabs",
+        active: props.listTab === "activity" ? "activity" : props.jobsEnabledFilter,
+        tabs: [
+          ...ENABLED_TABS.map((tab) => ({
+            value: tab.value,
+            label: t(tab.labelKey),
+            testId: `cron-tab-${tab.value}`,
+          })),
+          {
+            value: "activity",
+            label: t("cron.list.activityTab"),
+            testId: "cron-list-tab-activity",
           },
-        })
-      }
+        ],
+        ariaLabel: t("cron.list.viewLabel"),
+        onSelect: (value) => {
+          if (value === "activity") {
+            props.onListTabChange("activity");
+            return;
+          }
+          props.onListTabChange("tasks");
+          if (value !== props.jobsEnabledFilter) {
+            props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
+          }
+        },
+      }}
     />
   );
 }
@@ -147,7 +221,7 @@ function Toolbar(
               aria-label={t("cron.list.searchPlaceholder")}
               placeholder={t("cron.list.searchPlaceholder")}
               onInput={(e) =>
-                void props.onJobsFiltersChange({
+                props.onJobsFiltersChange({
                   cronJobsQuery: e.currentTarget.value,
                 })
               }
@@ -194,26 +268,24 @@ function JobsTable(
 ) {
   // A snapshot revision is the successful-list fact. Until one exists, show
   // pending or failure, never completed-empty guidance.
+  const canManage = createMemo(() => props.canManage);
+  const busy = createMemo(() => props.busy);
+  const connected = createMemo(() => props.connected);
   const initialPending = () => props.loading && !props.hasLoaded;
-  const tableBusy = () => props.loading || props.jobsLoadingMore;
-  const jobs = createMemo(() =>
-    props.jobs.toSorted(
-      (left, right) => Number(isCronJobActiveFailure(right)) - Number(isCronJobActiveFailure(left)),
-    ),
+  const tableBusy = () =>
+    (props.reads ? isPending(props.reads.jobs) : props.loading) || props.jobsLoadingMore;
+  const jobs = createProjection(
+    () =>
+      (props.reads ? props.reads.rows() : props.jobs).toSorted(
+        (left, right) =>
+          Number(isCronJobActiveFailure(right)) - Number(isCronJobActiveFailure(left)),
+      ),
+    [],
+    { key: "id" },
   );
   return (
-    <div
-      class={["cron-table", { "cron-table--read-only": !props.canManage }]}
-      aria-busy={tableBusy() ? "true" : undefined}
-    >
-      <div class="cron-table__head">
-        <span>{t("cron.jobs.name")}</span>
-        <span>{t("cron.jobs.schedule")}</span>
-        <span>{t("cron.jobs.nextRun")}</span>
-        <span>{t("cron.jobs.lastRun")}</span>
-        {props.canManage ? <span aria-hidden="true" /> : undefined}
-      </div>
-      {jobs().length === 0 ? (
+    <JobsTableFrame canManage={props.canManage} busy={tableBusy()}>
+      {jobs.length === 0 ? (
         initialPending() ? (
           <div
             class="cron-empty-state"
@@ -234,8 +306,21 @@ function JobsTable(
           </div>
         ) : undefined
       ) : (
-        <For each={jobs()} keyed={(job) => job.id}>
-          {(job) => <JobRow job={job()} {...props} />}
+        <For each={jobs} keyed={(job) => job.id}>
+          {(job) => (
+            <JobRow
+              job={job()}
+              jobs={props.jobs}
+              canManage={canManage()}
+              busy={busy()}
+              connected={connected()}
+              onRun={props.onRun}
+              onToggle={props.onToggle}
+              onClone={props.onClone}
+              onRemove={props.onRemove}
+              onSelectJob={props.onSelectJob}
+            />
+          )}
         </For>
       )}
       <CronJobsPagination
@@ -246,24 +331,46 @@ function JobsTable(
         loadingMore={props.jobsLoadingMore}
         onLoadMore={props.onLoadMoreJobs}
       />
+    </JobsTableFrame>
+  );
+}
+function JobsTableFrame(props: { canManage: boolean; busy: boolean; children: JSX.Element }) {
+  return (
+    <div
+      class={["cron-table", { "cron-table--read-only": !props.canManage }]}
+      aria-busy={props.busy ? "true" : undefined}
+    >
+      <div class="cron-table__head">
+        <span>{t("cron.jobs.name")}</span>
+        <span>{t("cron.jobs.schedule")}</span>
+        <span>{t("cron.jobs.nextRun")}</span>
+        <span>{t("cron.jobs.lastRun")}</span>
+        {props.canManage ? <span aria-hidden="true" /> : undefined}
+      </div>
+      {props.children}
     </div>
   );
 }
 function JobRow(
-  props: CronProps & {
-    job: CronJob;
-  },
+  props: CronJobActionProps &
+    Pick<CronProps, "jobs" | "onSelectJob"> & {
+      job: CronJob;
+    },
 ) {
   const displayName = () => props.job.displayName ?? props.job.name;
   const description = () => props.job.description?.trim();
-  const systemOwned = () => isSystemMonitorDeclaration(props.job.declarationKey);
   const nextRunAtMs = () => props.job.state?.nextRunAtMs;
-  const hasNextRun = () => typeof nextRunAtMs() === "number" && Number.isFinite(nextRunAtMs());
+  const hasNextRun = () => nextRunAtMs() !== undefined;
   return (
     <div
       class={["cron-table__row", { "cron-table__row--paused": !props.job.enabled }]}
       data-test-id={`cron-row-${props.job.id}`}
-      onClick={() => props.onSelectJob(props.job)}
+      onClick={() => {
+        const job = props.jobs.find((entry) => entry.id === props.job.id);
+        if (job) {
+          props.onSelectJob(job);
+        }
+      }}
     >
       <button type="button" class="cron-table__name">
         <JobStateIndicator job={props.job} />
@@ -272,7 +379,7 @@ function JobRow(
             <span class="cron-table__name-text">{displayName()}</span>
             {props.job.trigger ? <TriggerIndicator /> : undefined}
           </span>
-          {systemOwned() ? undefined : <openclaw-agent-row-chip prop:agentId={props.job.agentId} />}
+          <AgentRowChip agentId={props.job.agentId} />
           {description() || !props.job.enabled ? (
             <span class="cron-table__name-meta">
               {description() ? (
@@ -297,7 +404,7 @@ function JobRow(
       <JobCell
         class="cron-table__schedule"
         label={t("cron.jobs.schedule")}
-        value={formatCronSchedule(props.job)}
+        value={describeJobSchedule(props.job)}
       />
       <JobCell
         class="cron-table__next"
@@ -325,13 +432,22 @@ function JobRow(
             data-test-id={`cron-row-run-${props.job.id}`}
             title={t("cron.actions.runNowJob", { name: displayName() })}
             aria-label={t("cron.actions.runNowJob", { name: displayName() })}
-            disabled={props.busy}
+            disabled={props.busy || !props.connected}
             onClick={() => props.onRun(props.job, "force")}
           >
             <Icon name="play" />
           </button>
-          {systemOwned() ? undefined : <EnabledSwitch {...props} job={props.job} compact />}
-          <JobMenu {...props} job={props.job} />
+          <EnabledSwitch {...props} job={props.job} compact />
+          <JobMenu
+            {...props}
+            job={props.job}
+            onClone={() => {
+              const job = props.jobs.find((entry) => entry.id === props.job.id);
+              if (job) {
+                props.onClone(job);
+              }
+            }}
+          />
         </span>
       ) : undefined}
     </div>
@@ -339,7 +455,7 @@ function JobRow(
 }
 function JobCell(props: { class: string; label: string; value: JSX.Element }) {
   return (
-    <span class={`cron-table__cell ${props.class}`}>
+    <span class={["cron-table__cell", props.class]}>
       <span class="cron-table__cell-label">{props.label}</span>
       <span class="cron-table__cell-value">{props.value}</span>
     </span>

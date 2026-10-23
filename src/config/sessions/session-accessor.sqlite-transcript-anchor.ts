@@ -1,4 +1,6 @@
+import { sql } from "kysely";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
@@ -174,17 +176,20 @@ function readActiveTranscriptEntryFacts(
     }
     const identity = actor.transcript.identities.get(params.entryId);
     const active = identity && actor.transcript.active.get(identity.seq);
-    return identity && active
-      ? {
-          seq: identity.seq,
-          parent_id: identity.parent_id,
-          message_idempotency_key: identity.message_idempotency_key,
-          message_position: active.message_position,
-          generation: actor.hot.transcript.version.generation,
-          latestSeq: actor.hot.transcript.version.rawSeq,
-          transcriptUpdatedAt: actor.hot.transcript.version.updatedAt,
-        }
-      : undefined;
+    if (identity && active) {
+      return {
+        seq: identity.seq,
+        parent_id: identity.parent_id,
+        message_idempotency_key: identity.message_idempotency_key,
+        message_position: active.message_position,
+        generation: actor.hot.transcript.version.generation,
+        latestSeq: actor.hot.transcript.version.rawSeq,
+        transcriptUpdatedAt: actor.hot.transcript.version.updatedAt,
+      };
+    }
+    if (actor.transcript.complete) {
+      return undefined;
+    }
   }
   const row = executeSqliteQueryTakeFirstSync(
     params.database.db,
@@ -243,7 +248,11 @@ function selectActiveTranscriptEntryAnchor(
         ),
       )
       // Branch changes retain old rows; readiness and the anchor share this statement's snapshot.
-      .where("status.needs_reconcile", "is not", 1),
+      .where(
+        "status.needs_reconcile",
+        "is not",
+        isPostgresSqlConnection(params.database.db) ? sql.lit(true) : 1,
+      ),
   );
 }
 

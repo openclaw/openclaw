@@ -1,6 +1,6 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import "../lib/toast-host.ts";
+import "../lib/toast-host.tsx";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import "../styles/base.css";
@@ -27,27 +27,50 @@ const anchor = () => document.querySelector<HTMLAnchorElement>("a[data-file-path
 const card = () =>
   document.querySelector<HTMLElement>("openclaw-tooltip[open] .markdown-file-tooltip");
 const copyButton = () => page.getByRole("button", { name: "Copy path", exact: true });
+const outsideButton = () => page.getByRole("button", { name: "Outside", exact: true });
+async function focusFile() {
+  anchor().focus();
+  await expect.element(copyButton()).toBeVisible();
+}
+function tooltipOwner() {
+  const tooltip = copyButton().element().closest("openclaw-tooltip");
+  assert(tooltip, "Expected the file tooltip owner");
+  return tooltip;
+}
+const waitForReopen = (tooltip: HTMLElementTagNameMap["openclaw-tooltip"]) =>
+  new Promise<void>((resolve) => {
+    // Closing content can still be visible; completion belongs to this owner.
+    tooltip.addEventListener("overlay-after-show", () => resolve(), { once: true });
+  });
+async function reopen(tooltip: HTMLElementTagNameMap["openclaw-tooltip"]) {
+  await outsideButton().hover();
+  const reopened = waitForReopen(tooltip);
+  await page.elementLocator(anchor()).hover();
+  await reopened;
+  await expect.element(copyButton()).toBeVisible();
+}
 
 describe("file path tooltip", () => {
   it("keeps the popup reachable and copies the exact path without opening the file", async () => {
-    const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    const copied = Promise.withResolvers<void>();
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockReturnValue(copied.promise);
     const open = vi.fn();
     anchor().addEventListener("click", open);
     await page.elementLocator(anchor()).hover();
     await expect.element(copyButton()).toBeVisible();
     expect(card()?.textContent?.trim()).toBe(filePath);
     await copyButton().hover();
-    await Promise.all([
-      expect.poll(() => card()?.querySelector('[role="status"]')?.textContent).toBe("Copied!"),
-      copyButton().click(),
-    ]);
+    await copyButton().click();
     expect(write).toHaveBeenCalledWith(filePath);
+    copied.resolve();
+    await expect.poll(() => card()?.querySelector('[role="status"]')?.textContent).toBe("Copied!");
     expect(open).not.toHaveBeenCalled();
     expect(card()?.textContent).toContain(filePath);
     expect(document.querySelectorAll("openclaw-tooltip[open]")).toHaveLength(1);
+    const tooltip = tooltipOwner();
     await userEvent.keyboard("{Escape}");
-    await page.elementLocator(anchor()).hover();
-    await expect.element(copyButton()).toBeVisible();
+    await expect.poll(card).toBeNull();
+    await reopen(tooltip);
     await expect.poll(() => card()?.textContent?.trim()).toBe(filePath);
     await page.elementLocator(anchor()).click();
     expect(open).toHaveBeenCalledOnce();
@@ -55,8 +78,7 @@ describe("file path tooltip", () => {
   });
 
   it("supports Tab to copy, Escape back to the link, and onward keyboard navigation", async () => {
-    anchor().focus();
-    await expect.element(copyButton()).toBeVisible();
+    await focusFile();
     await userEvent.keyboard("{Tab}");
     expect(document.activeElement).toBe(copyButton().element());
     await userEvent.keyboard("{Escape}");
@@ -71,8 +93,7 @@ describe("file path tooltip", () => {
     async (copied) => {
       vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("Denied"));
       const fallback = vi.spyOn(document, "execCommand").mockReturnValue(copied);
-      anchor().focus();
-      await expect.element(copyButton()).toBeVisible();
+      await focusFile();
       expect(anchor().matches(":hover"), "keyboard fallback must start without pointer hover").toBe(
         false,
       );
@@ -103,27 +124,23 @@ describe("file path tooltip", () => {
   it.each(["Escape", "outside", "reopen"])(
     "cancels delayed clipboard fallback after %s dismissal",
     async (dismissal) => {
-      let reject!: (error: Error) => void;
-      vi.spyOn(navigator.clipboard, "writeText").mockImplementation(
-        () =>
-          new Promise<void>((_, fail) => {
-            reject = fail;
-          }),
-      );
+      const copied = Promise.withResolvers<void>();
+      vi.spyOn(navigator.clipboard, "writeText").mockReturnValue(copied.promise);
       const fallback = vi.spyOn(document, "execCommand").mockReturnValue(true);
       anchor().focus();
       await copyButton().click();
+      const tooltip = tooltipOwner();
       if (dismissal === "outside") {
-        await page.getByRole("button", { name: "Outside", exact: true }).click();
+        await outsideButton().click();
       } else {
         await userEvent.keyboard("{Escape}");
       }
+      await expect.poll(card).toBeNull();
       if (dismissal === "reopen") {
-        await page.elementLocator(anchor()).hover();
-        await expect.element(copyButton()).toBeVisible();
+        await reopen(tooltip);
         await expect.poll(card).not.toBeNull();
       }
-      reject(new Error("Denied"));
+      copied.reject(new Error("Denied"));
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => resolve());
       });
@@ -150,20 +167,15 @@ describe("file path tooltip", () => {
   );
 
   it("ignores late clipboard feedback after switching to another file", async () => {
-    let finish!: () => void;
-    vi.spyOn(navigator.clipboard, "writeText").mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
-        }),
-    );
+    const copied = Promise.withResolvers<void>();
+    vi.spyOn(navigator.clipboard, "writeText").mockReturnValue(copied.promise);
     anchor().focus();
     await copyButton().click();
     const next = document.querySelectorAll<HTMLAnchorElement>("a[data-file-path]")[1];
     assert(next, "Expected the second file link in the fixture");
     await userEvent.keyboard("{Tab}");
     expect(document.activeElement).toBe(next);
-    finish();
+    copied.resolve();
     await expect.element(copyButton()).toBeVisible();
     expect(card()?.textContent).toContain("src/next.ts");
     expect(card()?.textContent).not.toContain("Copied!");
@@ -172,8 +184,7 @@ describe("file path tooltip", () => {
   it("also offers copy when the link label already contains the full path", async () => {
     anchor().textContent = filePath;
     anchor().removeAttribute("title");
-    anchor().focus();
-    await expect.element(copyButton()).toBeVisible();
+    await focusFile();
     await userEvent.keyboard("{Escape}");
     expect(anchor().hasAttribute("title")).toBe(false);
   });

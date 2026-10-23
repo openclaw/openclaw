@@ -1,58 +1,100 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
-import { createMemo, createSignal } from "solid-js";
 import { expect, vi } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
 import type { UsageOverviewOptions } from "../../../../src/shared/usage-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import type { UsageDetailsController } from "./detail-controller.ts";
-import type { UsageRefreshPolicy } from "./refresh-policy.ts";
-import { page as usageRoute } from "./route.ts";
-import type { UsageSessionEntry } from "./types.ts";
-import { UsagePageModel, type UsageRouteData } from "./usage-page-model.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { page as usageRoute } from "./route.tsx";
+import type { UsageRouteData, UsageSessionEntry } from "./types.ts";
+import { createUsagePage } from "./usage-page-state.ts";
+import { buildAggregatesFromSessions } from "./view.test-support.ts";
 
-export type TestUsagePage = Pick<
-  HTMLElement,
-  "querySelector" | "querySelectorAll" | "textContent" | "isConnected" | "remove"
-> & {
-  readonly element: HTMLElement;
-  context: ApplicationContext;
-  routeData: UsageRouteData | undefined;
-  usageError: string | null;
-  readonly usageResult: SessionsUsageResult | null;
-  readonly usageLoading: boolean;
-  usageSelectedSessions: string[];
-  details: UsageDetailsController;
-  providerUsageStalled: boolean;
-  providerUsageSummary: { updatedAt: number; providers: unknown[] } | null;
-  providerUsageUnavailable: boolean;
-  readonly refreshPolicy: UsageRefreshPolicy;
-  readonly gateway: {
-    applySnapshot: (
-      snapshot: ApplicationGatewaySnapshot,
-      binding: { initial: boolean; sourceChanged: boolean },
-    ) => void;
-  };
-  loadUsage: () => Promise<void>;
-  requestUpdate: () => void;
-  render: () => unknown;
-  readonly updateComplete: Promise<boolean>;
-};
+export type TestUsagePage = Awaited<ReturnType<typeof createPage>>;
 
-type InspectedUsagePageModel = Pick<
-  TestUsagePage,
-  | "details"
-  | "loadUsage"
-  | "providerUsageSummary"
-  | "usageSelectedSessions"
-  | "refreshPolicy"
-  | "gateway"
->;
+export async function createUsagePageFixture(
+  request: (...args: never[]) => unknown,
+  renderView = true,
+  configure?: (context: ReturnType<typeof contextWithClient>) => void,
+) {
+  const client = { request } as unknown as GatewayBrowserClient;
+  const context = contextWithClient(client);
+  configure?.(context);
+  const page = await createPage(client, renderView, context);
+  return { client, context, page };
+}
 
-const pageCleanups = new Set<() => void>();
+export async function loadUsagePage(...args: Parameters<typeof createUsagePageFixture>) {
+  const fixture = await createUsagePageFixture(...args);
+  await preloadUsage(fixture.page);
+  return fixture;
+}
+
+export function usagePoints(timestamp: number, count: number, cost = 0) {
+  return Array.from({ length: count }, (_, index) => ({
+    timestamp: timestamp + index * 1_000,
+    input: 100,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 100,
+    cost,
+    cumulativeTokens: (index + 1) * 100,
+    cumulativeCost: (index + 1) * cost,
+  }));
+}
+
+export async function settleUsageTimers(page: TestUsagePage, milliseconds = 0) {
+  await vi.advanceTimersByTimeAsync(milliseconds);
+  await page.updateComplete;
+}
+
+export function usageCalls<T extends readonly unknown[]>(
+  request: { mock: { calls: T[] } },
+  method = "sessions.usage",
+) {
+  return request.mock.calls.filter(([name]) => name === method);
+}
+
+export function textOf(root: Pick<ParentNode, "querySelector">, selector: string) {
+  return root.querySelector(selector)?.textContent;
+}
+
+export async function settleUsagePage(page: TestUsagePage) {
+  await waitForFast(() => expect(page.usageLoading).toBe(false));
+  await page.updateComplete;
+}
+
+export async function queryUsagePage(page: TestUsagePage, query: string) {
+  const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
+  input.value = query;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await settleUsagePage(page);
+}
+
+export function changeUsageControl(control: HTMLInputElement | HTMLSelectElement, value: string) {
+  control.value = value;
+  control.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+export function usageButton(page: TestUsagePage, label: string, selector = "button") {
+  const button = [...page.querySelectorAll<HTMLButtonElement>(selector)].find(
+    (entry) => (entry.getAttribute("aria-label") ?? entry.textContent?.trim()) === label,
+  );
+  expect(button).toBeDefined();
+  return button!;
+}
+
+export function selectUsageSession(page: TestUsagePage, index = 0) {
+  page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[index]!.click();
+}
 
 type UsagePublicationFixture = {
   agentId?: string;
@@ -65,7 +107,7 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
   publishUsage: (publication: UsagePublicationFixture) => void;
 } {
   const subscribe = () => () => undefined;
-  let snapshot = {
+  const { gateway, publish } = createApplicationGateway({
     client,
     phase: "connected",
     hello: null,
@@ -73,8 +115,7 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
     sessionKey: "main",
     lastError: null,
     lastErrorCode: null,
-  } as ApplicationGatewaySnapshot;
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  } as ApplicationGatewaySnapshot);
   const selectionState: ApplicationContext["agentSelection"]["state"] = {
     selectedId: null,
     scopeId: null,
@@ -82,12 +123,8 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
   const selectionListeners = new Set<
     Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0]
   >();
-  const setGatewaySnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
-    snapshot = { ...snapshot, ...patch };
-    for (const listener of listeners) {
-      listener(snapshot);
-    }
-  };
+  const setGatewaySnapshot = (patch: Partial<ApplicationGatewaySnapshot>) =>
+    publish({ ...gateway.snapshot, ...patch });
   return {
     setGatewaySnapshot,
     publishUsage: ({
@@ -97,29 +134,28 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
     }: UsagePublicationFixture) =>
       setGatewaySnapshot({
         usagePublications: {
-          ...snapshot.usagePublications,
+          ...gateway.snapshot.usagePublications,
           [agentId]: {
             usageUpdatedAt,
             committedAt: usageRefreshFailed
-              ? (snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
+              ? (gateway.snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
               : usageUpdatedAt,
             usageRefreshFailed: usageRefreshFailed || undefined,
           },
         },
       }),
     basePath: "",
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
+    gateway,
     agents: {
       state: { agentsList: null, agentsLoading: false, agentsError: null },
       ensureList: vi.fn(async () => null),
+      subscribe,
+    },
+    agentIdentity: {
+      get: () => null,
+      entries: () => [],
+      ensure: async () => undefined,
+      invalidate: () => undefined,
       subscribe,
     },
     agentSelection: {
@@ -144,8 +180,9 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
 export async function createPage(
   client: GatewayBrowserClient,
   renderView = false,
-  context: ApplicationContext = contextWithClient(client),
-): Promise<TestUsagePage> {
+  initialContext: ApplicationContext = contextWithClient(client),
+) {
+  let context = initialContext;
   // Legacy test fixtures describe canonical rows; expose the same server projection
   // as the real RPC so page tests exercise request ownership and presentation.
   const originalRequest = client.request.bind(client);
@@ -195,46 +232,29 @@ export async function createPage(
   }) as GatewayBrowserClient["request"];
   const content = renderView ? (await import("./usage-page.tsx")).UsagePageContent : undefined;
   const container = document.createElement("div");
-  const [revision, setRevision] = createSignal(0);
-  const notify = () => setRevision((value) => value + 1);
-  let model = new UsagePageModel(context, notify);
-  let disposeView: (() => void) | undefined;
-  let disposed = false;
-  const inspect = () => model as unknown as InspectedUsagePageModel;
+  let model: ReturnType<typeof createUsagePage>;
+  let routeData: UsageRouteData | undefined;
+  let disposeView: () => void;
   const mount = () => {
-    model.connect();
-    if (content) {
-      disposeView = mountSolid(
-        () => {
-          const state = createMemo(() => {
-            revision();
+    disposeView = mountSolid(
+      () => {
+        model = createUsagePage(context);
+        return content?.({
+          get state() {
             return model.read();
-          });
-          return content({
-            get state() {
-              return state();
-            },
-            context: model.context,
-            get result() {
-              revision();
-              return model.usageResult;
-            },
-          });
-        },
-        { container },
-      ).unmount;
-    }
+          },
+          get result() {
+            return model.result();
+          },
+        });
+      },
+      {
+        container,
+        wrapper: content ? createSolidApplicationContextProvider(context).wrapper : undefined,
+      },
+    ).unmount;
   };
-  const cleanup = () => {
-    if (disposed) {
-      return;
-    }
-    disposed = true;
-    disposeView?.();
-    model.dispose();
-    pageCleanups.delete(cleanup);
-  };
-  const page: TestUsagePage = {
+  const page = {
     element: container,
     querySelector: container.querySelector.bind(container),
     querySelectorAll: container.querySelectorAll.bind(container),
@@ -245,32 +265,25 @@ export async function createPage(
       return container.isConnected;
     },
     get context() {
-      return model.context;
+      return context;
     },
     set context(next: ApplicationContext) {
-      const routeData = model.routeData;
-      disposeView?.();
-      model.dispose();
-      model = new UsagePageModel(next, notify);
-      disposed = false;
-      pageCleanups.add(cleanup);
+      disposeView();
+      context = next;
       mount();
       if (routeData) {
         model.setRouteData(routeData);
       }
-      notify();
     },
     get routeData() {
-      return model.routeData;
+      return routeData;
     },
     set routeData(data: UsageRouteData | undefined) {
+      routeData = data;
       model.setRouteData(data);
     },
-    get usageError() {
-      return model.read().data.error;
-    },
     get usageResult() {
-      return model.usageResult;
+      return model.result();
     },
     get usageLoading() {
       return model.read().data.loading;
@@ -278,31 +291,10 @@ export async function createPage(
     get usageSelectedSessions() {
       return model.read().filters.selectedSessions;
     },
-    set usageSelectedSessions(sessions: string[]) {
-      inspect().usageSelectedSessions = sessions;
-      notify();
+    read: () => model.read(),
+    refresh: async () => {
+      await model.read().callbacks.filters.onRefresh();
     },
-    get details() {
-      return inspect().details;
-    },
-    get providerUsageStalled() {
-      return model.read().data.providerUsageStalled;
-    },
-    get providerUsageSummary() {
-      return inspect().providerUsageSummary;
-    },
-    get providerUsageUnavailable() {
-      return model.read().data.providerUsageUnavailable;
-    },
-    get refreshPolicy() {
-      return inspect().refreshPolicy;
-    },
-    get gateway() {
-      return inspect().gateway;
-    },
-    loadUsage: () => inspect().loadUsage(),
-    requestUpdate: notify,
-    render: () => undefined,
     get updateComplete() {
       return Promise.resolve().then(() => {
         flush();
@@ -310,12 +302,11 @@ export async function createPage(
       });
     },
     remove() {
-      cleanup();
+      disposeView();
       container.remove();
     },
   };
   document.body.append(container);
-  pageCleanups.add(cleanup);
   mount();
   await page.updateComplete;
   return page;
@@ -342,16 +333,13 @@ export function createPendingUsageRouteData(
     },
     result: null,
     costSummary: null,
-    providerUsage: { state: "pending" },
     loadedAtMs: null,
     error: null,
   };
 }
 
 export function cleanupUsagePageTest(): void {
-  for (const cleanup of pageCleanups) {
-    cleanup();
-  }
+  cleanupSolid();
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -376,17 +364,11 @@ export function cacheSnapshot(status: "fresh" | "partial" | "stale" | "refreshin
     staleFiles: status === "stale" ? 1 : 0,
   };
   const totals = {
+    ...createEmptyCostUsageTotals(),
     input: 100,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
     totalTokens: 100,
     totalCost: 1,
     inputCost: 1,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
   };
   return {
     result: {
@@ -396,13 +378,7 @@ export function cacheSnapshot(status: "fresh" | "partial" | "stale" | "refreshin
       sessions: [],
       totals,
       aggregates: {
-        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-        byModel: [],
-        byProvider: [],
-        byAgent: [],
-        byChannel: [],
-        daily: [],
+        ...buildAggregatesFromSessions([]),
         costDaily: [],
       },
       cacheStatus,
@@ -423,10 +399,13 @@ export async function preloadUsage(page: TestUsagePage): Promise<void> {
   await page.updateComplete;
 }
 
+/** Tests written against the recent-first session order opt back into it; the page sorts by cost. */
+export async function showRecentSessions(page: TestUsagePage): Promise<void> {
+  page.read().callbacks.display.onChange({ sessionSort: "recent" });
+  await vi.waitFor(() => expect(page.usageLoading).toBe(false));
+  await page.updateComplete;
+}
+
 export function refreshButton(page: TestUsagePage): HTMLButtonElement {
-  const button = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-    (entry) => entry.textContent?.trim() === "Refresh",
-  );
-  expect(button).toBeDefined();
-  return button!;
+  return usageButton(page, "Refresh");
 }

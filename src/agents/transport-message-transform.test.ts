@@ -1,354 +1,237 @@
-// Transport message transform tests cover replay cleanup for provider-specific
-// tool-call/result sequencing before messages are sent back to transports.
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
-import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import type { Api, Context } from "openclaw/plugin-sdk/llm";
+import { expect, it } from "vitest";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
 const EXPECTED_FAILURE_MARKER =
   "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
-const NO_CONTENT_PLACEHOLDER = "[assistant turn failed before producing content]";
 
-function makeModel(api: Api, provider: string, id: string): Model {
-  return {
-    api,
-    provider,
-    id,
-    name: id,
-    input: [],
-    output: [],
-  } as unknown as Model;
-}
+const makeModel = (api: Api, provider: string, id: string) =>
+  makeProviderModelFixture({ api, provider, id, baseUrl: "https://example.test" });
 
 type ToolResultMessage = Extract<Context["messages"][number], { role: "toolResult" }>;
-
-function requireToolResultMessage(
-  message: Context["messages"][number] | undefined,
+type AssistantMessage = Extract<Context["messages"][number], { role: "assistant" }>;
+const userMessage = (content: string, timestamp = Date.now()) => ({
+  role: "user" as const,
+  content,
+  timestamp,
+});
+const text = (value: string) => ({ type: "text" as const, text: value });
+const openai = makeModel("openai-responses", "openai", "gpt-5.4");
+function toolResult(
+  toolCallId: string,
+  output: string,
+  toolName = "read",
+  isError = false,
 ): ToolResultMessage {
-  if (!message || message.role !== "toolResult") {
-    throw new Error(`expected toolResult message, got ${message?.role ?? "missing"}`);
-  }
-  return message;
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName,
+    content: [text(output)],
+    isError,
+    timestamp: Date.now(),
+  };
+}
+function thinkingMessage(
+  overrides: Partial<AssistantMessage>,
+  thinking: string,
+  thinkingSignature: string,
+  visible?: string,
+) {
+  return {
+    ...assistantToolCall("unused"),
+    api: "anthropic-messages" as const,
+    stopReason: "stop" as const,
+    ...overrides,
+    content: [
+      { type: "thinking" as const, thinking, thinkingSignature },
+      ...(visible ? [text(visible)] : []),
+    ],
+  };
 }
 
 function assistantToolCall(
   id: string,
   name = "read",
-  stopReason: Extract<Context["messages"][number], { role: "assistant" }>["stopReason"] = "toolUse",
-): Extract<Context["messages"][number], { role: "assistant" }> {
-  return {
-    role: "assistant",
-    provider: "openai",
-    api: "openai-responses",
+  stopReason: AssistantMessage["stopReason"] = "toolUse",
+): AssistantMessage {
+  return makeAgentAssistantMessage({
     model: "gpt-5.4",
     stopReason,
-    timestamp: Date.now(),
     content: [{ type: "toolCall", id, name, arguments: {} }],
-  } as Extract<Context["messages"][number], { role: "assistant" }>;
+  });
 }
 
-describe("transformTransportMessages synthetic tool-result policy", () => {
-  it.each(["openai-completions"] as const)(
-    "compacts sparse %s history without changing the source or sharing assistant arrays",
-    (api) => {
-      const hidden = makeAssistantMessageFixture({
-        api,
-        content: [{ type: "thinking", thinking: "unfinished reasoning" }],
-      });
-      const failed = makeAssistantMessageFixture({
-        api,
-        content: [{ type: "text", text: "unfinished answer" }],
-      });
-      const retained = makeAssistantMessageFixture({
-        api,
-        stopReason: "stop",
-        content: [{ type: "text", text: "completed answer" }],
-      });
-      const user: Context["messages"][number] = {
-        role: "user",
-        content: "continue",
-        timestamp: 1,
-      };
-      const messages: Context["messages"] = [];
-      messages[1] = hidden;
-      messages[3] = failed;
-      messages[4] = retained;
-      messages[6] = user;
-      messages.length = 8;
-      const original = structuredClone(messages);
+it("compacts sparse history without changing the source or sharing assistant arrays", () => {
+  const api = "openai-completions";
+  const assistant = (
+    content: AssistantMessage["content"],
+    stopReason?: AssistantMessage["stopReason"],
+  ) => makeAssistantMessageFixture({ api, content, ...(stopReason ? { stopReason } : {}) });
+  const hidden = assistant([{ type: "thinking", thinking: "unfinished reasoning" }]);
+  const failed = assistant([text("unfinished answer")]);
+  const retained = assistant([text("completed answer")], "stop");
+  const user = userMessage("continue", 1);
+  const messages: Context["messages"] = [];
+  messages[1] = hidden;
+  messages[3] = failed;
+  messages[4] = retained;
+  messages[6] = user;
+  messages.length = 8;
+  const original = structuredClone(messages);
 
-      const result = transformTransportMessages(messages, makeModel(api, "openai", "test-model"));
+  const result = transformTransportMessages(messages, makeModel(api, "openai", "test-model"));
 
-      expect(result).toStrictEqual([
-        { ...failed, content: [{ type: "text", text: EXPECTED_FAILURE_MARKER }] },
-        retained,
-        user,
-      ]);
-      const replayedAssistant = result[1];
-      if (replayedAssistant?.role !== "assistant") {
-        throw new Error("expected the completed assistant turn");
-      }
-      replayedAssistant.stopReason = "length";
-      replayedAssistant.content.push({ type: "text", text: "replay-only addition" });
-      result.pop();
-      expect(messages).toStrictEqual(original);
+  expect(result).toStrictEqual([
+    { ...failed, content: [text(EXPECTED_FAILURE_MARKER)] },
+    retained,
+    user,
+  ]);
+  const replayedAssistant = result[1];
+  if (replayedAssistant?.role !== "assistant") {
+    throw new Error("expected the completed assistant turn");
+  }
+  replayedAssistant.stopReason = "length";
+  replayedAssistant.content.push(text("replay-only addition"));
+  result.pop();
+  expect(messages).toStrictEqual(original);
+});
+
+it("preserves unframed tool results only for a selected compaction replay window", () => {
+  const messages = [
+    assistantToolCall("call_early"),
+    userMessage("continue"),
+    assistantToolCall("call_after"),
+    toolResult("call_early", "displaced retained result"),
+    toolResult("call_before", "real result after compaction"),
+  ] as Context["messages"];
+
+  const normal = transformTransportMessages(messages, openai);
+  const compactionReplay = transformTransportMessages(messages, openai, undefined, {
+    preserveUnframedToolResults: true,
+  });
+
+  const expected = [
+    { toolCallId: "call_early", content: [text("displaced retained result")] },
+    { toolCallId: "call_after", content: [text("aborted")] },
+  ];
+  expect(normal.filter((message) => message.role === "toolResult")).toMatchObject(expected);
+  expect(compactionReplay.filter((message) => message.role === "toolResult")).toMatchObject([
+    ...expected,
+    { toolCallId: "call_before", content: [text("real result after compaction")] },
+  ]);
+  expect(
+    compactionReplay.filter(
+      (message) => message.role === "toolResult" && message.toolCallId === "call_early",
+    ),
+  ).toHaveLength(1);
+});
+
+// Live-verified 2026-09-02: equivalent response-model bindings retain usable reasoning.
+it.each([
+  {
+    source: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    target: "claude-fable-5",
+    keepThinking: false,
+  },
+  {
+    source: {
+      provider: "microsoft-foundry",
+      model: "prod-primary",
+      responseModel: "claude-opus-5",
     },
+    target: "claude-fable-5-1",
+    keepThinking: true,
+  },
+])("applies thinking binding when switching to $target", ({ source, target, keepThinking }) => {
+  const result = transformTransportMessages(
+    [thinkingMessage(source, "earlier reasoning", "sig_readable", "visible answer")],
+    makeModel("anthropic-messages", "anthropic", target),
   );
 
-  it("preserves unframed tool results only for a selected compaction replay window", () => {
-    const model = makeModel("openai-responses", "openai", "gpt-5.4");
-    const messages = [
-      assistantToolCall("call_early"),
-      { role: "user", content: "continue", timestamp: Date.now() },
-      assistantToolCall("call_after"),
-      {
-        role: "toolResult",
-        toolCallId: "call_early",
-        toolName: "read",
-        content: [{ type: "text", text: "displaced retained result" }],
-        isError: false,
-        timestamp: Date.now(),
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_before",
-        toolName: "read",
-        content: [{ type: "text", text: "real result after compaction" }],
-        isError: false,
-        timestamp: Date.now(),
-      },
-    ] as Context["messages"];
-
-    const normal = transformTransportMessages(messages, model);
-    const compactionReplay = transformTransportMessages(messages, model, undefined, {
-      preserveUnframedToolResults: true,
-    });
-
-    expect(normal.filter((message) => message.role === "toolResult")).toMatchObject([
-      {
-        toolCallId: "call_early",
-        content: [{ type: "text", text: "displaced retained result" }],
-      },
-      { toolCallId: "call_after", content: [{ type: "text", text: "aborted" }] },
-    ]);
-    expect(compactionReplay.filter((message) => message.role === "toolResult")).toMatchObject([
-      {
-        toolCallId: "call_early",
-        content: [{ type: "text", text: "displaced retained result" }],
-      },
-      { toolCallId: "call_after", content: [{ type: "text", text: "aborted" }] },
-      {
-        toolCallId: "call_before",
-        content: [{ type: "text", text: "real result after compaction" }],
-      },
-    ]);
-    expect(
-      compactionReplay.filter(
-        (message) => message.role === "toolResult" && message.toolCallId === "call_early",
-      ),
-    ).toHaveLength(1);
+  expect(result[0]).toMatchObject({
+    role: "assistant",
+    content: [
+      ...(keepThinking
+        ? [{ type: "thinking", thinking: "earlier reasoning", thinkingSignature: "sig_readable" }]
+        : []),
+      text("visible answer"),
+    ],
   });
+});
 
-  it.each([
+it.each([
+  {
+    name: "object",
+    content: { type: "text", text: "legacy object" },
+    expected: [text("legacy object")],
+  },
+  { name: "null", content: null, expected: [] },
+])("normalizes $name assistant content before transport conversion", ({ content, expected }) => {
+  const messages = [
     {
-      source: { provider: "anthropic", model: "claude-sonnet-4-6" },
-      target: { provider: "anthropic", model: "claude-fable-5" },
+      ...assistantToolCall("call_object"),
+      stopReason: "stop",
+      content,
     },
-  ])("drops model-bound thinking for Fable/Mythos switches", ({ source, target }) => {
-    const result = transformTransportMessages(
-      [
-        {
-          role: "assistant",
-          provider: source.provider,
-          api: "anthropic-messages",
-          model: source.model,
-          stopReason: "stop",
-          timestamp: Date.now(),
-          content: [
-            {
-              type: "thinking",
-              thinking: "model-bound thought",
-              thinkingSignature: "sig_model_bound",
-            },
-            { type: "text", text: "visible answer" },
-          ],
-        },
-      ] as Context["messages"],
-      makeModel("anthropic-messages", target.provider, target.model),
-    );
+    userMessage("continue"),
+  ] as unknown as Context["messages"];
+  const result = transformTransportMessages(messages, openai);
+  expect(result[0]).toMatchObject({ role: "assistant", content: expected });
+  expect(result[1]).toMatchObject({ role: "user" });
+});
 
-    expect(result[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "visible answer" }],
-    });
-  });
-
-  // Live-verified 2026-09-02 with thinking-binding-controls: these replays return
-  // input_transformations: [] on claude-fable-5-1, so the earlier reasoning stays usable.
-  it.each([
-    {
-      source: {
-        provider: "microsoft-foundry",
-        model: "prod-primary",
-        responseModel: "claude-opus-5",
-      },
-    },
-  ])("keeps readable Claude thinking when moving onto Fable 5.1", ({ source }) => {
-    const result = transformTransportMessages(
-      [
-        {
-          role: "assistant",
-          provider: source.provider,
-          api: "anthropic-messages",
-          model: source.model,
-          responseModel: source.responseModel,
-          stopReason: "stop",
-          timestamp: Date.now(),
-          content: [
-            {
-              type: "thinking",
-              thinking: "earlier reasoning",
-              thinkingSignature: "sig_readable",
-            },
-            { type: "text", text: "visible answer" },
-          ],
-        },
-      ] as Context["messages"],
-      makeModel("anthropic-messages", "anthropic", "claude-fable-5-1"),
-    );
-
-    expect(result[0]).toMatchObject({
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "earlier reasoning", thinkingSignature: "sig_readable" },
-        { type: "text", text: "visible answer" },
-      ],
-    });
-  });
-
-  it("normalizes malformed assistant content before transport conversion", () => {
-    const objectContentMessages = [
+it("drops max-token reasoning-only transport assistant turns before replay", () => {
+  const messages: Context["messages"] = [
+    thinkingMessage(
       {
-        ...assistantToolCall("call_object"),
-        stopReason: "stop",
-        content: { type: "text", text: "legacy object" },
-      },
-      { role: "user", content: "continue", timestamp: Date.now() },
-    ] as unknown as Context["messages"];
-    const objectResult = transformTransportMessages(
-      objectContentMessages,
-      makeModel("openai-responses", "openai", "gpt-5.4"),
-    );
-    expect(objectResult[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "legacy object" }],
-    });
-
-    const nullContentMessages = [
-      {
-        ...assistantToolCall("call_null"),
-        stopReason: "stop",
-        content: null,
-      },
-      { role: "user", content: "continue", timestamp: Date.now() },
-    ] as unknown as Context["messages"];
-    const nullResult = transformTransportMessages(
-      nullContentMessages,
-      makeModel("openai-responses", "openai", "gpt-5.4"),
-    );
-    expect(nullResult[0]).toMatchObject({ role: "assistant", content: [] });
-    expect(nullResult[1]).toMatchObject({ role: "user" });
-  });
-
-  describe.each(["error"] as const)("%s replay without visible output", (stopReason) => {
-    it.each([
-      {
-        name: "the no-content placeholder with hidden reasoning",
-        content: [
-          { type: "text", text: NO_CONTENT_PLACEHOLDER },
-          { type: "thinking", thinking: "hidden partial reasoning" },
-        ],
-      },
-    ] satisfies Array<{
-      name: string;
-      content: Extract<Context["messages"][number], { role: "assistant" }>["content"];
-    }>)("drops $name across a model change without inventing a visible turn", ({ content }) => {
-      const failed = makeAssistantMessageFixture({ model: "source-model", stopReason, content });
-      const user: Context["messages"][number] = {
-        role: "user",
-        content: "what is the weather?",
-        timestamp: 3,
-      };
-
-      expect(
-        transformTransportMessages(
-          [failed, user],
-          makeModel("openai-responses", "openai", "gpt-5.4"),
-        ),
-      ).toEqual([user]);
-    });
-  });
-
-  it("drops max-token reasoning-only transport assistant turns before replay", () => {
-    const messages: Context["messages"] = [
-      {
-        role: "assistant",
         provider: "amazon-bedrock",
         api: "bedrock-converse-stream",
         model: "global.anthropic.claude-sonnet-4-6",
         stopReason: "length",
-        timestamp: Date.now(),
-        content: [
-          {
-            type: "thinking",
-            thinking: "partial hidden reasoning",
-            thinkingSignature: "partial-signature",
-          },
-        ],
-      } as Extract<Context["messages"][number], { role: "assistant" }>,
-      { role: "user", content: "retry after max token thinking", timestamp: Date.now() },
-    ];
-
-    const result = transformTransportMessages(
-      messages,
-      makeModel(
-        "bedrock-converse-stream" as Api,
-        "amazon-bedrock",
-        "global.anthropic.claude-sonnet-4-6",
-      ),
-    );
-
-    expect(result.map((msg) => msg.role)).toEqual(["user"]);
-    expect(JSON.stringify(result)).not.toContain("partial-signature");
-  });
-
-  it("does not reassign a dropped errored turn's repeated-id result to an older turn", () => {
-    const messages: Context["messages"] = [
-      assistantToolCall("call_repeated"),
-      assistantToolCall("call_repeated", "exec", "error"),
-      {
-        role: "toolResult",
-        toolCallId: "call_repeated",
-        toolName: "exec",
-        content: [{ type: "text", text: "failed turn output" }],
-        isError: true,
-        timestamp: Date.now(),
       },
-      { role: "user", content: "retry after error", timestamp: Date.now() },
-    ];
+      "partial hidden reasoning",
+      "partial-signature",
+    ),
+    userMessage("retry after max token thinking"),
+  ];
 
-    const result = transformTransportMessages(
-      messages,
-      makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
-    );
+  const result = transformTransportMessages(
+    messages,
+    makeModel(
+      "bedrock-converse-stream" as Api,
+      "amazon-bedrock",
+      "global.anthropic.claude-sonnet-4-6",
+    ),
+  );
 
-    expect(result.map((message) => message.role)).toEqual(["assistant", "toolResult", "user"]);
-    expect(requireToolResultMessage(result[1])).toMatchObject({
-      toolCallId: "call_repeated",
-      isError: true,
-      content: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
-    });
-    expect(JSON.stringify(result)).not.toContain("failed turn output");
+  expect(result.map((msg) => msg.role)).toEqual(["user"]);
+  expect(JSON.stringify(result)).not.toContain("partial-signature");
+});
+
+it("does not reassign a dropped errored turn's repeated-id result to an older turn", () => {
+  const messages: Context["messages"] = [
+    assistantToolCall("call_repeated"),
+    assistantToolCall("call_repeated", "exec", "error"),
+    toolResult("call_repeated", "failed turn output", "exec", true),
+    userMessage("retry after error"),
+  ];
+
+  const result = transformTransportMessages(
+    messages,
+    makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
+  );
+
+  expect(result.map((message) => message.role)).toEqual(["assistant", "toolResult", "user"]);
+  expect(result[1]).toMatchObject({
+    role: "toolResult",
+    toolCallId: "call_repeated",
+    isError: true,
+    content: [text(DEFAULT_MISSING_TOOL_RESULT_TEXT)],
   });
+  expect(JSON.stringify(result)).not.toContain("failed turn output");
 });

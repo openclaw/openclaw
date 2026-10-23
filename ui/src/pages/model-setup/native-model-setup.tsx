@@ -1,5 +1,15 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo } from "solid-js";
+import {
+  createMemo,
+  createProjection,
+  createSignal,
+  Errored,
+  isPending,
+  latest,
+  Loading,
+  onCleanup,
+  Show,
+} from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -9,13 +19,15 @@ import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.t
 import {
   loadModelCatalog,
   modelCatalogRefreshError,
-  peekModelCatalog,
+  readModelCatalog,
+  subscribeModelCatalogCache,
   subscribeModelCatalogChanges,
 } from "../../lib/model-catalog-store.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
-import type { ControllerHost } from "../model-providers/page-controller.ts";
 import type { captureModelSetupConnection } from "./first-run-setup.ts";
+import { createModelSetupSaving } from "./model-setup-saving.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
 
 type NativeModelSetupOptions = {
@@ -24,249 +36,323 @@ type NativeModelSetupOptions = {
   canUseSetup: (client: GatewayBrowserClient | null) => boolean;
   blocked: () => boolean;
   onSelected: () => void;
+  onChange: () => void;
 };
 
-export class NativeModelSetup {
-  private nativeModels: ModelCatalogEntry[] = [];
-  private nativeModel = "";
-  private nativeModelError: string | null = null;
-  private nativeCatalogError: string | null = null;
-  saving = false;
-  private generation = 0;
-  private nativeModelsAbort: AbortController | null = null;
-  private nativeModelsUnsubscribe: (() => void) | null = null;
-  private nativeModelsStatus: "idle" | "loading" | "ready" = "idle";
+export type NativeModelSetup = ReturnType<typeof createNativeModelSetup>;
 
-  constructor(
-    private readonly host: ControllerHost,
-    private readonly options: NativeModelSetupOptions,
-  ) {}
+type NativeCatalogRequest = {
+  client: GatewayBrowserClient;
+  scope: { view: "all"; agentId?: string };
+  result: Promise<ModelCatalogResult>;
+};
 
-  get count() {
-    return this.nativeModels.length;
+export function createNativeModelSetup(options: NativeModelSetupOptions) {
+  const catalog = projectSource<NativeCatalogRequest | null, ReturnType<typeof readModelCatalog>>(
+    null,
+    {
+      read: (source) => readModelCatalog(source?.client, source?.scope),
+      subscribe: (source, notify) =>
+        source ? subscribeModelCatalogCache(source.client, notify, () => source.scope) : () => {},
+      equality: "revision",
+    },
+  );
+  const readNativeModels = () =>
+    catalog
+      .read()
+      .models.filter((model) => model.agentRuntime && model.agentRuntime.id !== "openclaw");
+  const nativeModels = createProjection(readNativeModels, [], {
+    key: (model: ModelCatalogEntry) => `${model.provider}/${model.id}`,
+  });
+  // A removed choice stays cleared if a later catalog reintroduces the model.
+  const [nativeModel, setNativeModel] = createSignal<string>((previous = "") =>
+    nativeModels.some((model) => `${model.provider}/${model.id}` === previous) ? previous : "",
+  );
+  const [nativeMutation, setNativeMutation] = createSignal<{ completion: Promise<null> }>();
+  const saving = createModelSetupSaving(options.getConnection);
+  const [request, setRequest] = createSignal<NativeCatalogRequest | null>(null);
+  let generation = 0;
+  let mutationActive = false;
+  let nativeModelsAbort: AbortController | null = null;
+  let nativeModelsUnsubscribe: (() => void) | null = null;
+  const result = createMemo<ModelCatalogResult>(
+    () => request()?.result ?? Promise.resolve({ models: [] }),
+  );
+
+  function reset() {
+    saving.retire();
+    generation += 1;
+    mutationActive = false;
+    catalog.replaceSource(null);
+    setRequest(null);
+    setNativeModel("");
+    setNativeMutation(undefined);
+    nativeModelsAbort?.abort();
+    nativeModelsAbort = null;
+    nativeModelsUnsubscribe?.();
+    nativeModelsUnsubscribe = null;
   }
-
-  reset() {
-    this.generation += 1;
-    this.nativeModels = [];
-    this.nativeModel = "";
-    this.nativeModelError = null;
-    this.nativeCatalogError = null;
-    this.saving = false;
-    this.nativeModelsAbort?.abort();
-    this.nativeModelsAbort = null;
-    this.nativeModelsUnsubscribe?.();
-    this.nativeModelsUnsubscribe = null;
-    this.nativeModelsStatus = "idle";
-  }
-  private async useNativeModel(): Promise<void> {
-    const connection = this.options.getConnection();
-    const generation = this.generation;
+  function useNativeModel(): void {
+    const connection = options.getConnection();
+    const requestGeneration = generation;
     const isCurrent = () =>
-      this.generation === generation && this.options.getConnection() === connection;
-    const context = this.options.getContext();
+      generation === requestGeneration && options.getConnection() === connection;
+    const context = options.getContext();
     const client = context.gateway.snapshot.client;
     const agentId =
       connection?.agentId ?? readSessionDefaults(context.gateway.snapshot)?.defaultAgentId;
-    const model = this.nativeModels.find(
-      (entry) => `${entry.provider}/${entry.id}` === this.nativeModel,
+    const model = readNativeModels().find(
+      (entry) => `${entry.provider}/${entry.id}` === nativeModel(),
     );
     if (
-      !this.options.canUseSetup(client) ||
+      !options.canUseSetup(client) ||
       !agentId ||
       model?.available !== true ||
-      this.saving ||
-      this.options.blocked()
+      mutationActive ||
+      options.blocked()
     ) {
       return;
     }
-    this.saving = true;
-    this.host.requestUpdate();
-    this.nativeModelError = null;
+    mutationActive = true;
+    options.onChange();
     const modelRef = `${model.provider}/${model.id}`;
-    try {
-      const mutation = await context.runtimeConfig.runExternalMutation(
-        (mutationClient) =>
-          mutationClient.request("agents.update", {
-            agentId,
-            model: modelRef,
-            agentRuntime: model.agentRuntime?.id,
-          }),
-        {
-          canDispatch: () => isCurrent() && this.options.canUseSetup(client),
-        },
-      );
-      if (!isCurrent()) {
-        return;
+    const pending = (async () => {
+      try {
+        const mutation = await context.runtimeConfig.runExternalMutation(
+          (mutationClient) =>
+            mutationClient.request("agents.update", {
+              agentId,
+              model: modelRef,
+              agentRuntime: model.agentRuntime?.id,
+            }),
+          {
+            canDispatch: () => isCurrent() && options.canUseSetup(client),
+          },
+        );
+        if (!isCurrent()) {
+          return;
+        }
+        const outcome = mutation.ok ? mutation.refresh : mutation;
+        if (!outcome.ok) {
+          throw new Error(outcome.error);
+        }
+        await context.agents.refreshList();
+        if (isCurrent()) {
+          options.onSelected();
+        }
+      } catch (error) {
+        if (isCurrent()) {
+          throw error;
+        }
+      } finally {
+        if (isCurrent()) {
+          mutationActive = false;
+          options.onChange();
+        }
       }
-      const result = mutation.ok ? mutation.refresh : mutation;
-      if (!result.ok) {
-        this.nativeModelError = result.error;
-        return;
-      }
-      await context.agents.refreshList();
-      if (isCurrent()) {
-        this.options.onSelected();
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        this.nativeModelError = formatModelSetupError(error);
-      }
-    } finally {
-      if (isCurrent()) {
-        this.saving = false;
-        this.host.requestUpdate();
-      }
-    }
+    })();
+    const completion = saving.present(pending, isCurrent).then(() => null);
+    // The error boundary observes this completion; a retired view may no longer read it.
+    void completion.catch(() => {});
+    setNativeMutation({ completion });
   }
 
-  private applyNativeCatalog(catalog: ModelCatalogResult): void {
-    this.nativeModels = catalog.models.filter(
-      (model) => model.agentRuntime && model.agentRuntime.id !== "openclaw",
-    );
-    this.nativeModelsStatus = catalog.pendingProviders?.length ? "loading" : "ready";
-    this.nativeCatalogError = modelCatalogRefreshError(catalog);
-    if (!this.nativeModels.some((model) => `${model.provider}/${model.id}` === this.nativeModel)) {
-      this.nativeModel = "";
-    }
-  }
-
-  private async loadNativeModels(refresh: boolean): Promise<void> {
-    const connection = this.options.getConnection();
-    const context = this.options.getContext();
+  function loadNativeModels(refresh: boolean): void {
+    const connection = options.getConnection();
+    const context = options.getContext();
     const client = context.gateway.snapshot.client;
-    if (!client || !this.options.canUseSetup(client)) {
+    if (!client || !options.canUseSetup(client)) {
       return;
     }
     const scope = {
       view: "all" as const,
       agentId: connection?.agentId ?? undefined,
     };
-    const cached = peekModelCatalog(client, scope, { allowStale: true });
-    if (cached) {
-      this.applyNativeCatalog(cached);
-    }
-    this.nativeModelsUnsubscribe ??= subscribeModelCatalogChanges(
+    nativeModelsUnsubscribe ??= subscribeModelCatalogChanges(
       context.gateway,
-      () => void this.loadNativeModels(false),
+      () => loadNativeModels(false),
       scope,
     );
-    this.nativeModelsAbort?.abort();
+    nativeModelsAbort?.abort();
     const controller = new AbortController();
-    this.nativeModelsAbort = controller;
-    if (refresh) {
-      this.nativeCatalogError = null;
-    }
-    this.nativeModelsStatus = "loading";
-    this.host.requestUpdate();
-    try {
-      const catalog = await loadModelCatalog(client, {
-        ...scope,
-        refresh,
-        signal: controller.signal,
-      });
-      if (this.options.getConnection() !== connection || controller.signal.aborted) {
-        return;
+    nativeModelsAbort = controller;
+    const completion = loadModelCatalog(client, {
+      ...scope,
+      refresh,
+      signal: controller.signal,
+    }).finally(() => {
+      if (nativeModelsAbort === controller) {
+        nativeModelsAbort = null;
       }
-      this.applyNativeCatalog(catalog);
-    } catch (error) {
-      if (this.options.getConnection() === connection && !controller.signal.aborted) {
-        this.nativeModelsStatus = "ready";
-        this.nativeCatalogError = formatModelSetupError(error);
-      }
-    } finally {
-      if (this.nativeModelsAbort === controller) {
-        this.nativeModelsAbort = null;
-        this.host.requestUpdate();
-      }
-    }
+    });
+    // Scope retirement may discard the receipt before its async reader observes it.
+    void completion.catch(() => {});
+    const read = { client, scope, result: completion };
+    catalog.replaceSource(read);
+    setRequest(read);
   }
 
-  render(revision?: () => unknown) {
-    const current = () => {
-      revision?.();
-      return this;
-    };
-    const selected = () =>
-      current().nativeModels.find(
-        (model) => `${model.provider}/${model.id}` === current().nativeModel,
-      );
-    const options = createMemo(() =>
-      current().nativeModels.map((model) => ({
-        value: `${model.provider}/${model.id}`,
-        label: model.name,
-        provider: model.provider,
-        detail:
-          model.available === true
-            ? providerDisplayLabel(model.provider)
-            : (chatModelUnavailableMessage(model.unavailableReason) ??
-              (current().nativeModelsStatus === "loading" && model.available === undefined
-                ? t("modelSetup.nativeModels.loading")
-                : model.available === false
-                  ? t("chat.modelControls.modelsUnavailable")
-                  : t("modelSetup.nativeModels.unconfirmed"))),
-        disabled: model.available !== true,
-      })),
-    );
-    return renderNativeModelSetupSection(
-      <>
-        {current().nativeModelsStatus === "loading" ? (
-          <p role="status">{t("modelSetup.nativeModels.loading")}</p>
-        ) : undefined}
-        {current().nativeModelsStatus === "ready" &&
-        current().nativeModels.length === 0 &&
-        !current().nativeCatalogError ? (
-          <p role="status">{t("modelSetup.nativeModels.empty")}</p>
-        ) : undefined}
-        <ModelPicker
-          label={t("modelSetup.nativeModels.choose")}
-          value={current().nativeModel}
-          options={options()}
-          disabled={current().options.blocked() || current().saving}
-          onChange={(value) => {
-            this.nativeModel = value;
-            this.host.requestUpdate();
-          }}
-          onOpen={() => {
-            if (!this.nativeModelsAbort) {
-              void this.loadNativeModels(this.nativeModelsStatus === "idle");
-            }
-          }}
-        />
-        <button
-          class="btn primary"
-          disabled={
-            current().options.blocked() || current().saving || selected()?.available !== true
-          }
-          onClick={() => void this.useNativeModel()}
+  // open() admits resources synchronously, including before the first settle.
+  onCleanup(() => {
+    saving.retire();
+    generation += 1;
+    nativeModelsAbort?.abort();
+    nativeModelsUnsubscribe?.();
+  });
+  return {
+    reset,
+    models: () => nativeModels,
+    selected: nativeModel,
+    mutation: nativeMutation,
+    catalogPending: () => Boolean(catalog.read().pendingProviders?.length),
+    result,
+    request,
+    setSelected: setNativeModel,
+    blocked: options.blocked,
+    useModel: () => useNativeModel(),
+    retry: () => loadNativeModels(true),
+    open: () => {
+      if (!nativeModelsAbort) {
+        loadNativeModels(request() === null);
+      }
+    },
+    get count() {
+      return nativeModels.length;
+    },
+    get saving() {
+      return saving.saving() || mutationActive;
+    },
+    get active() {
+      return mutationActive;
+    },
+  };
+}
+
+export function NativeModelSetupView(props: { owner: NativeModelSetup }) {
+  const selected = () =>
+    props.owner
+      .models()
+      .find((model) => `${model.provider}/${model.id}` === props.owner.selected());
+  const pickerOptions = createMemo(() =>
+    props.owner.models().map((model) => ({
+      value: `${model.provider}/${model.id}`,
+      label: model.name,
+      provider: model.provider,
+      detail:
+        model.available === true
+          ? providerDisplayLabel(model.provider)
+          : (chatModelUnavailableMessage(model.unavailableReason) ??
+            (props.owner.catalogPending() && model.available === undefined
+              ? t("modelSetup.nativeModels.loading")
+              : model.available === false
+                ? t("chat.modelControls.modelsUnavailable")
+                : t("modelSetup.nativeModels.unconfirmed"))),
+      disabled: model.available !== true,
+    })),
+  );
+  // Only status regions wait; cached picker controls stay interactive during refresh.
+  return renderNativeModelSetupSection(
+    <>
+      <Errored
+        fallback={() => (
+          <>
+            {isPending(() => props.owner.result()) ? (
+              <p role="status">{t("modelSetup.nativeModels.loading")}</p>
+            ) : undefined}
+          </>
+        )}
+      >
+        <Loading
+          on={props.owner.request()}
+          fallback={<p role="status">{t("modelSetup.nativeModels.loading")}</p>}
         >
-          {t(current().saving ? "modelSetup.nativeModels.saving" : "modelSetup.nativeModels.use")}
-        </button>
-        {current().nativeModelError ? (
-          <div class="callout danger" role="alert">
-            {current().nativeModelError}
-          </div>
-        ) : undefined}
-        {current().nativeCatalogError ? (
-          <div class="callout danger" role="alert">
-            {current().nativeCatalogError}
-            <button
-              class="btn btn--sm"
-              type="button"
-              disabled={
-                current().options.blocked() ||
-                current().saving ||
-                current().nativeModelsAbort !== null
-              }
-              onClick={() => void this.loadNativeModels(true)}
-            >
-              {t("common.retry")}
-            </button>
-          </div>
-        ) : undefined}
-      </>,
-    );
-  }
+          <NativeCatalogStatus owner={props.owner} />
+        </Loading>
+      </Errored>
+      <ModelPicker
+        label={t("modelSetup.nativeModels.choose")}
+        value={props.owner.selected()}
+        options={pickerOptions()}
+        disabled={props.owner.saving || props.owner.blocked()}
+        onChange={(value) => props.owner.setSelected(value)}
+        onOpen={() => props.owner.open()}
+      />
+      <button
+        class="btn primary"
+        disabled={props.owner.saving || props.owner.blocked() || selected()?.available !== true}
+        onClick={() => props.owner.useModel()}
+      >
+        {t(props.owner.saving ? "modelSetup.nativeModels.saving" : "modelSetup.nativeModels.use")}
+      </button>
+      <Show when={props.owner.mutation()} keyed>
+        {(mutation) => <NativeModelMutationStatus completion={mutation.completion} />}
+      </Show>
+      <Errored
+        fallback={(error) => (
+          <NativeCatalogError
+            owner={props.owner}
+            message={isPending(() => props.owner.result()) ? null : formatModelSetupError(error())}
+          />
+        )}
+      >
+        <Loading on={props.owner.request()}>
+          <NativeCatalogError
+            owner={props.owner}
+            message={modelCatalogRefreshError(latest(() => props.owner.result()))}
+          />
+        </Loading>
+      </Errored>
+    </>,
+  );
+}
+
+function NativeCatalogStatus(props: { owner: NativeModelSetup }) {
+  return (
+    <>
+      {isPending(() => props.owner.result()) || props.owner.result().pendingProviders?.length ? (
+        <p role="status">{t("modelSetup.nativeModels.loading")}</p>
+      ) : props.owner.request() &&
+        props.owner.models().length === 0 &&
+        !modelCatalogRefreshError(props.owner.result()) ? (
+        <p role="status">{t("modelSetup.nativeModels.empty")}</p>
+      ) : undefined}
+    </>
+  );
+}
+
+function NativeCatalogError(props: { owner: NativeModelSetup; message: string | null }) {
+  return (
+    <>
+      {props.message ? (
+        <div class="callout danger" role="alert">
+          {props.message}
+          <button
+            class="btn btn--sm"
+            type="button"
+            disabled={props.owner.saving || props.owner.blocked()}
+            onClick={() => props.owner.retry()}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      ) : undefined}
+    </>
+  );
+}
+
+function NativeModelMutationStatus(props: { completion: Promise<null> }) {
+  const completion = createMemo(() => props.completion);
+  return (
+    <Errored
+      fallback={(error) => (
+        <div class="callout danger" role="alert">
+          {formatModelSetupError(error())}
+        </div>
+      )}
+    >
+      <Loading>{completion()}</Loading>
+    </Errored>
+  );
 }
 
 function renderNativeModelSetupSection(content: JSX.Element) {

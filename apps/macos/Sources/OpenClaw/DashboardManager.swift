@@ -352,10 +352,12 @@ final class DashboardManager {
                 controller.documentHost.nativeGatewayAuthProvider = configuration.nativeAuthProvider
                 controller.documentHost.legacyNativeCredentials = configuration.legacyNativeCredentials
                 let updateBridgeEnabled = controller === self.controller && Self.updateBridgeEnabled(mode: mode)
-                if configuration.url == controller.currentURL {
-                    controller.setUpdateBridgeEnabled(updateBridgeEnabled)
-                } else if auth.hasCredential || auth.hasAcceptedNativeBinding || auth.usesBrowserIdentity {
+                // Reconcile failed documents even when the route is unchanged;
+                // update preserves live content and loads already in flight.
+                if auth.hasCredential || auth.hasAcceptedNativeBinding || auth.usesBrowserIdentity {
                     controller.update(url: configuration.url, auth: auth, updateBridgeEnabled: updateBridgeEnabled)
+                } else if configuration.url == controller.currentURL {
+                    controller.setUpdateBridgeEnabled(updateBridgeEnabled)
                 }
                 self.displayedPrimaryRoutes[key] = (routeRevision, previousRoute?.authority)
             }
@@ -416,10 +418,20 @@ final class DashboardManager {
         return controller.auth
     }
 
+    /// Reopen restores the last focused Dashboard window instead of raising the main window over it.
+    /// A closed main window is still reopened by an explicit presentation.
+    private var lastFocusedDashboardToReopen: DashboardWindowController? {
+        guard let previous = self.lastFrontmostWindow?.windowController as? DashboardWindowController
+        else { return nil }
+        if previous.isHiddenForExperience { return previous }
+        guard previous !== self.controller, previous.isWindowOpen, self.controller?.isWindowOpen == true
+        else { return nil }
+        return previous
+    }
+
     @discardableResult
     func showConfiguredWindowIfPossible() -> Bool {
-        if let previous = self.lastFrontmostWindow?.windowController as? DashboardWindowController,
-           previous.isHiddenForExperience { return false }
+        if self.lastFocusedDashboardToReopen != nil { return false }
         guard self.mainTarget == .primary, self.controller?.pendingGatewaySwitch == nil else { return false }
         // Remote dashboards must resolve the server's sign-in route before any
         // document receives native credentials, including the synchronous fast path.
@@ -1365,9 +1377,7 @@ extension DashboardManager {
 
     private func showResolvedDashboard(userGesture: Bool) async throws {
         try Task.checkCancellation()
-        if let previous = self.lastFrontmostWindow?.windowController as? DashboardWindowController,
-           previous.isHiddenForExperience, let target = self.target(for: previous)
-        {
+        if let previous = self.lastFocusedDashboardToReopen, let target = self.target(for: previous) {
             await self.openWindow(for: target, reuseExisting: true).value
             return
         }

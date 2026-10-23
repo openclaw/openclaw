@@ -1,14 +1,26 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import { Show, createEffect, createSignal, onCleanup } from "solid-js";
 import {
-  isOptionalElementDefined,
-  LazyCustomElementRequestController,
-} from "../../app/lazy-custom-element.ts";
+  children,
+  createSignal,
+  Errored,
+  isPending,
+  lazy,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
+import {
+  cancelStaleChunkRecovery,
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "../../app/stale-chunk-reload.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { Icon } from "./icon.tsx";
-import { LazyElementStateView } from "./lazy-view-error.tsx";
+import { LazyViewError } from "./lazy-view-error.tsx";
+import { LoadingState } from "./loading-state.tsx";
+
+const ModalDialog = lazy(() => import("../modal-dialog.tsx"), { export: "ModalDialog" });
 
 type ConfirmationProps = {
   pendingGatewayUrl: string | null;
@@ -36,12 +48,8 @@ function renderConfirmation(props: () => ConfirmationProps) {
     ]
       .filter(Boolean)
       .join(" ");
-  return (
-    <openclaw-modal-dialog
-      label={title()}
-      description={summary()}
-      onModal-cancel={() => props().onCancel()}
-    >
+  const content = children(() => (
+    <ModalDialog label={title()} description={summary()} onModal-cancel={() => props().onCancel()}>
       <div class="gateway-switch">
         <div class="gateway-switch__head">
           <span class="gateway-switch__icon" aria-hidden="true">
@@ -66,82 +74,69 @@ function renderConfirmation(props: () => ConfirmationProps) {
           </div>
         </div>
         <p class="gateway-switch__note">{notes()}</p>
-        <div class="gateway-switch__actions">
+        <openclaw-modal-actions class="gateway-switch__actions">
+          <button type="button" class="btn" onClick={() => props().onCancel()}>
+            {t("connection.switchGateway.cancel")}
+          </button>
           <button type="button" class="btn primary" onClick={() => props().onConfirm()}>
             {t("connection.switchGateway.confirm", {
               host: formatGatewayHost(props().pendingGatewayUrl ?? ""),
             })}
           </button>
-          <button type="button" class="btn" onClick={() => props().onCancel()}>
-            {t("connection.switchGateway.cancel")}
-          </button>
-        </div>
+        </openclaw-modal-actions>
       </div>
-    </openclaw-modal-dialog>
+    </ModalDialog>
+  ));
+  return (
+    <Errored
+      fallback={(error, reset) => {
+        let active = true;
+        const [retrying, setRetrying] = createSignal(false);
+        const stale = isStaleChunkImportError(error());
+        onSettled(() => () => {
+          active = false;
+          if (stale) {
+            cancelStaleChunkRecovery();
+          }
+        });
+        const retry = async () => {
+          if (!active) {
+            return;
+          }
+          setRetrying(true);
+          if (stale && (await retryStaleChunkReloadWhenReachable({ canReload: () => active }))) {
+            return;
+          }
+          if (active) {
+            setRetrying(false);
+            reset();
+          }
+        };
+        return (
+          <Show when={!retrying() && !isPending(content)} fallback={<LoadingState />}>
+            <LazyViewError
+              error={error()}
+              stale={stale}
+              subtitle={title()}
+              actionLabel={t("common.retry")}
+              onRetry={() => void retry()}
+              onClose={() => props().onCancel()}
+            />
+          </Show>
+        );
+      }}
+    >
+      <Loading fallback={<LoadingState />}>{content()}</Loading>
+    </Errored>
   );
 }
 
-export const GatewayUrlConfirmation = defineSolidBridge<{ props?: ConfirmationProps }>(
-  "openclaw-gateway-url-confirmation",
-  (props, host) => {
-    host.style.display = "contents";
-    const [revision, setRevision] = createSignal(0);
-    let live = true;
-    const dialogElement = {
-      tagName: "openclaw-modal-dialog",
-      get label() {
-        return t("connection.switchGateway.title");
-      },
-      loadModule: () => import("../modal-dialog.ts"),
-    };
-    const loader = new LazyCustomElementRequestController(
-      {
-        requestUpdate: () => {
-          if (live) {
-            setRevision((value) => value + 1);
-          }
-        },
-      },
-      () => props.props?.onCancel(),
-    );
-    createEffect(
-      () => Boolean(props.props?.pendingGatewayUrl),
-      (active) => loader.requestWhileActive(dialogElement, active),
-    );
-    onCleanup(() => {
-      live = false;
-      loader.requestWhileActive(dialogElement, false);
-    });
-    const loaded = () => {
-      revision();
-      return isOptionalElementDefined(dialogElement);
-    };
-    const loadingState = () => {
-      revision();
-      return loader.visibleState;
-    };
-    return (
-      <Show when={props.props?.pendingGatewayUrl ? props.props : undefined}>
-        {(confirmation) => (
-          <Show
-            when={loaded()}
-            fallback={
-              <Show when={loadingState()}>
-                {(state) => (
-                  <LazyElementStateView
-                    state={state()}
-                    onRetry={() => loader.retry()}
-                    onClose={() => loader.close()}
-                  />
-                )}
-              </Show>
-            }
-          >
-            {renderConfirmation(confirmation)}
-          </Show>
-        )}
+export function GatewayUrlConfirmation(input: { props?: ConfirmationProps }) {
+  return (
+    <openclaw-gateway-url-confirmation style="display: contents">
+      <Show when={input.props?.pendingGatewayUrl ? input.props : undefined}>
+        {(confirmation) => renderConfirmation(confirmation)}
       </Show>
-    );
-  },
-  { properties: { props: { default: undefined, attribute: false } } },
-);
+    </openclaw-gateway-url-confirmation>
+  );
+}

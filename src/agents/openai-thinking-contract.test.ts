@@ -25,11 +25,8 @@ const openaiModel = {
 } as Model<"openai-responses">;
 
 const codexModel = {
+  ...openaiModel,
   api: "openai-chatgpt-responses",
-  provider: "openai",
-  id: "gpt-5.5",
-  input: ["text"],
-  reasoning: true,
   baseUrl: "https://chatgpt.com/backend-api",
 } as Model<"openai-chatgpt-responses">;
 
@@ -186,13 +183,9 @@ describe("OpenAI thinking contract", () => {
   )(
     "maps Agent $thinkingLevel to declared chat-template effort $reasoningEffort over $transport HTTP",
     async ({ transport, thinkingLevel, reasoningEffort }) => {
-      const payload = await captureHttpProviderPayload({
-        api: "openai-completions",
-        thinkingFormat: "qwen-chat-template",
-        reasoningCompat: qwen38ChatTemplateEfforts,
+      const payload = await captureQwenPayload({
         transport,
         thinkingLevel,
-        mode: "agent",
       });
       expect(payload.chat_template_kwargs).toMatchObject({
         enable_thinking: true,
@@ -206,48 +199,27 @@ describe("OpenAI thinking contract", () => {
     (["managed", "direct"] as const).flatMap((transport) =>
       (
         [
-          {
-            caseName: "known unselected thinking",
-            thinkingExplicit: false,
-            thinkingLevel: "high",
-            expectedEffort: undefined,
-            enabled: true,
-          },
-          {
-            caseName: "explicit configured default",
-            thinkingExplicit: true,
-            thinkingLevel: "high",
-            expectedEffort: "xhigh",
-            enabled: true,
-          },
-          {
-            caseName: "unknown provenance",
-            thinkingExplicit: undefined,
-            thinkingLevel: "high",
-            expectedEffort: "xhigh",
-            enabled: true,
-          },
-          {
-            caseName: "thinking off",
-            thinkingExplicit: true,
-            thinkingLevel: "off",
-            expectedEffort: undefined,
-            enabled: false,
-          },
+          ["known unselected thinking", false, "high", undefined, true],
+          ["explicit configured default", true, "high", "xhigh", true],
+          ["unknown provenance", undefined, "high", "xhigh", true],
+          ["thinking off", true, "off", undefined, false],
         ] as const
-      ).map((testCase) => Object.assign({ transport }, testCase)),
+      ).map(([caseName, thinkingExplicit, thinkingLevel, expectedEffort, enabled]) => ({
+        transport,
+        caseName,
+        thinkingExplicit,
+        thinkingLevel,
+        expectedEffort,
+        enabled,
+      })),
     ),
   )(
     "applies Qwen template provenance for $caseName over $transport HTTP",
     async ({ transport, thinkingExplicit, thinkingLevel, expectedEffort, enabled }) => {
-      const payload = await captureHttpProviderPayload({
-        api: "openai-completions",
-        thinkingFormat: "qwen-chat-template",
-        reasoningCompat: qwen38ChatTemplateEfforts,
+      const payload = await captureQwenPayload({
         transport,
         thinkingLevel,
         thinkingExplicit,
-        mode: "agent",
       });
       expect(payload).not.toHaveProperty("openclawThinkingExplicit");
       expect(payload.chat_template_kwargs).toMatchObject({ enable_thinking: enabled });
@@ -281,13 +253,9 @@ describe("OpenAI thinking contract", () => {
   it.each(["managed", "direct"] as const)(
     "omits declared chat-template effort when Agent thinking is off over %s HTTP",
     async (transport) => {
-      const payload = await captureHttpProviderPayload({
-        api: "openai-completions",
-        thinkingFormat: "qwen-chat-template",
-        reasoningCompat: qwen38ChatTemplateEfforts,
+      const payload = await captureQwenPayload({
         transport,
         thinkingLevel: "off",
-        mode: "agent",
       });
       expect(payload.chat_template_kwargs).toMatchObject({ enable_thinking: false });
       expect(payload).not.toHaveProperty("chat_template_kwargs.reasoning_effort");
@@ -302,14 +270,11 @@ describe("OpenAI thinking contract", () => {
   )(
     "keeps undeclared chat-template thinking binary for $modelId over $transport HTTP",
     async ({ transport, modelId }) => {
-      const payload = await captureHttpProviderPayload({
-        api: "openai-completions",
-        thinkingFormat: "qwen-chat-template",
+      const payload = await captureQwenPayload({
         reasoningCompat: {},
         modelId,
         transport,
         thinkingLevel: "high",
-        mode: "agent",
       });
       expect(payload.chat_template_kwargs).toMatchObject({ enable_thinking: true });
       expect(payload).not.toHaveProperty("chat_template_kwargs.reasoning_effort");
@@ -334,10 +299,7 @@ describe("OpenAI thinking contract", () => {
   it.each(["managed", "direct"] as const)(
     "omits declared chat-template effort without a standalone selection over %s HTTP",
     async (transport) => {
-      const completions = await captureHttpProviderPayload({
-        api: "openai-completions",
-        thinkingFormat: "qwen-chat-template",
-        reasoningCompat: qwen38ChatTemplateEfforts,
+      const completions = await captureQwenPayload({
         transport,
         mode: "standalone",
       });
@@ -345,6 +307,16 @@ describe("OpenAI thinking contract", () => {
       expect(completions).not.toHaveProperty("openclawThinkingExplicit");
     },
   );
+
+  function captureQwenPayload(params: Partial<Parameters<typeof captureHttpProviderPayload>[0]>) {
+    return captureHttpProviderPayload({
+      api: "openai-completions",
+      thinkingFormat: "qwen-chat-template",
+      reasoningCompat: qwen38ChatTemplateEfforts,
+      mode: "agent",
+      ...params,
+    });
+  }
 
   it("retains standalone managed defaults when no reasoning option is supplied", async () => {
     const completions = await captureHttpProviderPayload({
@@ -365,25 +337,21 @@ describe("OpenAI thinking contract", () => {
     }
   });
 
-  it("serializes OpenAI Responses reasoning effort from shared model runtime simple options", async () => {
-    const payload = await captureProviderPayload({
-      model: openaiModel,
-      streamFn: streamSimple,
-      options: { reasoning: "high" },
-    });
+  it.each([openaiModel, codexModel])(
+    "serializes $api reasoning from shared simple options",
+    async (model) => {
+      const payload = await captureProviderPayload({
+        model,
+        streamFn: streamSimple,
+        options: {
+          reasoning: "high",
+          ...(model.api === "openai-chatgpt-responses" ? { transport: "sse" as const } : {}),
+        },
+      });
 
-    expect(payload.reasoning).toEqual({ effort: "high", summary: "auto" });
-  });
-
-  it("serializes Codex Responses reasoning effort from shared model runtime simple options", async () => {
-    const payload = await captureProviderPayload({
-      model: codexModel,
-      streamFn: streamSimple,
-      options: { reasoning: "high", transport: "sse" },
-    });
-
-    expect(payload.reasoning).toEqual({ effort: "high", summary: "auto" });
-  });
+      expect(payload.reasoning).toEqual({ effort: "high", summary: "auto" });
+    },
+  );
 
   it.each([undefined, "off"] as const)(
     "leaves direct Codex Responses reasoning absent for %s",
@@ -536,39 +504,27 @@ async function captureProviderPayload<
   ) => ReturnType<StreamFn>;
   options: SimpleStreamOptions;
 }): Promise<Record<string, unknown>> {
-  // Stop at onPayload so transport serialization can be asserted without HTTP.
-  const payloadPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
-    let payloadCaptured = false;
-    const abortController = new AbortController();
-    abortController.abort(new Error("payload capture must not reach provider egress"));
-    const stream = params.streamFn(
-      params.model,
-      {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+  let payload: Record<string, unknown> | undefined;
+  const stream = await params.streamFn(
+    params.model,
+    {
+      messages: [{ role: "user", content: "hello", timestamp: 0 }],
+    },
+    {
+      apiKey: params.model.api === "openai-chatgpt-responses" ? codexTestToken : "test-api-key",
+      cacheRetention: "none",
+      ...params.options,
+      onPayload: (value) => {
+        payload = structuredClone(value as Record<string, unknown>);
+        throw new Error("stop after payload capture");
       },
-      {
-        apiKey: params.model.api === "openai-chatgpt-responses" ? codexTestToken : "test-api-key",
-        cacheRetention: "none",
-        ...params.options,
-        signal: abortController.signal,
-        onPayload: (payload) => {
-          payloadCaptured = true;
-          resolve(structuredClone(payload as Record<string, unknown>));
-          throw new Error("stop after payload capture");
-        },
-      },
+    },
+  );
+  const result = await stream.result();
+  if (!payload) {
+    throw new Error(
+      `Provider payload callback was not invoked for ${params.model.api}: ${result.stopReason}: ${result.errorMessage ?? "no error"}`,
     );
-    void Promise.resolve(stream).then(async (resolvedStream) => {
-      const result = await resolvedStream.result();
-      if (!payloadCaptured) {
-        reject(
-          new Error(
-            `provider payload callback was not invoked for ${params.model.api}; stream ended with ${result.stopReason}: ${result.errorMessage ?? "no error"}`,
-          ),
-        );
-      }
-    }, reject);
-  });
-
-  return payloadPromise;
+  }
+  return payload;
 }

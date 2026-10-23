@@ -21,35 +21,81 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
+import { updateRpcSourceSessionId } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createAgentDedupeLifecycle } from "../agent-turn/agent-dedupe-lifecycle.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
+import * as agentJob from "../agent-turn/agent-job.js";
 import { dispatchAgentRunFromGateway } from "../agent-turn/agent-run-dispatch.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
+import { withGatewaySessionEntry } from "../session-utils-store.js";
+import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import * as transcriptPersistence from "./chat-transcript-persistence.js";
+import { captureRpcTargetForTest } from "./rpc-source-fixtures.test-support.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
+import { stopSession } from "./sessions.abort-lifecycle.test-support.js";
 import type { RespondFn } from "./types.js";
 
 const fixture = useChatAbortRegistryFixture();
+type CommandReply = Pick<AgentCommandDeliveryResult, "payloads"> & {
+  meta: Partial<AgentCommandDeliveryResult["meta"]>;
+};
 
 const dispatchMocks = vi.hoisted(() => ({
-  agentCommand: vi.fn(
-    async (
-      _options: AgentCommandOpts,
-    ): Promise<
-      Pick<AgentCommandDeliveryResult, "payloads"> & {
-        meta: Partial<AgentCommandDeliveryResult["meta"]>;
-      }
-    > => ({ payloads: [], meta: {} }),
-  ),
+  agentCommand: vi.fn<(options: AgentCommandOpts) => Promise<CommandReply>>(),
 }));
 vi.mock("../../commands/agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../commands/agent.js")>()),
   agentCommandFromGatewayIngress: dispatchMocks.agentCommand,
 }));
+
+async function abortTarget(id = "abort-receipt") {
+  const scope = { agentId: "main", sessionKey: `agent:main:${id}`, sessionId: id };
+  const runId = `run-${id}`;
+  const context = createDirectChatContext({ getRuntimeConfig });
+  await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const sourceTarget = await withGatewaySessionEntry(
+    scope.sessionKey,
+    { agentId: scope.agentId },
+    (session) => captureRpcTargetForTest({ ...scope, storeScope: session.storePath }),
+  );
+  const register = (options: Partial<Parameters<typeof registerChatAbortController>[0]> = {}) =>
+    registerChatAbortController({
+      target: sourceTarget,
+      ...scope,
+      runId,
+      timeoutMs: 60_000,
+      ...options,
+    });
+  return { scope, runId, key: `agent:${runId}`, context, register };
+}
+
+async function startExecution(
+  registration: ReturnType<typeof registerChatAbortController>,
+  releaseOnAbort = false,
+) {
+  const entry = expectDefined(registration.entry, "registered RPC source");
+  const release = await claimRpcSourceForTest(entry);
+  if (releaseOnAbort) {
+    registration.controller.signal.addEventListener("abort", release, { once: true });
+  }
+  registration.initializeTiming();
+  expect(registration.markExecutionStarted()).toBe(true);
+  return release;
+}
+
+function expectStopped(respond: RespondFn, runId: string) {
+  expect(respond).toHaveBeenCalledExactlyOnceWith(
+    true,
+    { ok: true, abortedRunId: runId, status: "aborted" },
+    undefined,
+    undefined,
+  );
+}
 
 it.each([
   { method: "sessions.abort", hidden: false },
@@ -58,31 +104,12 @@ it.each([
 ] as const)(
   "$method stops direct-agent residual exec without rewriting its completed receipt (hidden=$hidden)",
   async ({ method, hidden }) => {
-    const caseId = `${method}-${hidden ? "hidden" : "visible"}`;
-    const scope = {
-      agentId: "main",
-      sessionKey: `agent:main:completed-exec-${caseId}`,
-      sessionId: `completed-exec-session-${caseId}`,
-    };
-    const runId = `completed-exec-run-${caseId}`;
+    const { scope, runId, key, context, register } = await abortTarget(`${method}-${hidden}`);
     const ownerDeviceId = "completed-exec-owner";
-    const context = createDirectChatContext({ getRuntimeConfig });
-    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const registration = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
-      ...scope,
-      runId,
-      ownerDeviceId,
-      controlUiVisible: !hidden,
-      timeoutMs: 60_000,
-    });
-    expect(registration.markExecutionStarted()).toBe(true);
+    const registration = register({ ownerDeviceId, controlUiVisible: !hidden });
+    const releaseExecution = await startExecution(registration);
     let processSession: ProcessSession | undefined;
-    const terminalReply = {
-      disposition: "visible" as const,
-      text: "The command is still running.",
-    };
-    const key = `agent:${runId}`;
+    const terminalReply = { disposition: "visible" as const, text: "Still running." };
     const emitFinal = vi.fn();
     try {
       dispatchMocks.agentCommand.mockImplementationOnce(async (options) => {
@@ -131,7 +158,10 @@ it.each([
           runId,
           dedupeKeys: [key],
           abortController: registration.controller,
-          cleanupAbortController: registration.cleanup,
+          cleanupAbortController: () => {
+            releaseExecution();
+            registration.cleanup();
+          },
           io: { emitAcceptance: vi.fn(), emitFinal },
           context,
         }),
@@ -142,9 +172,10 @@ it.each([
       );
       const command = expectDefined(processSession, "direct Gateway command process");
       const receipt = expectDefined(context.dedupe.get(key), "completed model receipt");
-      const completed = await waitForAgentJob({ runId, source: "agent", timeoutMs: 0 });
+      const completion = () => waitForAgentJob({ runId, source: "agent", timeoutMs: 0 });
+      const completed = await completion();
       expect(completed).toMatchObject({ status: "ok", terminalReply });
-      expect(context.chatAbortControllers.size).toBe(0);
+      expect(rpcSourceTesting.size).toBe(0);
       expect(command.exited).toBe(false);
       const stop = async (deviceId: string, exact = true) => {
         const respond = vi.fn<RespondFn>();
@@ -195,8 +226,9 @@ it.each([
       expect(command).toMatchObject({ exited: true, exitReason: "manual-cancel" });
       expect(command.finalizationFailed).not.toBe(true);
       expect(context.dedupe.get(key)).toBe(receipt);
-      expect(await waitForAgentJob({ runId, source: "agent", timeoutMs: 0 })).toEqual(completed);
+      expect(await completion()).toEqual(completed);
     } finally {
+      releaseExecution();
       registration.cleanup();
       if (processSession) {
         getProcessSupervisor().cancel(processSession.id, "manual-cancel");
@@ -210,42 +242,29 @@ it.each([
 it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
   "sessions.abort preserves the %s receipt after committed partial persistence",
   async (mode) => {
-    const scope = { agentId: "main", sessionKey: "agent:main:abort-receipt" };
-    const sessionId = "abort-receipt-session";
-    const runId = "abort-receipt-run";
-    const key = `agent:${runId}`;
-    const context = createDirectChatContext({ getRuntimeConfig });
-    await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+    const { scope, runId, key, context, register } = await abortTarget();
+    const { sessionId } = scope;
     const reserve = () => {
       const lifecycle = createAgentDedupeLifecycle({
         cfg: getRuntimeConfig(),
         request: { message: "Continue durable input", idempotencyKey: runId },
         runId,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
         agentDedupeKeys: [key],
         suppressVisibleSessionEffects: false,
-        privateCompletion: true,
+        reconcileDurableInput: true,
         context,
         io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
       });
       lifecycle.reserve(scope.sessionKey, scope.agentId);
-      lifecycle.bindSessionTarget({ ...scope, sessionId });
+      lifecycle.bindSessionTarget(scope);
       return lifecycle;
     };
     const original = mode === "unchanged" || mode === "successor" ? reserve() : undefined;
     const originalReceipt = context.dedupe.get(key);
     const removed = createDeferred();
-    const registration = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
-      ...scope,
-      sessionId,
-      runId,
-      kind: "agent",
-      timeoutMs: 60_000,
-      onRemoved: () => removed.resolve(),
-    });
+    const registration = register({ kind: "agent", onRemoved: () => removed.resolve() });
     expect(registration.registered).toBe(true);
-    expect(registration.markExecutionStarted()).toBe(true);
+    const releaseExecution = await startExecution(registration, true);
     context.chatRunState.getOrCreate(runId).buffer = "Predecessor partial";
     const committed = createDeferred();
     const release = createDeferred();
@@ -260,14 +279,7 @@ it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
       });
     const respond = vi.fn<RespondFn>();
     const request = Promise.resolve(
-      sessionAbortHandlers["sessions.abort"]!({
-        req: { type: "req", id: "abort-receipt", method: "sessions.abort" },
-        params: { key: scope.sessionKey, runId },
-        context,
-        client: null,
-        respond,
-        isWebchatConnect: () => false,
-      }),
+      stopSession(scope.sessionKey, respond, context, { runId }, null),
     );
     let successor: ReturnType<typeof registerChatAbortController> | undefined;
     try {
@@ -275,12 +287,11 @@ it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
         Promise.race([committed.promise.then(() => true), request.then(() => false)]),
       ).resolves.toBe(true);
       expect(registration.controller.signal.aborted).toBe(true);
-      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(rpcSourceTesting.has(runId)).toBe(false);
       await removed.promise;
       expect(respond).not.toHaveBeenCalled();
       expect(context.dedupe.get(key)).toBe(originalReceipt);
-      const transcriptScope = { ...scope, sessionId };
-      const committedTranscript = await loadTranscriptEvents(transcriptScope);
+      const committedTranscript = await loadTranscriptEvents(scope);
       expect(
         committedTranscript.filter((event) => asOptionalRecord(event)?.type === "message"),
       ).toEqual([
@@ -305,30 +316,18 @@ it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
           sessionId,
           sessionKey: scope.sessionKey,
         });
-        successor = registerChatAbortController({
-          chatAbortControllers: context.chatAbortControllers,
-          ...scope,
-          sessionId,
-          runId,
-          kind: "agent",
-          timeoutMs: 60_000,
-        });
+        successor = register({ kind: "agent" });
         expect(successor.registered).toBe(true);
         context.chatRunState.getOrCreate(runId).buffer = "Successor partial";
       }
       release.resolve();
       await request;
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        true,
-        { ok: true, abortedRunId: runId, status: "aborted" },
-        undefined,
-        undefined,
-      );
+      expectStopped(respond, runId);
       expect(persistence).toHaveBeenCalledOnce();
-      expect(await loadTranscriptEvents(transcriptScope)).toEqual(committedTranscript);
+      expect(await loadTranscriptEvents(scope)).toEqual(committedTranscript);
       if (replacesReceipt) {
         expect(context.dedupe.get(key)).toBe(successorReceipt);
-        expect(context.chatAbortControllers.get(runId)).toBe(successor?.entry);
+        expect(rpcSourceTesting.get(runId)).toBe(successor?.entry);
         expect(successor?.controller.signal.aborted).toBe(false);
         expect(context.chatRunState.resolveBuffer(runId, { final: true }).text).toBe(
           "Successor partial",
@@ -344,9 +343,43 @@ it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
       release.resolve();
       await request.catch(() => {});
       persistence.mockRestore();
+      releaseExecution();
       successor?.cleanup();
       registration.cleanup();
       context.chatRunState.clearRun(runId);
     }
   },
 );
+
+it("sessions.abort records the rotated RPC source identity on its terminal receipt", async () => {
+  const { scope, runId, context, register } = await abortTarget("rotated-abort-receipt");
+  const rotatedSessionId = "rotated-abort-receipt-session";
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const registration = register({ lifecycleGeneration, kind: "chat-send" });
+  const entry = expectDefined(registration.entry, "registered RPC source");
+  const releaseExecution = await startExecution(registration, true);
+  await replaceSessionEntry(scope, { sessionId: rotatedSessionId, updatedAt: 2 });
+  updateRpcSourceSessionId(entry, rotatedSessionId);
+  context.chatRunState.getOrCreate(runId).buffer = "Rotated abort partial";
+  const respond = vi.fn<RespondFn>();
+  const setDedupeEntry = vi.spyOn(agentJob, "setGatewayDedupeEntry");
+
+  try {
+    await stopSession(scope.sessionKey, respond, context, { runId }, null);
+    expectStopped(respond, runId);
+    const expectedSession = {
+      ...scope,
+      sessionId: rotatedSessionId,
+      lifecycleGeneration,
+    };
+    expect(setDedupeEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ key: `chat:${runId}`, session: expectedSession }),
+    );
+    expect(agentJob.getAgentJobSession(runId, "chat")).toEqual(expectedSession);
+  } finally {
+    setDedupeEntry.mockRestore();
+    releaseExecution();
+    registration.cleanup();
+    context.chatRunState.clearRun(runId);
+  }
+});

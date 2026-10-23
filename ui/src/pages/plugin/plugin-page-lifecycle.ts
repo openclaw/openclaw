@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import type { ControlUiPluginFrameGrantAck } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
   CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS,
@@ -9,31 +8,11 @@ import {
 } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  isStaleChunkImportError,
-  retryStaleChunkReloadWhenReachable,
-  scheduleStaleChunkReload,
-} from "../../app/stale-chunk-reload.ts";
 import { uiDevGatewayResourceUrl } from "../../dev-gateway.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-theme.ts";
-import type { LogbookProps } from "./logbook-view.tsx";
 import { openPluginFrameSession } from "./plugin-frame-session-navigation.ts";
-import { pluginTabKey } from "./route.ts";
-
-/**
- * Views shipped with the Control UI use this adapter. Native plugin entries
- * mount through the contribution runtime; descriptor paths use sandboxed frames.
- */
-type BundledPluginTabView = {
-  render: (props: LogbookProps) => JSX.Element;
-  stop: (host: object) => void;
-};
-
-type BundledPluginTabViewState =
-  | { status: "idle" }
-  | { status: "loading"; id: string }
-  | { status: "error"; id: string; error: unknown }
-  | { status: "ready"; id: string; view: BundledPluginTabView };
+import { pluginTabKey } from "./route.tsx";
 
 function pluginFrameGrantCoversTab(
   grant: ControlUiPluginFrameGrantAck,
@@ -57,17 +36,6 @@ function pluginFrameGrantCoversTab(
 const EXTERNAL_AUTH_REFRESH_TIMEOUT_MS = 10_000;
 const EXTERNAL_AUTH_PROBE_TIMEOUT_MS = 5_000;
 
-// Keyed by pluginId/tabId: tab ids are only unique within their plugin.
-export const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
-  "logbook/logbook": async () => {
-    const [{ Logbook }, { stopLogbookPolling }] = await Promise.all([
-      import("./logbook-view.tsx"),
-      import("./logbook-controller.ts"),
-    ]);
-    return { render: Logbook, stop: stopLogbookPolling };
-  },
-};
-
 export type PluginPageProps = {
   pluginId?: string;
   tabId?: string;
@@ -75,13 +43,15 @@ export type PluginPageProps = {
 };
 
 // Auth grants and retired frame epochs must change synchronously at the effect boundary.
-// Solid observes the lifecycle; its deferred signal writes never own these facts.
-export class PluginPageLifecycle {
+// Solid observes the owner; its deferred signal writes never own these facts.
+export class PluginPageOwner {
   private disposed = false;
-  bundledViewState: BundledPluginTabViewState = { status: "idle" };
   externalAuthReadyKey: string | null = null;
   externalAuthUnavailableKey: string | null = null;
   pluginFrameGeneration: object = {};
+
+  private readonly stopListeners: (() => void)[];
+  private actionLifetime = Promise.withResolvers<void>();
 
   constructor(
     readonly props: PluginPageProps,
@@ -89,8 +59,26 @@ export class PluginPageLifecycle {
     private readonly host: HTMLElement,
     private readonly notify: () => void,
   ) {
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    window.addEventListener("message", this.handlePluginSessionOpen);
+    let location = context.router.getState().location;
+    this.stopListeners = [
+      listen(document, "visibilitychange", this.handleVisibilityChange),
+      listen(window, "message", this.handlePluginSessionOpen),
+      context.router.subscribe((state) => {
+        if (state.location !== location) {
+          location = state.location;
+          this.retireActions();
+        }
+      }),
+    ];
+  }
+
+  get actionRetired() {
+    return this.actionLifetime.promise;
+  }
+
+  private retireActions() {
+    this.actionLifetime.resolve();
+    this.actionLifetime = Promise.withResolvers<void>();
   }
 
   bundledViewHost: object = {};
@@ -127,78 +115,33 @@ export class PluginPageLifecycle {
   };
 
   dispose() {
+    this.retireActions();
     this.disposed = true;
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-    window.removeEventListener("message", this.handlePluginSessionOpen);
+    this.stopListeners.forEach((stop) => stop());
     this.syncPluginThemeFrame(null);
     this.clearExternalTabAuth();
-    this.stopBundledView();
   }
 
   tabKey(): string {
     return pluginTabKey({ pluginId: this.props.pluginId ?? "", id: this.props.tabId ?? "" });
   }
 
-  private loadBundledView(key: string): Promise<BundledPluginTabView> {
-    const load = BUNDLED_TAB_VIEWS[key];
-    return load ? load() : Promise.reject(new Error(`Unknown bundled plugin tab: ${key}`));
+  hasBundledView(info = this.tabInfo()): boolean {
+    // Tab ids are only unique within their plugin.
+    return info?.pluginId === "logbook" && info.id === "logbook";
   }
-
-  private hasCurrentBundledDescriptor(key: string): boolean {
-    return this.tabKey() === key && this.tabInfo() !== undefined && key in BUNDLED_TAB_VIEWS;
-  }
-
-  private startBundledViewLoad(key: string) {
-    const loading = { status: "loading", id: key } as const;
-    this.bundledViewState = loading;
-    this.notify();
-    const settle = (nextState: BundledPluginTabViewState) => {
-      if (this.bundledViewState !== loading || !this.hasCurrentBundledDescriptor(key)) {
-        return;
-      }
-      this.bundledViewState = nextState;
-      this.notify();
-      if (nextState.status === "error" && isStaleChunkImportError(nextState.error)) {
-        void scheduleStaleChunkReload();
-      }
-    };
-    void this.loadBundledView(key).then(
-      (view) => settle({ status: "ready", id: key, view }),
-      (error: unknown) => settle({ status: "error", id: key, error }),
-    );
-  }
-
-  readonly retryBundledView = () => {
-    const viewState = this.bundledViewState;
-    if (viewState.status !== "error" || !this.hasCurrentBundledDescriptor(viewState.id)) {
-      return;
-    }
-    if (isStaleChunkImportError(viewState.error)) {
-      void retryStaleChunkReloadWhenReachable();
-    } else {
-      this.startBundledViewLoad(viewState.id);
-    }
-  };
 
   readonly update = () => {
     this.updateGatewaySource(this.context.gateway);
     if (this.disposed) {
       return;
     }
-    const key = this.tabKey();
     const info = this.tabInfo();
-    const hasBundledDescriptor = info !== undefined && key in BUNDLED_TAB_VIEWS;
-    const viewState = this.bundledViewState;
-    // Switching between plugin tabs reuses this element; the previous bundled
-    // view must stop its background polling before the next one renders. A
-    // descriptor can also disappear in place after disablement or scope loss.
-    if (viewState.status !== "idle" && (viewState.id !== key || !hasBundledDescriptor)) {
-      this.stopBundledView();
+    const bundled = this.hasBundledView(info);
+    if (!bundled) {
+      this.retireActions();
     }
-    if (this.bundledViewState.status === "idle" && hasBundledDescriptor) {
-      this.startBundledViewLoad(key);
-    }
-    this.syncExternalTabAuth(info, hasBundledDescriptor);
+    this.syncExternalTabAuth(info, bundled);
     this.notify();
   };
 
@@ -280,8 +223,8 @@ export class PluginPageLifecycle {
         if (timeout) {
           clearTimeout(timeout);
         }
-        window.removeEventListener("message", handleMessage);
-        signal.removeEventListener("abort", handleAbort);
+        stopMessage();
+        stopAbort();
         frame.remove();
         resolve(result);
       };
@@ -295,8 +238,8 @@ export class PluginPageLifecycle {
         }
       };
       const handleAbort = () => finish(false);
-      window.addEventListener("message", handleMessage);
-      signal.addEventListener("abort", handleAbort, { once: true });
+      const stopMessage = listen(window, "message", handleMessage);
+      const stopAbort = listen(signal, "abort", handleAbort, { once: true });
       timeout = setTimeout(() => finish(false), EXTERNAL_AUTH_PROBE_TIMEOUT_MS);
       frame.src = url.toString();
       document.body.append(frame);
@@ -526,20 +469,6 @@ export class PluginPageLifecycle {
     }
   }
 
-  private stopBundledView() {
-    this.replaceBundledViewHost();
-    this.bundledViewState = { status: "idle" };
-  }
-
-  private replaceBundledViewHost() {
-    if (this.bundledViewState.status === "ready") {
-      this.bundledViewState.view.stop(this.bundledViewHost);
-    }
-    // Async controller work is keyed by host. A new host makes every completion
-    // from the retired connection epoch unreachable without coupling plugins to the renderer.
-    this.bundledViewHost = {};
-  }
-
   private updateGatewaySource(gateway: ApplicationContext["gateway"]) {
     const { client, hello } = gateway.snapshot;
     const connected = gateway.snapshot.phase === "connected";
@@ -553,7 +482,9 @@ export class PluginPageLifecycle {
       return;
     }
     const externalAuthTargetKey = this.externalAuthTargetKey;
-    this.replaceBundledViewHost();
+    this.retireActions();
+    // A new key retires the bundled view's owner and all of its pending work.
+    this.bundledViewHost = {};
     this.gatewaySource = gateway;
     this.gatewayClient = client;
     this.gatewayHello = hello;

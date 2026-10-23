@@ -1,7 +1,16 @@
 import "../../styles/approval.css";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { JSX } from "@solidjs/web";
-import { createEffect, createSignal, onCleanup, Show, For, untrack } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  For,
+} from "solid-js";
 import {
   validateApprovalGetResult,
   validateApprovalResolveResult,
@@ -15,16 +24,17 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { formatDateTimeMs } from "../../lib/reactive/format.ts";
+import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { renderApprovalPresentation } from "./approval-presentation.tsx";
+import { listen } from "../../lib/reactive/listener.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
+import { ApprovalContent, approvalTitle, type ResolutionOrigin } from "./approval-presentation.tsx";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
 const APPROVAL_REQUIRED_SCOPE = "operator.approvals";
 
 type ApprovalRequestError = "connection" | "unavailable" | null;
-type ResolutionOrigin = "here" | "elsewhere" | "observed";
 
 function isUnavailableApprovalError(error: unknown): boolean {
   if (!(error instanceof GatewayRequestError)) {
@@ -35,16 +45,6 @@ function isUnavailableApprovalError(error: unknown): boolean {
     reason === "APPROVAL_NOT_FOUND" ||
     error.gatewayCode === "APPROVAL_NOT_FOUND" ||
     error.gatewayCode === "INVALID_REQUEST"
-  );
-}
-
-function decisionLabel(decision: ApprovalDecision): string {
-  return t(
-    {
-      "allow-once": "execApproval.allowOnce",
-      "allow-always": "execApproval.alwaysAllow",
-      deny: "execApproval.deny",
-    }[decision],
   );
 }
 
@@ -60,376 +60,348 @@ function appliedDecisionMatches(
     : result.approval.status === "allowed" && result.approval.decision === decision;
 }
 
-function ApprovalChip(props: { kind: "plugin" | "tool" | "agent"; value?: string | null }) {
-  return (
-    <Show when={props.value?.trim()}>
-      {(value) => (
-        <span class="approval-page__chip mono" data-approval-chip={props.kind}>
-          {value()}
-        </span>
-      )}
-    </Show>
-  );
-}
-
-function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
-  if (origin === "elsewhere" && (approval.status === "allowed" || approval.status === "denied")) {
-    return t("approvalPage.resolvedElsewhere");
-  }
-  if (origin === "here" && approval.status === "allowed") {
-    return t("approvalPage.approvedHere");
-  }
-  if (origin === "here" && approval.status === "denied") {
-    return t("approvalPage.deniedHere");
-  }
-  return t(
-    {
-      allowed: "approvalPage.approved",
-      denied: "approvalPage.denied",
-      expired: "approvalPage.expired",
-      cancelled: "approvalPage.cancelled",
-      pending: "approvalPage.pending",
-    }[approval.status],
-  );
-}
-
-function terminalDescription(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
-  if (origin === "elsewhere" && (approval.status === "allowed" || approval.status === "denied")) {
-    return t("approvalPage.resolvedElsewhereDescription");
-  }
-  if (approval.status === "allowed") {
-    return t(
-      approval.decision === "allow-always"
-        ? "approvalPage.allowedAlwaysDescription"
-        : "approvalPage.allowedOnceDescription",
-    );
-  }
-  return t(
-    {
-      denied: "approvalPage.deniedDescription",
-      expired: "approvalPage.expiredDescription",
-      cancelled: "approvalPage.cancelledDescription",
-      pending: "approvalPage.pendingDescription",
-    }[approval.status],
-  );
-}
-
-function approvalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
-  return approval.status === "pending"
-    ? approval.presentation.kind === "plugin"
-      ? approval.presentation.title
-      : t("approvalPage.execTitle")
-    : terminalTitle(approval, origin);
-}
-
 type ApprovalPageProps = { approvalId: string };
 
-/** Request admission remains synchronous; Solid observes the published revision. */
-class ApprovalPageController {
-  approval: ApprovalSnapshot | null = null;
-  connected = false;
-  approvalsAccess = true;
-  approvalGrantAccess = false;
-  loading = true;
-  resolvingDecision: ApprovalDecision | null = null;
-  requestError: ApprovalRequestError = null;
-  resolutionOrigin: ResolutionOrigin = "observed";
+const approvalIdHandlers = new WeakMap<HTMLElement, () => void>();
 
-  constructor(
-    readonly context: ApplicationContext,
-    private readonly props: ApprovalPageProps,
-    private readonly host: HTMLElement,
-    private readonly notify: () => void,
-  ) {}
-  get approvalId() {
-    return untrack(() => this.props.approvalId);
+/** Approval admission stays synchronous; rendering observes the request owner's facts. */
+function createApprovalPage(
+  context: ApplicationContext,
+  host: SolidBridgeElement<ApprovalPageProps>,
+) {
+  // The bridge owns this live value; callbacks must see changes before the next render.
+  const approvalId = () => host.approvalId;
+  const state: {
+    approval: ApprovalSnapshot | null;
+    connected: boolean;
+    approvalsAccess: boolean;
+    approvalGrantAccess: boolean;
+    resolvingDecision: ApprovalDecision | null;
+    requestError: ApprovalRequestError;
+    resolutionOrigin: ResolutionOrigin;
+  } = {
+    approval: null,
+    connected: false,
+    approvalsAccess: true,
+    approvalGrantAccess: false,
+    resolvingDecision: null,
+    requestError: null,
+    resolutionOrigin: "observed",
+  };
+  // Observe admitted foreground reads without starting requests from a computation.
+  let completion = Promise.withResolvers<void>();
+  const [request, setRequest] = createSignal({ completion: completion.promise });
+  function beginRead() {
+    completion.resolve();
+    completion = Promise.withResolvers<void>();
+    setRequest({ completion: completion.promise });
+    return completion.resolve;
   }
-  private client: GatewayBrowserClient | null = null;
-  private operationGeneration = 0;
-  private pollTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  private stopGateway: (() => void) | undefined;
-  private boundApprovalId: string | undefined;
-  private previousDocumentTitle: string | undefined;
-  private activeDocumentTitle: string | undefined;
-
-  connect() {
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    this.previousDocumentTitle = document.title;
-    this.bindApprovalId(true);
-    this.stopGateway = this.context.gateway.subscribe((snapshot) =>
-      this.applyGatewaySnapshot(snapshot),
-    );
-    this.applyGatewaySnapshot(this.context.gateway.snapshot);
+  const [optimisticDecision, setOptimisticDecision] = createOptimistic<ApprovalDecision | null>(
+    null,
+  );
+  let presentationLifetime = Promise.withResolvers<void>();
+  function retirePresentation() {
+    presentationLifetime.resolve();
+    presentationLifetime = Promise.withResolvers<void>();
   }
-
-  dispose() {
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-    this.stopGateway?.();
-    this.stopGateway = undefined;
-    this.operationGeneration += 1;
-    this.clearPollTimer();
-    this.client = null;
-    this.connected = false;
-    if (
-      this.previousDocumentTitle !== undefined &&
-      (!this.activeDocumentTitle || document.title === this.activeDocumentTitle)
-    ) {
-      document.title = this.previousDocumentTitle;
+  const presentDecision = action(function* (
+    decision: ApprovalDecision,
+    pending: Promise<void>,
+    retired: Promise<void>,
+    isCurrent: () => boolean,
+  ) {
+    if (isCurrent() && state.resolvingDecision !== null) {
+      setOptimisticDecision(decision);
     }
-  }
+    // Retiring the UI does not cancel an already admitted Gateway decision.
+    yield Promise.race([pending, retired]);
+  });
+  let clientOwner: GatewayBrowserClient | null = null;
+  let operationGeneration = 0;
+  let pollTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  let boundApprovalId: string | undefined;
+  let heading: HTMLHeadingElement | undefined;
+  let notify = () => {};
+  const view = projectSource(state, {
+    read: (source) => source,
+    subscribe: (_source, publish) => {
+      notify = publish;
+      return () => {
+        notify = () => {};
+      };
+    },
+    equality: "revision",
+  });
+  const hasGatewayConnection = (current = state) => current.connected && Boolean(clientOwner);
+  const hasApprovalAccess = (current = state) =>
+    current.approvalsAccess &&
+    readGatewayOperatorAccess(context.gateway.snapshot).canReviewApprovals;
+  const hasApprovalGrantAccess = (current = state) =>
+    current.approvalGrantAccess &&
+    readGatewayOperatorAccess(context.gateway.snapshot).canGrantApprovals;
 
-  bindApprovalId(force = false) {
+  function bindApprovalId(force = false) {
+    const id = approvalId();
     try {
-      if (!force && this.boundApprovalId === this.approvalId) {
+      if (!force && boundApprovalId === id) {
         return;
       }
-      this.boundApprovalId = this.approvalId;
-      this.operationGeneration += 1;
-      this.clearPollTimer();
-      this.approval = null;
-      this.loading = Boolean(this.approvalId);
-      this.resolvingDecision = null;
-      this.requestError = this.approvalId ? null : "unavailable";
-      this.resolutionOrigin = "observed";
-      if (this.approvalId && this.connected && this.client && this.hasApprovalAccess) {
-        void this.loadApproval();
+      boundApprovalId = id;
+      operationGeneration += 1;
+      retirePresentation();
+      clearPollTimer();
+      state.approval = null;
+      beginRead();
+      if (!id) {
+        completion.resolve();
+      }
+      state.resolvingDecision = null;
+      state.requestError = id ? null : "unavailable";
+      state.resolutionOrigin = "observed";
+      if (id && state.connected && clientOwner && hasApprovalAccess()) {
+        const generation = operationGeneration;
+        // Retire decisions immediately, but coalesce native ID writes before the lookup.
+        queueMicrotask(() => {
+          if (operationGeneration === generation) {
+            void loadApproval({ id });
+          }
+        });
       }
     } finally {
-      this.notify();
+      notify();
     }
   }
 
-  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
+  function applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     try {
-      const clientChanged = snapshot.client !== this.client;
-      const connectionChanged = (snapshot.phase === "connected") !== this.connected;
+      const clientChanged = snapshot.client !== clientOwner;
+      const connectionChanged = (snapshot.phase === "connected") !== state.connected;
       const access = readGatewayOperatorAccess(snapshot);
-      const approvalAccessChanged = access.canReviewApprovals !== this.approvalsAccess;
-      const approvalGrantAccessChanged = access.canGrantApprovals !== this.approvalGrantAccess;
-      this.client = snapshot.client;
-      this.connected = snapshot.phase === "connected";
-      this.approvalsAccess = access.canReviewApprovals;
-      this.approvalGrantAccess = access.canGrantApprovals;
+      const approvalAccessChanged = access.canReviewApprovals !== state.approvalsAccess;
+      const approvalGrantAccessChanged = access.canGrantApprovals !== state.approvalGrantAccess;
+      clientOwner = snapshot.client;
+      state.connected = snapshot.phase === "connected";
+      state.approvalsAccess = access.canReviewApprovals;
+      state.approvalGrantAccess = access.canGrantApprovals;
       if (
         clientChanged ||
         connectionChanged ||
         approvalAccessChanged ||
         approvalGrantAccessChanged
       ) {
-        this.operationGeneration += 1;
-        this.clearPollTimer();
-        this.resolvingDecision = null;
+        operationGeneration += 1;
+        retirePresentation();
+        completion.resolve();
+        clearPollTimer();
+        state.resolvingDecision = null;
       }
-      if (!this.approvalsAccess) {
+      if (!state.approvalsAccess) {
         // A revoke can arrive in the same snapshot as disconnect; redact before
         // the connection branch can preserve the previously visible command.
-        this.approval = null;
+        state.approval = null;
       }
       if (snapshot.phase !== "connected" || !snapshot.client) {
-        if (this.approvalId) {
-          this.loading = false;
-          this.requestError =
-            !this.approval || this.approval.status === "pending" ? "connection" : null;
+        if (approvalId()) {
+          completion.resolve();
+          state.requestError =
+            !state.approval || state.approval.status === "pending" ? "connection" : null;
         }
         return;
       }
-      if (!this.approvalsAccess) {
-        this.loading = false;
-        this.requestError = null;
+      if (!state.approvalsAccess) {
+        completion.resolve();
+        state.requestError = null;
         return;
       }
-      if (!this.approvalId) {
-        this.loading = false;
-        this.requestError = "unavailable";
+      if (!approvalId()) {
+        completion.resolve();
+        state.requestError = "unavailable";
         return;
       }
-      if (clientChanged || connectionChanged || approvalAccessChanged || !this.approval) {
-        void this.loadApproval();
+      if (clientChanged || connectionChanged || approvalAccessChanged || !state.approval) {
+        void loadApproval();
         return;
       }
-      this.schedulePoll();
+      schedulePoll();
     } finally {
-      this.notify();
+      notify();
     }
   }
 
-  private isCurrentOperation(client: GatewayBrowserClient, generation: number, id: string) {
+  function isCurrentOperation(client: GatewayBrowserClient, generation: number, id: string) {
     return (
-      this.hasGatewayConnection &&
-      this.hasApprovalAccess &&
-      this.client === client &&
-      this.approvalId === id &&
-      this.operationGeneration === generation
+      hasGatewayConnection() &&
+      hasApprovalAccess() &&
+      clientOwner === client &&
+      approvalId() === id &&
+      operationGeneration === generation
     );
   }
 
-  get hasGatewayConnection(): boolean {
-    return this.connected && Boolean(this.client);
-  }
-
-  get hasApprovalAccess(): boolean {
-    return (
-      this.approvalsAccess &&
-      readGatewayOperatorAccess(this.context.gateway.snapshot).canReviewApprovals
-    );
-  }
-
-  get hasApprovalGrantAccess(): boolean {
-    return (
-      this.approvalGrantAccess &&
-      readGatewayOperatorAccess(this.context.gateway.snapshot).canGrantApprovals
-    );
-  }
-
-  async loadApproval(options: { background?: boolean } = {}) {
-    const client = this.client;
-    const id = this.approvalId;
-    if (!client || !this.connected || !id || !this.hasApprovalAccess) {
+  async function loadApproval(options: { background?: boolean; id?: string } = {}) {
+    const client = clientOwner;
+    const id = options.id ?? approvalId();
+    if (!client || !state.connected || !id || !hasApprovalAccess()) {
       return;
     }
-    const generation = ++this.operationGeneration;
-    const previousStatus = this.approval?.status;
+    const generation = ++operationGeneration;
+    const previousStatus = state.approval?.status;
     let shouldFocusTerminal = false;
-    this.clearPollTimer();
-    if (!options.background) {
-      this.loading = true;
-    }
-    this.notify();
+    clearPollTimer();
+    const completeRead = options.background ? completion.resolve : beginRead();
+    notify();
     try {
       const result = await client.request<ApprovalGetResult>("approval.get", { id });
-      if (!this.isCurrentOperation(client, generation, id)) {
+      if (!isCurrentOperation(client, generation, id)) {
         return;
       }
       if (!validateApprovalGetResult(result) || result.approval.id !== id) {
-        this.approval = null;
-        this.requestError = "unavailable";
+        state.approval = null;
+        state.requestError = "unavailable";
         return;
       }
-      this.requestError = null;
-      this.approval = result.approval;
+      state.requestError = null;
+      state.approval = result.approval;
       if (result.approval.status === "pending") {
-        this.resolutionOrigin = "observed";
-      } else if (previousStatus === "pending" && this.resolutionOrigin === "observed") {
-        this.resolutionOrigin = "elsewhere";
+        state.resolutionOrigin = "observed";
+      } else if (previousStatus === "pending" && state.resolutionOrigin === "observed") {
+        state.resolutionOrigin = "elsewhere";
         shouldFocusTerminal = true;
       }
     } catch (error) {
-      if (!this.isCurrentOperation(client, generation, id)) {
+      if (!isCurrentOperation(client, generation, id)) {
         return;
       }
       if (isUnavailableApprovalError(error)) {
-        this.approval = null;
-        this.requestError = "unavailable";
+        state.approval = null;
+        state.requestError = "unavailable";
       } else {
-        this.requestError = "connection";
+        state.requestError = "connection";
       }
     } finally {
-      if (this.isCurrentOperation(client, generation, id)) {
-        this.loading = false;
-        this.schedulePoll();
-        this.notify();
+      if (isCurrentOperation(client, generation, id)) {
+        completeRead();
+        schedulePoll();
+        notify();
       }
     }
-    if (shouldFocusTerminal && this.isCurrentOperation(client, generation, id)) {
-      await this.focusTerminalState();
+    if (shouldFocusTerminal && isCurrentOperation(client, generation, id)) {
+      await focusTerminalState();
     }
   }
 
-  async resolveApproval(decision: ApprovalDecision) {
-    const approval = this.approval;
-    const client = this.client;
-    const id = this.approvalId;
+  async function resolveApproval(decision: ApprovalDecision) {
+    const approval = state.approval;
+    const client = clientOwner;
+    const id = approvalId();
     if (
       !client ||
-      !this.connected ||
-      !this.hasApprovalGrantAccess ||
+      !state.connected ||
+      !hasApprovalGrantAccess() ||
       !id ||
       approval?.status !== "pending" ||
       !Array.prototype.includes.call(approval.presentation.allowedDecisions, decision) ||
-      this.resolvingDecision !== null
+      state.resolvingDecision !== null
     ) {
       return;
     }
     const kind = approval.presentation.kind;
-    const generation = ++this.operationGeneration;
+    const generation = ++operationGeneration;
+    completion.resolve();
     const isCurrentDecision = () =>
-      this.isCurrentOperation(client, generation, id) && this.hasApprovalGrantAccess;
+      isCurrentOperation(client, generation, id) && hasApprovalGrantAccess();
+    const retired = presentationLifetime.promise;
     let shouldFocusTerminal = false;
     let shouldRecoverCanonicalState = false;
-    this.clearPollTimer();
-    this.resolvingDecision = decision;
-    this.requestError = null;
-    this.notify();
+    clearPollTimer();
+    state.resolvingDecision = decision;
+    state.requestError = null;
+    notify();
+    const pending = applyDecision(client);
+    // Publish the owner's admission before opening its optimistic transition.
+    await Promise.resolve();
     try {
-      const result = await client.request<ApprovalResolveResult>("approval.resolve", {
-        id,
-        kind,
-        decision,
-      });
-      if (!isCurrentDecision()) {
-        return;
-      }
-      if (
-        !validateApprovalResolveResult(result) ||
-        result.approval.id !== id ||
-        result.approval.presentation.kind !== kind ||
-        !appliedDecisionMatches(result, decision)
-      ) {
-        // The write outcome is unknown. Keep every decision disabled until a
-        // fresh, strictly validated read establishes canonical Gateway truth.
-        this.requestError = "connection";
-        shouldRecoverCanonicalState = true;
-      } else {
-        this.approval = result.approval;
-        this.resolutionOrigin = result.applied ? "here" : "elsewhere";
-        shouldFocusTerminal = true;
-      }
+      await presentDecision(decision, pending, retired, isCurrentDecision);
     } catch (error) {
-      if (!isCurrentDecision()) {
-        return;
-      }
-      this.requestError = isUnavailableApprovalError(error) ? "unavailable" : "connection";
-    } finally {
       if (isCurrentDecision()) {
-        this.resolvingDecision = null;
-        this.schedulePoll();
-        this.notify();
+        state.requestError = isUnavailableApprovalError(error) ? "unavailable" : "connection";
+        notify();
       }
     }
+
     if (shouldRecoverCanonicalState && isCurrentDecision()) {
-      await this.loadApproval({ background: true });
+      await loadApproval({ background: true });
       return;
     }
     if (shouldFocusTerminal && isCurrentDecision()) {
-      await this.focusTerminalState();
+      await focusTerminalState();
+    }
+
+    async function applyDecision(admittedClient: GatewayBrowserClient) {
+      try {
+        const result = await admittedClient.request<ApprovalResolveResult>("approval.resolve", {
+          id,
+          kind,
+          decision,
+        });
+        if (!isCurrentDecision()) {
+          return;
+        }
+        if (
+          !validateApprovalResolveResult(result) ||
+          result.approval.id !== id ||
+          result.approval.presentation.kind !== kind ||
+          !appliedDecisionMatches(result, decision)
+        ) {
+          // The write outcome is unknown. Keep every decision disabled until a
+          // fresh, strictly validated read establishes canonical Gateway truth.
+          state.requestError = "connection";
+          shouldRecoverCanonicalState = true;
+        } else {
+          state.approval = result.approval;
+          state.resolutionOrigin = result.applied ? "here" : "elsewhere";
+          shouldFocusTerminal = true;
+        }
+      } catch (error) {
+        if (!isCurrentDecision()) {
+          return;
+        }
+        state.requestError = isUnavailableApprovalError(error) ? "unavailable" : "connection";
+      } finally {
+        if (isCurrentDecision()) {
+          state.resolvingDecision = null;
+          schedulePoll();
+          notify();
+        }
+      }
     }
   }
 
-  private async focusTerminalState() {
+  async function focusTerminalState() {
     await Promise.resolve();
-    if (this.approval?.status === "pending") {
+    if (state.approval?.status === "pending") {
       return;
     }
-    const heading = this.host.querySelector<HTMLElement>("#approval-page-title");
     heading?.focus({ preventScroll: true });
     if (typeof heading?.scrollIntoView === "function") {
       heading.scrollIntoView({ behavior: "auto", block: "center", inline: "nearest" });
     }
   }
 
-  private clearPollTimer() {
-    globalThis.clearTimeout(this.pollTimer);
-    this.pollTimer = undefined;
+  function clearPollTimer() {
+    globalThis.clearTimeout(pollTimer);
+    pollTimer = undefined;
   }
 
-  private schedulePoll() {
-    this.clearPollTimer();
-    const approval = this.approval;
+  function schedulePoll() {
+    clearPollTimer();
+    const approval = state.approval;
     if (
-      !this.hasGatewayConnection ||
-      !this.hasApprovalAccess ||
-      this.resolvingDecision !== null ||
-      this.requestError === "unavailable" ||
+      !hasGatewayConnection() ||
+      !hasApprovalAccess() ||
+      state.resolvingDecision !== null ||
+      state.requestError === "unavailable" ||
       approval?.status !== "pending" ||
       document.visibilityState !== "visible"
     ) {
@@ -440,293 +412,223 @@ class ApprovalPageController {
       APPROVAL_MIN_POLL_DELAY_MS,
       Math.min(APPROVAL_POLL_INTERVAL_MS, untilDeadline + APPROVAL_MIN_POLL_DELAY_MS),
     );
-    this.pollTimer = globalThis.setTimeout(() => {
-      this.pollTimer = undefined;
-      void this.loadApproval({ background: true });
+    pollTimer = globalThis.setTimeout(() => {
+      pollTimer = undefined;
+      void loadApproval({ background: true });
     }, delay);
   }
 
-  private readonly handleVisibilityChange = () => {
+  const handleVisibilityChange = () => {
     if (document.visibilityState !== "visible") {
-      this.clearPollTimer();
+      clearPollTimer();
       return;
     }
     if (
-      this.approval?.status === "pending" &&
-      this.hasGatewayConnection &&
-      this.hasApprovalAccess &&
-      this.resolvingDecision === null
+      state.approval?.status === "pending" &&
+      hasGatewayConnection() &&
+      hasApprovalAccess() &&
+      state.resolvingDecision === null
     ) {
-      void this.loadApproval({ background: true });
+      void loadApproval({ background: true });
     }
   };
 
-  documentTitle() {
+  onSettled(() => {
+    const stopVisibility = listen(document, "visibilitychange", handleVisibilityChange);
+    bindApprovalId(true);
+    // Gateway receipts retire decisions and polls and redact approvals synchronously when access changes.
+    const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);
+    applyGatewaySnapshot(context.gateway.snapshot);
+    approvalIdHandlers.set(host, () => bindApprovalId());
+    return () => {
+      approvalIdHandlers.delete(host);
+      stopVisibility();
+      stopGateway();
+      operationGeneration += 1;
+      retirePresentation();
+      completion.resolve();
+      clearPollTimer();
+      clientOwner = null;
+    };
+  });
+  createDocumentTitle(() => {
+    const current = view.read();
     const pageTitle =
-      this.connected && !this.approvalsAccess
+      current.connected && !current.approvalsAccess
         ? t("common.disabled")
-        : this.requestError === "unavailable"
+        : current.requestError === "unavailable"
           ? t("approvalPage.unavailableTitle")
-          : this.requestError === "connection" && !this.approval
+          : current.requestError === "connection" && !current.approval
             ? t("approvalPage.connectionErrorTitle")
-            : this.approval
-              ? approvalTitle(this.approval, this.resolutionOrigin)
+            : current.approval
+              ? approvalTitle(current.approval, current.resolutionOrigin)
               : t("approvalPage.loadingTitle");
     return `${pageTitle} — ${t("approvalPage.brandName")}`;
-  }
-
-  updateDocumentTitle(title: string) {
-    document.title = title;
-    this.activeDocumentTitle = title;
-  }
-}
-
-function ApprovalPageContent(props: ApprovalPageProps & { host: HTMLElement }) {
-  const context = useApplication();
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const controller = new ApprovalPageController(
-    context,
-    props,
-    untrack(() => props.host),
-    () => setRevision((value) => value + 1),
-  );
-  const read = () => {
-    revision();
-    return controller;
-  };
-  untrack(() => controller.connect());
-  onCleanup(() => controller.dispose());
-  createEffect(
-    () => props.approvalId,
-    () => controller.bindApprovalId(),
-  );
-  createEffect(
-    () => {
-      revision();
-      return controller.documentTitle();
+  });
+  return {
+    read: view.read,
+    resolvingDecision: () => optimisticDecision() ?? view.read().resolvingDecision,
+    request,
+    hasGatewayConnection: () => hasGatewayConnection(view.read()),
+    hasApprovalAccess: () => hasApprovalAccess(view.read()),
+    hasApprovalGrantAccess: () => hasApprovalGrantAccess(view.read()),
+    loadApproval,
+    resolveApproval,
+    setHeading: (element: HTMLHeadingElement) => {
+      heading = element;
     },
-    (title) => controller.updateDocumentTitle(title),
-  );
-  const missingScope = () => read().connected && !read().approvalsAccess;
-  const disconnected = () => read().requestError === "connection" && !read().approval;
-  const documentState = () =>
-    missingScope()
-      ? "missing-scope"
-      : read().requestError === "unavailable"
-        ? "unavailable"
-        : disconnected()
-          ? "connection-error"
-          : (read().approval?.status ?? "loading");
-  const severity = () => {
-    const active = read().approval?.presentation;
-    const raw = active?.kind === "plugin" ? active.severity?.trim().toLowerCase() : null;
-    return active?.kind === "exec" || raw === "warning" || raw === "warn"
-      ? "warning"
-      : raw === "danger" || raw === "critical" || raw === "error"
-        ? "danger"
-        : "info";
   };
-  const retry = (className: string) => (
-    <button
-      type="button"
-      class={className}
-      disabled={!read().hasGatewayConnection || !read().hasApprovalAccess || read().loading}
-      onClick={() => void controller.loadApproval()}
-    >
-      {t("approvalPage.retry")}
-    </button>
-  );
-  const renderState = (kind: "loading" | "unavailable" | "missing-scope" | "connection") => {
-    const title = {
-      loading: "approvalPage.loadingTitle",
-      unavailable: "approvalPage.unavailableTitle",
-      "missing-scope": "common.disabled",
-      connection: "approvalPage.connectionErrorTitle",
-    }[kind];
-    const description = {
-      loading: "approvalPage.loadingDescription",
-      unavailable: "approvalPage.unavailableDescription",
-      connection: "approvalPage.connectionErrorDescription",
-    };
-    return (
-      <div
-        class={[
-          "approval-page__state",
-          `approval-page__state--${kind === "missing-scope" ? "unavailable" : kind}`,
-        ]}
-        role={kind === "loading" ? "status" : "alert"}
-      >
-        {kind === "loading" ? (
-          <div class="approval-page__spinner" aria-hidden="true" />
-        ) : (
-          <div class="approval-page__state-mark" aria-hidden="true">
-            !
-          </div>
-        )}
-        <h1 id="approval-page-title">{t(title)}</h1>
-        <p>
-          {kind === "missing-scope" ? <code>{APPROVAL_REQUIRED_SCOPE}</code> : t(description[kind])}
-        </p>
-        {kind === "connection" ? retry("btn") : null}
-      </div>
-    );
-  };
-  return (
-    <main class="approval-page" data-state={documentState()}>
-      <div class="approval-page__backdrop" aria-hidden="true" />
-      <section
-        class={["approval-page__card", `approval-page__card--severity-${severity()}`]}
-        aria-labelledby="approval-page-title"
-        aria-busy={read().loading || read().resolvingDecision !== null ? "true" : "false"}
-      >
-        <header class="approval-page__brand">
-          <img
-            class="approval-page__logo"
-            src={controlUiPublicAssetPath("apple-touch-icon.png", context.resourceBasePath)}
-            alt=""
-          />
-          <div>
-            <div class="approval-page__eyebrow">{t("approvalPage.eyebrow")}</div>
-            <div class="approval-page__brand-name">{t("approvalPage.brandName")}</div>
-          </div>
-        </header>
-        <div class="approval-page__content">
-          {missingScope() ? (
-            renderState("missing-scope")
-          ) : read().loading && !read().approval ? (
-            renderState("loading")
-          ) : disconnected() ? (
-            renderState("connection")
-          ) : read().requestError === "unavailable" || !read().approval ? (
-            renderState("unavailable")
-          ) : (
-            <Show when={read().approval}>
-              {(approval) => <ApprovalContent approval={approval()} read={read} retry={retry} />}
-            </Show>
-          )}
-        </div>
-      </section>
-      <a class="approval-page__back-link" href={`${context.basePath}/chat`}>
-        {t("approvalPage.openControlUi")}
-      </a>
-    </main>
-  );
 }
 
-function ApprovalContent(props: {
-  approval: ApprovalSnapshot;
-  read: () => ApprovalPageController;
-  retry: (className: string) => JSX.Element;
-}) {
-  const pending = () => props.approval.status === "pending";
-  const presentation = () => props.approval.presentation;
-  const origin = () => props.read().resolutionOrigin;
-  const pluginPresentation = () => {
-    const value = presentation();
-    return value.kind === "plugin" ? value : null;
-  };
-  const resolvedAt = () => {
-    const approval = props.approval;
-    return approval.status === "pending" ? approval.expiresAtMs : approval.resolvedAtMs;
-  };
-  return (
-    <>
-      <div class="approval-page__status" aria-live="polite" aria-atomic="true">
-        <span
-          class={`approval-page__status-dot approval-page__status-dot--${props.approval.status}`}
-          aria-hidden="true"
-        />
-        {pending() ? t("approvalPage.pending") : terminalTitle(props.approval, origin())}
-      </div>
-      <div class="approval-page__heading">
-        <h1 id="approval-page-title" tabindex={pending() ? undefined : -1}>
-          {approvalTitle(props.approval, origin())}
-        </h1>
-        <div class="approval-page__chips">
-          <Show when={pluginPresentation()}>
-            {(value) => (
-              <>
-                <ApprovalChip kind="plugin" value={value().pluginId} />
-                <ApprovalChip kind="tool" value={value().toolName} />
-              </>
-            )}
-          </Show>
-          <ApprovalChip kind="agent" value={presentation().agentId} />
-        </div>
-        <p>
-          {pending()
-            ? t(
-                props.read().hasApprovalGrantAccess
-                  ? "approvalPage.pendingDescription"
-                  : "execApproval.reviewOnly",
-              )
-            : terminalDescription(props.approval, origin())}
-        </p>
-      </div>
-      {renderApprovalPresentation(presentation())}
-      <div class="approval-page__timing">
-        <span>{pending() ? t("approvalPage.expiresLabel") : t("approvalPage.resolvedLabel")}</span>
-        <time datetime={new Date(resolvedAt()).toISOString()}>
-          {formatDateTimeMs(resolvedAt(), { dateStyle: "medium", timeStyle: "short" })}
-        </time>
-      </div>
-      <Show when={props.read().requestError === "connection"}>
-        <div class="approval-page__callout" role="alert">
-          <div>
-            <strong>{t("approvalPage.connectionErrorTitle")}</strong>
-            <span>{t("approvalPage.connectionErrorDescription")}</span>
-          </div>
-          {props.retry("btn btn--sm")}
-        </div>
-      </Show>
-      <Show
-        when={pending()}
-        fallback={
-          <div class="approval-page__terminal" role="status">
-            {t("approvalPage.safeToClose")}
-          </div>
-        }
-      >
-        <div
-          class="approval-page__actions"
-          role="group"
-          aria-label={t("approvalPage.actionsLabel")}
-        >
-          <For each={presentation().allowedDecisions} keyed={(decision) => decision}>
-            {(decision) => (
-              <button
-                type="button"
-                class={["btn approval-page__action", `approval-page__action--${decision()}`]}
-                data-decision={decision()}
-                disabled={
-                  props.read().resolvingDecision !== null ||
-                  !props.read().hasGatewayConnection ||
-                  !props.read().hasApprovalGrantAccess ||
-                  props.read().requestError !== null
-                }
-                onClick={() => void props.read().resolveApproval(decision())}
-              >
-                {props.read().resolvingDecision === decision()
-                  ? t("approvalPage.resolvingDecision", { decision: decisionLabel(decision()) })
-                  : decisionLabel(decision())}
-              </button>
-            )}
-          </For>
-        </div>
-      </Show>
-    </>
-  );
-}
-
-defineSolidBridge<ApprovalPageProps>(
+export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
   "openclaw-approval-page",
-  (props, host) => <ApprovalPageContent approvalId={props.approvalId} host={host} />,
+  (_props, host) => {
+    const context = useApplication();
+    const page = createApprovalPage(context, host);
+    const initialRead = createMemo(() => (page.read().approval ? null : page.request()));
+    function ReadyFrame() {
+      const ready = createMemo(() => page.request().completion);
+      const read = () => {
+        if (!page.read().approval) {
+          ready();
+          return page.read();
+        }
+        latest(ready);
+        return page.read();
+      };
+      const loading = () => {
+        read();
+        return isPending(ready);
+      };
+      return <Frame read={read} loading={loading()} />;
+    }
+    function Frame(props: { loading: boolean; read?: typeof page.read }) {
+      const read = () => (props.read ?? page.read)();
+      const approvals = () => {
+        const approval = read().approval;
+        return approval ? [approval] : [];
+      };
+      const missingScope = () => read().connected && !read().approvalsAccess;
+      const disconnected = () => read().requestError === "connection" && !read().approval;
+      const documentState = () =>
+        missingScope()
+          ? "missing-scope"
+          : read().requestError === "unavailable"
+            ? "unavailable"
+            : disconnected()
+              ? "connection-error"
+              : (read().approval?.status ?? "loading");
+      const severity = () => {
+        const active = read().approval?.presentation;
+        const raw = active?.kind === "plugin" ? active.severity?.trim().toLowerCase() : null;
+        return active?.kind === "exec" || raw === "warning" || raw === "warn"
+          ? "warning"
+          : raw === "danger" || raw === "critical" || raw === "error"
+            ? "danger"
+            : "info";
+      };
+      const retry = (className: string) => (
+        <button
+          type="button"
+          class={className}
+          disabled={!page.hasGatewayConnection() || !page.hasApprovalAccess() || props.loading}
+          onClick={() => void page.loadApproval()}
+        >
+          {t("approvalPage.retry")}
+        </button>
+      );
+      const renderState = (kind: "loading" | "unavailable" | "missing-scope" | "connection") => {
+        const title = {
+          loading: "approvalPage.loadingTitle",
+          unavailable: "approvalPage.unavailableTitle",
+          "missing-scope": "common.disabled",
+          connection: "approvalPage.connectionErrorTitle",
+        }[kind];
+        const description = {
+          loading: "approvalPage.loadingDescription",
+          unavailable: "approvalPage.unavailableDescription",
+          connection: "approvalPage.connectionErrorDescription",
+        };
+        return (
+          <div
+            class={[
+              "approval-page__state",
+              `approval-page__state--${kind === "missing-scope" ? "unavailable" : kind}`,
+            ]}
+            role={kind === "loading" ? "status" : "alert"}
+          >
+            {kind === "loading" ? (
+              <div class="approval-page__spinner" aria-hidden="true" />
+            ) : (
+              <div class="approval-page__state-mark" aria-hidden="true">
+                !
+              </div>
+            )}
+            <h1 ref={page.setHeading} id="approval-page-title">
+              {t(title)}
+            </h1>
+            <p>
+              {kind === "missing-scope" ? (
+                <code>{APPROVAL_REQUIRED_SCOPE}</code>
+              ) : (
+                t(description[kind])
+              )}
+            </p>
+            {kind === "connection" ? retry("btn") : null}
+          </div>
+        );
+      };
+      return (
+        <main class="approval-page" data-state={documentState()}>
+          <div class="approval-page__backdrop" aria-hidden="true" />
+          <section
+            class={["approval-page__card", `approval-page__card--severity-${severity()}`]}
+            aria-labelledby="approval-page-title"
+            aria-busy={props.loading || page.resolvingDecision() !== null ? "true" : "false"}
+          >
+            <header class="approval-page__brand">
+              <img
+                class="approval-page__logo"
+                src={controlUiPublicAssetPath("apple-touch-icon.png", context.resourceBasePath)}
+                alt=""
+              />
+              <div>
+                <div class="approval-page__eyebrow">{t("approvalPage.eyebrow")}</div>
+                <div class="approval-page__brand-name">{t("approvalPage.brandName")}</div>
+              </div>
+            </header>
+            <div class="approval-page__content">
+              {missingScope() ? (
+                renderState("missing-scope")
+              ) : props.loading && !read().approval ? (
+                renderState("loading")
+              ) : disconnected() ? (
+                renderState("connection")
+              ) : read().requestError === "unavailable" || !read().approval ? (
+                renderState("unavailable")
+              ) : (
+                <For each={approvals()} keyed={(approval) => approval.id}>
+                  {(approval) => (
+                    <ApprovalContent approval={approval()} page={page} retry={retry} />
+                  )}
+                </For>
+              )}
+            </div>
+          </section>
+          <a class="approval-page__back-link" href={`${context.basePath}/chat`}>
+            {t("approvalPage.openControlUi")}
+          </a>
+        </main>
+      );
+    }
+    return (
+      <Loading on={initialRead()} fallback={<Frame loading={true} />}>
+        <ReadyFrame />
+      </Loading>
+    );
+  },
   {
     properties: { approvalId: { default: "", attribute: "approval-id" } },
-    connected: (host) => {
-      if (!host.querySelector(".approval-page__brand")) {
-        host.replaceChildren();
-      }
-    },
+    propertyChanged: (host) => approvalIdHandlers.get(host)?.(),
   },
 );

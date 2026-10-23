@@ -2,7 +2,10 @@ import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { createCrabboxXfceSessionEnvironment } from "./crabbox-worker-desktop-setup.js";
 import { createCrabboxNodeProcessRuntime } from "./crabbox-worker-node-process.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
-import { wrapCrabboxNodeScript } from "./crabbox-worker-script.js";
+import {
+  createCrabboxWorkerStateDirScript,
+  wrapCrabboxNodeScript,
+} from "./crabbox-worker-script.js";
 import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
@@ -101,7 +104,7 @@ setPhase("preparation");
   try { tokens = JSON.parse(credentials || "{}"); }
   catch { throw new Error("Cloud worker bootstrap credential format is invalid"); }
   const home = fs.realpathSync(os.homedir());
-  const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
+  const stateDir = ${createCrabboxWorkerStateDirScript(leaseId)};
   const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
   const runtimeDir = path.join(runtimeRoot, bootstrap.sha256);
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
@@ -158,7 +161,7 @@ setPhase("preparation");
       const current = spawnSync("crontab", ["-l"], { encoding: "utf8", timeout: 10000 });
       const kept = (current.status === 0 ? current.stdout : "").split("\\n").filter((line) => line && !line.includes(script));
       spawnSync("crontab", ["-"], { input: [...kept, "@reboot /bin/sh " + script].join("\\n") + "\\n", timeout: 10000 });
-    } catch {}
+    } catch { /* Prefetch is optional; failed setup keeps the ordinary cold-start path. */ }
   };
   const launcher = path.join(process.env.ProgramFiles || "C:\\\\Program Files", "Crabbox", "bin", "Start-CrabboxDetachedProcess.ps1");
   if (process.platform === "win32" && mode && !${JSON.stringify(desktopTarget === "windows/normal")} && !fs.existsSync(launcher)) {
@@ -174,6 +177,13 @@ setPhase("preparation");
   if (mode) {
     fs.mkdirSync(stateDir, { recursive: true, ...directoryOptions });
     if (process.platform !== "win32") fs.chmodSync(stateDir, 0o700);
+    else if (path.dirname(stateDir) === path.join(path.parse(home).root, "ocw")) {
+      // The drive root does not inherit the worker profile's private permissions.
+      const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
+      const secureState = "$ErrorActionPreference = 'Stop'; $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; icacls.exe " + quote(stateDir) + " /inheritance:r /grant:r ('*' + $sid + ':(OI)(CI)F') /grant:r '*S-1-5-18:(OI)(CI)F' /grant:r '*S-1-5-32-544:(OI)(CI)F' | Out-Null; exit $LASTEXITCODE";
+      const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", secureState], { env: nodeEnv, encoding: "utf8", windowsHide: true, timeout: 10000 });
+      if (result.error || result.status !== 0) throw subprocessError("Cloud worker state directory permissions could not be secured", result);
+    }
   }
   ${createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
   if (desktopTarget === "macos") finishDesktopSetup();
@@ -294,6 +304,8 @@ setPhase("preparation");
     let attempt = 1;
     let retries = 0;
     let noProgressFailures = 0;
+    // A fresh no-progress streak waits about 24-40 seconds through edge reconnects.
+    const maxNoProgressFailures = 9;
     let offset = 0;
     let retainedAnyBytes = false;
     const partial = archive + ".partial";
@@ -301,7 +313,7 @@ setPhase("preparation");
       origin = new URL(artifact.url).origin;
       for (;;) {
         try {
-          if (retries > 0) await delay(Math.round(250 * 2 ** Math.min(retries - 1, 3) * (0.5 + Math.random())), undefined, { signal: downloadAbort.signal });
+          if (retries > 0) await delay(Math.round(250 * 2 ** Math.min(retries - 1, 5) * (0.75 + Math.random() * 0.5)), undefined, { signal: downloadAbort.signal });
           downloadAbort.signal.throwIfAborted();
           await downloadAttempt(artifact, token, partial, offset, progress);
           fs.renameSync(partial, archive);
@@ -309,7 +321,7 @@ setPhase("preparation");
         } catch (error) {
           if (downloadAbort.signal.aborted) throw downloadAbort.signal.reason;
           const busy = error.code === "TRANSFER_IN_PROGRESS";
-          const transient = busy || ["ARTIFACT_RANGE_MISMATCH", "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EPIPE", "ERR_STREAM_PREMATURE_CLOSE", "ABORT_ERR", "ETIMEDOUT", "ESOCKETTIMEDOUT", "EAI_AGAIN"].includes(error.code) || [502, 503, 504].includes(error.statusCode);
+          const transient = busy || ["ARTIFACT_RANGE_MISMATCH", "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EPIPE", "ERR_STREAM_PREMATURE_CLOSE", "ABORT_ERR", "ETIMEDOUT", "ESOCKETTIMEDOUT", "EAI_AGAIN"].includes(error.code) || [502, 503, 504, 520, 521, 522, 523, 524, 530].includes(error.statusCode);
           if (transient && !busy) {
             let retainedBytes = 0;
             try { retainedBytes = (await fsp.stat(partial)).size; }
@@ -319,15 +331,15 @@ setPhase("preparation");
             offset = retainedBytes;
             retainedAnyBytes ||= retainedBytes > 0;
           }
-          if (!transient || noProgressFailures === 3) {
+          if (!transient || noProgressFailures === maxNoProgressFailures) {
             const hint = !retainedAnyBytes && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"].includes(error.code)
               ? " The worker could not reach the Gateway public origin <" + origin + ">; verify the provider's network can reach it (for example with curl from a sandbox) or configure gateway.publicOrigin on a reachable hostname."
               : "";
-            throw Object.assign(new Error(error.message + " (download attempt " + attempt + (noProgressFailures === 3 ? "; 3 consecutive no-progress failures" : "") + ")" + hint, { cause: error }), { code: error.code });
+            throw Object.assign(new Error(error.message + " (download attempt " + attempt + (noProgressFailures === maxNoProgressFailures ? "; " + maxNoProgressFailures + " consecutive no-progress failures" : "") + ")" + hint, { cause: error }), { code: error.code });
           }
           if (!busy) attempt++;
           retries++;
-          console.error(failureMessage("bootstrap", downloadPhase, error.code || "HTTP_" + error.statusCode, origin) + "; retrying download attempt " + attempt + " (" + noProgressFailures + "/3 consecutive no-progress failures)");
+          console.error(failureMessage("bootstrap", downloadPhase, error.code || "HTTP_" + error.statusCode, origin) + "; retrying download attempt " + attempt + " (" + noProgressFailures + "/" + maxNoProgressFailures + " consecutive no-progress failures)");
         }
       }
     } catch (error) {

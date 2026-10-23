@@ -27,7 +27,10 @@ import {
   publishAssistantTranscriptRewrite,
 } from "../server-methods/chat-transcript-persistence.js";
 import { withGatewaySessionEntry } from "../session-utils-store.js";
-import { prepareSessionPlacementRead } from "../worker-environments/placement-turn-authority.js";
+import {
+  capturePlacementReplicaRead,
+  prepareSessionPlacementRead,
+} from "../worker-environments/placement-turn-authority.js";
 
 /** Materialize one visible agent final before its Gateway run releases custody. */
 export async function finalizeAgentRunMedia(
@@ -75,10 +78,12 @@ export async function finalizeAgentRunMedia(
       state.admission.databasePath,
       reply.sessionId,
       async () => {
+        const publish = capturePlacementReplicaRead(state.admission.identity);
         const records = await executeOpenClawStateWorker(state, {
           type: "workerPlacements.read",
           input: { sessionIds: [reply.sessionId] },
         });
+        publish(records, [reply.sessionId]);
         return records[0];
       },
     );
@@ -153,14 +158,15 @@ export async function finalizeAgentRunMedia(
         sessionId: reply.sessionId,
         storePath: reply.storePath,
       };
-      const { persistedAssistantContent: content } = await prepareWebchatReplyMediaForDisplay({
-        scope: prepared,
-        storePath: scope.storePath,
-        inputs: plan.map((entry) => ({ kind: "prepared", plan: entry })),
-        abortSignal: params.abortSignal,
-        includeSensitiveMedia: false,
-        includeSensitiveDisplay: false,
-      });
+      const { persistedAssistantContent: content, mediaBySource } =
+        await prepareWebchatReplyMediaForDisplay({
+          scope: prepared,
+          storePath: scope.storePath,
+          inputs: plan.map((entry) => ({ kind: "prepared", plan: entry })),
+          abortSignal: params.abortSignal,
+          includeSensitiveMedia: false,
+          includeSensitiveDisplay: false,
+        });
       if (!content || !hasAssistantDisplayMediaContent(content)) {
         throw new Error("WebChat final media could not be prepared");
       }
@@ -176,6 +182,7 @@ export async function finalizeAgentRunMedia(
               runId,
               expectedLifecycleRevision: reply.lifecycleRevision ?? null,
               content,
+              mediaBySource,
               mediaUrls: plan.flatMap((entry) => entry.parts.mediaUrls),
             }),
         );

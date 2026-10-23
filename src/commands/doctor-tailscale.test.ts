@@ -1,7 +1,8 @@
 // Doctor Tailscale tests cover safe migration of shipped external Serve routes.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { TailscaleStatusCommandRunner } from "../shared/tailscale-status.js";
+import * as exec from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { collectTailscaleConfigWarnings } from "./doctor-tailscale.js";
 
 function serveStatus(
@@ -31,8 +32,8 @@ function serveStatus(
   });
 }
 
-function runner(stdout: string): TailscaleStatusCommandRunner {
-  return vi.fn().mockResolvedValue({ code: 0, stdout });
+function runner(stdout: string) {
+  vi.spyOn(exec, "runUtf8CommandWithTimeout").mockResolvedValue(createCommandResult({ stdout }));
 }
 
 async function inspectWithoutConfigMutation(
@@ -43,6 +44,8 @@ async function inspectWithoutConfigMutation(
   expect(params.cfg).toEqual(original);
   return warnings;
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("collectTailscaleConfigWarnings", () => {
   it("does not adopt a canonical-looking route without ownership proof", async () => {
@@ -56,10 +59,10 @@ describe("collectTailscaleConfigWarnings", () => {
       },
     };
 
+    runner(serveStatus());
     const warnings = await inspectWithoutConfigMutation({
       cfg,
       env: {},
-      runCommandWithTimeout: runner(serveStatus()),
     });
 
     const warning = warnings.join("\n");
@@ -73,10 +76,10 @@ describe("collectTailscaleConfigWarnings", () => {
     const cfg: OpenClawConfig = {
       gateway: { bind: "loopback", port, tailscale: { mode: "serve" } },
     };
+    runner(serveStatus({ backendPort: port, proxyHost: "localhost" }));
     const warnings = await inspectWithoutConfigMutation({
       cfg,
       env: {},
-      runCommandWithTimeout: runner(serveStatus({ backendPort: port, proxyHost: "localhost" })),
     });
     expect(warnings.join("\n")).toContain("will be adopted");
   });
@@ -102,10 +105,10 @@ describe("collectTailscaleConfigWarnings", () => {
       },
     };
 
+    runner(stdout);
     await inspectWithoutConfigMutation({
       cfg,
       env: {},
-      runCommandWithTimeout: runner(stdout),
     });
   });
 
@@ -120,10 +123,10 @@ describe("collectTailscaleConfigWarnings", () => {
       },
     };
 
+    runner(serveStatus({ hostPort: 8443 }));
     const warnings = await inspectWithoutConfigMutation({
       cfg,
       env: {},
-      runCommandWithTimeout: runner(serveStatus({ hostPort: 8443 })),
     });
 
     expect(warnings.join("\n")).toContain("not changed");
@@ -138,17 +141,15 @@ describe("collectTailscaleConfigWarnings", () => {
         tailscale: { mode: "off" },
       },
     };
-    const unavailable = vi.fn().mockRejectedValue(new Error("missing"));
-
+    runner("not-json");
     const invalidWarnings = await inspectWithoutConfigMutation({
       cfg,
       env: {},
-      runCommandWithTimeout: runner("not-json"),
     });
+    vi.spyOn(exec, "runUtf8CommandWithTimeout").mockRejectedValue(new Error("missing"));
     const unavailableWarnings = await inspectWithoutConfigMutation({
       cfg,
       env: {},
-      runCommandWithTimeout: unavailable,
     });
 
     expect(invalidWarnings.join("\n")).toContain("could not be parsed");

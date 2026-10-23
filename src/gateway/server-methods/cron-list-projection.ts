@@ -2,6 +2,7 @@ import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coer
 import type { CronCompactJob } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { cronJobReadView } from "../../cron/job-read-view.js";
+import { toPublicCronJob } from "../../cron/public-job.js";
 import type { CronServiceContract } from "../../cron/service-contract.js";
 import type { CronListPageResult } from "../../cron/service/list-page-types.js";
 import type { CronJob } from "../../cron/types.js";
@@ -34,7 +35,7 @@ export function projectCronListJobs(
 function prepareJobs(jobs: CronJob[], defaultAgentId: string | undefined, compact: boolean) {
   const rows = jobs.map((job) =>
     freezeJsonSnapshot({
-      ...(compact ? compactCronListJob(job) : cronJobReadView(job)),
+      ...(compact ? compactCronListJob(toPublicCronJob(job)) : cronJobReadView(job)),
       effectiveAgentId: tryResolveCronJobEffectiveAgentId(job, defaultAgentId) ?? null,
     }),
   );
@@ -58,6 +59,7 @@ function compactCronListJob(job: CronJob): CronCompactJob {
     nextRunAt: timestampMsToIsoString(job.state.nextRunAtMs) ?? null,
     nextRunAtMs: job.state.nextRunAtMs ?? null,
     scheduleKind: job.schedule.kind,
+    ...(job.streamExecutionHost ? { streamExecutionHost: job.streamExecutionHost } : {}),
     // Disabled jobs retain timing without exposing event commands.
     ...(job.schedule.kind === "at" || job.schedule.kind === "every" || job.schedule.kind === "cron"
       ? { schedule: job.schedule }

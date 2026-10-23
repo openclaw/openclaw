@@ -171,6 +171,20 @@ type SessionDisplayRow = {
   accountId?: string;
 } & SessionWorktreeDisplayRow;
 
+/** Naming has a separate lifetime from the first reply; a usable name always wins. */
+export function isSessionTitlePending(
+  key: string,
+  row?: SessionDisplayRow & { titlePending?: boolean },
+): boolean {
+  return (
+    /^agent:[^:]+:dashboard:/.test(key) &&
+    row?.titlePending === true &&
+    ![row.label, row.displayName, row.derivedTitle].some(
+      (name) => name?.trim() && name.trim() !== key,
+    )
+  );
+}
+
 export function formatSessionChannelLabel(channel: string): string {
   return CHANNEL_LABELS.get(channel) ?? channel.charAt(0).toUpperCase() + channel.slice(1);
 }

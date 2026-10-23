@@ -53,7 +53,7 @@ function listDistinctPreparedRuntimeAuthAttempts(
 /** Resolves one complete prepared route/profile tuple without crossing retries mid-flight. */
 export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
   attempts: readonly PreparedAgentRuntimeAuthAttempt[];
-  store: AuthProfileStore;
+  store?: AuthProfileStore;
   modelId: string;
   model: Model;
   materializeModel(input: {
@@ -70,11 +70,14 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
 }): Promise<PreparedRuntimeAuthAttemptResolution<Model, Auth>> {
   const hasAvailableCandidate = (attempt: PreparedAgentRuntimeAuthAttempt) =>
     attempt.kind !== "profile" ||
-    preparedAgentRuntimeProfileAttemptHasCandidate({
-      attempt,
-      store: params.store,
-      modelId: params.modelId,
-    });
+    Boolean(
+      params.store &&
+      preparedAgentRuntimeProfileAttemptHasCandidate({
+        attempt,
+        store: params.store,
+        modelId: params.modelId,
+      }),
+    );
   let firstError: unknown;
   let priorProfileAttempted = false;
   for (const attempt of listDistinctPreparedRuntimeAuthAttempts(params.attempts)) {

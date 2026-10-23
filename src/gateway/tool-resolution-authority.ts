@@ -2,12 +2,13 @@ import {
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
-import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
+import {
+  isInternalOwnerRequester,
+  resolveRequesterToolPolicies,
+} from "../agents/requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
-import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 
 /** Preserve trusted channel policy and require verified lineage for completion grants. */
@@ -15,6 +16,10 @@ export async function resolveGatewayRequesterToolPolicies(
   params: Pick<
     McpLoopbackRequestContext,
     | "conversationToolPolicy"
+    | "requesterOrigin"
+    | "operatorProfileId"
+    | "conversationId"
+    | "chatType"
     | "spawnedBy"
     | "messageProvider"
     | "groupId"
@@ -43,13 +48,13 @@ export async function resolveGatewayRequesterToolPolicies(
 ) {
   // Only immutable Gateway-launched grants can opt into node exec. Match the
   // embedded runner's wildcard sender policy while preserving owner WebChat.
-  const isOwnerInternalSession =
-    options.nodeExecSurface &&
-    params.senderIsOwner === true &&
-    normalizeMessageChannel(params.messageProvider) === INTERNAL_MESSAGE_CHANNEL;
+  const isOwnerInternalSession = options.nodeExecSurface && isInternalOwnerRequester(params);
   const policies = await withPreparedSessionCapabilityRead(() =>
     resolveRequesterToolPolicies({
       config: params.cfg,
+      requesterOrigin: params.requesterOrigin,
+      conversationId: params.conversationId,
+      chatType: params.chatType,
       conversationPolicy: pickSandboxToolPolicy(params.conversationToolPolicy),
       sessionKey: options.runtimePolicySessionKey,
       subagentSessionKey: options.runtimePolicySessionKey,

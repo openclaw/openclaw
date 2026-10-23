@@ -263,6 +263,8 @@ failures become failed `exec` or `wait` results. The model can read the error,
 correct its code, inspect the current state, and continue with the normal tool
 surface. A failed cell does not impose a separate recovery mode or mutation budget.
 
+Source syntax errors are detected before guest execution. Their parser-message text is bounded to 240 UTF-16 units and clipped at a Unicode code-point boundary.
+
 OpenClaw does not automatically replay a failed program. Earlier calls may have
 changed state, and a failed call may have partially applied. Inspect authoritative
 state before deciding what remains, and do not repeat completed actions. This
@@ -287,8 +289,8 @@ openclaw gateway
 ```
 
 With code mode active, the logged model-facing tool names should be `exec` and
-`wait`. For the full redacted provider payload, add
-`OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` for a short debugging session.
+`wait`. `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` also reports request shape
+and the complete tool-name list; it never logs prompt, message, or tool content.
 
 ## Use Swarm for agent fan-out
 

@@ -1,10 +1,10 @@
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
-import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
 
-registerEnglishCatalog(registerModelControlsEnglish);
+registerEnglishCatalog(registerSettingsEnglish);
 
 const AUTH_STATUS: Record<
   ModelProviderAuthKind,
@@ -35,8 +35,22 @@ function renderAuthStatus(card: ModelProviderCard) {
   );
 }
 
-export function hasProviderCredentials(card: ModelProviderCard): boolean {
-  return card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
+function hasProviderCredentials(card: ModelProviderCard): boolean {
+  return card.configApiKeys.length > 0 || Boolean(card.apiKey) || card.profiles.length > 0;
+}
+
+/**
+ * Usable through OpenClaw: credentials it stores, or a catalog that reports the
+ * provider ready (for example a CLI backend or plugin that owns its own login).
+ */
+/** Usage the provider reported, even an error, proves a credential it accepted. */
+export function isProviderUsable(card: ModelProviderCard): boolean {
+  return (
+    hasProviderCredentials(card) ||
+    card.availableModelCount > 0 ||
+    card.catalogStatus === "ready" ||
+    card.usage !== undefined
+  );
 }
 
 function needsAuthAttention(card: ModelProviderCard): boolean {
@@ -53,8 +67,14 @@ export function renderProviderStatus(card: ModelProviderCard) {
   if (card.checkingModels) {
     return (
       <SettingsStatus
-        kind={"muted"}
-        label={t("chat.modelControls.checkingProviderModels", { providers: card.displayName })}
+        kind="muted"
+        dot={false}
+        label={
+          <span class="model-providers__checking" role="status">
+            <span class="btn__spinner" aria-hidden="true" />
+            <span>{t("modelProviders.status.checking")}</span>
+          </span>
+        }
       />
     );
   }
@@ -67,7 +87,7 @@ export function renderProviderStatus(card: ModelProviderCard) {
   if (card.catalogStatus === "unavailable") {
     return <SettingsStatus kind={"warn"} label={t("modelProviders.status.modelsUnavailable")} />;
   }
-  if (!hasProviderCredentials(card)) {
+  if (!isProviderUsable(card)) {
     return renderAuthStatus(card);
   }
   const verified = hasVerifiedProvider(card);
@@ -92,7 +112,7 @@ export function renderMutationMessage(message: ModelProviderRowMessage | undefin
   }
   return (
     <>
-      <div class={"callout " + message.kind} role={message.kind === "error" ? "alert" : "status"}>
+      <div class={["callout", message.kind]} role={message.kind === "error" ? "alert" : "status"}>
         {message.text}
       </div>
       {message.warning ? (

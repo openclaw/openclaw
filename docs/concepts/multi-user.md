@@ -26,8 +26,9 @@ controls signed-in people. None of those settings creates a public link.
 
 The session creator or a Gateway admin can explicitly enable **Public access**.
 Anyone with the normal thread URL can then read existing and future conversation
-text without signing in, while tools, reasoning, files, images, widgets, hidden
-messages, and internal metadata remain excluded. **Log in** returns to that same
+text, shared images, saved inline widgets, and tool-step summaries without signing
+in, while tool results, reasoning, file downloads, hidden messages, and internal
+metadata remain excluded. **Log in** returns to that same
 thread with the person's existing permissions. Assigning a different owner does
 not transfer publication authority. Disabling public access stops anonymous
 reads; enabling it again makes the same normal URL readable. Previously revoked
@@ -46,6 +47,13 @@ Every session carries up to three layers of attribution:
 
 Gateway profile display names and avatars are resolved from the current profile when session rows are returned. Agent actors resolve from the configured agent identity. Participant aggregates do not store display labels, so renaming a profile or agent updates the ownership UI without rewriting participant history.
 
+For `sessions_create`, the selected human remains the session's creator and access
+principal, while the opening message identifies the agent as its author. This
+creator record does not prove that the person authored or approved the operation.
+When audit collection is enabled, operation receipts can separately record the
+selected authority subject. A new agent-initiated execution records the agent
+invoker separately from the represented person.
+
 ## Assigning an owner
 
 In the Control UI, the session context menu (kebab or right-click on a sidebar row, and the same menu on the chat header) offers:
@@ -53,7 +61,7 @@ In the Control UI, the session context menu (kebab or right-click on a sidebar r
 - **Assign to me**: take responsibility for the session yourself.
 - **Assign to…**: pick any registered person or configured agent, including offline people and people who have not owned a session. Choices refresh when you open the menu and do not depend on session filters or archive status.
 
-Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups), including non-owner agent turns when tool policy permits it. Those turns receive the assignment action. An admitted operator with `operator.sessions.write` can also ask the agent to rename a session they created through a label-only patch; other session settings, reset/delete, and global group controls remain restricted. The default sandbox exposes only renaming for these non-owner writers. Explicit sandbox allowlists and denials still apply; explicitly permitting `sessions` retains the actions allowed by the caller’s authority. Operators with `operator.write` can archive or restore only sessions they created. They can stop sessions they created or are assigned to, subject to session access checks. Use `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`. It targets the current session by default, or another visible session via `sessionKey`.
+Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups), including non-owner agent turns when tool policy permits it. Those turns receive the assignment action. An admitted operator with `operator.sessions.write` can also ask the agent to rename a session they created through a label-only patch; other session settings, reset/delete, and global group controls remain restricted. The default sandbox exposes label-only renaming and the separate `sessions_create` tool for these non-owner writers. Creation retains their role's agent, workspace, and session-access limits; it does not grant access to other people's sessions. Explicit sandbox allowlists and denials still apply; explicitly permitting `sessions` retains the actions allowed by the caller’s authority. Operators with `operator.write` can archive or restore only sessions they created. They can stop sessions they created or are assigned to, subject to session access checks. Use `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`. It targets the current session by default, or another visible session via `sessionKey`.
 
 Archive and restore require the creator or a Gateway admin (`operator.admin`), including for existing sessions after an upgrade. Assigned owners who are not the creator no longer receive these permissions. If the creator is unavailable, or the session has no usable profile creator, an admin can archive or restore it from the session menu. Reassigning an owner does not change archive authority.
 
@@ -118,9 +126,9 @@ Administrators can still create shared profiles through the CLI (`openclaw model
 
 ### Pin and default rules
 
-Creating your own session with `operator.sessions.write` applies your saved new-chat default when available, or uses the Gateway's configured selection otherwise. Explicit personal account selection and changes to your new-chat default still require `operator.write`. Both creation paths retain the current connection, profile, and role checks.
+Creating your own session with `operator.sessions.write` applies your saved new-chat default when available, or uses the Gateway's configured selection otherwise. This includes an agent using [`sessions_create`](/concepts/session-tool#creating-an-independent-session) on your behalf under your current admitted operator authority. The agent can use that saved default without receiving permission to select another personal account or manage your accounts. Explicit personal account selection and changes to your new-chat default still require an authenticated human with `operator.write`. Creation retains the applicable live caller, profile, and role checks.
 
-When a linked person creates a session, OpenClaw captures their default as that session's auth selection. The selection has the same strength as a `/model ...@profile` pin. This happens before an initial message is dispatched, including when creation and the first message are separate requests. Sessions first created by turn admission capture the default at that admission. The pin is **session-sticky**: other people steering into that session use its selected account, and forks inherit it. An explicit `/model ...@profile -s` pin outranks the link. A fresh personal selection must belong to the authenticated human making it. Knowing another person's account id is not permission to select it. Agent- and channel-originated turns do not create personal links. For runtimes using OpenClaw's auth fallback planner, the ordered shared profiles for the same provider remain failover candidates if the pinned account fails. This matches the behavior of an explicit pin. Claude CLI requires its selected account and does not substitute shared profiles or its native login when that account cannot be used.
+When a linked person creates a session, OpenClaw captures their default as that session's auth selection. The selection has the same strength as a `/model ...@profile` pin. This happens before an initial message is dispatched, including when creation and the first message are separate requests. Sessions first created by turn admission capture the default at that admission. The pin is **session-sticky**: other people steering into that session use its selected account, and forks inherit it. An explicit `/model ...@profile -s` pin outranks the link. A fresh personal selection must belong to the authenticated human making it. Knowing another person's account id is not permission to select it. Agent- and channel-originated turns do not create personal links. The qualified `sessions_create` path can capture the admitted person's existing default for the new session; it does not create or change that default. For runtimes using OpenClaw's auth fallback planner, the ordered shared profiles for the same provider remain failover candidates if the pinned account fails. This matches the behavior of an explicit pin. Claude CLI requires its selected account and does not substitute shared profiles or its native login when that account cannot be used.
 
 **Use Gateway defaults for new chats**, CLI `clear-default`, and API `users.unlinkAuthProfile` affect future sessions only. Changing a default does not repin existing chats, including unpinned chats using shared credentials. Adopting or forking an existing chat does not apply the current participant's default, and changing providers does not silently select their personal account. Expand the **Account** category in the model menu to make that explicit choice. Clearing a default neither deletes the saved credential nor revokes a provider token. Revoke it with the provider if existing sessions must stop using it. Links and existing session credentials follow verified profile merges, but an explicit unlink on the surviving profile is not reversed by a merge.
 
@@ -213,13 +221,16 @@ another mention. After five minutes, it refreshes cached results in the backgrou
 without hiding the people you can already select. Switching sessions, profiles,
 or connections clears that cache. Results older than 30 minutes are discarded.
 The picker shows placeholders for uncached searches, an empty message when nobody
-matches, and **Retry** if a search without usable cached results fails.
+matches, and **Retry** if a search without usable cached results fails temporarily.
+Permission, profile-verification, and unsupported-conversation rejections clear
+cached people and show guidance instead of Retry. Follow that guidance to restore
+your access or choose a supported conversation.
 **Will notify** reuses the selected person's photo, with initials while it loads or
 when the photo is unavailable.
 
 Selected mentions render as distinct person references in the transcript. Hover, focus, or tap a reference to open the same information card used in the sidebar: current name and avatar, observed presence and connection details, visible watched and recent sessions, and the Activity link. The original message label and copied text stay unchanged. Cards follow explicit profile merges; ordinary unselected `@name` text does not become a person reference.
 
-The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. A mention adds personal discovery involvement, not authored participation or Git contributor credit. It never adds session membership, changes visibility, or grants access. The Gateway rechecks the recipient's current access when creating and displaying it.
+The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. Guests with session-only permissions can select eligible people in existing conversations they are allowed to write in. A mention adds personal discovery involvement, not authored participation or Git contributor credit. It never adds session membership, changes visibility, or grants access. The Gateway rechecks the recipient's current access when creating and displaying it.
 
 Mentions work for ordinary messages, queued or steered input, and the first message of a new session, including a remotely placed session. They are unavailable in incognito, Goal, catalog, suggestion-only, command-send, or terminal-launch modes. If selected mentions remain after switching to an unsupported mode, the composer blocks the send. It asks you to remove them, or to return to a normal chat. It does not silently discard selected recipients.
 
@@ -239,9 +250,12 @@ The Inbox works without browser notification permission. For optional alerts whi
 
 ## Agent-spawned sessions
 
-In a turn steered by several people, `sessions_spawn` requires `user` (the requester's verified `requester_profile.id`)
-and the child acts with that person's retained authority. This selection does not
-change the session's model account or the creator and owner rules below.
+`sessions_spawn` defaults to the active execution's requester, including after
+collaborative steering. An explicit `user` selects an authenticated participant
+whose source authority remains current; the child carries that person's requester
+facts and resolves current destination policy at admission. Selection leaves the
+parent execution unchanged and does not change the session's model account or the
+creator and owner rules below.
 
 Sessions an agent creates with `sessions_spawn` (`visible: true`) normally retain the requesting agent as their immutable creator. A required sandbox instead preserves the parent's creator provenance as an isolation policy. If the active human requester matches the requesting session's verified human owner, a new visible child assigns that person as its initial owner. A different owner, an unlinked requester, or a system-triggered spawn explicitly assigns the requesting agent as owner, even when sandbox policy retained human creator provenance. The sidebar shows the current owner's profile or configured agent identity rather than an internal session key. The assignment follows the same [owner and personal-context rules](/concepts/multi-user#assigning-an-owner); sharing and visibility authority remains anchored on the creator.
 

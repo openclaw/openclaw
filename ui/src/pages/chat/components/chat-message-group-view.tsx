@@ -1,15 +1,15 @@
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { emptyLegacyContent as litNothing, LitContent } from "../../../lit/solid-content.tsx";
-import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
+import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import { ActivityGroupContent } from "./chat-message-activity-view.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -38,14 +38,15 @@ import type { AssistantMessageDisclosure } from "./chat-message-text-view.tsx";
 import { MessageMeta } from "./chat-message-timestamp-view.tsx";
 import {
   NO_REPLY_LINE,
-  renderReplyLine,
-  renderReplyLineConnector,
   resolveGroupReplyLine,
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
+import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
+import type { ReplyConnectorElements } from "./chat-reply-connector.ts";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
-import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
-import { renderTurnRecapRow } from "./chat-working-indicator.ts";
+import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
+import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { TurnRecapRow } from "./chat-working-indicator.tsx";
 
 export type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 
@@ -55,12 +56,21 @@ function MessageActionsRow(props: {
   options: NativeMessageGroupOptions;
   class?: string;
 }) {
+  let owner: HTMLDivElement | undefined;
   return (
     <div
+      ref={(element) => {
+        owner = element;
+      }}
       class={props.class ?? "chat-group-footer-actions"}
       data-message-actions-for={props.messageKey}
     >
-      <MessageActions details={props.details} options={props.options} />
+      <MessageActions
+        details={props.details}
+        options={props.options}
+        actionOwner={() => owner}
+        messageKey={props.messageKey}
+      />
     </div>
   );
 }
@@ -101,6 +111,8 @@ function PreparedMessage(props: {
           : {}),
       };
     }
+    const entryId = persistedMessageEntryId(props.item.message) ?? undefined;
+    const openFile = props.options.onOpenWorkspaceFile;
     return {
       ...props.options,
       firstBubbleKey:
@@ -108,8 +120,17 @@ function PreparedMessage(props: {
           ? props.options.firstBubbleKey
           : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
       isStreaming: isStreaming(),
-      entryId: persistedMessageEntryId(props.item.message) ?? undefined,
-      entryRef: props.options.entryRefFor?.(props.item.key),
+      entryId,
+      // Tool-row file links carry their message like rendered markdown links, so earlier
+      // messages keep reading their original source; sender-owned links stay session-scoped.
+      ...(entryId && openFile && !props.group.senderSession?.sessionKey
+        ? {
+            onOpenWorkspaceFile: (target: { path: string; line?: number | null }) => {
+              const owned = { ...target, messageEntryId: entryId };
+              openFile(owned);
+            },
+          }
+        : {}),
       duplicateCount: props.item.duplicateCount ?? 1,
       showToolCalls: props.options.showToolCalls ?? true,
       assistantMessageDisclosure,
@@ -185,40 +206,48 @@ export function MessageGroupContent(props: {
         )}
       </For>
       {options().showToolCalls === false ? undefined : (
-        <LitContent value={renderBrowserTabPreviews([props.group], options())} />
+        <BrowserTabPreviews previews={selectBrowserTabPreviews([props.group], options())} />
       )}
     </Show>
   );
 }
 
-function GroupAvatar(props: { frame: MessageGroupFrame }) {
+function GroupAvatar(props: {
+  frame: MessageGroupFrame;
+  elementRef?: (element: HTMLElement) => void;
+}) {
   const frame = () => props.frame;
   const options = () => frame().options;
   return (
     <Show when={frame().hasAvatar}>
-      <LitContent
-        value={
-          frame().isForwarded
-            ? renderForwardedAvatar(frame().group.senderSession?.agentId, options())
-            : renderChatAvatar(
-                frame().group.role,
-                {
-                  agentId: options().agentId,
-                  name: frame().assistantName,
-                  avatar: options().assistantAvatar ?? null,
-                  textAvatar: options().assistantTextAvatar,
-                },
-                frame().isOwnGroup
-                  ? {
-                      name: options().userName ?? null,
-                      avatar: options().userAvatar ?? null,
-                    }
-                  : undefined,
-                frame().group.sender,
-                options().channelAvatar,
-              )
+      <Show
+        when={frame().isForwarded}
+        fallback={
+          <ChatAvatar
+            elementRef={props.elementRef}
+            role={frame().group.role}
+            assistant={{
+              agentId: options().agentId,
+              name: frame().assistantName,
+              avatar: options().assistantAvatar ?? null,
+              textAvatar: options().assistantTextAvatar,
+            }}
+            user={
+              frame().isOwnGroup
+                ? { name: options().userName ?? null, avatar: options().userAvatar ?? null }
+                : undefined
+            }
+            sender={frame().group.sender}
+            channelAvatar={options().channelAvatar}
+          />
         }
-      />
+      >
+        <ForwardedAvatar
+          agentId={frame().group.senderSession?.agentId}
+          options={options()}
+          elementRef={props.elementRef}
+        />
+      </Show>
     </Show>
   );
 }
@@ -247,12 +276,16 @@ function SenderIdentity(props: { frame: MessageGroupFrame }) {
 }
 
 function UserFooterActions(props: { frame: MessageGroupFrame }) {
+  let owner: HTMLDivElement | undefined;
   const frame = () => props.frame;
   const options = () => frame().options;
   return (
     <Show when={frame().hasUserFooterActions}>
       <div
         class="chat-group-footer-actions"
+        ref={(element) => {
+          owner = element;
+        }}
         data-message-actions-for={frame().footerActionMessageKey}
       >
         <Show when={Boolean(frame().footerActionDetails?.replyTarget && options().onReply)}>
@@ -267,6 +300,8 @@ function UserFooterActions(props: { frame: MessageGroupFrame }) {
         <MessageActions
           details={frame().footerActionDetails}
           options={messageReactionOptions(frame().group, options())}
+          actionOwner={() => owner}
+          messageKey={frame().footerActionMessageKey}
         />
       </div>
     </Show>
@@ -279,6 +314,7 @@ function FramedMessage(props: {
   index: number;
   mobile: boolean;
 }) {
+  const replyElements: ReplyConnectorElements = {};
   const frame = () => props.frame;
   const prepared = () => frame().preparedMessages[props.index]!;
   const line = createMemo(() =>
@@ -306,6 +342,7 @@ function FramedMessage(props: {
         : undefined,
   }));
   const showActions = () =>
+    prepared().ownsActions &&
     hasMessageActionButtons(prepared().actions, frame().options) &&
     props.index < frame().lastMessageIndex &&
     !frame().isTurnBlock;
@@ -317,7 +354,7 @@ function FramedMessage(props: {
         fallback={
           <>
             {frame().isPeerGroup ? (
-              <LitContent value={renderReplyLine(line(), frame().options)} />
+              <ReplyLineView line={line()} actions={frame().options} />
             ) : undefined}
             <PreparedMessage
               group={frame().group}
@@ -329,8 +366,8 @@ function FramedMessage(props: {
           </>
         }
       >
-        <div class="chat-message--reply">
-          <LitContent value={renderReplyLine(line(), frame().options)} />
+        <div ref={(element) => (replyElements.group = element)} class="chat-message--reply">
+          <ReplyLineView line={line()} actions={frame().options} elements={replyElements} />
           <PreparedMessage
             group={frame().group}
             item={props.item}
@@ -338,10 +375,11 @@ function FramedMessage(props: {
             options={options()}
             prepared={prepared()}
           />
-          <GroupAvatar frame={props.frame} />
-          <LitContent
-            value={renderReplyLineConnector(line(), frame().hasAvatar ? true : litNothing)}
+          <GroupAvatar
+            frame={props.frame}
+            elementRef={(element) => (replyElements.avatar = element)}
           />
+          <ReplyLineConnector line={line()} avatar={frame().hasAvatar} elements={replyElements} />
         </div>
       </Show>
       <Show when={showActions()}>
@@ -377,6 +415,7 @@ function FramedMessageGroup(props: {
   group: MessageGroupData;
   options: NativeMessageGroupOptions;
 }) {
+  const replyElements: ReplyConnectorElements = {};
   const frame = createMemo(() => prepareMessageGroupFrame(props.group, props.options));
   const options = () => frame().options;
   const media = globalThis.matchMedia?.(
@@ -384,23 +423,24 @@ function FramedMessageGroup(props: {
   );
   const [mobile, setMobile] = createSignal(media?.matches ?? false);
   const onLayoutChange = () => setMobile(media?.matches ?? false);
-  media?.addEventListener("change", onLayoutChange);
-  onCleanup(() => media?.removeEventListener("change", onLayoutChange));
+  onSettled(() => media && listen(media, "change", onLayoutChange));
   return (
     <div
+      ref={(element) => (replyElements.group = element)}
       class={frame().className}
       style={frame().style}
       data-chat-row-key={props.group.key}
+      data-chat-streaming={props.group.isStreaming ? "true" : undefined}
       data-file-session-key={frame().sessionKey}
     >
       <Show when={!frame().inlineUserAvatar}>
-        <GroupAvatar frame={frame()} />
+        <GroupAvatar frame={frame()} elementRef={(element) => (replyElements.avatar = element)} />
       </Show>
-      <div class="chat-group-messages">
+      <div ref={(element) => (replyElements.messages = element)} class="chat-group-messages">
         <Show when={frame().forwardedSource}>
-          <LitContent value={renderForwardedAttribution(props.group, options())} />
+          <ForwardedAttribution group={props.group} options={options()} />
         </Show>
-        <LitContent value={renderReplyLine(frame().replyLine, options())} />
+        <ReplyLineView line={frame().replyLine} actions={options()} elements={replyElements} />
         <Show
           when={options().frameContent !== undefined}
           fallback={
@@ -414,15 +454,13 @@ function FramedMessageGroup(props: {
           {options().frameContent}
         </Show>
         {frame().ownsRunFrame || options().showToolCalls === false ? undefined : (
-          <LitContent value={renderBrowserTabPreviews([props.group], options())} />
+          <BrowserTabPreviews previews={selectBrowserTabPreviews([props.group], options())} />
         )}
         <Show
           when={Boolean(options().activeContinuation)}
           fallback={
             options().turnRecap ? (
-              <LitContent
-                value={renderTurnRecapRow(options().turnRecap!, { presentation: "continuation" })}
-              />
+              <TurnRecapRow recap={options().turnRecap!} presentation="continuation" />
             ) : undefined
           }
         >
@@ -460,13 +498,9 @@ function FramedMessageGroup(props: {
               {frame().normalizedRole === "user" &&
               frame().showAvatar &&
               frame().avatarPlacement === "footer" ? (
-                <LitContent
-                  value={renderChatAuthorAvatar(
-                    props.group.sender,
-                    "chat-author-avatar",
-                    undefined,
-                    options().channelAvatar,
-                  )}
+                <ChatAuthorAvatar
+                  sender={props.group.sender}
+                  channelAvatar={options().channelAvatar}
                 />
               ) : undefined}
               <SenderIdentity frame={frame()} />
@@ -490,8 +524,10 @@ function FramedMessageGroup(props: {
           </div>
         </Show>
       </Show>
-      <LitContent
-        value={renderReplyLineConnector(frame().replyLine, frame().hasAvatar ? true : litNothing)}
+      <ReplyLineConnector
+        line={frame().replyLine}
+        avatar={frame().hasAvatar}
+        elements={replyElements}
       />
     </div>
   );
@@ -508,7 +544,11 @@ function SessionActivityGroup(props: {
       options={options()}
       renderEntry={(item, index) => {
         const prepared = createMemo(() => prepareGroupMessage(props.group, item(), options()));
+        let actionOwner: HTMLDivElement | undefined;
         return {
+          actionsRef: (element: HTMLDivElement) => {
+            actionOwner = element;
+          },
           content: (
             <PreparedMessage
               group={props.group}
@@ -526,18 +566,18 @@ function SessionActivityGroup(props: {
               }}
             />
           ),
-          actions: <MessageActions details={prepared().actions} options={options()} />,
+          actions: (
+            <MessageActions
+              details={prepared().actions}
+              options={options()}
+              actionOwner={() => actionOwner}
+              messageKey={item().key}
+            />
+          ),
         };
       }}
     />
   );
-}
-
-export function renderSolidMessageGroup(
-  group: MessageGroupData,
-  options: NativeMessageGroupOptions,
-) {
-  return <MessageGroup group={group} options={options} />;
 }
 
 export function MessageGroup(props: {

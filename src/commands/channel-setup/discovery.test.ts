@@ -43,7 +43,8 @@ vi.mock("../../secrets/channel-env-vars.js", () => ({
   getChannelEnvVars: () => [],
 }));
 
-import { listManifestInstalledChannelIds, resolveChannelSetupEntries } from "./discovery.js";
+import { resolveChannelSetupEntries } from "./discovery.js";
+import { listManifestInstalledChannelIds } from "./trusted-catalog.js";
 
 describe("listManifestInstalledChannelIds", () => {
   beforeEach(() => {

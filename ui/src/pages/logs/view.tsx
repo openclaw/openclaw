@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { PanelRefreshStatus as RefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
@@ -10,12 +10,20 @@ import {
   SettingsStatus,
   SettingsToggle,
 } from "../../components/solid/settings-ui.tsx";
+import { registerLogsEnglish } from "../../i18n/locales/en-logs.ts";
 import { createMsFormatter } from "../../lib/format.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LOG_LEVELS, type LogEntry, type LogLevel } from "./log-lines.ts";
 
+registerEnglishCatalog(registerLogsEnglish);
+
+export type LogsReadCompletion = {
+  promise: Promise<RefreshStatus | null>;
+  quiet: boolean;
+};
+
 export type LogsProps = {
-  loading: boolean;
+  completion: LogsReadCompletion | null;
   refreshDisabled: boolean;
   status: RefreshStatus;
   file: string | null;
@@ -24,6 +32,7 @@ export type LogsProps = {
   levelFilters: Record<LogLevel, boolean>;
   autoFollow: boolean;
   truncated: boolean;
+  onStreamRef?: (element: HTMLDivElement) => void;
   onFilterTextChange: (next: string) => void;
   onLevelToggle: (level: LogLevel, enabled: boolean) => void;
   onToggleAutoFollow: (next: boolean) => void;
@@ -41,6 +50,22 @@ function formatLogTime(value: string | null | undefined, formatTime: (ms: number
 }
 
 export function LogsView(props: LogsProps) {
+  const read = createMemo(() =>
+    props.completion?.promise.then((result) => {
+      if (result?.error) {
+        throw new Error(result.error);
+      }
+    }),
+  );
+  const readStatus = () => {
+    read();
+    return null;
+  };
+  const loading = () => !props.completion?.quiet && isPending(read);
+  const refreshStatus = () => (
+    // eslint-disable-next-line solid/no-react-specific-props -- The shared status API calls this prop className.
+    <PanelRefreshStatus status={props.status} className="logs-refresh-status" />
+  );
   const needle = createMemo(() => normalizeLowercaseStringOrEmpty(props.filterText));
   const filtered = createMemo(() =>
     props.entries.filter((entry) => {
@@ -63,9 +88,8 @@ export function LogsView(props: LogsProps) {
       formatTime: createMsFormatter({ timeStyle: "short" }),
     };
   });
-  const exportFileLabel = createMemo(() =>
-    needle() || LOG_LEVELS.some((level) => !props.levelFilters[level]) ? "filtered" : "visible",
-  );
+  const exportFileLabel = () =>
+    needle() || LOG_LEVELS.some((level) => !props.levelFilters[level]) ? "filtered" : "visible";
 
   // Keep the fill-height flex chain from the workspace through the log stream.
   return (
@@ -73,9 +97,21 @@ export function LogsView(props: LogsProps) {
       <div class="settings-section__header">
         <h2 class="settings-section__heading">{t("gatewayLogs.title")}</h2>
         <div class="settings-section__actions">
-          <button class="btn" disabled={props.refreshDisabled} onClick={() => props.onRefresh()}>
-            {props.loading ? t("common.loading") : t("common.refresh")}
-          </button>
+          <Loading
+            fallback={
+              <button class="btn" disabled>
+                {props.completion?.quiet ? t("common.refresh") : t("common.loading")}
+              </button>
+            }
+          >
+            <button
+              class="btn"
+              disabled={props.refreshDisabled || isPending(read)}
+              onClick={() => props.onRefresh()}
+            >
+              {loading() ? t("common.loading") : t("common.refresh")}
+            </button>
+          </Loading>
           <button
             class="btn"
             disabled={filtered().length === 0}
@@ -93,8 +129,16 @@ export function LogsView(props: LogsProps) {
         </div>
       </div>
       <p class="settings-section__desc">{t("gatewayLogs.subtitle")}</p>
-      {/* eslint-disable-next-line solid/no-react-specific-props -- The shared status API calls this prop className. */}
-      <PanelRefreshStatus status={props.status} className="logs-refresh-status" />
+      <Show when={props.completion} keyed fallback={refreshStatus()}>
+        {(completion) => (
+          <Errored fallback={refreshStatus()}>
+            <Loading on={completion} fallback={refreshStatus()}>
+              {readStatus()}
+              {refreshStatus()}
+            </Loading>
+          </Errored>
+        )}
+      </Show>
       <div class="settings-group logs-card">
         <SettingsRow
           title={t("gatewayLogs.filter")}
@@ -113,7 +157,7 @@ export function LogsView(props: LogsProps) {
           <div class="chip-row">
             <For each={LOG_LEVELS}>
               {(level) => (
-                <label class={`chip log-chip ${level}`}>
+                <label class={["chip log-chip", level]}>
                   <input
                     type="checkbox"
                     checked={props.levelFilters[level]}
@@ -139,13 +183,19 @@ export function LogsView(props: LogsProps) {
           </div>
         </Show>
         <div
+          ref={(element) => props.onStreamRef?.(element)}
           class="log-stream"
           role="region"
           aria-label={t("gatewayLogs.title")}
           tabindex={0}
           onScroll={(event) => props.onScroll(event)}
         >
-          <Show when={props.status.hasLoaded} fallback={props.loading ? <LoadingState /> : null}>
+          <Show
+            when={props.status.hasLoaded}
+            fallback={
+              <Loading fallback={<LoadingState />}>{loading() ? <LoadingState /> : null}</Loading>
+            }
+          >
             <For
               each={display().entries}
               fallback={<SettingsEmpty message={t("gatewayLogs.empty")} />}

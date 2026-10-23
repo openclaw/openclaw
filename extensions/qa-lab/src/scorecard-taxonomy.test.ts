@@ -36,20 +36,16 @@ async function withDecisionFixture(
     const scoresPath = path.join(dir, "scores.yaml");
     fs.writeFileSync(
       taxonomyPath,
-      YAML.stringify({
-        version: 1,
-        title: "Synthetic decision fixture",
-        levels: [{ id: "experimental" }, { id: "stable" }],
-        surfaces: [
-          {
-            id: "tools",
-            name: "Tools",
-            family: "core",
-            level: "experimental",
-            categories: [{ id: "review", name: "Review", category_note: "Fixture" }],
-          },
-        ],
-      }),
+      `version: 1
+title: Synthetic decision fixture
+levels: [{id: experimental}, {id: stable}]
+surfaces:
+  - id: tools
+    name: Tools
+    family: core
+    level: experimental
+    categories: [{id: review, name: Review, category_note: Fixture}]
+`,
     );
     const taxonomy = readQaMaturityTaxonomySource(taxonomyPath);
     const bundle = () => ({
@@ -86,7 +82,7 @@ async function withDecisionFixture(
   });
 }
 
-describe("maturity decision context", () => {
+describe("QA maturity taxonomy", () => {
   it("retains every authored decision and non-gating mismatch without changing aggregates", async () => {
     await withDecisionFixture(({ scores, taxonomy, read }) => {
       const identity = qaMaturityTaxonomyIdentity(taxonomy);
@@ -99,7 +95,7 @@ describe("maturity decision context", () => {
       category.lts.decision = decision(true);
       taxonomy.surfaces[0]!.level_decision = decision("stable");
       const result = read();
-      expect(result).toEqual({ scores, taxonomy, warnings: [] });
+      expect(result).toEqual({ scores, taxonomy });
       expect(qaMaturityTaxonomyIdentity(result.taxonomy)).toEqual(identity);
       expect(result.scores.rollups.surface_average).toEqual({
         quality: { score: 70, label: "Beta" },
@@ -109,41 +105,24 @@ describe("maturity decision context", () => {
     });
   });
 
-  it.each([
-    [
-      "score label mismatch",
-      (scores: QaMaturityScores) =>
+  it.each(["score label mismatch", "undeclared level decision"])("rejects %s", async (fault) => {
+    await withDecisionFixture(({ scores, taxonomy, read }) => {
+      if (fault === "score label mismatch") {
         Object.assign(scores.surfaces[0]!.scores.quality, {
           label: "Stable",
           decision: decision(70),
-        }),
-    ],
-  ] as const)("keeps %s outside the decision contract", async (_name, mutate) => {
-    await withDecisionFixture(({ scores, read }) => {
-      mutate(scores);
+        });
+      } else {
+        taxonomy.surfaces[0]!.level_decision = decision("undeclared");
+      }
       expect(read).toThrow();
     });
   });
-
-  it.each(["undeclared"])("rejects invalid level decision %j", async (value) => {
-    await withDecisionFixture(({ taxonomy, read }) => {
-      Object.assign(taxonomy.surfaces[0]!, { level_decision: decision(value) });
-      expect(read).toThrow();
-    });
-  });
-});
-
-describe("QA maturity YAML readers", () => {
-  it.each([
-    {
-      name: "root",
-      value: null,
-      issues: "<root>: Invalid input: expected object, received null",
-    },
-  ])("preserves $name diagnostics and caller-specific labels", async ({ value, issues }) => {
+  it("preserves root diagnostics and caller-specific labels", async () => {
     await withTempDir("qa-taxonomy-", async (dir) => {
       const taxonomyPath = path.join(dir, "taxonomy.yaml");
-      fs.writeFileSync(taxonomyPath, YAML.stringify(value));
+      fs.writeFileSync(taxonomyPath, YAML.stringify(null));
+      const issues = "<root>: Invalid input: expected object, received null";
 
       expect(() => readQaMaturityTaxonomySource(taxonomyPath)).toThrow(
         new Error(`${taxonomyPath}: ${issues}`),
@@ -153,9 +132,6 @@ describe("QA maturity YAML readers", () => {
       );
     });
   });
-});
-
-describe("semantic taxonomy identity", () => {
   it("includes explicit proof meaning without assigning requirements to other profiles", () => {
     const taxonomy = readQaMaturityTaxonomySource(
       path.resolve(import.meta.dirname, "../../../taxonomy.yaml"),
@@ -185,29 +161,75 @@ describe("semantic taxonomy identity", () => {
     delete profile.proofRequirements;
     expect(qaMaturityTaxonomyIdentity(taxonomy)).toEqual(before);
   });
-  const source = path.resolve(import.meta.dirname, "../../../taxonomy.yaml");
-  const read = () => readQaMaturityTaxonomySource(source);
-  const category = (taxonomy: QaMaturityTaxonomy) =>
-    taxonomy.surfaces
+  it("changes when a feature is added", () => {
+    const taxonomy = readQaMaturityTaxonomySource(
+      path.resolve(import.meta.dirname, "../../../taxonomy.yaml"),
+    );
+    const before = qaMaturityTaxonomyIdentity(taxonomy);
+    const category = taxonomy.surfaces
       .find(
         (surface) =>
           !surface.archived && surface.categories.some((entry) => entry.features.length > 1),
       )!
       .categories.find((entry) => entry.features.length > 1)!;
 
-  it.each<[string, (taxonomy: QaMaturityTaxonomy) => void]>([
-    [
-      "feature addition",
-      (taxonomy) =>
-        category(taxonomy).features.push({
-          name: "New capability",
-          coverageIds: ["tools.new-capability"],
-        }),
-    ],
-  ])("changes when %s changes", (_name, mutate) => {
-    const taxonomy = read();
-    const before = qaMaturityTaxonomyIdentity(taxonomy);
-    mutate(taxonomy);
+    category.features.push({ name: "New capability", coverageIds: ["tools.new-capability"] });
     expect(qaMaturityTaxonomyIdentity(taxonomy)).not.toEqual(before);
+  });
+});
+
+describe("regional channel declarations", () => {
+  const repoRoot = path.resolve(import.meta.dirname, "../../..");
+
+  it("separates account and protocol claims without revising setup IDs or reviewed scores", () => {
+    const { taxonomy, scores } = readValidatedQaMaturityScoreSources({
+      taxonomyPath: path.join(repoRoot, "taxonomy.yaml"),
+      scoresPath: path.join(repoRoot, "qa/maturity-scores.yaml"),
+    });
+    const regional = taxonomy.surfaces.find((surface) => surface.id === "regional-channels")!;
+    expect(regional.categories.map((category) => [category.id, category.features.length])).toEqual([
+      ["channel-setup-and-operations", 6],
+      ["access-and-identity", 10],
+      ["conversation-routing-and-delivery", 10],
+      ["media-and-rich-content", 6],
+    ]);
+    expect(regional.categories[0]!.features.flatMap((feature) => feature.coverageIds)).toEqual([
+      "regional-channels.docs-channel-index",
+      "regional-channels.official-external-channel-catalog-entries",
+      "regional-channels.core-channel-plugin-catalog",
+      "regional-channels.channel-setup-wizard",
+      "regional-channels.missing-plugin",
+      "regional-channels.cross-channel-ingress",
+    ]);
+    const claims = regional.categories.flatMap((category) =>
+      category.features.flatMap((feature) => feature.coverageIds),
+    );
+    expect(new Set(claims).size).toBe(32);
+    for (const id of [
+      "regional-channels.access-and-identity",
+      "regional-channels.conversation-routing-and-delivery",
+      "regional-channels.media-and-rich-content",
+    ]) {
+      expect(claims).not.toContain(id);
+    }
+    expect(regional.level_code).toBe("M2");
+    expect(scores.surfaces.find((surface) => surface.id === "regional-channels")).toMatchObject({
+      level: { id: "alpha", code: "M2" },
+      scores: { quality: { score: 55 }, completeness: { score: 58 } },
+      lts: { status: "none", supported_categories: 0, total_categories: 4 },
+    });
+  });
+
+  it("invalidates captured semantic identity when a regional proof contract changes", () => {
+    const taxonomy = readQaMaturityTaxonomySource(path.join(repoRoot, "taxonomy.yaml"));
+    const before = qaMaturityTaxonomyIdentity(taxonomy);
+    const profiles = structuredClone(taxonomy.profiles);
+    const feature = taxonomy.surfaces
+      .find((surface) => surface.id === "regional-channels")!
+      .categories.flatMap((category) => category.features)
+      .find((entry) => entry.coverageIds.includes("regional-channels.feishu-bot-websocket"))!;
+    feature.description = "Synthetic contract for a different realm and account.";
+    expect(qaMaturityTaxonomyIdentity(taxonomy)).not.toEqual(before);
+    expect(taxonomy.profiles).toEqual(profiles);
   });
 });

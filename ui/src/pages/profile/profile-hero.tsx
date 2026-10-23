@@ -2,14 +2,13 @@ import { Show } from "solid-js";
 import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
 import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
-import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
+import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { SettingsGroup } from "../../components/solid/settings-ui.tsx";
 import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
-import "../../components/viewer-facepile.ts";
+import "../../components/solid/viewer-facepile.tsx";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 
 export type ProfileHeroProps = {
   user?: AuthenticatedUser | null;
@@ -23,15 +22,12 @@ export function ProfileHero(props: ProfileHeroProps) {
     subscribe: (_read, notify) => subscribeThemeBranding(notify),
     equality: Object.is,
   });
-  const agentAvatar = () => {
-    branding.read();
-    return renderAgentIdentityAvatar({
-      id: props.row.id,
-      name: name(),
-      avatar: resolveAgentAvatarUrl(props.row, props.identity),
-      textAvatar: resolveAgentTextAvatar(props.row, props.identity),
-    });
-  };
+  const agentAvatar = () => ({
+    id: props.row.id,
+    name: name(),
+    avatar: resolveAgentAvatarUrl(props.row, props.identity),
+    textAvatar: resolveAgentTextAvatar(props.row, props.identity),
+  });
   // An absent live name is authoritative; the editor's fetched profile may be stale.
   const name = () =>
     props.user
@@ -45,7 +41,7 @@ export function ProfileHero(props: ProfileHeroProps) {
     <SettingsGroup>
       <section class="profile-hero">
         <div class="profile-hero__avatar">
-          <Show when={props.user} fallback={<LitContent render={agentAvatar} />}>
+          <Show when={props.user} fallback={<AgentIdentityAvatar agent={agentAvatar()} />}>
             {(user) => (
               <openclaw-viewer-avatar
                 prop:user={{ ...user(), name: name(), watchedSessions: [] }}

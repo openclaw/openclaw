@@ -10,6 +10,9 @@ read_when:
 
 The Gateway handles commands sent as standalone messages starting with `/`.
 Host-only bash commands use `! <cmd>` (with `/bash <cmd>` as an alias).
+The bang must start the command text, after any required group mention. Bang
+commands still require command authorization and elevated access; text such as
+`hello ! poll` and Markdown images such as `![diagram](image.png)` remain ordinary chat.
 
 When a conversation is bound to an ACP session, normal text routes to the ACP
 harness. Gateway management commands remain local: `/acp ...` always reaches
@@ -275,13 +278,14 @@ plugins, and installed skills.
     | `/model [name\|default\|list\|status] [-s\|--session\|-a\|--agent\|-g\|--global]` | Show or select a model. `-s` changes only this session; owner/admin `-a` and `-g` also update configured defaults |
     | `/models [provider] [page] [limit=<n>\|all]` | List configured/auth-available providers or models |
     | `/queue <mode>` | Manage active-run queue behavior. See [Queue](/concepts/queue) and [Queue steering](/concepts/queue-steering) |
+    | `/followup <message>` | Run this message as a new turn, waiting behind current and already-queued work. Leaves the stored queue mode unchanged. See [Queue](/concepts/queue) |
     | `/steer <message>` | Inject guidance into the active run. Alias: `/tell`. See [Steer](/tools/steer) |
 
     <AccordionGroup>
       <Accordion title="verbose / trace / fast / reasoning safety">
         - `/verbose` is for debugging — keep it **off** in normal use.
         - `/trace` reveals only plugin-owned trace/debug lines. Normal verbose chatter stays off.
-        - `/fast auto|on|off|ultrafast` persists a session override. Use `/fast default` or the Sessions UI `inherit` option to clear it.
+        - `/fast auto|on|off|ultrafast` persists a session override. `/fast ultra` is shorthand for `/fast ultrafast` and stores the same value. Use `/fast default` or the Sessions UI `inherit` option to clear it.
         - `/fast` is provider-specific: ordinary Fast starts from priority on OpenAI/Codex. Codex requests Ultrafast only for an explicit `"ultrafast"` selection and an authenticated app-server catalog that advertises it for the selected native model. Fast, Auto, and unspecified selections never automatically upgrade. Set `appServer.enableUltrafast: false` to disable Ultrafast: explicit `/fast ultrafast` then sends ordinary Fast (`priority`) without an Ultrafast catalog check. Saving the preference does not guarantee provider fulfillment. Standard and inactive Auto remain off. Direct Anthropic Fast requests map to `service_tier=auto` or `standard_only`.
         - `/reasoning`, `/verbose`, and `/trace` are risky in group settings — they may reveal internal reasoning or plugin diagnostics. Keep them off in group chats.
 
@@ -331,6 +335,9 @@ plugins, and installed skills.
 named `dashboard`, skill discovery exposes its generated slash alias as
 `/dashboard_2`. `$dashboard` and `/skill dashboard` continue to select that
 user skill directly.
+
+A multiline `/dashboard` request keeps its line breaks and indentation, so a
+list of requirements reaches the agent complete.
 
   <Accordion title="Skills, allowlists, approvals">
     | Command | Description |
@@ -443,6 +450,8 @@ use the Control UI Tools panel or config surfaces.
 
 `/loop` is owner-only because it uses the cron control-plane tool. `/loop 5m check deploy status` asks the agent to create a fixed-cadence cron job in the current conversation. Without an interval, `/loop watch for new issues` creates a self-paced loop that checks more often while active and backs off toward 1 hour while quiet. `/loop status` lists the conversation's loop jobs. `/loop stop [name]` removes them.
 
+Multiline prompts retain their line breaks and indentation. Generated loop names collapse whitespace onto one line; the recurring prompt keeps the complete text.
+
 ## `/model`: model selection
 
 Use `-s` to change only the current session, `-a` to also update the agent default, or `-g` to also update the shared global default. The long forms are `--session`, `--agent`, and `--global`. An explicit scope overrides `agents.defaults.modelSelectionScope`.
@@ -550,7 +559,7 @@ the command asks the owner to retry from a direct chat.
 /plugin show context7
 /plugins enable context7
 /plugins disable context7
-/plugins install clawhub:<package>
+/plugins install <package>
 /plugins install npm:@openclaw/<official-package>
 /plugins install npm:<package> --force
 /plugins install git:<repository>@<ref> --force
@@ -561,6 +570,8 @@ plugin lifecycle and report the runtime application result without restarting it
 New agent turns use the updated plugin runtime. See
 [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
+Package specs default to ClawHub. Bare plugin ids without a version or tag
+retain the CLI's bundled and official catalog shortcuts. Use `npm:<package>` to select npm explicitly.
 Trusted ClawHub and official-catalog installs do not need a provenance acknowledgement. Arbitrary npm,
 git, archive, `npm-pack:`, and local path sources show a provenance warning and
 require a trailing `--force` after you review the source. This flag acknowledges
@@ -576,7 +587,7 @@ returns the plugin's declared capabilities and an exact retry command. Review
 that reply, then rerun with `--accept-capabilities`:
 
 ```text
-/plugins install clawhub:<package> --accept-capabilities
+/plugins install <package> --accept-capabilities
 /plugins enable <plugin-id> --accept-capabilities
 ```
 
@@ -599,6 +610,8 @@ tool output).
 ## `/btw`: side questions
 
 `/btw` is a quick side question about the current session context. Alias: `/side`.
+
+Questions can span multiple lines or start on the line after `/btw` or `/side`. Pasted errors, blank lines, and indentation are preserved in the question.
 
 ```text
 /btw what are we doing right now?
@@ -626,6 +639,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **Native Discord commands:** `agent:<agentId>:discord:slash:<userId>`
     - **Native Slack commands:** `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
     - **Native Telegram commands:** run in the chat session like text commands.
+    - Native commands entering shared reply dispatch restore an archived command-source session in place before execution. The session ID and history are retained. Restart-recovery tombstones, active worker placement, and non-human or unauthorized requests remain blocked with recovery guidance; archive and retention policies are unchanged. Discord's direct status and picker shortcuts do not use this dispatch path.
     - **`/login`** requires a private chat or Control UI session. It shows provider buttons without starting sign-in. API keys and local setup use the Control UI handoff. `/login codex` still selects OpenAI device pairing. Retry messages name the exact connection command.
     - **`/login openrouter`** sends a browser sign-in action through the Gateway's managed HTTPS address. Approve access in your browser, then return to chat for the saved result. See [OpenRouter](/providers/openrouter#getting-started) for address requirements. Use `/login cancel` to cancel a pending sign-in.
     - After login, model restrictions can prompt **Show all provider models** or **Keep current restrictions**. Credentials stay saved either way, and the question does not block another sign-in. An expired question or changed restrictions opens a fresh choice without signing in again. `/login cancel` can cancel the pending question without removing saved credentials.

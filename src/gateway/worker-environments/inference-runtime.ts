@@ -208,7 +208,7 @@ export const executePreparedWorkerInference = async (
       agentId: target.agentId,
       sessionEntry: target.sessionEntry,
     });
-    const fastModeSetting = promptCacheContext.fastMode ?? fastMode.mode;
+    const fastModeSetting = promptCacheContext.fastMode ?? fastMode.requestMode;
     const fastModeStartedAtMs =
       promptCacheContext.fastModeStartedAtMs ??
       runContext?.lifecycleStartedAt ??

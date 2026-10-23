@@ -17,10 +17,7 @@ import type { ReplyPayload } from "../reply-payload.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 import { resolveSessionStoreLookup } from "./dispatch-from-config.context.js";
 import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events.js";
-import {
-  resolveTurnModelOverride,
-  resolveVisibleRepliesPolicy,
-} from "./dispatch-from-config.harness-defaults.js";
+import { resolveVisibleRepliesPolicy } from "./dispatch-from-config.harness-defaults.js";
 import type { PrepareDispatchDeliveryReadyState } from "./dispatch-from-config.prepare-delivery.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 import { claimInboundDedupe } from "./inbound-dedupe.js";
@@ -178,7 +175,11 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   });
   const chatType = normalizeChatType(ctx.ChatType);
   state.replyOperationRunState.replyCompletion = resolveReplyCompletion(
-    resolveSourceReplyExpectation({ ctx, cfg, isHeartbeat: params.replyOptions?.isHeartbeat }),
+    resolveSourceReplyExpectation({
+      ctx,
+      cfg,
+      scheduledAutomation: params.replyOptions?.scheduledAutomation !== undefined,
+    }),
     "empty",
   );
   const { configuredVisibleReplies, harnessDefaultVisibleReplies } =
@@ -190,7 +191,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       sessionAgentId,
       sessionKey: acpDispatchSessionKey,
       sessionStore: sessionStoreEntry.store,
-      turnModelOverride: resolveTurnModelOverride(params.replyOptions),
+      turnModelOverride: params.replyOptions?.modelOverride,
     });
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   const prefersMessageToolDelivery =
@@ -247,6 +248,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   const sourceReplyPolicyParams = {
     cfg,
     ctx,
+    scheduledAutomation: params.replyOptions?.scheduledAutomation !== undefined,
     strictMessageToolOnly: ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn,
     sendPolicy,
     suppressAcpChildUserDelivery: state.suppressAcpChildUserDelivery,
@@ -254,7 +256,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     shouldSuppressTyping: state.shouldSuppressTyping,
     messageToolAvailable,
     sessionStableMessageToolAvailable,
-    isHeartbeat: params.replyOptions?.isHeartbeat,
     requested: params.replyOptions?.sourceReplyDeliveryMode,
   } as const;
   let sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
@@ -392,7 +393,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       if (!state.inboundDedupeReplayUnsafe && !state.turnAdoptionState?.adopted) {
         inboundDedupeClaim.release();
       }
-      onAbandoned?.();
+      return onAbandoned?.();
     };
   }
   const finishReplyOperationBusyDispatch = (opts?: {

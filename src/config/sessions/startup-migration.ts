@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import {
   readDeferredPluginSessionImport,
   readStaleDeferredPluginSessionImport,
@@ -17,16 +18,17 @@ import {
 import {
   prepareAgentDatabaseDeletionSnapshotRead,
   readAgentDatabaseDeletionSnapshot,
-  readAgentDeletionJournalStatusInWorker,
 } from "../../state/agent-deletion-journal.read.js";
 import {
   AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../../state/openclaw-agent-db-contract.js";
-import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
+import { agentEngineInput } from "../../state/openclaw-agent-db-engine.js";
+import { listOpenClawRegisteredAgentDatabasesAsync } from "../../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   isOpenClawAgentDatabaseOpen,
+  openOpenClawAgentDatabase,
   withOpenClawAgentDatabaseAsync,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
@@ -34,7 +36,6 @@ import {
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import type { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import {
   isLegacySessionRecordOwnedByTarget,
   listLegacySessionTranscriptFiles,
@@ -220,18 +221,19 @@ export async function runSessionStartupMigration(params: {
   assertCurrent?: () => void;
   log: SessionStartupMigrationLogger;
   handoffDatabase?: (database: OpenClawAgentDatabaseOptions) => Promise<void>;
-  deps?: {
-    migrateLegacyMainSessionKeys?: typeof migrateLegacyMainSessionKeys;
-    resolveAllAgentSessionStoreTargetsSync?: typeof resolveAllAgentSessionStoreTargetsSync;
-  };
 }): Promise<void> {
   params.assertCurrent?.();
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
+  const registeredDatabaseRows = await listOpenClawRegisteredAgentDatabasesAsync({ env });
+  params.assertCurrent?.();
   const deletionRead = prepareAgentDatabaseDeletionSnapshotRead({ env }, "runtime");
-  const resolveTargets =
-    params.deps?.resolveAllAgentSessionStoreTargetsSync ?? resolveAllAgentSessionStoreTargetsSync;
+  let deletionSnapshot: ReturnType<typeof deletionRead.read> | undefined;
   const admittedTargets = () =>
-    resolveTargets(params.cfg, { env, agentIds: params.agentIds }).filter(
+    resolveAllAgentSessionStoreTargetsSync(params.cfg, {
+      env,
+      agentIds: params.agentIds,
+      registeredDatabases: registeredDatabaseRows,
+    }).filter(
       (target) =>
         (!params.agentIds || params.agentIds.has(target.agentId)) &&
         !readAgentDatabaseAdmissionRefusal(target.agentId, { env }),
@@ -239,12 +241,17 @@ export async function runSessionStartupMigration(params: {
   const targets = admittedTargets();
   // Stable installations may still have file-backed history. Only Doctor imports it;
   // do not serve an empty SQLite history or rewrite those files during startup.
-  assertSessionStoreMigrationComplete({ cfg: params.cfg, env, targets });
+  withEngineStoreAdmission(() =>
+    assertSessionStoreMigrationComplete({
+      cfg: params.cfg,
+      env,
+      targets,
+      registeredDatabases: registeredDatabaseRows,
+    }),
+  );
   const { assertAcpSessionKeysMigratedForStartup, assertEmbeddedAcpMetadataMigratedForStartup } =
     await import("../../acp/runtime/session-meta-startup.js");
-  const migrateLegacyMain =
-    params.deps?.migrateLegacyMainSessionKeys ??
-    (await import("./legacy-main-session-migration.js")).migrateLegacyMainSessionKeys;
+  const { migrateLegacyMainSessionKeys } = await import("./legacy-main-session-migration.js");
   // Both inspections are read-only; join them before repair, including on refusal.
   const [, result] = await settleCurrentReadPreparations([
     params.agentIds
@@ -256,7 +263,7 @@ export async function runSessionStartupMigration(params: {
           undefined,
           params.assertCurrent,
         ),
-    migrateLegacyMain({ cfg: params.cfg, env, mode: "detect" }),
+    migrateLegacyMainSessionKeys({ cfg: params.cfg, env, mode: "detect" }),
   ] as const);
   params.assertCurrent?.();
   if (result.warnings.length > 0) {
@@ -269,11 +276,11 @@ export async function runSessionStartupMigration(params: {
   const coldCloses = new Set<string>();
   let interruptedSessions = 0;
   const registeredDatabases = new Set(
-    listOpenClawRegisteredAgentDatabases({ env }).map((entry) => `${entry.agentId}\0${entry.path}`),
+    registeredDatabaseRows.map((entry) => `${entry.agentId}\0${entry.path}`),
   );
-  const configuredTargets = resolveConfiguredAgentDatabaseCandidatePaths(params.cfg, { env }).map(
-    (pathname) => ({ path: pathname }),
-  );
+  const configuredTargets = resolveConfiguredAgentDatabaseCandidatePaths(params.cfg, {
+    env,
+  }).map((pathname) => ({ path: pathname }));
   const tasks = targets.map((target) => async () => {
     params.assertCurrent?.();
     const options = toDatabaseOptions(resolveSqliteReadScope({ ...target, env }));
@@ -282,45 +289,42 @@ export async function runSessionStartupMigration(params: {
       return;
     }
     databases.add(databasePath);
+    // Discovery is fixed for this startup pass; database owners fence later deletion effects.
+    const { snapshot } = await (deletionSnapshot ??= deletionRead.read());
+    params.assertCurrent?.();
+    const deletion = snapshot?.deletedAgents.find((entry) => entry.agentId === options.agentId);
+    if (deletion) {
+      params.log.info(
+        `session: skipping deleted agent database for ${options.agentId} (${deletion.status === "complete" ? "cleanup complete" : "cleanup pending; retry agent deletion"})`,
+      );
+      return;
+    }
     // Retained stores remain discoverable, but only deletion cleanup may write them.
     // Check the physical owner so surviving shared stores still reach their runtime.
-    const runUnlessDeleted = (operation: () => Promise<void>) =>
-      deletionRead.withCurrentSnapshot((snapshot) => {
-        params.assertCurrent?.();
-        const retained = createRetainedAgentDatabaseMatcherFromSnapshot(
+    const retained = createRetainedAgentDatabaseMatcherFromSnapshot(
+      env,
+      () =>
+        resolveConfiguredAgentDatabaseTargets(params.cfg, {
           env,
-          () =>
-            resolveConfiguredAgentDatabaseTargets(params.cfg, {
-              env,
-              registeredDatabases: (snapshot?.registeredAgentDatabases ?? []).filter(
-                (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
-              ),
-            }),
-          snapshot,
-          "database",
-          "runtime",
-        )(databasePath, options.agentId);
-        if (typeof retained === "object") {
-          params.log.info(
-            `session: skipping deleted agent database for ${options.agentId} at ${databasePath} (cleanup complete); run "${formatCliCommand("openclaw doctor --fix", env)}" for explicit restoration guidance`,
-          );
-          return false;
-        }
-        // Missing registry entries still need recovery before runtime can discover their lineage.
-        if (
-          registeredDatabases.has(`${options.agentId}\0${databasePath}`) &&
-          !isConfiguredAgentDatabaseTarget(configuredTargets, options.agentId, databasePath)
-        ) {
-          return false;
-        }
-        return operation().then(() => true);
-      });
-    const deletion = await readAgentDeletionJournalStatusInWorker(options.agentId, { env });
-    params.assertCurrent?.();
-    if (deletion !== "absent") {
+          registeredDatabases: (snapshot?.registeredAgentDatabases ?? []).filter(
+            (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
+          ),
+        }),
+      snapshot,
+      "database",
+      "runtime",
+    )(databasePath, options.agentId);
+    if (typeof retained === "object") {
       params.log.info(
-        `session: skipping deleted agent database for ${options.agentId} (${deletion === "complete" ? "cleanup complete" : "cleanup pending; retry agent deletion"})`,
+        `session: skipping deleted agent database for ${options.agentId} at ${databasePath} (cleanup complete); run "${formatCliCommand("openclaw doctor --fix", env)}" for explicit restoration guidance`,
       );
+      return;
+    }
+    // Missing registry entries still need recovery before runtime can discover their lineage.
+    if (
+      registeredDatabases.has(`${options.agentId}\0${databasePath}`) &&
+      !isConfiguredAgentDatabaseTarget(configuredTargets, options.agentId, databasePath)
+    ) {
       return;
     }
     let alreadyOpen: boolean | undefined;
@@ -328,35 +332,37 @@ export async function runSessionStartupMigration(params: {
     try {
       const { repairLegacySessionRunOutcomes } =
         await import("../../commands/doctor/shared/session-entry-rewrite.js");
-      if (
-        !(await runUnlessDeleted(async () => {
-          alreadyOpen = isOpenClawAgentDatabaseOpen(databasePath);
-          const mainKey = params.cfg.session?.mainKey;
-          try {
-            if (
-              !registeredDatabases.has(`${options.agentId}\0${databasePath}`) ||
-              !isCanonicalSqliteSessionMainKeyCurrent(options, mainKey)
-            ) {
-              await withOpenClawAgentDatabaseAsync(
-                options,
-                (database) => setCanonicalSqliteSessionMainKey(database, mainKey),
-                params.assertCurrent,
-              );
-            }
-          } catch (error) {
-            params.assertCurrent?.();
-            params.log.warn(
-              `session: SQLite startup maintenance failed for ${target.agentId}; continuing: ${String(error)}`,
+      params.assertCurrent?.();
+      alreadyOpen = isOpenClawAgentDatabaseOpen(databasePath);
+      const mainKey = params.cfg.session?.mainKey;
+      try {
+        if (
+          !registeredDatabases.has(`${options.agentId}\0${databasePath}`) ||
+          !isCanonicalSqliteSessionMainKeyCurrent(options, mainKey)
+        ) {
+          if (agentEngineInput()) {
+            withEngineStoreAdmission(() => {
+              params.assertCurrent?.();
+              setCanonicalSqliteSessionMainKey(openOpenClawAgentDatabase(options), mainKey);
+            });
+          } else {
+            await withOpenClawAgentDatabaseAsync(
+              options,
+              (database) => setCanonicalSqliteSessionMainKey(database, mainKey),
+              params.assertCurrent,
             );
           }
-          interruptedSessions += await repairLegacySessionRunOutcomes(
-            { agentId: options.agentId, env, storePath: databasePath },
-            () => params.assertCurrent?.(),
-          );
-        }))
-      ) {
-        return;
+        }
+      } catch (error) {
+        params.assertCurrent?.();
+        params.log.warn(
+          `session: SQLite startup maintenance failed for ${target.agentId}; continuing: ${String(error)}`,
+        );
       }
+      interruptedSessions += await repairLegacySessionRunOutcomes(
+        { agentId: options.agentId, env, storePath: databasePath },
+        () => params.assertCurrent?.(),
+      );
       // Canonical refusal is readiness failure. Drain before runtime visitors can
       // otherwise parse a whole migrated store on the main thread.
       const { certifySessionCanonicalValidationPending } =
@@ -364,38 +370,28 @@ export async function runSessionStartupMigration(params: {
       const { withSqliteCanonicalValidationWorker } =
         await import("./session-accessor.sqlite-reclamation-worker.js");
       params.assertCurrent?.();
-      if (
-        !(await runUnlessDeleted(() =>
-          withSqliteCanonicalValidationWorker((withWorker) =>
-            certifySessionCanonicalValidationPending(options, withWorker, params.assertCurrent),
-          ),
-        ))
-      ) {
-        return;
-      }
+      await withSqliteCanonicalValidationWorker((withWorker) =>
+        certifySessionCanonicalValidationPending(options, withWorker, params.assertCurrent),
+      );
       params.assertCurrent?.();
-      await runUnlessDeleted(async () => {
-        params.assertCurrent?.();
-        if (params.agentIds) {
-          await assertAcpSessionKeysMigratedForStartup(
-            params.cfg,
-            env,
-            targets.map((admittedTarget) => admittedTarget.agentId),
-            options,
-            params.assertCurrent,
-          );
-        }
-        assertEmbeddedAcpMetadataMigratedForStartup(options);
-      });
+      if (params.agentIds) {
+        await assertAcpSessionKeysMigratedForStartup(
+          params.cfg,
+          env,
+          targets.map((admittedTarget) => admittedTarget.agentId),
+          options,
+          params.assertCurrent,
+        );
+      }
+      assertEmbeddedAcpMetadataMigratedForStartup(options);
       const handoffDatabase = params.handoffDatabase;
       if (handoffDatabase) {
         // Runtime readiness failures must propagate; only successful handoff
         // transfers the cold connection beyond this maintenance operation.
-        await runUnlessDeleted(async () => {
-          await handoffDatabase(options);
-          params.assertCurrent?.();
-          handedOff = true;
-        });
+        params.assertCurrent?.();
+        await handoffDatabase(options);
+        params.assertCurrent?.();
+        handedOff = true;
       }
     } finally {
       if (alreadyOpen === false && !handedOff) {

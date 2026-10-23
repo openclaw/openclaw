@@ -112,7 +112,7 @@ of failing the task if local persistence rejects an oversized file.
 | PixVerse              | `v6`                            |  ✓   | 1 local or remote image                              | -                                               | `PIXVERSE_API_KEY`                       |
 | Qwen                  | `wan2.6-t2v`                    |  ✓   | Local or remote (i2v and Wan 2.7)                    | Yes (remote URL)                                | `QWEN_API_KEY`                           |
 | Runway                | `gen4.5`                        |  ✓   | 1 image                                              | 1 video                                         | `RUNWAYML_API_SECRET`                    |
-| Together              | `Wan-AI/Wan2.2-T2V-A14B`        |  ✓   | `Wan-AI/Wan2.2-I2V-A14B` only                        | -                                               | `TOGETHER_API_KEY`                       |
+| Together              | `Wan-AI/wan2.7-t2v`             |  ✓   | `Wan-AI/wan2.7-i2v` only                             | -                                               | `TOGETHER_API_KEY`                       |
 | Vydra                 | `veo3`                          |  ✓   | 1 image (`kling`)                                    | -                                               | `VYDRA_API_KEY`                          |
 | xAI                   | `grok-imagine-video`            |  ✓   | Classic: 1 first frame or 7 references; 1.5: 1 frame | Classic: 1 video                                | `XAI_API_KEY`                            |
 | Z.AI                  | `cogvideox-3`                   |  ✓   | 1 image (URL or local file)                          | -                                               | `ZAI_API_KEY`                            |
@@ -200,6 +200,9 @@ Repeated references keep their positions, so the same image can supply both
 <ParamField path="resolution" type="string">Resolution hint such as `360P`, `480P`, `540P`, `720P`, `768P`, `1080P`, `4K`, or a provider-specific value. OpenClaw normalizes or ignores unsupported values per provider.</ParamField>
 <ParamField path="durationSeconds" type="number">
   Target duration in seconds (rounded to nearest provider-supported value).
+  Explicit values must round to a positive safe integer (1–9007199254740991 seconds);
+  invalid values fail instead of being clamped to one second. Omission preserves
+  the provider default.
 </ParamField>
 <ParamField path="size" type="string">Size hint when the provider supports it.</ParamField>
 <ParamField path="audio" type="boolean">
@@ -224,8 +227,9 @@ dimensions). Providers that do not declare it surface the value via
 
 For Runway and Together, an explicit timeout covers submission, polling, and
 downloading together. Individual HTTP requests retain a 120-second limit.
-Without an explicit timeout, their 120-second polling budget starts after
-submission; request and download limits remain separate.
+Without an explicit timeout, the polling budget starts after submission:
+20 minutes for Together and 120 seconds for Runway. Request and download
+limits remain separate.
 
 <ParamField path="providerOptions" type="object">
   Provider-specific options as a JSON object (e.g. `{"seed": 42, "draft": true}`).
@@ -443,7 +447,9 @@ OpenClaw does not append auto-detected providers.
     ratios.
   </Accordion>
   <Accordion title="Together">
-    Single image reference only.
+    Single first-frame image only with `Wan-AI/wan2.7-i2v`. Wan 2.7 requests
+    use 2-10 seconds in OpenClaw. See [Together AI](/providers/together) for
+    supported sizes and request parameters.
   </Accordion>
   <Accordion title="Vydra">
     Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping

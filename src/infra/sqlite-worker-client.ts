@@ -64,6 +64,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
   actor: Actor;
   isDraining: () => boolean;
   isAvailable: () => boolean;
+  retireIdle?: () => Promise<void> | undefined;
   dispatch: (
     payload: Buffer<ArrayBuffer>,
     signal: AbortSignal | undefined,
@@ -72,18 +73,32 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
     createAdmission: SqliteWorkerAdmissionFactory | undefined,
     requestClass: string,
   ) => Promise<unknown>;
-  release: () => Promise<void>;
+  release: (reclaiming: boolean) => Promise<void>;
 }) {
   let closed: Promise<void> | undefined;
+  let reclaiming = false;
   const pending = new Set<Promise<unknown>>();
   const client: StoreClient = {
     actor: owner.actor,
     close: () => store.close(),
+    retireIdle: owner.retireIdle
+      ? () => {
+          if (client.sealed || client.scopes.size || pending.size) {
+            return undefined;
+          }
+          reclaiming = true;
+          try {
+            return owner.retireIdle?.();
+          } finally {
+            reclaiming = false;
+          }
+        }
+      : undefined,
     sealed: owner.isDraining(),
     isAvailable: owner.isAvailable,
     scopes: new Set(),
     execute: (command, options, scope) => {
-      if (scope ? !scope.active : closed || client.sealed || owner.isDraining()) {
+      if (scope ? !scope.active : client.sealed || owner.isDraining()) {
         return Promise.reject(new SqliteWorkerError("SQLite worker store is closed", "closed"));
       }
       if (options.signal?.aborted) {
@@ -137,10 +152,12 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
     close: () => {
       if (!closed) {
         client.sealed = true;
+        // The idle owner seals synchronously; carry that close mode through settlement.
+        const reclaimingIdle = reclaiming;
         closed = (async () => {
           await Promise.allSettled(client.scopes);
           await Promise.allSettled(pending);
-          await owner.release();
+          await owner.release(reclaimingIdle);
         })().catch((error: unknown) => {
           closed = undefined;
           throw error;

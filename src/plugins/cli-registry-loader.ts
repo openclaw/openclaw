@@ -9,10 +9,15 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getDatabaseEngineSelection,
+  installDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
+import { listDatabaseEngineStores } from "../infra/database-engine/registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
-import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
+import { pluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
 import { resolvePluginControlPlaneWorkspace } from "./control-plane-workspace.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
@@ -29,15 +34,10 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import {
   buildPluginRuntimeLoadOptions,
-  createPluginRuntimeLoaderLogger,
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
-import type {
-  OpenClawPluginCliContext,
-  OpenClawPluginCliRootCommandDescriptor,
-  PluginLogger,
-} from "./types.js";
+import type { OpenClawPluginCliContext, OpenClawPluginCliRootCommandDescriptor } from "./types.js";
 
 export type PluginCliLoaderOptions = Pick<PluginLoadOptions, "pluginSdkResolution">;
 
@@ -46,7 +46,6 @@ export type PluginCliPublicLoadParams = {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   loaderOptions?: PluginCliLoaderOptions;
-  logger?: PluginLogger;
   primaryCommand?: string;
   session?: PluginCliLoadSession;
 };
@@ -85,7 +84,6 @@ export function createPluginCliLoadSession(
   let current:
     | {
         key: string;
-        logger?: PluginLogger;
         env: NodeJS.ProcessEnv;
         sdk?: PluginCliLoaderOptions["pluginSdkResolution"];
         prepared: PreparedPluginCliLoad;
@@ -128,7 +126,6 @@ export function createPluginCliLoadSession(
         // Equal values permit package reuse, but raw/source identities retain private provenance.
         if (
           current?.key === key &&
-          current.logger === params.logger &&
           current.env === env &&
           current.sdk === sdk &&
           current.prepared.context.rawConfig === config &&
@@ -152,7 +149,6 @@ export function createPluginCliLoadSession(
           env: preparedEnv,
           workspaceDir,
           metadataSnapshot,
-          logger: params.logger ?? createPluginRuntimeLoaderLogger(),
         });
         const prepared: PreparedPluginCliLoad = {
           context,
@@ -161,7 +157,7 @@ export function createPluginCliLoadSession(
           // Metadata stays captured for this preparation; invocation closure still gates use.
           assertCurrent: assertOpen,
         };
-        current = { key, sdk, logger: params.logger, env, prepared };
+        current = { key, sdk, env, prepared };
         return prepared;
       }),
   };
@@ -272,12 +268,25 @@ async function loadPluginCliCommandRegistryWithContext(params: {
   if (onlyPluginIds && onlyPluginIds.length === 0) {
     return createEmptyPluginRegistry();
   }
+  // Database families need their boot choice before registration can open a store.
+  // Unrelated CLI commands retain their independent credential requirements.
+  if (
+    !getDatabaseEngineSelection() &&
+    listDatabaseEngineStores().some(
+      ({ id, postgres }) => postgres && (!onlyPluginIds || onlyPluginIds.includes(id)),
+    )
+  ) {
+    const { resolveDatabaseEngineSelection } = await import("../infra/database-engine/config.js");
+    installDatabaseEngineSelection(
+      await resolveDatabaseEngineSelection(context.config, context.env),
+    );
+  }
   const options = buildPluginRuntimeLoadOptions(context, {
     ...params.loaderOptions,
     ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
     cache: false,
     channelPluginLoadIntent: "full",
-    runtimeOptions: { nodes: createPluginCliGatewayNodesRuntime() },
+    runtimeOptions: { nodes: pluginCliGatewayNodesRuntime },
   });
   const resources = params.prepared.resources;
   return params.prepared.withCache(() =>
@@ -303,9 +312,7 @@ export async function loadPluginCliDescriptors(
         .map((entry) => entry.descriptors),
     );
   } catch (error) {
-    // Callers pass a muted per-plugin logger for descriptor scans; a total
-    // load failure still removes every plugin command from help/dispatch and
-    // must not vanish with it.
+    // A total load failure removes plugin commands from help/dispatch; keep it visible.
     log.warn(`plugin CLI descriptor load failed: ${String(error)}`);
     return [];
   }

@@ -1,11 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
+import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
-import { icons } from "../../../components/icons.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
+import { profileDirectory } from "../../../lib/profile-directory.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -14,6 +13,7 @@ import {
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
 import { createSessionOwnerMenuHarness } from "../../../test-helpers/session-owner-menu.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
@@ -22,14 +22,20 @@ import {
 } from "../chat-pane.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import type { HeaderMenuAction } from "./chat-header-session-menu.ts";
+import { PaneHeaderView } from "./chat-pane-header.tsx";
 import "./chat-header-session-menu.ts";
-import type { ChatSessionSharingProps } from "./chat-session-sharing.ts";
+import type { ChatSessionSharingProps } from "./chat-session-sharing-shared.tsx";
 import { openNativeSessionMenu } from "./native-session-menu.runtime.ts";
 
 type HeaderMenuElement = HTMLElementTagNameMap["openclaw-chat-header-session-menu"];
-type MenuItemElement = HTMLElement & { checked: boolean; disabled: boolean; submenuOpen?: boolean };
+type MenuItemElement = HTMLButtonElement;
 
 const containers: HTMLElement[] = [];
+const viewLabels = ["Reasoning", "Tool calls", "Keep commentary"];
+const shortcut = (menuItem: Element, compact = false) => {
+  const text = menuItem.querySelector(".session-menu__shortcut")?.textContent;
+  return (compact ? text?.replace(/\s+/gu, "") : text)?.trim();
+};
 
 afterEach(() => {
   for (const container of containers.splice(0)) {
@@ -39,20 +45,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function settings(): UiSettings {
+function settings(): HeaderMenuElement["settings"] {
   return {
-    gatewayUrl: "ws://localhost:18789",
-    token: "",
-    sessionKey: "main",
-    lastActiveSessionKey: "main",
-    theme: "claw",
-    themeMode: "dark",
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatPersistCommentary: true,
-    navCollapsed: false,
-    navWidth: 280,
-    sidebarEntries: [],
   };
 }
 
@@ -107,22 +104,100 @@ async function mountMenu(
   container.append(menu);
   await menu.updateComplete;
   if (open) {
-    menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
+    await openMenu(menu);
+    await materializeSubmenus(menu);
     await menu.updateComplete;
   }
   return menu;
 }
 
+async function mountPaneMenu(
+  { pane, state }: ReturnType<typeof createTestChatPane>,
+  session: Parameters<ReturnType<typeof createTestChatPane>["pane"]["renderPaneHeader"]>[1],
+) {
+  state.settings = {} as ChatPageHost["settings"];
+  const container = document.createElement("div");
+  document.body.append(container);
+  containers.push(container);
+  mountSolid(
+    () =>
+      createComponent(
+        PaneHeaderView,
+        pane.renderPaneHeader(
+          createPaneHeaderWorkspaceFixture(state),
+          session,
+          false,
+          undefined,
+          false,
+          null,
+        ),
+      ),
+    { container },
+  );
+  const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
+  if (!menu) {
+    throw new Error("Expected chat header session menu");
+  }
+  await menu.updateComplete;
+  await openMenu(menu);
+  await menu.updateComplete;
+  await materializeSubmenus(menu);
+  return menu;
+}
+
+async function openMenu(menu: HeaderMenuElement) {
+  expect(menu.openMenu()).toBe(true);
+  await waitForSolid(() => expect(menu.querySelector('[data-value="rename"]')).not.toBeNull());
+}
+
+function whenHidden(menu: HeaderMenuElement) {
+  return new Promise<void>((resolve) => {
+    const hidden = (event: Event) => {
+      if (event.target === panel(menu)) {
+        panel(menu).removeEventListener("overlay-after-hide", hidden);
+        resolve();
+      }
+    };
+    panel(menu).addEventListener("overlay-after-hide", hidden);
+  });
+}
+
+async function expectParked(menu: HeaderMenuElement, update: () => void) {
+  const changes: MutationRecord[] = [];
+  const mutations = new MutationObserver((records) => changes.push(...records));
+  mutations.observe(panel(menu), { childList: true, subtree: true, attributes: true });
+  update();
+  await menu.updateComplete;
+  flush();
+  expect([...changes, ...mutations.takeRecords()]).toEqual([]);
+  mutations.disconnect();
+}
+
+function panel(menu: ParentNode): HTMLElement {
+  const found = menu.querySelector<HTMLElement>(".chat-header-session-menu__panel");
+  if (!found) {
+    throw new Error("Expected header menu panel");
+  }
+  return found;
+}
+
 function itemLabel(menuItem: Element): string {
-  return menuItem.querySelector(":scope > .session-menu__text")?.textContent?.trim() ?? "";
+  return (
+    menuItem.querySelector(".session-menu__text")?.textContent?.trim() ??
+    menuItem.getAttribute("aria-label") ??
+    ""
+  );
 }
 
 function rootLabels(menu: ParentNode): string[] {
-  return Array.from(menu.querySelectorAll(":scope > wa-dropdown > wa-dropdown-item"), itemLabel);
+  const root = panel(menu);
+  return [...root.querySelectorAll('[role^="menuitem"]')]
+    .filter((candidate) => candidate.closest('[role="menu"]') === root)
+    .map(itemLabel);
 }
 
 function item(menu: ParentNode, label: string): MenuItemElement {
-  const found = Array.from(menu.querySelectorAll<MenuItemElement>("wa-dropdown-item")).find(
+  const found = [...menu.querySelectorAll<MenuItemElement>('[role^="menuitem"]')].find(
     (candidate) => itemLabel(candidate) === label,
   );
   if (!found) {
@@ -131,97 +206,186 @@ function item(menu: ParentNode, label: string): MenuItemElement {
   return found;
 }
 
-function select(menu: ParentNode, value: string) {
-  menu.querySelector("wa-dropdown")?.dispatchEvent(
-    new CustomEvent("wa-select", {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      detail: { item: { value } },
-    }),
+async function materializeSubmenus(menu: HeaderMenuElement): Promise<void> {
+  const visit = async (root: HTMLElement) => {
+    for (const trigger of root.querySelectorAll<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )) {
+      if (trigger.closest('[role="menu"]') !== root || trigger.disabled) {
+        continue;
+      }
+      trigger.click();
+      flush();
+      await menu.updateComplete;
+      const branch = document.getElementById(trigger.getAttribute("aria-controls") ?? "");
+      if (!branch) {
+        throw new Error("Expected submenu panel");
+      }
+      await visit(branch);
+      if (branch.matches(":popover-open")) {
+        trigger.click();
+        flush();
+      }
+    }
+  };
+  await visit(panel(menu));
+}
+
+function submenuItems(trigger: HTMLElement): MenuItemElement[] {
+  const id = trigger.getAttribute("aria-controls");
+  const root = id ? document.getElementById(id) : null;
+  if (!root) {
+    throw new Error("Expected submenu panel");
+  }
+  return [...root.querySelectorAll<MenuItemElement>('[role^="menuitem"]')].filter(
+    (candidate) => candidate.closest('[role="menu"]') === root,
   );
 }
 
+async function select(menu: HeaderMenuElement, value: string) {
+  await menu.updateComplete;
+  if (!panel(menu).matches(":popover-open")) {
+    await openMenu(menu);
+  }
+  const target = menu.querySelector<HTMLButtonElement>(`[data-value="${value}"]`);
+  if (!target) {
+    throw new Error(`Expected menu value: ${value}`);
+  }
+  const parents: HTMLElement[] = [];
+  for (
+    let root = target.closest<HTMLElement>('[role="menu"]');
+    root && root !== panel(menu);
+    root = root.parentElement?.closest<HTMLElement>('[role="menu"]') ?? null
+  ) {
+    parents.unshift(root);
+  }
+  for (const root of parents) {
+    if (!root.matches(":popover-open")) {
+      const trigger = document.getElementById(root.id.replace(/:content$/u, ":trigger"));
+      if (!(trigger instanceof HTMLButtonElement)) {
+        throw new Error("Expected submenu trigger");
+      }
+      trigger.click();
+      flush();
+    }
+  }
+  await menu.updateComplete;
+  flush();
+  target.click();
+  flush();
+  await menu.updateComplete;
+}
+
 describe("chat header session menu", () => {
-  it("defers session actions until first open and retains them across reopening", async () => {
+  it("keeps current session actions and their DOM identity across reopening", async () => {
     const menu = await mountMenu({}, false);
-    expect(menu.querySelector("button[slot='trigger']")).not.toBeNull();
-    expect(menu.querySelector("wa-dropdown-item")).toBeNull();
+    expect(menu.querySelector(".chat-header-session-menu__trigger")).not.toBeNull();
+    expect(panel(menu).matches(":popover-open")).toBe(false);
     menu.session = { ...menu.session, label: "Latest session", pinned: true };
     await menu.updateComplete;
-    expect(menu.querySelector("wa-dropdown-item")).toBeNull();
-    const dropdown = menu.querySelector("wa-dropdown")!;
-    dropdown.dispatchEvent(new Event("wa-show"));
-    await menu.updateComplete;
+    await openMenu(menu);
     const pin = item(menu, "Unpin session");
-    expect(pin).not.toBeNull();
-    dropdown.dispatchEvent(new Event("wa-after-hide"));
-    dropdown.dispatchEvent(new Event("wa-show"));
-    await menu.updateComplete;
-    expect(item(menu, "Unpin session")).toBe(pin);
+    const hidden = whenHidden(menu);
+    panel(menu).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    flush();
+    expect(panel(menu).matches(":popover-open")).toBe(false);
+    await hidden;
+    await expectParked(menu, () => {
+      menu.session = { ...menu.session, pinned: false, unread: true };
+    });
+    await openMenu(menu);
+    expect(item(menu, "Pin session")).toBe(pin);
+    expect(item(menu, "Mark as read")).toBeDefined();
   });
 
-  it.each(["shown", "selected", "aborted", "retargeted"] as const)(
-    "settles native opening only at the current popup boundary: %s",
+  it("reconciles parked owner membership and labels without replacing surviving rows", async () => {
+    const owner = createSessionOwnerMenuHarness();
+    owner.context.agents.state.agentsList!.agents.push({ id: "retired", name: "Retired" });
+    const menu = await mountMenu({ context: owner.context }, false);
+    await openMenu(menu);
+    item(menu, "Assign to…").click();
+    flush();
+    await profileDirectory(owner.context.gateway).load();
+    await menu.updateComplete;
+    const research = item(menu, "Research");
+    const self = item(menu, "Me");
+    const hidden = whenHidden(menu);
+    menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!.click();
+    await menu.updateComplete;
+    expect(panel(menu).matches(":popover-open")).toBe(false);
+    await hidden;
+    await expectParked(menu, () => {
+      owner.context.agents.state.agentsList!.agents = [
+        { id: "research:one", name: "Updated research" },
+        { id: "new", name: "New agent" },
+      ];
+      owner.publish({ selfUser: { id: "profile-ada", name: "Ada" } });
+    });
+    await openMenu(menu);
+    expect(item(menu, "Updated research")).toBe(research);
+    expect(item(menu, "Me")).toBe(self);
+    expect(
+      submenuItems(item(menu, "Assign to…"))
+        .filter((option) => option.value.startsWith("assign-owner:"))
+        .map(itemLabel),
+    ).toEqual(["Me", "New agent", "Updated research"]);
+  });
+
+  it.each(["shown", "aborted", "retargeted"] as const)(
+    "opens only a current native popup request: %s",
     async (outcome) => {
-      const menu = await mountMenu();
+      const menu = await mountMenu({}, false);
       const abort = new AbortController();
-      let current = true;
-      const settled = vi.fn();
-      const opening = openNativeSessionMenu({
-        pane: menu.parentElement!,
-        signal: abort.signal,
-        isCurrent: () => current,
-      });
-      void opening.then(settled);
-      await menu.updateComplete;
-      await Promise.resolve();
-      const dropdown = menu.querySelector("wa-dropdown")!;
-      await dropdown.updateComplete;
-      expect(dropdown.open).toBe(true);
-      expect(settled).not.toHaveBeenCalled();
-      if (outcome === "selected") {
-        dropdown.dispatchEvent(
-          new CustomEvent("wa-select", { cancelable: true, detail: { item: { value: "rename" } } }),
-        );
-        dropdown.open = false;
-        dropdown.dispatchEvent(new Event("wa-hide"));
-      } else if (outcome === "aborted") {
+      if (outcome === "aborted") {
         abort.abort();
-      } else {
-        current = outcome === "shown";
-        dropdown.dispatchEvent(new Event("wa-after-show"));
       }
-      expect(await opening).toBe(outcome === "shown" || outcome === "selected");
-      expect(dropdown.open).toBe(outcome === "shown");
+      const opened = await openNativeSessionMenu({
+        pane: menu.parentElement!,
+        getMenu: () => menu,
+        signal: abort.signal,
+        isCurrent: () => outcome !== "retargeted",
+      });
+      expect(opened).toBe(outcome === "shown");
+      expect(panel(menu).matches(":popover-open")).toBe(outcome === "shown");
       abort.abort();
-      expect(dropdown.open).toBe(outcome === "shown");
+      expect(panel(menu).matches(":popover-open")).toBe(outcome === "shown");
     },
   );
+
+  it("settles native opening before a later selection or cancellation", async () => {
+    const onAction = vi.fn();
+    const menu = await mountMenu({ onAction }, false);
+    const abort = new AbortController();
+    expect(
+      await openNativeSessionMenu({
+        pane: menu.parentElement!,
+        getMenu: () => menu,
+        signal: abort.signal,
+        isCurrent: () => true,
+      }),
+    ).toBe(true);
+    await select(menu, "rename");
+    expect(onAction).toHaveBeenCalledWith({ kind: "rename" });
+    expect(panel(menu).matches(":popover-open")).toBe(false);
+    abort.abort();
+    expect(panel(menu).matches(":popover-open")).toBe(false);
+  });
 
   it.each(["MacIntel", "Win32"])(
     "shows the direct Archive hint only for the current unarchived chat on %s",
     async (platform) => {
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
       const menu = await mountMenu({ archiveShortcut: true });
-      expect(
-        item(menu, "Archive session")
-          .querySelector(".session-menu__shortcut")
-          ?.textContent?.replace(/\s+/gu, "")
-          .trim(),
-      ).toBe(platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl+Shift+A");
-      const inactive = await mountMenu();
-      expect(
-        item(inactive, "Archive session")
-          .querySelector(".session-menu__shortcut")
-          ?.textContent?.trim(),
-      ).toBe("A");
-      const archived = await mountMenu({ archiveShortcut: true, session: { archived: true } });
-      expect(
-        archived
-          .querySelector('[value="toggle-archived"] .session-menu__shortcut')
-          ?.textContent?.trim(),
-      ).toBe("A");
+      expect(shortcut(item(menu, "Archive session"), true)).toBe(
+        platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl+Shift+A",
+      );
+      menu.archiveShortcut = false;
+      await menu.updateComplete;
+      expect(shortcut(item(menu, "Archive session"))).toBe("A");
+      menu.archiveShortcut = true;
+      menu.session = { ...menu.session, archived: true };
+      await menu.updateComplete;
+      expect(shortcut(menu.querySelector('[data-value="toggle-archived"]')!)).toBe("A");
     },
   );
 
@@ -243,7 +407,7 @@ describe("chat header session menu", () => {
           },
         });
         await menu.updateComplete;
-        expect(menu.querySelector('[value="toggle-involving-me"]') !== null).toBe(multiple);
+        expect(menu.querySelector('[data-value="toggle-involving-me"]') !== null).toBe(multiple);
       }
     },
   );
@@ -270,12 +434,12 @@ describe("chat header session menu", () => {
       const client = createGatewayBrowserClientFixture({
         gatewayUrl: "gatewayUrl" in testCase ? testCase.gatewayUrl : "ws://localhost:18789",
       });
-      const { pane, state } = createTestChatPane({
+      const fixture = createTestChatPane({
         client,
         sessions: createSessionCapabilityFixture(),
       });
       const session = {
-        key: state.sessionKey,
+        key: fixture.state.sessionKey,
         kind: "direct" as const,
         updatedAt: 0,
         spawnedWorkspaceDir: "/workspace",
@@ -283,28 +447,7 @@ describe("chat header session menu", () => {
           ? { execNode: testCase.execNode, execCwd: "/remote/workspace" }
           : {}),
       };
-      state.settings = {} as ChatPageHost["settings"];
-      const container = document.createElement("div");
-      document.body.append(container);
-      containers.push(container);
-      mountSolid(
-        () =>
-          createComponent(LitContent, {
-            value: pane.renderPaneHeader(
-              createPaneHeaderWorkspaceFixture(state),
-              session,
-              false,
-              undefined,
-              false,
-              null,
-            ),
-          }),
-        { container },
-      );
-      const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
-      await menu?.updateComplete;
-      menu?.querySelector("wa-dropdown")?.dispatchEvent(new Event("wa-show"));
-      await menu?.updateComplete;
+      const menu = await mountPaneMenu(fixture, session);
 
       expect(menu?.textContent?.includes("Open in")).toBe(true);
       expect(menu?.textContent?.includes("Cursor")).toBe(testCase.offered);
@@ -338,40 +481,13 @@ describe("chat header session menu", () => {
         },
       },
     });
-    const { pane, state } = createTestChatPane({
+    const fixture = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
       sessions,
     });
-    state.settings = {} as ChatPageHost["settings"];
-    const container = document.createElement("div");
-    document.body.append(container);
-    containers.push(container);
-    mountSolid(
-      () =>
-        createComponent(LitContent, {
-          value: pane.renderPaneHeader(
-            createPaneHeaderWorkspaceFixture(state),
-            session,
-            false,
-            undefined,
-            false,
-            null,
-          ),
-        }),
-      { container },
-    );
-    const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
-    if (!menu) {
-      throw new Error("Expected chat header session menu");
-    }
-    await menu.updateComplete;
-    menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
-    await menu.updateComplete;
-
+    const menu = await mountPaneMenu(fixture, session);
     const moveToGroup = item(menu, "Move to group");
-    const groupLabels = Array.from(
-      moveToGroup.querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
-    ).map(itemLabel);
+    const groupLabels = submenuItems(moveToGroup).map(itemLabel);
     expect(groupLabels).toEqual(["Catalog", "Discovered", "New group"]);
   });
 
@@ -385,31 +501,32 @@ describe("chat header session menu", () => {
       onSettingsChange,
     });
     const view = item(menu, "View");
-    const viewItems = Array.from(
-      view.querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
-    );
+    const viewItems = submenuItems(view);
 
-    expect(viewItems.map(itemLabel)).toEqual([
-      "Reasoning",
-      "Tool calls",
-      "Keep commentary",
-      "Speech bubbles",
+    expect(viewItems.map(itemLabel)).toEqual([...viewLabels, "Speech bubbles"]);
+    expect(viewItems.map((entry) => entry.getAttribute("aria-checked") === "true")).toEqual([
+      !onboarding,
+      true,
+      true,
+      false,
     ]);
-    expect(viewItems.map((entry) => entry.checked)).toEqual([!onboarding, true, true, false]);
     if (onboarding) {
       expect(viewItems.every((entry) => entry.disabled)).toBe(true);
       expect(
         viewItems.every((entry) => entry.getAttribute("title") === "Disabled during setup"),
       ).toBe(true);
     } else {
-      expect(view.querySelector('[role="note"]')?.textContent?.trim()).toBe(
-        "Stored in this browser only.",
-      );
+      expect(
+        document
+          .getElementById(view.getAttribute("aria-controls")!)
+          ?.querySelector('[role="note"]')
+          ?.textContent?.trim(),
+      ).toBe("Stored in this browser only.");
     }
-    select(menu, "view:reasoning");
-    select(menu, "view:tool-calls");
-    select(menu, "view:commentary");
-    select(menu, "view:speech-bubbles");
+    await select(menu, "view:reasoning");
+    await select(menu, "view:tool-calls");
+    await select(menu, "view:commentary");
+    await select(menu, "view:speech-bubbles");
     expect(onSettingsChange.mock.calls).toEqual(
       onboarding
         ? []
@@ -437,12 +554,12 @@ describe("chat header session menu", () => {
     });
     menu.settings = { ...settings(), chatBubbleSessionKeys: ["agent:main:main"] };
     if (compact) {
-      select(menu, "compact:open-view");
+      await select(menu, "compact:open-view");
     }
     await menu.updateComplete;
     const bubbleItem = item(menu, "Speech bubbles");
-    expect(bubbleItem.checked).toBe(false);
-    select(menu, "view:speech-bubbles");
+    expect(bubbleItem.getAttribute("aria-checked") === "true").toBe(false);
+    await select(menu, "view:speech-bubbles");
     expect(onSettingsChange).toHaveBeenLastCalledWith({
       chatBubbleSessionKeys: ["agent:main:main", "agent:main:other"],
       chatBubbleDisabledSessionKeys: undefined,
@@ -451,13 +568,14 @@ describe("chat header session menu", () => {
     await menu.updateComplete;
     // The open checkbox keeps its DOM identity and keyboard navigation position.
     expect(item(menu, "Speech bubbles")).toBe(bubbleItem);
-    expect(bubbleItem.checked).toBe(true);
+    expect(bubbleItem.getAttribute("aria-checked") === "true").toBe(true);
+    expect(bubbleItem.closest('[role="menu"]')?.matches(":popover-open")).toBe(true);
     menu.session = { ...menu.session, target: { key: "agent:main:third" } };
     await menu.updateComplete;
-    expect(item(menu, "Speech bubbles").checked).toBe(false);
+    expect(item(menu, "Speech bubbles").getAttribute("aria-checked") === "true").toBe(false);
     menu.session = { ...menu.session, target: { key: "agent:main:other" } };
     await menu.updateComplete;
-    select(menu, "view:speech-bubbles");
+    await select(menu, "view:speech-bubbles");
     expect(onSettingsChange).toHaveBeenLastCalledWith({
       chatBubbleSessionKeys: ["agent:main:main"],
       chatBubbleDisabledSessionKeys: ["agent:main:other"],
@@ -477,13 +595,13 @@ describe("chat header session menu", () => {
         {
           id: "plugin/export",
           label: "Export transcript",
-          icon: icons.plug,
+          icon: "plug",
           onActivate: exportTranscript,
         },
         {
           id: "stop-cloud-worker",
           label: "Stop cloud worker",
-          icon: icons.stop,
+          icon: "stop",
           variant: "danger",
           disabled: true,
           description: "Worker is restarting",
@@ -501,26 +619,40 @@ describe("chat header session menu", () => {
           }
         : {}),
     });
-    const navigate = async (value: string) => {
-      select(menu, `compact:${value}`);
-      await menu.updateComplete;
+    const navigate = async (value: string): Promise<void> => {
+      const target = () => menu.querySelector(`[data-value="compact:${value}"]`);
+      if (value === "back") {
+        const back = menu.querySelector<HTMLButtonElement>(".session-menu__back");
+        if (!back?.dataset.value) {
+          throw new Error("Expected compact back action");
+        }
+        await select(menu, back.dataset.value);
+        return;
+      }
+      if (!target() && menu.querySelector(".session-menu__back")) {
+        await navigate("back");
+      }
+      if (!target()) {
+        await select(menu, "compact:open-advanced");
+      }
+      await select(menu, `compact:${value}`);
     };
     const initialLabels = rootLabels(menu);
     expect(initialLabels).not.toContain("Panels");
     expect(initialLabels).not.toContain("Layout");
     const stopItem = item(menu, "Stop cloud workerWorker is restarting");
     expect(stopItem.disabled).toBe(true);
-    expect(stopItem.getAttribute("variant")).toBe("danger");
+    expect(stopItem.getAttribute("data-variant")).toBe("danger");
     expect(stopItem.querySelector(".session-menu__description")?.textContent).toBe(
       "Worker is restarting",
     );
-    select(menu, "quick:plugin/export");
-    select(menu, "quick:stop-cloud-worker");
+    await select(menu, "quick:plugin/export");
+    await select(menu, "quick:stop-cloud-worker");
     expect(exportTranscript).toHaveBeenCalledOnce();
     expect(stopWorker).not.toHaveBeenCalled();
     if (compact) {
       expect(initialLabels).toEqual([
-        "Open command palette",
+        "Command palette",
         "View",
         "Pin session",
         "Rename…",
@@ -533,8 +665,8 @@ describe("chat header session menu", () => {
         "Stop cloud workerWorker is restarting",
         "Advanced",
       ]);
-      expect(menu.querySelector("[slot='submenu']")).toBeNull();
-      select(menu, "open-command-palette");
+      expect(panel(menu).querySelector('[role="menu"]')).toBeNull();
+      await select(menu, "open-command-palette");
       expect(onOpenCommandPalette).toHaveBeenCalledOnce();
       await navigate("open-copy");
       expect(rootLabels(menu)).toEqual([
@@ -557,27 +689,23 @@ describe("chat header session menu", () => {
       ]);
       await navigate("back");
       await navigate("open-view");
-      expect(rootLabels(menu)).toEqual(["Back", "Reasoning", "Tool calls", "Keep commentary"]);
-      expect(menu.querySelector("[slot='submenu']")).toBeNull();
-      select(menu, "view:reasoning");
+      expect(rootLabels(menu)).toEqual(["Back", ...viewLabels]);
+      expect(panel(menu).querySelector('[role="menu"]')).toBeNull();
+      await select(menu, "view:reasoning");
       expect(onSettingsChange).toHaveBeenCalledWith({ chatShowThinking: false });
       await navigate("back");
       await navigate("open-assign-owner");
       expect(rootLabels(menu)).toEqual(["Back", "Me", "Research"]);
-      select(menu, "assign-owner:human:profile-ada");
+      await select(menu, "assign-owner:human:profile-ada");
       expect(onAction).toHaveBeenCalledWith({
         kind: "assign-owner",
         owner: { type: "human", id: "profile-ada" },
       });
-      menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
+      await openMenu(menu);
       await menu.updateComplete;
       expect(rootLabels(menu)).toEqual(initialLabels);
     } else {
-      expect(
-        Array.from(
-          item(menu, "View").querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
-        ).map(itemLabel),
-      ).toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
+      expect(submenuItems(item(menu, "View")).map(itemLabel)).toEqual(viewLabels);
     }
   });
 
@@ -612,14 +740,10 @@ describe("chat header session menu", () => {
     expect(desktop.textContent).not.toContain("Session sharing");
 
     const compact = await mountMenu({ compact: true, sharing });
-    select(compact, "compact:open-sharing");
+    await select(compact, "compact:open-sharing");
     await compact.updateComplete;
     expect(onOpen).toHaveBeenCalledOnce();
-    expect(
-      compact
-        .querySelector("wa-dropdown")
-        ?.classList.contains("chat-header-session-menu--compact-sharing"),
-    ).toBe(true);
+    expect(compact.querySelector(".chat-header-session-menu--compact-sharing") !== null).toBe(true);
     expect(rootLabels(compact)).toEqual([
       "Back",
       "Publish draft",
@@ -631,7 +755,7 @@ describe("chat header session menu", () => {
     expect(
       compact.querySelector(".chat-pane__publish-draft")?.classList.contains("session-menu__item"),
     ).toBe(true);
-    select(compact, "visibility:read-only");
+    await select(compact, "visibility:read-only");
     expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
   });
 
@@ -648,7 +772,7 @@ describe("chat header session menu", () => {
         forkFromLastCompleted: true,
         onAction,
       });
-      const dropdown = menu.querySelector("wa-dropdown");
+      const dropdown = panel(menu);
 
       expect(item(menu, "Rename…").disabled).toBe(true);
       expect(item(menu, "Archive session").disabled).toBe(true);
@@ -667,17 +791,22 @@ describe("chat header session menu", () => {
         "open-new-window",
       ] as const;
       for (const kind of navigationActions) {
-        select(menu, kind);
+        await select(menu, kind);
       }
       expect(onAction.mock.calls).toEqual(navigationActions.map((kind) => [{ kind }]));
       onAction.mockClear();
       const gatedActions = ["copy-markdown", "split-right", "split-below"] as const;
       for (const kind of gatedActions) {
-        select(menu, kind);
+        if (!allowed && kind !== "copy-markdown") {
+          expect(menu.querySelector(`[data-value="${kind}"]`)).toBeNull();
+        } else {
+          await select(menu, kind);
+        }
       }
       expect(onAction.mock.calls).toEqual(allowed ? gatedActions.map((kind) => [{ kind }]) : []);
       onAction.mockClear();
-      dropdown?.dispatchEvent(
+      await openMenu(menu);
+      dropdown.dispatchEvent(
         new KeyboardEvent("keydown", { key: "f", bubbles: true, cancelable: true }),
       );
       expect(onAction).toHaveBeenCalledWith({ kind: "fork" });
@@ -694,10 +823,9 @@ describe("chat header session menu", () => {
     const connected = await mountMenu({ onAction });
 
     expect(item(connected, "Continue in terminal…").disabled).toBe(false);
-    const dropdown = connected.querySelector("wa-dropdown") as HTMLElement & { open: boolean };
-    dropdown.open = true;
-    select(connected, "continue-in-terminal");
-    expect(dropdown.open).toBe(false);
+    const dropdown = panel(connected);
+    await select(connected, "continue-in-terminal");
+    expect(dropdown.matches(":popover-open")).toBe(false);
     expect(onAction).toHaveBeenCalledWith({ kind: "continue-in-terminal" });
 
     const disconnected = await mountMenu({
@@ -708,7 +836,7 @@ describe("chat header session menu", () => {
     expect(disabledAction.disabled).toBe(true);
     expect(disabledAction.getAttribute("title")).toBe("Gateway disconnected.");
     onAction.mockClear();
-    select(disconnected, "continue-in-terminal");
+    await select(disconnected, "continue-in-terminal");
     expect(onAction).not.toHaveBeenCalled();
   });
 });

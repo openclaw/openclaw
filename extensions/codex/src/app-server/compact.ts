@@ -39,6 +39,7 @@ import {
   failedCodexThreadBindingCompactionResult,
   skippedCodexNativeCompactionResult,
 } from "./compact-result.js";
+import type { CodexPluginConfig } from "./config-contracts.js";
 import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
 import { getCodexInferenceThreadQualification } from "./inference-routing.js";
 import { readCodexRuntimeModelId } from "./model-runtime.js";
@@ -68,7 +69,7 @@ import { resumeCodexAppServerThread } from "./thread-resume.js";
 const CODEX_NATIVE_COMPACTION_INTERRUPT_GRACE_MS = 30_000;
 type CodexAppServerCompactOptions = {
   bindingStore: CodexAppServerBindingStore;
-  pluginConfig?: unknown;
+  pluginConfig?: CodexPluginConfig;
   clientFactory?: CodexAppServerClientFactory;
   allowNonManualNativeRequest?: boolean;
   nativeCompactionRequest?: "required_preflight" | "after_context_engine";
@@ -160,9 +161,7 @@ export async function maybeCompactCodexAppServerSession(
     }
     using _ = { [Symbol.dispose]: resolvedBinding.release };
     const { binding: initialBinding, authority } = resolvedBinding;
-    const assertCurrent = () => {
-      authority.assertCurrent();
-    };
+    const assertCurrent = () => authority.assertCurrent();
     const withCurrent = async (write: () => void) => {
       await nativeExecutionGuard.assertCurrent();
       await authority.withCurrent(write);

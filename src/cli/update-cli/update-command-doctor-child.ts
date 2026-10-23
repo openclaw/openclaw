@@ -22,6 +22,7 @@ import {
   type SpawnResult,
 } from "../../process/exec.js";
 import { parseOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withUpdateCommandExecutorChild } from "./update-command-executor.js";
 import type { UpdateDoctorInput } from "./update-command-migrated-types.js";
@@ -172,10 +173,14 @@ export async function runUpdateDoctorProcess(
     return outcome.result;
   } finally {
     try {
-      // Doctor can migrate in another process, outside this parent's admission publication cells.
-      revokeSqliteDatabaseAdmissionsForPath(statePath);
+      // Doctor's foreign schema writes require cold admission, including retained parent handles.
+      await closeOpenClawStateDatabaseByPathAsync(statePath);
     } finally {
-      custody.close();
+      try {
+        revokeSqliteDatabaseAdmissionsForPath(statePath);
+      } finally {
+        custody.close();
+      }
     }
   }
 }

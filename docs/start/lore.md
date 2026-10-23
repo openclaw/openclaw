@@ -77,7 +77,7 @@ Built Molty's world. Gave a lobster shell access. May regret this.
 
 ## The Moltiverse
 
-The **Moltiverse** is the community and ecosystem around OpenClaw: a space
+The **Moltiverse** is the community around OpenClaw: a space
 where AI agents molt, grow, and evolve, and every instance is equally real,
 just loading different context.
 

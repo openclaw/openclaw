@@ -43,8 +43,7 @@ export type RuntimeToolSchemaQuarantineIdentity = {
 };
 
 // Remember submitted records before awaiting them, so recovery also joins a pending write.
-// Identity checks below keep a late clear reply from forgetting a newer same-key failure.
-const submittedQuarantines = new Map<string, symbol>();
+const submittedQuarantines = new Set<string>();
 
 export async function recordPersistedRuntimeToolSchemaQuarantine(
   quarantine: RuntimeToolSchemaQuarantine,
@@ -55,10 +54,7 @@ export async function recordPersistedRuntimeToolSchemaQuarantine(
     ...createRuntimeHealthRecordEnvelope(quarantine.failedAt),
     ...(quarantine.owner ? { owner: quarantine.owner } : {}),
   };
-  submittedQuarantines.set(
-    runtimeToolSchemaIdentityKey(record),
-    Symbol("runtime-tool-quarantine-submission"),
-  );
+  submittedQuarantines.add(runtimeToolSchemaIdentityKey(record));
   await quarantineStore.register(recordKey(record), record);
 }
 
@@ -73,27 +69,20 @@ export async function clearRecoveredPersistedRuntimeToolSchemaQuarantines(
   if (submittedQuarantines.size === 0) {
     return;
   }
-  const recoveredKeys = new Map(
-    listHealthyTools()
-      .map(runtimeToolSchemaIdentityKey)
-      .flatMap((key) => {
-        const submission = submittedQuarantines.get(key);
-        return submission ? [[key, submission] as const] : [];
-      }),
-  );
-  if (recoveredKeys.size === 0) {
+  const recoveredKeys = listHealthyTools()
+    .map(runtimeToolSchemaIdentityKey)
+    .filter((key) => submittedQuarantines.has(key));
+  if (recoveredKeys.length === 0) {
     return;
   }
   // The worker orders this diagnostic cleanup before later registrations.
   const cleared = await quarantineStore.clearForProcess(process.pid, {
     kind: "tool-schema",
-    keys: [...recoveredKeys.keys()],
+    keys: recoveredKeys,
   });
   if (cleared) {
-    for (const [key, submission] of recoveredKeys) {
-      if (submittedQuarantines.get(key) === submission) {
-        submittedQuarantines.delete(key);
-      }
+    for (const key of recoveredKeys) {
+      submittedQuarantines.delete(key);
     }
   }
 }

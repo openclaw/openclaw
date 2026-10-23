@@ -1,10 +1,9 @@
-// Public LINE entry proof keeps webhook admission and both question resolvers real.
 import { createHmac } from "node:crypto";
 import { createJiti } from "jiti";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { createMockIncomingRequest, createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as linePublicApi from "../extensions/line/api.js";
 import lineEntry from "../extensions/line/index.js";
 import {
@@ -54,10 +53,8 @@ vi.mock("../src/plugins/http-registry.js", async (importOriginal) => ({
   },
 }));
 
-// The existing entry test loader keeps the public plugin module in Vitest's graph,
-// so Gateway transport and store IO are intercepted. Seed the actual public runtime
-// store below; the unchanged broad bootstrap sidecar loader is outside this fixture.
-// No private plugin imports or production exports are added for this test.
+// Keep the public plugin in Vitest's graph to intercept Gateway/store IO;
+// seed its actual runtime store below rather than using the bootstrap sidecar.
 const createEntryLoader: typeof createJiti = (...loaderArgs) =>
   new Proxy(createJiti(...loaderArgs), {
     apply(target, thisArg, args) {
@@ -93,7 +90,6 @@ afterEach(() => {
 });
 
 type Scenario = {
-  name: string;
   paired: boolean;
   policy: "pairing" | "allowlist";
   lookup: "pending" | "terminal" | "failed";
@@ -101,117 +97,67 @@ type Scenario = {
   push: "success" | "server-error" | "transport-error";
   reply: "success" | "reject" | "partial";
   replyToken: string;
-  writes: number;
-  replies: number;
-  pushes: number;
-  pairings: number;
 };
-function scenario(name: string, overrides: Partial<Scenario> = {}): Scenario {
-  return {
-    name,
-    paired: true,
-    policy: "pairing",
-    lookup: "pending",
-    revoke: "none",
-    push: "success",
-    reply: "success",
-    replyToken: "reply-token",
-    writes: 1,
-    replies: 0,
-    pushes: 0,
-    pairings: 0,
-    ...overrides,
-  };
-}
+type Counts = readonly [writes: number, replies: number, pushes: number, pairings: number];
+type ScenarioRow = [name: string, overrides: Partial<Scenario>, counts: Counts];
 
-const scenarios = [
-  scenario("allowed pending answer"),
-  scenario("initially forbidden", { paired: false, policy: "allowlist", writes: 0 }),
-  scenario("initially unpaired follows pairing policy", {
-    paired: false,
-    writes: 0,
-    replies: 1,
-    pairings: 1,
-  }),
-  scenario("revoked during pending lookup", { revoke: "read", writes: 0 }),
-  scenario("revoked during terminal lookup", { lookup: "terminal", revoke: "read", writes: 0 }),
-  scenario("revoked during failed lookup", { lookup: "failed", revoke: "read", writes: 0 }),
-  scenario("allowed terminal notice", { lookup: "terminal", writes: 0, replies: 1 }),
-  scenario("allowed failed lookup notice", { lookup: "failed", writes: 0, replies: 1 }),
-  scenario("revoked during failed reply prevents push", {
-    lookup: "terminal",
-    revoke: "reply",
-    reply: "reject",
-    writes: 0,
-    replies: 1,
-  }),
-  scenario("allowed failed reply falls back to push", {
-    lookup: "terminal",
-    reply: "reject",
-    writes: 0,
-    replies: 1,
-    pushes: 1,
-  }),
-  scenario("partial reply never duplicates as push", {
-    lookup: "terminal",
-    reply: "partial",
-    writes: 0,
-    replies: 1,
-  }),
-  scenario("revoked terminal notice without reply token", {
-    lookup: "terminal",
-    revoke: "read",
-    replyToken: "",
-    writes: 0,
-  }),
-  ...(["server-error", "transport-error"] as const).flatMap((push) => [
-    scenario(`revoked after ${push} prevents push retry`, {
-      lookup: "terminal",
-      replyToken: "",
-      revoke: "push",
-      push,
-      writes: 0,
-      pushes: 1,
-    }),
-    scenario(`allowed ${push} retries under the same key`, {
-      lookup: "terminal",
-      replyToken: "",
-      push,
-      writes: 0,
-      pushes: 2,
-    }),
+const scenarios: ScenarioRow[] = [
+  ["allowed pending answer", { lookup: "pending" }, [1, 0, 0, 0]],
+  ["initially forbidden", { paired: false, policy: "allowlist" }, [0, 0, 0, 0]],
+  ["initially unpaired", { paired: false }, [0, 1, 0, 1]],
+  ...(["pending", "terminal", "failed"] as const).map<ScenarioRow>((lookup) => [
+    `revoked ${lookup} lookup`,
+    { lookup, revoke: "read" },
+    [0, 0, 0, 0],
   ]),
-  scenario("allowed terminal notice without reply token", {
-    lookup: "terminal",
-    replyToken: "",
-    writes: 0,
-    pushes: 1,
-  }),
+  ["allowed terminal notice", {}, [0, 1, 0, 0]],
+  ["failed lookup notice", { lookup: "failed" }, [0, 1, 0, 0]],
+  ["revoked failed reply prevents push", { revoke: "reply", reply: "reject" }, [0, 1, 0, 0]],
+  ["failed reply falls back to push", { reply: "reject" }, [0, 1, 1, 0]],
+  ["partial reply never pushes", { reply: "partial" }, [0, 1, 0, 0]],
+  ["revoked tokenless notice", { revoke: "read", replyToken: "" }, [0, 0, 0, 0]],
+  ...(["server-error", "transport-error"] as const).flatMap<ScenarioRow>((push) => [
+    [`revoked ${push} retry`, { replyToken: "", revoke: "push", push }, [0, 0, 1, 0]],
+    [`allowed ${push} retry`, { replyToken: "", push }, [0, 0, 2, 0]],
+  ]),
+  ["allowed tokenless notice", { replyToken: "" }, [0, 0, 1, 0]],
 ];
 
-describe("LINE public webhook question Gateway boundary", () => {
-  it.each(scenarios)("$name", async (testCase) => {
+it.each(scenarios)(
+  "LINE public webhook question Gateway boundary: %s",
+  async (name, overrides, counts) => {
+    const testCase: Scenario = {
+      paired: true,
+      policy: "pairing",
+      lookup: "terminal",
+      revoke: "none",
+      push: "success",
+      reply: "success",
+      replyToken: "reply-token",
+      ...overrides,
+    };
+    const [writes, replies, pushes, pairings] = counts;
+    const revoke = (stage: Scenario["revoke"]) => {
+      if (testCase.revoke === stage) {
+        boundary.paired = [];
+        boundary.trace.push("pairing:revoked");
+      }
+    };
     boundary.paired = testCase.paired ? [userId] : [];
     let questionStatus = testCase.lookup === "terminal" ? "answered" : "pending";
     boundary.callGateway.mockImplementation(async ({ method }) => {
       boundary.trace.push(method);
       if (method === "question.get") {
-        if (testCase.revoke === "read") {
-          boundary.paired = [];
-          boundary.trace.push("pairing:revoked");
-        }
+        revoke("read");
         if (testCase.lookup === "failed") {
           throw new Error("Fixture Gateway lookup failed");
         }
         return {
           question: {
-            id: questionId,
             status: questionStatus,
             questions: [
               {
                 questionId: "deploy_target",
-                header: "Target",
-                question: "Where should this deploy?",
                 options: [{ label: "Staging" }, { label: "Production" }],
               },
             ],
@@ -231,37 +177,36 @@ describe("LINE public webhook question Gateway boundary", () => {
       vi.fn<typeof fetch>(async (input, init) => {
         const url = new URL(input instanceof Request ? input.url : String(input));
         const method = init?.method ?? (input instanceof Request ? input.method : "GET");
-        const rejectUnexpectedIo = (reason: string): never => {
-          unexpectedProviderIo.push(`${method} ${url.origin}${url.pathname}: ${reason}`);
-          throw new Error(reason);
+        function requireIo(condition: unknown, reason: string): asserts condition {
+          if (!condition) {
+            unexpectedProviderIo.push(`${method} ${url.origin}${url.pathname}: ${reason}`);
+            throw new Error(reason);
+          }
+        }
+        requireIo(url.origin === "https://api.line.me", "Unexpected provider origin");
+        const startupResponses: Record<string, object> = {
+          "/v2/bot/info": { userId: "bot", displayName: "Fixture LINE" },
+          "/v2/bot/message/quota": { type: "none" },
+          "/v2/bot/channel/webhook/endpoint": {
+            endpoint: "https://example.test/line/webhook",
+            active: true,
+          },
         };
-        if (url.origin !== "https://api.line.me") {
-          return rejectUnexpectedIo("Unexpected provider origin");
+        if (method === "GET" && Object.hasOwn(startupResponses, url.pathname)) {
+          return Response.json(startupResponses[url.pathname]);
         }
-        if (method === "GET" && url.pathname === "/v2/bot/info") {
-          return Response.json({ userId: "bot", displayName: "Fixture LINE" });
-        }
-        if (method === "GET" && url.pathname === "/v2/bot/message/quota") {
-          return Response.json({ type: "none" });
-        }
-        if (method === "GET" && url.pathname === "/v2/bot/channel/webhook/endpoint") {
-          return Response.json({ endpoint: "https://example.test/line/webhook", active: true });
-        }
-        if (
-          method !== "POST" ||
-          (url.pathname !== "/v2/bot/message/reply" && url.pathname !== "/v2/bot/message/push")
-        ) {
-          return rejectUnexpectedIo("Unexpected LINE operation");
-        }
+        requireIo(
+          method === "POST" &&
+            ["/v2/bot/message/reply", "/v2/bot/message/push"].includes(url.pathname),
+          "Unexpected LINE operation",
+        );
         const operation = url.pathname === "/v2/bot/message/reply" ? "reply" : "push";
-        if (typeof init?.body !== "string") {
-          return rejectUnexpectedIo("Expected JSON string request body");
-        }
+        requireIo(typeof init?.body === "string", "Expected JSON string request body");
         let requestBody: unknown;
         try {
           requestBody = JSON.parse(init.body);
         } catch {
-          return rejectUnexpectedIo("Invalid JSON request body");
+          requireIo(false, "Invalid JSON request body");
         }
         providerCalls.push({
           operation,
@@ -274,48 +219,35 @@ describe("LINE public webhook question Gateway boundary", () => {
           testCase.push !== "success" &&
           providerCalls.filter((call) => call.operation === "push").length === 1
         ) {
-          if (testCase.revoke === "push") {
-            boundary.paired = [];
-            boundary.trace.push("pairing:revoked");
-          }
+          revoke("push");
           if (testCase.push === "transport-error") {
             throw Object.assign(new Error("Fixture socket reset"), { code: "ECONNRESET" });
           }
           return Response.json({ message: "Fixture server error" }, { status: 500 });
         }
-        if (operation === "reply" && testCase.revoke === "reply") {
-          boundary.paired = [];
-          boundary.trace.push("pairing:revoked");
-        }
-        if (operation === "reply" && testCase.reply === "reject") {
-          return Response.json({ message: "Invalid reply token" }, { status: 400 });
-        }
-        if (operation === "reply" && testCase.reply === "partial") {
-          return new Response("not-json", { status: 200 });
+        if (operation === "reply") {
+          revoke("reply");
+          if (testCase.reply === "reject") {
+            return Response.json({ message: "Invalid reply token" }, { status: 400 });
+          }
+          if (testCase.reply === "partial") {
+            return new Response("not-json", { status: 200 });
+          }
         }
         return Response.json({ sentMessages: [{ id: `message-${providerCalls.length}` }] });
       }),
     );
 
     const stateDir = tempDirs.make("openclaw-line-question-");
-    const queue = createChannelIngressQueueForTests({
-      channelId: "line",
-      accountId: "default",
-      stateDir,
-    });
-    const runtime = createPluginRuntimeMock();
-    runtime.state.openChannelIngressQueue = <
-      TPayload,
-      TMetadata = unknown,
-      TCompletedMetadata = unknown,
-    >(
-      options?: Parameters<PluginRuntime["state"]["openChannelIngressQueue"]>[0],
-    ) =>
-      createChannelIngressQueueForTests<TPayload, TMetadata, TCompletedMetadata>({
+    const openQueue: PluginRuntime["state"]["openChannelIngressQueue"] = (options) =>
+      createChannelIngressQueueForTests({
         ...options,
         channelId: "line",
         stateDir,
       });
+    const queue = openQueue({ accountId: "default" });
+    const runtime = createPluginRuntimeMock();
+    runtime.state.openChannelIngressQueue = openQueue;
     const runTurn = vi.fn(async () => {
       throw new Error("Question taps must not start an agent turn");
     });
@@ -335,20 +267,13 @@ describe("LINE public webhook question Gateway boundary", () => {
     };
     const account = linePublicApi.linePlugin.config.resolveAccount(cfg, "default");
     const abort = new AbortController();
-    const runtimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: () => {
-        throw new Error("Unexpected runtime exit");
-      },
-    };
     if (!plugin.gateway?.startAccount) {
       throw new Error("Expected the public LINE gateway adapter");
     }
     const registered = createDeferred<HttpRoute>();
     boundary.onRoute = registered.resolve;
     const monitor = plugin.gateway.startAccount(
-      createStartAccountContext({ account, cfg, runtime: runtimeEnv, abortSignal: abort.signal }),
+      createStartAccountContext({ account, cfg, abortSignal: abort.signal }),
     );
     try {
       const route = await Promise.race([
@@ -366,7 +291,7 @@ describe("LINE public webhook question Gateway boundary", () => {
             timestamp: Date.now(),
             source: { type: "user", userId },
             mode: "active",
-            webhookEventId: `question-${testCase.name}`,
+            webhookEventId: `question-${name}`,
             deliveryContext: { isRedelivery: false },
             postback: { data: `line.question=${questionId}&line.option=1` },
           },
@@ -397,11 +322,7 @@ describe("LINE public webhook question Gateway boundary", () => {
       const calls = boundary.callGateway.mock.calls.map(([request]) => request);
       expect(unexpectedProviderIo).toEqual([]);
       expect(calls.map((request) => request.method)).toEqual(
-        testCase.paired
-          ? testCase.writes
-            ? ["question.get", "question.resolve"]
-            : ["question.get"]
-          : [],
+        testCase.paired ? (writes ? ["question.get", "question.resolve"] : ["question.get"]) : [],
       );
       for (const request of providerCalls) {
         expect(request.body).toMatchObject({
@@ -409,50 +330,34 @@ describe("LINE public webhook question Gateway boundary", () => {
           messages: [{ type: "text", text: expect.any(String) }],
         });
       }
-      expect(calls.filter((request) => request.method === "question.resolve")).toHaveLength(
-        testCase.writes,
-      );
-      expect(providerCalls.filter((request) => request.operation === "reply")).toHaveLength(
-        testCase.replies,
-      );
-      expect(providerCalls.filter((request) => request.operation === "push")).toHaveLength(
-        testCase.pushes,
-      );
+      expect([
+        providerCalls.filter((request) => request.operation === "reply").length,
+        providerCalls.filter((request) => request.operation === "push").length,
+      ]).toEqual([replies, pushes]);
       const pushKeys = providerCalls
         .filter((request) => request.operation === "push")
         .map((request) => request.retryKey);
-      if (pushKeys.length) {
-        expect(pushKeys[0]).toEqual(expect.any(String));
-        expect(new Set(pushKeys).size).toBe(1);
-      }
-      expect(boundary.upsertPairing).toHaveBeenCalledTimes(testCase.pairings);
+      expect([...new Set(pushKeys)]).toEqual(pushes ? [expect.any(String)] : []);
+      expect(boundary.upsertPairing).toHaveBeenCalledTimes(pairings);
       expect(runTurn).not.toHaveBeenCalled();
-      if (testCase.writes) {
+      if (writes) {
         expect(questionStatus).toBe("answered");
         expect(calls.at(-1)?.params).toEqual({
           id: questionId,
           answers: { answers: { deploy_target: ["Production"] } },
           resolvedBy: userId,
         });
+      }
+      if (writes || testCase.revoke === "read") {
         expect(boundary.trace).toEqual([
           "store:allowed",
           "question.get",
-          "store:allowed",
-          "question.resolve",
+          ...(writes ? ["store:allowed", "question.resolve"] : ["pairing:revoked", "store:denied"]),
         ]);
-      } else if (testCase.revoke === "read") {
-        expect(boundary.trace).toEqual([
-          "store:allowed",
-          "question.get",
-          "pairing:revoked",
-          "store:denied",
-        ]);
-      } else if (!testCase.paired) {
-        expect(calls).toEqual([]);
       }
     } finally {
       abort.abort();
       await monitor;
     }
-  });
-});
+  },
+);

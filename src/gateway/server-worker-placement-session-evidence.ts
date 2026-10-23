@@ -48,6 +48,7 @@ function resolvePlacementSessionIdentities(
 
 export async function createWorkerPlacementSessionEvidenceResolver(
   placements: readonly WorkerSessionPlacementRecord[],
+  signal?: AbortSignal,
 ): Promise<PlacementSessionEvidenceResolver> {
   try {
     const cfg = getRuntimeConfig();
@@ -75,6 +76,7 @@ export async function createWorkerPlacementSessionEvidenceResolver(
         sessionId: identity.placement.sessionId,
         sessionKey: identity.sessionKey,
       })),
+      signal,
     );
     for (const [index, result] of evidence.entries()) {
       const placement = identities[index]?.placement;
@@ -96,6 +98,7 @@ export async function createWorkerPlacementSessionEvidenceResolver(
       return subject.evidence;
     };
   } catch (error) {
+    signal?.throwIfAborted();
     // "unknown" keeps retirement fail-open, but a silent catch would hide a broken
     // evidence pipeline (bad config, store corruption) behind indefinite retention.
     log.warn("worker placement session evidence resolution failed; treating all as unknown", {

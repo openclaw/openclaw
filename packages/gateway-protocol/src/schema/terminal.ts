@@ -4,7 +4,10 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { SessionCatalogLocatorSchema } from "./sessions-catalog.js";
+import {
+  SessionCatalogLocatorSchema,
+  SessionsCatalogStartTerminalResultSchema,
+} from "./sessions-catalog.js";
 import { withSince } from "./since.js";
 import {
   MAX_TERMINAL_UPLOAD_BASE64_LENGTH,
@@ -30,16 +33,10 @@ export const TerminalOpenParamsSchema = closedObject({
 });
 export type TerminalOpenParams = Static<typeof TerminalOpenParamsSchema>;
 
-export const TerminalOpenResultSchema = closedObject({
-  sessionId: NonEmptyString,
-  agentId: NonEmptyString,
-  shell: NonEmptyString,
-  cwd: NonEmptyString,
-  // True when the shell runs inside the agent's sandbox and cannot escape the
-  // workspace; false for a host shell that can navigate the whole filesystem.
-  confined: Type.Boolean(),
-  title: Type.Optional(NonEmptyString),
-});
+// `confined` is true for a sandboxed workspace shell and false for a host shell.
+export const TerminalOpenResultSchema = closedObject(
+  SessionsCatalogStartTerminalResultSchema.properties,
+);
 export type TerminalOpenResult = Static<typeof TerminalOpenResultSchema>;
 
 export const TerminalInputParamsSchema = closedObject({

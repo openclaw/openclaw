@@ -1,7 +1,3 @@
-/**
- * Amazon Bedrock Mantle discovery and bearer-token handling. It resolves
- * explicit tokens, IAM-generated tokens, model catalogs, and implicit provider config.
- */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -77,9 +73,6 @@ function mantleEndpoint(region: string): string {
 }
 
 /**
- * Resolve a bearer token for Mantle authentication.
- *
- * Returns the value of AWS_BEARER_TOKEN_BEDROCK if set, undefined otherwise.
  * When no explicit token is set, `resolveImplicitMantleProvider` will attempt
  * to generate one from IAM credentials via `@aws/bedrock-token-generator`.
  */
@@ -157,7 +150,6 @@ export async function generateBearerTokenFromIam(params: {
   }
 }
 
-/** Resolve the actual runtime bearer token for Mantle, generating IAM tokens when needed. */
 export async function resolveMantleRuntimeBearerToken(params: {
   apiKey: string;
   env?: NodeJS.ProcessEnv;
@@ -190,7 +182,6 @@ interface OpenAIModelsResponse {
   data: Array<{ id: string }>;
 }
 
-/** Model ID substrings that indicate reasoning/thinking support. */
 const REASONING_PATTERNS = [
   "thinking",
   "reasoner",

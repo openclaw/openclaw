@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { MessageChannel } from "node:worker_threads";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { requestCliParentTermination } from "../../cli-parent-lifetime.mjs";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { GATEWAY_OWNER_HEARTBEAT_MS } from "./gateway-lock-payload.js";
 import {
@@ -54,7 +55,12 @@ export function startGatewayStateOwnerHeartbeat(
     });
     worker.unref();
     // Parent expiration checks verify physical custody directly.
-    port1.on("message", () => recordWorkerMessage("lifecycle", "from_worker"));
+    port1.on("message", (message) => {
+      recordWorkerMessage("lifecycle", "from_worker");
+      if (message === "parent-lost") {
+        requestCliParentTermination();
+      }
+    });
     port1.unref();
     worker.on("error", (err) => onLost(new Error(`${coerceErrorMessage(err)}; restart Gateway.`)));
     const inspect = () => {

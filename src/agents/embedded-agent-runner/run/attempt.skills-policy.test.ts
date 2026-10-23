@@ -16,10 +16,6 @@ import {
 } from "../../cron-creator-authority-context.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { formatToolExecutionGatedMessage } from "../../tool-policy-shared.js";
-import type {
-  ToolSearchCatalogRef,
-  ToolSearchCatalogToolExecutor,
-} from "../../tool-search-types.js";
 import { createToolSearchTools } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { createInstalledSkillTools } from "../../tools/installed-skill-tools.js";
@@ -45,15 +41,11 @@ vi.mock("../../../skills/workshop/library.js", async (importOriginal) => ({
 }));
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
-const skillsPrompt = [
-  "<available_skills>",
-  "  <skill>",
-  "    <name>demo</name>",
-  "    <description>demo description</description>",
-  "    <location>/skills/demo/SKILL.md</location>",
-  "  </skill>",
-  "</available_skills>",
-].join("\n");
+const foregroundSession = { sessionId: "embedded-session", sessionKey: "agent:main:main" };
+const skillsPrompt =
+  "<available_skills><skill><name>demo</name>" +
+  "<description>demo description</description><location>/skills/demo/SKILL.md</location>" +
+  "</skill></available_skills>";
 beforeAll(preloadRunEmbeddedAttemptForTests);
 beforeEach(() => {
   resetEmbeddedAttemptHarness();
@@ -66,11 +58,7 @@ afterEach(async () => {
 
 function enableSkills() {
   const entry = createFixtureSkillEntry("demo");
-  hoisted.resolveEmbeddedRunSkillEntriesMock.mockReturnValue({
-    shouldLoadSkillEntries: true,
-    skillEntries: [entry],
-    loadSkillEntries: () => [entry],
-  });
+  hoisted.prepareWorkspaceSkillsMock.mockResolvedValue([entry]);
   hoisted.resolveSkillsPromptForRunMock.mockReturnValue(skillsPrompt);
 }
 
@@ -82,6 +70,14 @@ function tool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool {
     execute,
     parameters: Type.Object(name === "read" ? { path: Type.Optional(Type.String()) } : {}),
   };
+}
+const ok = () => ({ content: [{ type: "text" as const, text: "ok" }], details: undefined });
+const fulfilledText = (text: unknown) => ({ status: "fulfilled", value: { content: [{ text }] } });
+const promptInput = () => hoisted.embeddedSystemPromptInputs.at(-1);
+async function tempDir() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-policy-"));
+  tempPaths.push(dir);
+  return dir;
 }
 
 function sessionTools() {
@@ -97,11 +93,7 @@ function sessionTool(name: string) {
   return result;
 }
 
-function toolDigest(
-  tools: AnyAgentTool[],
-  systemPrompt: string,
-  session = { sessionId: "embedded-session", sessionKey: "agent:main:main" },
-) {
+function toolDigest(tools: AnyAgentTool[], systemPrompt: string, session = foregroundSession) {
   return beginPromptCacheObservation({
     messages: [],
     ...session,
@@ -113,23 +105,24 @@ function toolDigest(
   }).snapshot.toolDigest;
 }
 
-function run(
-  overrides: Omit<
-    Parameters<typeof createContextEngineAttemptRunner>[0],
-    "contextEngine" | "tempPaths"
-  >,
-) {
+type AttemptOptions = Parameters<typeof createContextEngineAttemptRunner>[0];
+function run({
+  sessionKey = "agent:main:main",
+  sessionPrompt,
+  ...attemptOverrides
+}: NonNullable<AttemptOptions["attemptOverrides"]> & Pick<AttemptOptions, "sessionPrompt">) {
   return createContextEngineAttemptRunner({
     contextEngine: createContextEngineBootstrapAndAssemble(),
     tempPaths,
-    ...overrides,
+    sessionKey,
+    sessionPrompt,
+    attemptOverrides,
   });
 }
 
 describe("runEmbeddedAttempt skill policy projections", () => {
   it("rebuilds skill prompt inputs from the sandbox workspace for non-rw sandbox runs", async () => {
-    const sandboxWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
-    tempPaths.push(sandboxWorkspace);
+    const sandboxWorkspace = await tempDir();
     hoisted.resolveSandboxContextMock.mockResolvedValue({
       enabled: true,
       workspaceAccess: "ro",
@@ -138,70 +131,38 @@ describe("runEmbeddedAttempt skill policy projections", () => {
 
     await run({
       sessionKey: "agent:main:guildchat:channel:test-ctx-engine",
-      attemptOverrides: {
-        skillsSnapshot: {
-          prompt:
-            "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
-          skills: [{ name: "smaug" }],
-          resolvedSkills: [
-            {
-              name: "smaug",
-              description: "Host copy",
-              disableModelInvocation: false,
-              filePath: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
-              baseDir: "/Users/alice/.openclaw/skills/smaug",
-              source: "openclaw-workspace",
-              sourceInfo: {
-                path: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
-                source: "openclaw-workspace",
-                scope: "project",
-                origin: "top-level",
-                baseDir: "/Users/alice/.openclaw/skills/smaug",
-              },
-            },
-          ],
-        },
+      skillsSnapshot: {
+        prompt:
+          "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
+        skills: [{ name: "smaug" }],
+        resolvedSkills: [createFixtureSkillEntry("smaug").skill],
       },
     });
 
-    expect(hoisted.resolveEmbeddedRunSkillEntriesMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ workspaceDir: sandboxWorkspace, skillsSnapshot: undefined }),
+    expect(hoisted.prepareWorkspaceSkillsMock).toHaveBeenCalledWith(
+      sandboxWorkspace,
+      expect.objectContaining({ workspaceOnly: true }),
+      expect.any(Function),
     );
-    expect(hoisted.resolveSkillsPromptForRunMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        workspaceDir: sandboxWorkspace,
-        skillsSnapshot: expect.objectContaining({
-          prompt: "",
-          skills: [],
-          resolvedSkills: [],
-          discoverySkills: [],
-        }),
-      }),
-    );
+    expect(hoisted.resolveSkillsPromptForRunMock.mock.calls[0]?.[0]).toMatchObject({
+      workspaceDir: sandboxWorkspace,
+      skillsSnapshot: {
+        prompt: "",
+        skills: [],
+        resolvedSkills: [],
+        discoverySkills: [],
+      },
+    });
   });
 
   it("preserves local operator tool schemas in the detached experience review", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-parity-"));
-    tempPaths.push(workspaceDir);
-    const foregroundPromptContext = {
-      agentId: "main",
-      agentDir: workspaceDir,
-      workspaceDir,
-      cwd: workspaceDir,
-      sandboxSessionKey: "agent:main:main",
-      promptCacheKey: "foreground-cache-prefix",
-      reasoningLevel: "on" as const,
-      trigger: "manual" as const,
-      cronCreatorCallerOrigin: { kind: "local" as const },
-    };
+    const workspaceDir = await tempDir();
     const capture = (runId: string | undefined) => {
       const toolNames = ["skill_workshop"];
       if (bindActiveOperatorTurnAuthority(runId)?.source === "local") {
         toolNames.push("transcripts");
       }
-      const tools = toolNames.map((name) =>
-        tool(name, async () => ({ content: [{ type: "text", text: "ok" }], details: undefined })),
-      );
+      const tools = toolNames.map((name) => tool(name, async () => ok()));
       return { toolNames, toolDigest: toolDigest(tools, `system:${toolNames.join(",")}`) };
     };
     const runId = "foreground-parity-run";
@@ -218,7 +179,14 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       [{ role: "user", content: "Inspect the available tools.", timestamp: 1 }],
       { workspaceDir, modelId: "gpt-test" },
     );
-    candidate.ctx.foregroundPromptContext = foregroundPromptContext;
+    candidate.ctx.foregroundPromptContext = {
+      ...candidate.ctx.foregroundPromptContext,
+      sandboxSessionKey: foregroundSession.sessionKey,
+      promptCacheKey: "foreground-cache-prefix",
+      reasoningLevel: "on",
+      trigger: "manual",
+      cronCreatorCallerOrigin: { kind: "local" },
+    };
     candidate.config = { skills: { workshop: { autonomous: { mode: "auto" } } } };
     await runSkillExperienceReview(candidate);
     expect(foreground.toolNames).toContain("transcripts");
@@ -226,20 +194,15 @@ describe("runEmbeddedAttempt skill policy projections", () => {
   });
 
   it("preserves tool schemas and source bytes while hiding unreadable draft-review skills", async () => {
-    const sessionRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-parity-"));
-    tempPaths.push(sessionRoot);
+    const sessionRoot = await tempDir();
     const transcriptFile = path.join(sessionRoot, "transcript.jsonl");
     const storeFile = path.join(sessionRoot, "sessions.json");
     const transcript = '{"type":"message","message":{"role":"user","content":"seed"}}\n';
     const store = '{"agent:main:main":{"sessionId":"embedded-session"}}\n';
     await fs.writeFile(transcriptFile, transcript);
     await fs.writeFile(storeFile, store);
-    const execute = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "ok" }],
-      details: undefined,
-    }));
+    const execute = vi.fn(async () => ok());
     const codingTools = ["skill_workshop", "message", "read"].map((name) => tool(name, execute));
-    const foreground = { sessionId: "embedded-session", sessionKey: "agent:main:main" };
     const reviewSession = resolveInternalSessionEffectsIdentity({
       agentId: "main",
       runId: "skill-workshop-review:prompt-parity",
@@ -250,7 +213,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       resetEmbeddedAttemptHarness();
       enableSkills();
       hoisted.createOpenClawCodingToolsMock.mockReturnValue(codingTools);
-      const session = review ? reviewSession : foreground;
+      const session = review ? reviewSession : foregroundSession;
       await run({
         sessionKey: session.sessionKey,
         sessionPrompt: async () => {
@@ -260,41 +223,32 @@ describe("runEmbeddedAttempt skill policy projections", () => {
             ]);
           }
         },
-        attemptOverrides: {
-          disableTools: false,
-          disableToolSearch: true,
-          disableMessageTool: false,
-          reasoningLevel: "on",
-          sessionId: session.sessionId,
-          sandboxSessionKey: foreground.sessionKey,
-          promptCacheKey: "foreground-cache-prefix",
-          sessionFile: transcriptFile,
-          sessionTarget: { agentId: "main", ...session, storePath: storeFile },
-          ...(review
-            ? {
-                sessionPersistence: "detached" as const,
-                toolExecutionAllow: ["skill_workshop"],
-                skillWorkshopReviewOf: "agent:main:main",
-                disableTrajectory: true,
-                verboseLevel: "off" as const,
-                trigger: "user" as const,
-              }
-            : {}),
-        },
+        disableTools: false,
+        disableToolSearch: true,
+        disableMessageTool: false,
+        reasoningLevel: "on",
+        sessionId: session.sessionId,
+        sandboxSessionKey: foregroundSession.sessionKey,
+        promptCacheKey: "foreground-cache-prefix",
+        sessionFile: transcriptFile,
+        sessionTarget: { agentId: "main", ...session, storePath: storeFile },
+        ...(review
+          ? {
+              sessionPersistence: "detached" as const,
+              toolExecutionAllow: ["skill_workshop"],
+              skillWorkshopReviewOf: "agent:main:main",
+              disableTrajectory: true,
+              verboseLevel: "off" as const,
+              trigger: "user" as const,
+            }
+          : {}),
       });
       expect(sessionTools().some((entry) => entry.name === "message")).toBe(true);
-      expect(hoisted.embeddedSystemPromptInputs.at(-1)).toMatchObject({
-        skillsPrompt: review ? "" : skillsPrompt,
-      });
+      expect(promptInput()).toMatchObject({ skillsPrompt: review ? "" : skillsPrompt });
       digests.push(toolDigest(sessionTools(), hoisted.systemPromptTexts.at(-1) ?? "", session));
     }
     expect(reviewReadOutcomes).toMatchObject([
-      {
-        status: "fulfilled",
-        value: {
-          content: [{ text: formatToolExecutionGatedMessage("read", ["skill_workshop"]) }],
-        },
-      },
+      fulfilledText(formatToolExecutionGatedMessage("read", ["skill_workshop"])),
     ]);
     expect(execute).not.toHaveBeenCalled();
     expect(digests[1]).toBe(digests[0]);
@@ -303,77 +257,57 @@ describe("runEmbeddedAttempt skill policy projections", () => {
   });
 
   it("keeps admitted Code Mode skill descriptions while enforcing execution restrictions", async () => {
-    const cases: Array<{
-      label: string;
-      toolsAllow?: string[];
-      toolExecutionAllow?: string[];
-      skillsPrompt?: string;
-      available: boolean;
-    }> = [
-      { label: "unrestricted", skillsPrompt, available: true },
-      { label: "wildcard", toolsAllow: ["*"], skillsPrompt, available: true },
-      { label: "mixed wildcard", toolsAllow: ["message", "*"], skillsPrompt, available: true },
-      { label: "finite", toolsAllow: ["message"], available: false },
-      {
-        label: "read executable",
-        toolExecutionAllow: ["skill_workshop", "read", "skills_read", "skills_search"],
+    type Policy = { toolsAllow?: string[]; toolExecutionAllow?: string[] };
+    const cases: Array<[string, Policy, string | undefined, boolean]> = [
+      ["unrestricted", {}, skillsPrompt, true],
+      ["wildcard", { toolsAllow: ["*"] }, skillsPrompt, true],
+      ["mixed wildcard", { toolsAllow: ["message", "*"] }, skillsPrompt, true],
+      ["finite", { toolsAllow: ["message"] }, undefined, false],
+      [
+        "read executable",
+        { toolExecutionAllow: ["skill_workshop", "read", "skills_read", "skills_search"] },
         skillsPrompt,
-        available: true,
-      },
-      {
-        label: "skill read denied",
-        toolExecutionAllow: ["read"],
-        skillsPrompt,
-        available: true,
-      },
-      {
-        label: "read denied",
-        toolExecutionAllow: ["skill_workshop"],
-        skillsPrompt: "",
-        available: false,
-      },
-      { label: "execution denied", toolExecutionAllow: [], skillsPrompt: "", available: false },
+        true,
+      ],
+      ["skill read denied", { toolExecutionAllow: ["read"] }, skillsPrompt, true],
+      ["read denied", { toolExecutionAllow: ["skill_workshop"] }, "", false],
+      ["execution denied", { toolExecutionAllow: [] }, "", false],
     ];
     let foregroundDescription: string | undefined;
     let restrictedListResult: unknown;
-    for (const testCase of cases) {
+    for (const [label, policy, expectedPrompt, available] of cases) {
       resetEmbeddedAttemptHarness();
       enableSkills();
       hoisted.createOpenClawCodingToolsMock.mockImplementation((options) =>
         createInstalledSkillTools(options?.installedSkills ?? []),
       );
       await run({
-        sessionKey: `agent:main:${testCase.label.replace(" ", "-")}`,
+        sessionKey: `agent:main:${label.replace(" ", "-")}`,
         sessionPrompt: async () => {
-          if (testCase.label === "skill read denied") {
+          if (label === "skill read denied") {
             restrictedListResult = await sessionTool("exec").execute("denied-skills", {
               title: "Check installed skill access",
               code: "return await skills.list();",
             });
           }
         },
-        attemptOverrides: {
-          disableTools: false,
-          toolsAllow: testCase.toolsAllow,
-          toolExecutionAllow: testCase.toolExecutionAllow,
-          config: { tools: { codeMode: true } },
-        },
+        disableTools: false,
+        ...policy,
+        config: { tools: { codeMode: true } },
       });
-      expect(hoisted.embeddedSystemPromptInputs.at(-1)).toMatchObject({
-        skillsPrompt: testCase.skillsPrompt,
-      });
+      expect(promptInput()).toMatchObject({ skillsPrompt: expectedPrompt });
       const description = sessionTool("exec").description;
       const guidance = {
         toolSchemaDirectoryPrompt: expect.stringContaining("await skills.list()"),
       };
-      if (testCase.available) {
-        expect(hoisted.embeddedSystemPromptInputs.at(-1)).toMatchObject(guidance);
+      if (available) {
+        expect(promptInput()).toMatchObject(guidance);
       } else {
-        expect(hoisted.embeddedSystemPromptInputs.at(-1)).not.toMatchObject(guidance);
+        expect(promptInput()).not.toMatchObject(guidance);
       }
-      if (testCase.label === "unrestricted") {
+      if (label === "unrestricted") {
         foregroundDescription = description;
-      } else if (testCase.label === "skill read denied") {
+      } else if (label === "skill read denied") {
         expect(description).toBe(foregroundDescription);
       }
     }
@@ -388,30 +322,24 @@ describe("runEmbeddedAttempt skill policy projections", () => {
   it("gates catalog-hidden tools during review while skill_workshop stays callable", async () => {
     const sessionManager = SessionManager.inMemory();
     const executed: string[] = [];
-    hoisted.createOpenClawCodingToolsMock.mockImplementation((...args: unknown[]) => {
-      const options = args[0] as {
-        config?: Parameters<typeof createToolSearchTools>[0]["config"];
-        toolSearchCatalogRef?: ToolSearchCatalogRef;
-        toolSearchCatalogExecutor?: ToolSearchCatalogToolExecutor;
-      };
+    hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => {
       return [
         ...createToolSearchTools({
-          config: options.config,
-          runtimeConfig: options.config,
-          catalogRef: options.toolSearchCatalogRef,
-          executeTool: options.toolSearchCatalogExecutor,
+          config: options?.config,
+          runtimeConfig: options?.config,
+          catalogRef: options?.toolSearchCatalogRef,
+          executeTool: options?.toolSearchCatalogExecutor,
         }),
         ...["skill_workshop", "read"].map((name) =>
           tool(name, async () => {
             executed.push(name);
-            return { content: [{ type: "text", text: "ok" }], details: undefined };
+            return ok();
           }),
         ),
       ];
     });
     let outcomes: PromiseSettledResult<unknown>[] = [];
     await run({
-      sessionKey: "agent:main:main",
       sessionPrompt: async () => {
         const toolCall = sessionTool("dispatch_action");
         outcomes = await Promise.allSettled([
@@ -419,18 +347,16 @@ describe("runEmbeddedAttempt skill policy projections", () => {
           toolCall.execute("call-workshop", { id: "skill_workshop" }),
         ]);
       },
-      attemptOverrides: {
-        config: { tools: { toolSearch: { enabled: true, mode: "tools" } } },
-        disableTools: false,
-        sessionManager,
-        sessionPersistence: "detached",
-        toolExecutionAllow: ["skill_workshop"],
-      },
+      config: { tools: { toolSearch: { enabled: true, mode: "tools" } } },
+      disableTools: false,
+      sessionManager,
+      sessionPersistence: "detached",
+      toolExecutionAllow: ["skill_workshop"],
     });
     expect(executed).toEqual(["skill_workshop"]);
     const denial = formatToolExecutionGatedMessage("read", ["skill_workshop"]);
     expect(outcomes).toMatchObject([
-      { status: "fulfilled", value: { content: [{ text: expect.stringContaining(denial) }] } },
+      fulfilledText(expect.stringContaining(denial)),
       { status: "fulfilled" },
     ]);
     const activities = sessionManager.getEntries().flatMap((entry) => {

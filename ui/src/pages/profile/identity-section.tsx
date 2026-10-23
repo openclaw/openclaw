@@ -13,7 +13,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import "../../components/viewer-facepile.ts";
+import "../../components/solid/viewer-facepile.tsx";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
@@ -25,6 +25,7 @@ export type IdentitySectionProps = {
   config?: ApplicationConfigCapability;
   profile: UserProfile;
   canWrite?: boolean;
+  connected: boolean;
   avatarUrl: string | null;
   displayName: string;
   gitCoauthorEnabled: boolean;
@@ -50,7 +51,7 @@ export function IdentitySection(props: IdentitySectionProps) {
         title={t("profilePage.identity.title")}
         description={t("profilePage.identity.description")}
       >
-        <Show when={!canWrite()}>
+        <Show when={!canWrite() && props.connected}>
           <SettingsRow title={t("profilePage.identity.writeRequired")} />
         </Show>
         <SettingsRow
@@ -189,14 +190,13 @@ export function IdentitySection(props: IdentitySectionProps) {
         <SettingsToggleRow
           title={t("profilePage.identity.gitCoauthor")}
           description={
+            // Publication selects its host independently of the displayed primary account.
             isOwnerProfile()
               ? t("profilePage.identity.ownerGitCoauthorDescription")
-              : props.profile.githubIdentity
-                ? t("profilePage.identity.gitCoauthorDescription")
-                : t("profilePage.identity.gitCoauthorUnavailable")
+              : t("profilePage.identity.gitCoauthorDescription")
           }
-          checked={Boolean(props.profile.githubIdentity && props.gitCoauthorEnabled)}
-          disabled={!canWrite() || props.busy !== null || !props.profile.githubIdentity}
+          checked={!isOwnerProfile() && props.gitCoauthorEnabled}
+          disabled={!canWrite() || props.busy !== null || isOwnerProfile()}
           onChange={props.onGitCoauthorChange}
         />
         <Show when={props.error}>

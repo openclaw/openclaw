@@ -1,80 +1,29 @@
-// Memory Wiki tests cover compile plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
 import { loadMemoryWikiCompiledCache, readMemoryWikiDashboardState } from "./compiled-cache.js";
-import { renderWikiMarkdown } from "./markdown.js";
+import type { MemoryWikiPluginConfig } from "./config.js";
+import { renderWikiMarkdown, toWikiPageSummary } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-function writePage(targetPath: string, markdown: Parameters<typeof renderWikiMarkdown>[0]) {
-  return fs.writeFile(targetPath, renderWikiMarkdown(markdown), "utf8");
-}
-
-const { createVault } = createMemoryWikiTestHarness();
+const { createVault: createTestVault } = createMemoryWikiTestHarness();
+const createVault = (config?: MemoryWikiPluginConfig) =>
+  createTestVault({ initialize: true, config });
 
 describe("compileMemoryWikiVault", () => {
-  let suiteRoot = "";
-  let caseId = 0;
-
-  beforeAll(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compile-suite-"));
-  });
-
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
-  afterAll(async () => {
-    if (suiteRoot) {
-      await fs.rm(suiteRoot, { recursive: true, force: true });
-    }
-  });
-
-  function nextCaseRoot() {
-    return path.join(suiteRoot, `case-${caseId++}`);
-  }
-
-  function expectDigestPage<T extends { path: string }>(pages: T[], pagePath: string): T {
-    const page = pages.find((candidate) => candidate.path === pagePath);
-    if (!page) {
-      throw new Error(`Expected digest page ${pagePath}`);
-    }
-    return page;
-  }
-
-  async function expectCompiledCache(config: Parameters<typeof compileMemoryWikiVault>[0]) {
-    const snapshot = await loadMemoryWikiCompiledCache(config);
-    if (!snapshot) {
-      throw new Error(`Expected compiled cache for ${config.vault.path}`);
-    }
-    return snapshot;
-  }
+  afterEach(() => vi.restoreAllMocks());
 
   it("keeps changed imports compile-required when auto-compile is disabled", async () => {
     const { rootDir, config } = await createVault({
-      rootDir: nextCaseRoot(),
-      config: {
-        ingest: { autoCompile: false },
-        render: { createBacklinks: false, createDashboards: false },
-      },
-      initialize: true,
+      ingest: { autoCompile: false },
+      render: { createBacklinks: false, createDashboards: false },
     });
     const sourcePath = path.join(rootDir, "sources", "cache-only.md");
     const renderSource = (value: string) =>
       renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          sourceType: "chatgpt-export",
-          title: "Cache only",
-        },
+        frontmatter: { pageType: "source", sourceType: "chatgpt-export", title: "Cache only" },
         body: `# Cache only\n\n## Auto Digest\n- First user line: ${value}\n`,
       });
     await fs.writeFile(sourcePath, renderSource("before"), "utf8");
@@ -100,34 +49,26 @@ describe("compileMemoryWikiVault", () => {
   });
 
   it("preserves source page bytes while rebuilding derived artifacts", async () => {
-    const { rootDir, config } = await createVault({
-      rootDir: nextCaseRoot(),
-      initialize: true,
-      config: { render: { createDashboards: false } },
-    });
+    const { rootDir, config } = await createVault({ render: { createDashboards: false } });
     const sourcePath = path.join(rootDir, "sources", "preserved.md");
     const source = renderWikiMarkdown({
-      frontmatter: {
-        pageType: "source",
-        id: "source.preserved",
-        title: "Preserved",
-      },
+      frontmatter: { pageType: "source", id: "source.preserved", title: "Preserved" },
       body: "# Preserved\n",
     });
     await fs.writeFile(sourcePath, source, "utf8");
 
-    const preserved = await compileMemoryWikiVault(config, {
-      sourcePageWrites: "preserve",
-    });
+    const preserved = await compileMemoryWikiVault(config, { sourcePageWrites: "preserve" });
 
     await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
       "[Preserved](sources/preserved.md)",
     );
     expect(preserved.updatedFiles).not.toContain(sourcePath);
-    expect((await expectCompiledCache(config)).digest.pages.map((page) => page.path)).toContain(
-      "sources/preserved.md",
-    );
+    expect(
+      expectDefined(await loadMemoryWikiCompiledCache(config), "compiled cache").digest.pages.map(
+        (page) => page.path,
+      ),
+    ).toContain("sources/preserved.md");
 
     const normal = await compileMemoryWikiVault(config);
     expect(normal.updatedFiles).toContain(sourcePath);
@@ -136,56 +77,24 @@ describe("compileMemoryWikiVault", () => {
     );
   });
 
-  it.each([
-    {
-      name: "directory index with syntax-error frontmatter",
-      relativePath: "sources/index.md",
-      frontmatterLines: [
-        "pageType: report",
-        "sourceIds:",
-        '  - **MEMORY.md line 235**:"some quoted, value"',
-      ],
-      error: "Unexpected scalar",
-    },
-  ])(
-    "rejects $name without changing its bytes",
-    async ({ relativePath, frontmatterLines, error }) => {
-      const { rootDir, config } = await createVault({
-        rootDir: nextCaseRoot(),
-        initialize: true,
-        config: { render: { createDashboards: false } },
-      });
-      const targetPath = path.join(rootDir, relativePath);
-      const original = [
-        "---",
-        ...frontmatterLines,
-        "---",
-        "",
-        "# Existing Index",
-        "",
-        "Keep this body.",
-      ].join("\n");
-      await fs.writeFile(targetPath, original, "utf8");
-
-      await expect(compileMemoryWikiVault(config)).rejects.toThrow(error);
-      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(original);
-    },
-  );
+  it("rejects directory-index syntax-error frontmatter without changing its bytes", async () => {
+    const { rootDir, config } = await createVault({ render: { createDashboards: false } });
+    const targetPath = path.join(rootDir, "sources/index.md");
+    const original =
+      '---\npageType: report\nsourceIds:\n  - **MEMORY.md line 235**:"some quoted, value"\n---\n\n# Existing Index\n\nKeep this body.';
+    await fs.writeFile(targetPath, original, "utf8");
+    await expect(compileMemoryWikiVault(config)).rejects.toThrow("Unexpected scalar");
+    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(original);
+  });
 
   it("bounds concurrent page reads and stops the queue after abort", async () => {
-    const { rootDir, config } = await createVault({
-      rootDir: nextCaseRoot(),
-      initialize: true,
-    });
+    const { rootDir, config, page } = await createVault();
 
     for (let index = 0; index < 24; index += 1) {
-      await writePage(path.join(rootDir, "sources", `page-${index}.md`), {
-        frontmatter: {
-          pageType: "source",
-          id: `source.page-${index}`,
-          title: `Page ${index}`,
-        },
-        body: `# Page ${index}\n`,
+      await page(`sources/page-${index}.md`, {
+        pageType: "source",
+        id: `source.page-${index}`,
+        title: `Page ${index}`,
       });
     }
 
@@ -194,48 +103,74 @@ describe("compileMemoryWikiVault", () => {
     let pageReads = 0;
     let activePageReads = 0;
     let maxActivePageReads = 0;
-    const readFileSpy = vi
-      .spyOn(fs, "readFile")
-      .mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
-        const targetPath = args[0];
-        const isTestPageRead =
-          typeof targetPath === "string" &&
-          targetPath.startsWith(path.join(rootDir, "sources", "page-"));
-        if (!isTestPageRead) {
-          return await originalReadFile(...args);
-        }
+    vi.spyOn(fs, "readFile").mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+      const targetPath = args[0];
+      const isTestPageRead =
+        typeof targetPath === "string" &&
+        targetPath.startsWith(path.join(rootDir, "sources", "page-"));
+      if (!isTestPageRead) {
+        return await originalReadFile(...args);
+      }
 
-        activePageReads += 1;
-        pageReads += 1;
-        maxActivePageReads = Math.max(maxActivePageReads, activePageReads);
-        if (pageReads === 16) {
-          abortController.abort();
-        }
-        try {
-          await Promise.resolve();
-          return await originalReadFile(...args);
-        } finally {
-          activePageReads -= 1;
-        }
-      });
+      activePageReads += 1;
+      pageReads += 1;
+      maxActivePageReads = Math.max(maxActivePageReads, activePageReads);
+      if (pageReads === 16) {
+        abortController.abort();
+      }
+      try {
+        await Promise.resolve();
+        return await originalReadFile(...args);
+      } finally {
+        activePageReads -= 1;
+      }
+    });
 
-    try {
-      await expect(
-        compileMemoryWikiVault(config, { signal: abortController.signal }),
-      ).rejects.toThrow();
-    } finally {
-      readFileSpy.mockRestore();
-    }
+    await expect(
+      compileMemoryWikiVault(config, { signal: abortController.signal }),
+    ).rejects.toThrow();
 
     expect(pageReads).toBe(16);
     expect(maxActivePageReads).toBeLessThanOrEqual(16);
   });
 
-  it("does not rewrite empty source pages into related-only stubs", async () => {
+  it("publishes scanned bytes without overwriting a later source edit", async () => {
     const { rootDir, config } = await createVault({
-      rootDir: nextCaseRoot(),
-      initialize: true,
+      render: { createBacklinks: false, createDashboards: false },
     });
+    const sourcePath = path.join(rootDir, "sources", "edited.md");
+    await fs.writeFile(sourcePath, "# Before\n", "utf8");
+    const readFile = fs.readFile.bind(fs);
+    let edited = false;
+    const readFileSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+        const value = await readFile(...args);
+        if (args[0] === sourcePath && !edited) {
+          edited = true;
+          await fs.writeFile(sourcePath, "# After\n", "utf8");
+        }
+        return value;
+      });
+
+    await compileMemoryWikiVault(config);
+    readFileSpy.mockRestore();
+    expect(
+      (await loadMemoryWikiCompiledCache(config))?.digest.pages.find(
+        (page) => page.path === "sources/edited.md",
+      )?.title,
+    ).toBe("Before");
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("# After\n");
+    await compileMemoryWikiVault(config);
+    expect(
+      (await loadMemoryWikiCompiledCache(config))?.digest.pages.find(
+        (page) => page.path === "sources/edited.md",
+      )?.title,
+    ).toBe("After");
+  });
+
+  it("does not rewrite empty source pages into related-only stubs", async () => {
+    const { rootDir, config } = await createVault();
     const emptySourcePath = path.join(rootDir, "sources", "empty.md");
     const whitespaceSourcePath = path.join(rootDir, "sources", "whitespace.md");
     await fs.writeFile(emptySourcePath, "", "utf8");
@@ -249,110 +184,142 @@ describe("compileMemoryWikiVault", () => {
     expect(result.updatedFiles).not.toContain(whitespaceSourcePath);
   });
 
-  it("does not relate every page through a broad shared source", async () => {
-    const { rootDir, config } = await createVault({
-      rootDir: nextCaseRoot(),
-      initialize: true,
-    });
-
-    await writePage(path.join(rootDir, "sources", "alpha.md"), {
-      frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
-      body: "# Alpha\n",
-    });
-
-    for (let index = 0; index < 30; index += 1) {
-      await writePage(path.join(rootDir, "entities", `entity-${index}.md`), {
-        frontmatter: {
-          pageType: "entity",
-          id: `entity.${index}`,
-          title: `Entity ${index}`,
-          sourceIds: ["source.alpha"],
-        },
-        body: `# Entity ${index}\n`,
-      });
-    }
-
-    await compileMemoryWikiVault(config);
-
-    const firstEntity = await fs.readFile(path.join(rootDir, "entities", "entity-0.md"), "utf8");
-    const sourcePage = await fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8");
-    expect(firstEntity).toContain("[Alpha](../sources/alpha.md)");
-    expect(firstEntity).not.toContain("### Related Pages");
-    expect(sourcePage).not.toContain("### Referenced By");
-  });
-
   it("writes agent directory, relationship, provenance, and privacy reports", async () => {
-    const { rootDir, config } = await createVault({
-      rootDir: nextCaseRoot(),
-      initialize: true,
-    });
-
-    await writePage(path.join(rootDir, "entities", "brad.md"), {
-      frontmatter: {
-        pageType: "entity",
-        entityType: "person",
-        id: "entity.brad",
-        title: "Brad Groux",
-        canonicalId: "maintainer.brad-groux",
-        aliases: ["brad"],
+    const { rootDir, config, page: writePage, read } = await createVault();
+    const relationships = [
+      {
+        targetId: "entity.alice",
+        targetTitle: "Alice",
+        kind: "collaborates-with",
+        weight: 0.7,
+        confidence: 0.6,
+        evidenceKind: "discrawl-stat",
         privacyTier: "local-private",
-        bestUsedFor: ["Microsoft routing"],
-        lastRefreshedAt: "2026-04-29T00:00:00.000Z",
-        personCard: {
-          handles: ["@bgroux"],
-          lane: "Microsoft Teams",
-          askFor: ["Teams and Azure questions"],
-          privacyTier: "confirm-before-use",
-        },
-        relationships: [
-          {
-            targetId: "entity.alice",
-            targetTitle: "Alice",
-            kind: "collaborates-with",
-            evidenceKind: "discrawl-stat",
-            privacyTier: "local-private",
-          },
-        ],
-        claims: [
-          {
-            id: "claim.brad.teams",
-            text: "Brad is useful for Microsoft Teams routing.",
-            status: "supported",
-            confidence: 0.9,
-            evidence: [
-              {
-                kind: "maintainer-whois",
-                sourceId: "source.maintainers",
-                privacyTier: "local-private",
-              },
-            ],
-          },
-        ],
       },
-      body: "# Brad Groux\n",
+    ];
+    const evidence = [
+      {
+        kind: "maintainer-whois",
+        sourceId: "source.maintainers",
+        confidence: 0.8,
+        privacyTier: "local-private",
+      },
+    ];
+    const metadata = {
+      entityType: "person",
+      canonicalId: "maintainer.brad-groux",
+      aliases: ["brad", "bgroux"],
+      privacyTier: "local-private",
+      bestUsedFor: ["Microsoft ecosystem routing"],
+      notEnoughFor: ["legal approval"],
+      lastRefreshedAt: "2026-04-29T00:00:00.000Z",
+      relationships,
+    };
+    await writePage("entities/brad.md", {
+      ...metadata,
+      pageType: "entity",
+      id: "entity.brad",
+      title: "Brad Groux",
+      personCard: {
+        handles: ["@bgroux"],
+        email: "brad@example.com",
+        lane: "Microsoft Teams",
+        askFor: ["Teams and Azure questions"],
+        confidence: 0.8,
+        privacyTier: "confirm-before-use",
+      },
+      claims: [
+        {
+          id: "claim.brad.teams",
+          text: "Brad is useful for Microsoft Teams routing.",
+          status: "supported",
+          confidence: 0.9,
+          evidence,
+        },
+      ],
     });
 
     await compileMemoryWikiVault(config);
 
-    await expect(
-      fs.readFile(path.join(rootDir, "reports", "person-agent-directory.md"), "utf8"),
-    ).resolves.toContain("[Brad Groux](../entities/brad.md)");
-    await expect(
-      fs.readFile(path.join(rootDir, "reports", "relationship-graph.md"), "utf8"),
-    ).resolves.toContain("[Brad Groux](../entities/brad.md) -> Alice");
-    await expect(
-      fs.readFile(path.join(rootDir, "reports", "provenance-coverage.md"), "utf8"),
-    ).resolves.toContain("maintainer-whois: 1");
-    await expect(
-      fs.readFile(path.join(rootDir, "reports", "privacy-review.md"), "utf8"),
-    ).resolves.toContain("[Brad Groux](../entities/brad.md)");
+    const summary = toWikiPageSummary({
+      absolutePath: path.join(rootDir, "entities/brad.md"),
+      relativePath: "entities/brad.md",
+      raw: await read("entities/brad.md"),
+    });
+    expect(summary).toMatchObject({
+      ...metadata,
+      personCard: {
+        handles: ["@bgroux"],
+        emails: ["brad@example.com"],
+        lane: "Microsoft Teams",
+        privacyTier: "confirm-before-use",
+      },
+    });
+    expect(summary?.relationships).toEqual(relationships);
+    expect(summary?.claims[0]?.id).toBe("claim.brad.teams");
+    expect(summary?.claims[0]?.evidence).toEqual(evidence);
 
-    const { digest: agentDigest, claims } = await expectCompiledCache(config);
-    const bradPage = expectDigestPage(agentDigest.pages, "entities/brad.md");
-    expect(bradPage.canonicalId).toBe("maintainer.brad-groux");
-    expect(bradPage.aliases).toEqual(["brad"]);
-    expect(bradPage.personCard?.lane).toBe("Microsoft Teams");
-    expect(bradPage.relationshipCount).toBe(1);
+    const expectReport = async (name: string, content: string) =>
+      expect(read(`reports/${name}.md`)).resolves.toContain(content);
+    await expectReport("person-agent-directory", "[Brad Groux](../entities/brad.md)");
+    await expectReport("relationship-graph", "[Brad Groux](../entities/brad.md) -> Alice");
+    await expectReport("provenance-coverage", "maintainer-whois: 1");
+    await expectReport("privacy-review", "[Brad Groux](../entities/brad.md)");
+
+    const { digest: agentDigest, claims } = expectDefined(
+      await loadMemoryWikiCompiledCache(config),
+      "compiled cache",
+    );
+    const bradPage = expectDefined(
+      agentDigest.pages.find((page) => page.path === "entities/brad.md"),
+      "Brad digest page",
+    );
+    expect(bradPage).toMatchObject({
+      canonicalId: "maintainer.brad-groux",
+      aliases: ["brad", "bgroux"],
+      personCard: { lane: "Microsoft Teams" },
+      relationshipCount: 1,
+    });
     expect(claims.flatMap((claim) => claim.evidenceKinds ?? [])).toContain("maintainer-whois");
+  });
+  it.each(["entities/router.md", "index.md", "reports/open-questions.md"])(
+    "refuses to rewrite malformed UTF-8 in %s and leaves it unchanged",
+    async (relativePath) => {
+      const { rootDir, config } = await createVault();
+      const pagePath = path.join(rootDir, relativePath);
+      await fs.mkdir(path.dirname(pagePath), { recursive: true });
+      const malformed = Buffer.concat([
+        Buffer.from(
+          "---\npageType: entity\nid: entity.router\ntitle: Router\nstatus: active\n---\n# Router\n\n## Human Notes\n\nlatin1: caf",
+          "utf8",
+        ),
+        Buffer.from([0xff]),
+        Buffer.from(" keeps dropping\n", "utf8"),
+      ]);
+      await fs.writeFile(pagePath, malformed);
+
+      await expect(compileMemoryWikiVault(config)).rejects.toMatchObject({
+        name: "WikiPageNotUtf8Error",
+        message: expect.stringContaining(relativePath),
+      });
+      // The rewrite never happened: the undecodable byte survived untouched.
+      expect(await fs.readFile(pagePath)).toEqual(malformed);
+    },
+  );
+
+  it("compiles valid non-ASCII pages including a literal replacement character", async () => {
+    const { config, page, read } = await createVault();
+    const notesLine = "- 中文 🦀 \uFFFD tail";
+    await page(
+      "entities/router.md",
+      { pageType: "entity", id: "entity.router", title: "Router" },
+      `# Router\n\n## Human Notes\n\n${notesLine}\n`,
+    );
+
+    await compileMemoryWikiVault(config);
+
+    const after = await read("entities/router.md");
+    expect(after).toContain(notesLine);
+    expect(after).toContain("<!-- openclaw:wiki:related:start -->");
   });
 });

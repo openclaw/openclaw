@@ -1,5 +1,4 @@
 import type {
-  EnvironmentsListResult,
   WorkerMachineOption,
   WorkerOperatingSystem,
 } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
@@ -18,6 +17,12 @@ import {
   type DraftCloudProfile,
   type DraftEnvironment,
 } from "./discovery.ts";
+import type { DraftGatewayState } from "./draft-gateway-state.ts";
+import type { DraftPlaceState } from "./draft-place-state.ts";
+import {
+  environmentDeviceDisabledReason,
+  environmentPlacementRuntime,
+} from "./hosted-environments.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -33,6 +38,27 @@ type WhereChipState = Readonly<{
   autoDeviceDisabledReason?: string;
   hostedRuntimeId?: string;
 }>;
+
+export function draftWhereChipParams(
+  place: DraftPlaceState,
+  gateway: DraftGatewayState,
+  cloudProfiles = place.isAdmin() ? gateway.cloudProfiles : [],
+) {
+  return {
+    hostedEnvironment: place.hostedEnvironment
+      ? { ...place.hostedEnvironment, id: place.modelControl.resolveAgentRuntime()!.id }
+      : undefined,
+    environments: place.canWrite() ? gateway.environments : [],
+    cloudProfiles,
+    cloudProfileId: place.cloudProfileId,
+    ...place.cloudSelection,
+    deviceId: place.deviceId,
+    autoDevice: place.autoDevice,
+    devicePlacement: environmentPlacementRuntime(place.modelControl)?.devicePlacement,
+    deviceDisabledReason:
+      environmentDeviceDisabledReason(place.modelControl) ?? gateway.deviceCatalogDisabledReason,
+  };
+}
 
 export function resolveWhereChip(params: {
   hostedEnvironment?: { id: string; label: string };
@@ -102,46 +128,3 @@ export function resolveWhereChip(params: {
       : t(params.autoDevice ? "newSession.autoDevice" : "newSession.local"),
   };
 }
-
-export type WhereChipOptions = {
-  hostedEnvironments?: readonly {
-    id: string;
-    label: string;
-    disabledReason?: string;
-    model?: string;
-  }[];
-  onSelectHostedEnvironment?: (id: string) => void;
-  hostDisabledReason?: string;
-  hostedLoading?: boolean;
-  autoPlacementMode?: "least-busy" | "eligible-order";
-  state: WhereChipState;
-  gatewayName: string;
-  environmentQuery: string;
-  onEnvironmentQueryInput: (query: string) => void;
-  cloudProfileId: string;
-  machineClass?: string;
-  os?: string;
-  deviceId: string;
-  autoDevice?: boolean;
-  cloudDisabledReason?: string;
-  cloudProfileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
-  submitting: boolean;
-  pendingPlacement: boolean;
-  popoverOpen: boolean;
-  popoverHiding: boolean;
-  isAdmin: boolean;
-  catalogLoading?: boolean;
-  onGuardTransition: (event: MouseEvent) => void;
-  onPopoverShow: () => void;
-  onPopoverHide: () => void;
-  onPopoverAfterHide: () => void;
-  onSelectDevice: (deviceId: string) => void;
-  onSelectAutoDevice: () => void;
-  onSelectCloudProfile: (profileId: string, useDefaults?: boolean) => void;
-  suggestedProfile?: EnvironmentsListResult["suggestedProfile"];
-  onAdoptSuggestedProfile?: () => void;
-  onSelectCloudOs?: (osId: string) => void;
-  onSelectCloudMachine?: (machineId: string) => void;
-  onConnectMachine: () => void;
-  onManageCloudWorkers: () => void;
-};

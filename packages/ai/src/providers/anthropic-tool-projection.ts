@@ -2,7 +2,7 @@ import type { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/messages
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AnthropicOptions } from "../provider-options.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
-import { SCHEMA_MAP_KEYS } from "./schema-walk.js";
+import { SCHEMA_ARRAY_KEYS, SCHEMA_MAP_KEYS, SCHEMA_OBJECT_KEYS } from "./schema-walk.js";
 import { inheritToolSchemaTruncation } from "./tool-schema-depth.js";
 import {
   getPublishedRuntimeToolInputSchema,
@@ -93,21 +93,6 @@ function isProviderSupportedViolation(violation: string): boolean {
   return violation.endsWith(".$dynamicRef") || violation.endsWith(".$dynamicAnchor");
 }
 
-const schemaValueKeywords = new Set([
-  "additionalProperties",
-  "contains",
-  "contentSchema",
-  "else",
-  "if",
-  "items",
-  "not",
-  "propertyNames",
-  "then",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-]);
-const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
-
 /** Normalize the detached JSON projection and report tuple changes to enclosing schemas. */
 function normalizeAnthropicJsonSchema(schema: unknown): boolean {
   if (!isRecord(schema)) {
@@ -116,11 +101,11 @@ function normalizeAnthropicJsonSchema(schema: unknown): boolean {
 
   let changed = false;
   for (const [key, value] of Object.entries(schema)) {
-    if (schemaValueKeywords.has(key) && !Array.isArray(value)) {
+    if (key !== "additionalItems" && SCHEMA_OBJECT_KEYS.has(key) && !Array.isArray(value)) {
       changed = normalizeAnthropicJsonSchema(value) || changed;
       continue;
     }
-    if (schemaArrayKeywords.has(key) && Array.isArray(value)) {
+    if (key !== "items" && SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
       for (const entry of value) {
         changed = normalizeAnthropicJsonSchema(entry) || changed;
       }
@@ -212,51 +197,35 @@ export function projectAnthropicTools(
   const originalNameByWireName = new Map<string, string>();
   const unavailableOriginalNames = new Set<string>();
   for (const tool of tools) {
-    let projectedTool: AnthropicProjectedTool;
-    let originalName: string | undefined;
-    try {
-      const name = tool.name;
-      originalName = name;
-      if (!name) {
-        continue;
-      }
-      const schemaProjection = projectRuntimeToolInputSchema(
-        tool.parameters,
-        `${name}.parameters`,
-        name,
-      );
-      if (
-        !isRecord(schemaProjection.schema) ||
-        schemaProjection.violations.some((violation) => !isProviderSupportedViolation(violation))
-      ) {
-        unavailableOriginalNames.add(name);
-        continue;
-      }
-      const inputSchema = prepareAnthropicInputSchema(schemaProjection.schema);
-      if (!inputSchema) {
-        unavailableOriginalNames.add(name);
-        continue;
-      }
-      let description: string | undefined;
-      try {
-        description = typeof tool.description === "string" ? tool.description : undefined;
-      } catch {
-        // Description is optional; keep the usable tool schema.
-      }
-      const wireName = toWireName(name);
-      projectedTool = {
-        originalName: name,
-        wireName,
-        ...(description ? { description } : {}),
-        inputSchema,
-      };
-    } catch {
-      // Direct/custom tool arrays can bypass the runtime quarantine.
-      if (originalName) {
-        unavailableOriginalNames.add(originalName);
-      }
+    const name = tool.name;
+    if (!name) {
       continue;
     }
+    const schemaProjection = projectRuntimeToolInputSchema(
+      tool.parameters,
+      `${name}.parameters`,
+      name,
+    );
+    if (
+      !isRecord(schemaProjection.schema) ||
+      schemaProjection.violations.some((violation) => !isProviderSupportedViolation(violation))
+    ) {
+      unavailableOriginalNames.add(name);
+      continue;
+    }
+    const inputSchema = prepareAnthropicInputSchema(schemaProjection.schema);
+    if (!inputSchema) {
+      unavailableOriginalNames.add(name);
+      continue;
+    }
+    const descriptionValue = tool.description;
+    const description = typeof descriptionValue === "string" ? descriptionValue : undefined;
+    const projectedTool: AnthropicProjectedTool = {
+      originalName: name,
+      wireName: toWireName(name),
+      ...(description ? { description } : {}),
+      inputSchema,
+    };
     const conflictingName = originalNameByWireName.get(projectedTool.wireName);
     if (conflictingName !== undefined && conflictingName !== projectedTool.originalName) {
       throw new Error(

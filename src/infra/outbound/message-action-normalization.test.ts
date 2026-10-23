@@ -1,5 +1,3 @@
-// Covers channel/target inference, legacy target rewrite, target validation,
-// and plugin alias-aware message-action normalization.
 import { describe, expect, it, vi } from "vitest";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 
@@ -17,146 +15,111 @@ vi.mock("../../utils/message-channel.js", async (importOriginal) => ({
 }));
 
 describe("normalizeMessageActionInput", () => {
-  type NormalizeMessageActionInputCase = {
-    input: Parameters<typeof normalizeMessageActionInput>[0];
-    expectedFields?: Record<string, unknown>;
-    absentFields?: string[];
+  const routedThreadContext = {
+    currentChannelProvider: "discord",
+    currentChatType: "channel" as const,
+    currentChannelId: "channel:parent",
+    currentMessagingTarget: "channel:thread",
+    currentMessageId: "thread",
   };
 
-  it.each([
-    {
-      input: {
-        action: "send",
-        args: {
-          target: "channel:C1",
-          to: "legacy",
-          channelId: "legacy-channel",
-        },
-      },
-      expectedFields: { target: "channel:C1", to: "channel:C1" },
-      absentFields: ["channelId"],
+  it.each(["read", "react", "edit", "delete"] as const)(
+    "keeps the native message conversation for an implicit %s",
+    (action) => {
+      expect(
+        normalizeMessageActionInput({
+          action,
+          args: { channel: "discord", messageId: "thread" },
+          toolContext: routedThreadContext,
+          targetAliasSpec: { aliases: ["messageId"], deliveryTargetAliases: [] },
+        }),
+      ).toMatchObject({ target: "channel:parent", to: "channel:parent", messageId: "thread" });
     },
-    {
-      input: {
-        action: "broadcast",
-        args: {},
-        toolContext: {
-          currentChannelId: "channel:C1",
-        },
-      },
-      absentFields: ["target", "to"],
-    },
-    {
-      input: {
+  );
+
+  type Input = Parameters<typeof normalizeMessageActionInput>[0];
+  it.each<[Input, Record<string, unknown>, string[]]>([
+    [
+      { action: "send", args: { target: "channel:C1", to: "legacy", channelId: "legacy-channel" } },
+      { target: "channel:C1", to: "channel:C1" },
+      ["channelId"],
+    ],
+    [
+      { action: "broadcast", args: {}, toolContext: { currentChannelId: "channel:C1" } },
+      {},
+      ["target", "to"],
+    ],
+    [
+      {
         action: "unsend",
-        args: {
-          channel: "imessage",
-          messageId: "msg_123",
-        },
+        args: { channel: "imessage", messageId: "msg_123" },
         toolContext: {
           currentChannelId: "chat_guid:iMessage;+;chat0000",
           currentChannelProvider: "imessage",
         },
       },
-      expectedFields: {
+      {
         target: "chat_guid:iMessage;+;chat0000",
         to: "chat_guid:iMessage;+;chat0000",
         messageId: "msg_123",
       },
-    },
-    {
-      input: {
-        action: "pin",
-        args: {
-          channel: "pinboard",
-          messageId: "om_123",
-        },
-      },
-      expectedFields: { messageId: "om_123" },
-      absentFields: ["target", "to"],
-    },
-    {
-      input: {
-        action: "poll-vote",
-        args: {
-          channel: "imessage",
-          chatId: 42,
-        },
-      },
-      expectedFields: { target: "chat_id:42", to: "chat_id:42", chatId: 42 },
-    },
-  ] satisfies NormalizeMessageActionInputCase[])(
-    "normalizes message action input for %j",
-    ({ input, expectedFields, absentFields }) => {
-      const normalized = normalizeMessageActionInput(input);
-      if (expectedFields) {
-        for (const [field, value] of Object.entries(expectedFields)) {
-          expect(normalized[field]).toBe(value);
-        }
-      }
-      for (const field of absentFields ?? []) {
-        expect(field in normalized).toBe(false);
-      }
-    },
-  );
-
-  it("does not inject heartbeat sender sentinel as inferred target", () => {
-    // The non-deliverable sender sentinel must not become @heartbeat.
-    expect(() =>
-      normalizeMessageActionInput({
+      [],
+    ],
+    [
+      { action: "pin", args: { channel: "pinboard", messageId: "om_123" } },
+      { messageId: "om_123" },
+      ["target", "to"],
+    ],
+    [
+      { action: "poll-vote", args: { channel: "imessage", chatId: 42 } },
+      { target: "chat_id:42", to: "chat_id:42", chatId: 42 },
+      [],
+    ],
+  ])("normalizes message action input for %j", (input, expected, absent) => {
+    const normalized = normalizeMessageActionInput(input);
+    expect(normalized).toEqual(expect.objectContaining(expected));
+    for (const field of absent) {
+      expect(field in normalized).toBe(false);
+    }
+  });
+  it.each<[string, Input]>([
+    [
+      "heartbeat sentinel",
+      {
         action: "send",
         args: {},
+        toolContext: { currentChannelId: "heartbeat", currentChannelProvider: "telegram" },
+      },
+    ],
+    [
+      "internal session",
+      {
+        action: "send",
+        args: { channel: "discord" },
         toolContext: {
-          currentChannelId: "heartbeat",
-          currentChannelProvider: "telegram",
+          currentChannelId: "channel:agent:main:subagent:worker",
+          currentChannelProvider: "discord",
         },
-      }),
-    ).toThrow(/requires a target/);
+      },
+    ],
+    [
+      "explicit empty targets",
+      {
+        action: "read",
+        args: { targets: [] },
+        toolContext: { currentChannelId: "C_CURRENT", currentChannelProvider: "workspace" },
+      },
+    ],
+    [
+      "resource without conversation",
+      {
+        action: "poll-vote",
+        args: { channel: "imessage", pollId: "poll_123" },
+      },
+    ],
+  ])("rejects %s as a target", (_name, input) => {
+    expect(() => normalizeMessageActionInput(input)).toThrow(/requires a target/);
   });
-
-  it.each(["channel:agent:main:subagent:worker"])(
-    "does not infer internal session %s as a message target",
-    (currentChannelId) => {
-      expect(() =>
-        normalizeMessageActionInput({
-          action: "send",
-          args: { channel: "discord" },
-          toolContext: {
-            currentChannelId,
-            currentChannelProvider: "discord",
-          },
-        }),
-      ).toThrow(/requires a target/);
-    },
-  );
-
-  it.each([{ name: "an empty targets array", targets: [] }])(
-    "does not replace $name with the current conversation",
-    ({ targets }) => {
-      expect(() =>
-        normalizeMessageActionInput({
-          action: "read",
-          args: { targets },
-          toolContext: {
-            currentChannelId: "C_CURRENT",
-            currentChannelProvider: "workspace",
-          },
-        }),
-      ).toThrow(/requires a target/);
-    },
-  );
-
-  it.each([{ action: "poll-vote" as const, args: { channel: "imessage", pollId: "poll_123" } }])(
-    "throws when $action has only a resource reference and no current target",
-    ({ action, args }) => {
-      expect(() =>
-        normalizeMessageActionInput({
-          action,
-          args,
-        }),
-      ).toThrow(/requires a target/);
-    },
-  );
 
   it("rejects conflicting canonical and plugin delivery targets", () => {
     expect(() =>

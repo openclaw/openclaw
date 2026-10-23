@@ -14,6 +14,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import {
   requiresAgentHarnessPluginSelection,
   resolveAgentHarnessOwnerPluginIds,
@@ -42,7 +43,9 @@ import {
   normalizeFastMode,
   normalizeReasoningLevel,
   normalizeThinkLevel,
+  normalizeTraceLevel,
   normalizeUsageDisplay,
+  normalizeVerboseLevel,
   resolveThinkingProfile,
 } from "../auto-reply/thinking.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
@@ -55,19 +58,13 @@ import { normalizeSessionToolOverrides } from "../config/sessions/session-tool-o
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
-import {
-  applyTraceOverride,
-  applyVerboseOverride,
-  parseTraceOverride,
-  parseVerboseOverride,
-} from "../sessions/level-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   isSessionAgentAttentionIconId,
@@ -92,7 +89,10 @@ import {
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
 import { validateSessionPatchAdmission } from "./sessions-patch-admission.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
-import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
+import {
+  applySessionsPatchDisplayMetadata,
+  isSessionIconColorOnlyPatch,
+} from "./sessions-patch-display-metadata.js";
 import { applySessionPatchLifecycleFlags } from "./sessions-patch-lifecycle-flags.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
@@ -109,7 +109,6 @@ type SessionPatchProjectionParams = {
   /** Trusted catalog runtime must own selection checks before the new row is persisted. */
   preparedAgentRuntime?: string;
   archivedBy?: SessionEntry["archivedBy"];
-  providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
   personalModelSelection?: UserModelAccountSelection;
@@ -144,18 +143,27 @@ export async function prepareSessionsPatchEntry(
     "model" in params.patch ||
     "agentRuntime" in params.patch ||
     "contextWindow" in params.patch;
+  const sessionAgentId = normalizeAgentId(
+    params.agentId ??
+      parseAgentSessionKey(params.storeKey)?.agentId ??
+      resolveDefaultAgentId(params.cfg),
+  );
   const acpMeta = needsRuntimeMetadata
     ? await readAcpSessionMetaForEntryAsync({
         sessionKey: params.storeKey,
-        agentId: normalizeAgentId(
-          params.agentId ??
-            parseAgentSessionKey(params.storeKey)?.agentId ??
-            resolveDefaultAgentId(params.cfg),
-        ),
+        agentId: sessionAgentId,
         entry: params.existingEntry,
       })
     : undefined;
-  const projection = projectSessionPatchSteps(params, acpMeta);
+  const pinnedProfile =
+    "model" in params.patch && params.existingEntry?.authProfileOverride?.trim();
+  const recordedProvider = pinnedProfile
+    ? await prepareAuthProfileProvider({
+        agentDir: resolveAgentDir(params.cfg, sessionAgentId),
+        profileId: pinnedProfile,
+      })
+    : undefined;
+  const projection = projectSessionPatchSteps(params, acpMeta, recordedProvider);
   const first = projection.next();
   if (first.done) {
     return { kind: "complete", result: first.value };
@@ -191,6 +199,7 @@ export async function projectSessionsPatchEntry(
 function* projectSessionPatchSteps(
   params: SessionPatchProjectionParams,
   acpMeta: SessionAcpMeta | undefined,
+  recordedProvider: { provider: string | undefined } | undefined,
 ): Generator<void, SessionPatchProjectionResult, ModelCatalogSnapshot | undefined> {
   const { cfg, storeKey, patch, creation } = params;
   const now = Date.now();
@@ -259,15 +268,16 @@ function* projectSessionPatchSteps(
       model,
       catalog: selected ? [selected] : catalog,
       agentRuntime,
+      configuredReasoning: logical?.configuredReasoning ?? logical?.reasoning,
     });
   }
 
   const existing =
     params.existingEntry && projectCanonicalSessionEntryShape({ ...params.existingEntry });
-  // A read acknowledgement is not session activity: ageing the row here would move a
-  // just-opened session to the top of recency order, so only the read state commits.
-  const unreadAckOnly = isSessionUnreadAckOnlyPatch(patch);
-  const nextUpdatedAt = unreadAckOnly
+  // A read acknowledgement or an icon/color change is not session activity: ageing the
+  // row here would move the session to the top of recency order, so only the patch commits.
+  const recencyNeutral = isSessionUnreadAckOnlyPatch(patch) || isSessionIconColorOnlyPatch(patch);
+  const nextUpdatedAt = recencyNeutral
     ? (existing?.updatedAt ?? now)
     : Math.max(existing?.updatedAt ?? 0, now);
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
@@ -444,24 +454,18 @@ function* projectSessionPatchSteps(
     }
   }
 
-  if ("verboseLevel" in patch) {
-    const parsed = parseVerboseOverride(patch.verboseLevel);
-    if (!parsed.ok) {
-      return invalid(parsed.error);
-    }
-    applyVerboseOverride(next, parsed.value);
-  }
-
-  if ("traceLevel" in patch) {
-    const parsed = parseTraceOverride(patch.traceLevel);
-    if (!parsed.ok) {
-      return invalid(parsed.error);
-    }
-    applyTraceOverride(next, parsed.value);
-  }
-
   // Explicit "off" values remain stored so session preferences override defaults.
   const preferenceError =
+    applyNormalizedPreference(
+      "verboseLevel",
+      normalizeVerboseLevel,
+      'invalid verboseLevel (use "on"|"off"|"full")',
+    ) ??
+    applyNormalizedPreference(
+      "traceLevel",
+      normalizeTraceLevel,
+      'invalid traceLevel (use "on"|"off"|"raw")',
+    ) ??
     applyNormalizedPreference(
       "reasoningLevel",
       normalizeReasoningLevel,
@@ -476,6 +480,11 @@ function* projectSessionPatchSteps(
       "elevatedLevel",
       normalizeElevatedLevel,
       'invalid elevatedLevel (use "on"|"off"|"ask"|"full")',
+    ) ??
+    applyNormalizedPreference(
+      "execHost",
+      (raw) => normalizeExecTarget(raw) ?? undefined,
+      'invalid execHost (use "auto"|"sandbox"|"gateway"|"node")',
     );
   if (preferenceError) {
     return invalid(preferenceError);
@@ -633,9 +642,7 @@ function* projectSessionPatchSteps(
         selection,
         explicitDefaultSelection: selection.isDefault,
         profileOverride: selection.profile,
-        ...(params.providerAuthMetadataSnapshot
-          ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
-          : {}),
+        recordedProvider,
         markLiveSwitchPending: statusModelPatch || raw !== null,
       });
       if (raw === null && !statusModelPatch) {

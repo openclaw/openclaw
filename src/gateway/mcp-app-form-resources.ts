@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ReadResourceResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { ReadResourceResultSchema } from "@modelcontextprotocol/core";
 import { z } from "zod";
 import type { QuestionResourceActionResult } from "../../packages/gateway-protocol/src/question-resource.js";
 import { captureAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
@@ -21,7 +21,6 @@ import {
   type McpAppFormOrigin,
   type McpFormResourceUpload,
 } from "../agents/mcp-ui-resource.js";
-import { readRetainedSessionEntryFacts } from "../config/sessions/session-entry-read-facts.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveMcpAppRequesterId, callMcpAppToolWithElicitation } from "./mcp-app-operations.js";
@@ -33,10 +32,7 @@ import {
 import { readArtifactBase64Payload } from "./server-methods/artifacts-base64.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
-import {
-  resolveLocalSessionWorkspaceRoot,
-  withSessionFileRoot,
-} from "./server-methods/sessions-files.js";
+import { withSessionFileRoot } from "./server-methods/sessions-files.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createWorkspaceUploadBatch } from "./server-methods/workspace-fs.js";
 import { captureGatewayClientUploadCommitGuard } from "./upload-policy.js";
@@ -264,34 +260,35 @@ export async function executeMcpAppFormResource(
     throw new Error("MCP form resource request limit reached");
   }
   form.operations += 1;
-  const caller = readGatewayRequestMutationAuthority(options);
-  const read = await retainSessionScopedRead(options, record.sessionKey, record.agentId);
-  const authorized = prepareQuestionAuthorization(
-    options,
-    observation,
-    record.id,
-    parsed.action === "upload" ? "mutate" : "read",
-  );
-  const assertCurrent = () => {
-    caller.assertCurrent();
-    options.sessionMutationAuthorization?.assertCurrent();
-    read?.assertCurrent();
-    owner.assertCurrent();
-    if (options.context.getRuntimeConfig().mcp?.apps?.enabled !== true) {
-      throw new Error("MCP App runtime is unavailable");
-    }
-    if (
-      manager.get(record.id) !== record ||
-      !observation.isCurrent() ||
-      record.status !== "pending" ||
-      resolveMcpAppRequesterId(options.client) !== form.origin.requesterId ||
-      owner.pending.get(record.id)?.record !== record
-    ) {
-      throw new Error("Question resource authority expired");
-    }
-  };
   form.activeOperations += 1;
+  let read: Awaited<ReturnType<typeof retainSessionScopedRead>>;
   try {
+    const caller = readGatewayRequestMutationAuthority(options);
+    read = await retainSessionScopedRead(options, record.sessionKey, record.agentId);
+    const authorized = prepareQuestionAuthorization(
+      options,
+      observation,
+      record.id,
+      parsed.action === "upload" ? "mutate" : "read",
+    );
+    const assertCurrent = () => {
+      caller.assertCurrent();
+      options.sessionMutationAuthorization?.assertCurrent();
+      read?.assertCurrent();
+      owner.assertCurrent();
+      if (options.context.getRuntimeConfig().mcp?.apps?.enabled !== true) {
+        throw new Error("MCP App runtime is unavailable");
+      }
+      if (
+        manager.get(record.id) !== record ||
+        !observation.isCurrent() ||
+        record.status !== "pending" ||
+        resolveMcpAppRequesterId(options.client) !== form.origin.requesterId ||
+        owner.pending.get(record.id)?.record !== record
+      ) {
+        throw new Error("Question resource authority expired");
+      }
+    };
     await withPreparedQuestionSessions(
       options,
       [authorized.target],
@@ -437,7 +434,6 @@ async function preview(
       assertPreparedPolicy();
     }
   };
-  assertExecutionCurrent();
   const result = await callMcpAppToolWithElicitation({
     options,
     origin,
@@ -499,7 +495,7 @@ export function createMcpAppWorkspaceUploadProvider(params: {
     withSessionFileRoot(
       params,
       request.options.context.getRuntimeConfig(),
-      async (loaded, assertSourceCurrent) => {
+      async (loaded, assertSourceCurrent, readEntry) => {
         const assertCurrent = () => {
           params.assertCurrent();
           assertSourceCurrent();
@@ -514,29 +510,11 @@ export function createMcpAppWorkspaceUploadProvider(params: {
               throw new Error("Form upload session generation changed");
             }
           }
-          if (
-            resolveLocalSessionWorkspaceRoot({
-              ...params,
-              source: {
-                entry: metadata
-                  ? metadata.readCurrent()
-                  : readRetainedSessionEntryFacts(
-                      {
-                        agentId: loaded.readSource?.agentId ?? params.agentId,
-                        path: loaded.readSource?.path ?? loaded.storePath,
-                      },
-                      {
-                        sessionKeys: [loaded.canonicalKey],
-                        projection: "exact",
-                        snapshotFields: [],
-                      },
-                    )?.entries.find((row) => row.sessionKey === loaded.canonicalKey)?.entry,
-                cfg: request.options.context.getRuntimeConfig(),
-              },
-            }) !== params.workspaceDir
-          ) {
+          const current = metadata ? metadata.readCurrent() : readEntry();
+          if (!current || current.execNode || loaded.root !== params.workspaceDir) {
             throw new Error("Form upload workspace authority changed");
           }
+          loaded.fileWorkspace?.assertCurrent(request.options.context.getRuntimeConfig(), current);
         };
         const files = request.files.map((file) => {
           if (

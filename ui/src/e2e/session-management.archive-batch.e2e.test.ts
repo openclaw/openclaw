@@ -1,19 +1,13 @@
-import { expect, it } from "vitest";
+import type { Locator } from "playwright";
+import { it, expect } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
-import {
-  activateSelfRemovingControl,
-  captureUiProof,
-  controlUiSessionPath,
-  createSessionManagementE2eSuite,
-  installMockGateway,
-  requireRecord,
-  sessionsListResponse,
-  waitForConfirmModal,
-} from "./session-management.test-support.ts";
+import * as ui from "./session-management.compact.test-support.ts";
+import * as support from "./session-management.test-support.ts";
 
-const suite = createSessionManagementE2eSuite();
+const suite = support.createSessionManagementE2eSuite();
+
 const rosterMatch = { includeGlobal: true };
 
 suite.define(() => {
@@ -22,142 +16,123 @@ suite.define(() => {
     "failed refresh",
     "Undo without restore events",
     "Undo with failed refresh",
-  ] as const)("reconciles batch archive acknowledgements with %s", async (scenario) => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-    const batchKeys = ["agent:main:batch-a", "agent:main:batch-b", "agent:main:batch-c"] as const;
-    const batchRows = [
-      sessionRow(batchKeys[0], "Batch A", baseTime - 1_000, {
-        pinned: true,
-        pinnedAt: baseTime - 1_000,
-      }),
-      sessionRow(batchKeys[1], "Batch B", baseTime - 2_000, {
-        hasActiveRun: true,
-        status: "running",
-      }),
-      sessionRow(batchKeys[2], "Batch C", baseTime - 3_000),
-    ];
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.patchMany"],
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", baseTime),
-          ...batchRows,
-        ]),
-      },
-      sessionArchiveFiltering: true,
-      sessionKey: "agent:main:main",
-    });
+  ] as const)("reconciles batch archive acknowledgements with %s", (scenario) =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const failedRefresh = scenario.includes("failed refresh");
+      const undo = scenario.startsWith("Undo");
 
-    try {
+      const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+      const batchKeys = ["agent:main:batch-a", "agent:main:batch-b", "agent:main:batch-c"] as const;
+      const batchRows = [
+        sessionRow(batchKeys[0], "Batch A", baseTime - 1_000, { pinned: true }),
+        sessionRow(batchKeys[1], "Batch B", baseTime - 2_000, {
+          hasActiveRun: true,
+          status: "running",
+        }),
+        sessionRow(batchKeys[2], "Batch C", baseTime - 3_000),
+      ];
+      const gateway = await ui.installSessionRows(
+        page,
+        [sessionRow("agent:main:main", "Main", baseTime), ...batchRows],
+        {
+          deferredMethods: ["sessions.patchMany"],
+          sessionArchiveFiltering: true,
+          sessionKey: "agent:main:main",
+        },
+      );
+
       await page.goto(`${suite.server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
-      const rowFor = (key: string) =>
-        sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      const rowFor = ui.sessionRows(sidebar);
+      const eachRow = async (check: (row: Locator) => Promise<unknown>, offset = 0) => {
+        for (const key of batchKeys.slice(offset)) {
+          await check(rowFor(key));
+        }
+      };
+      const sidebarError = page.locator("[data-sidebar-session-error]");
       const readPinnedSessionState = () =>
         evaluateControlUiContext(
           page,
           ({ sessions }, key) => {
-            const row = sessions.presentation.result?.sessions.find(
-              (session) => session.key === key,
-            );
-            return row
-              ? { archived: row.archived, pinned: row.pinned, pinnedAt: row.pinnedAt }
+            const found = sessions.presentation.result?.sessions.find((row) => row.key === key);
+            return found
+              ? { archived: found.archived, pinned: found.pinned, pinnedAt: found.pinnedAt }
               : null;
           },
           batchKeys[0],
         );
-      await rowFor(batchKeys[0]).waitFor({ state: "visible", timeout: 10_000 });
-      for (const key of batchKeys.slice(1)) {
-        await rowFor(key).waitFor({ state: "visible" });
-      }
-      expect(await readPinnedSessionState()).toEqual({
-        archived: false,
-        pinned: true,
-        pinnedAt: baseTime - 1_000,
+      const pinState = (archived: boolean, pinned = false) => ({
+        archived,
+        pinned,
+        pinnedAt: pinned ? baseTime - 1_000 : undefined,
       });
+      const failRefresh = async (message: string) => {
+        const error = { code: "UNAVAILABLE", message };
+        // Keep every roster reader unavailable, including the active chat's child roster.
+        await gateway.setMethodResponse("sessions.list", { __mockError: error });
+        await gateway.rejectDeferred("sessions.list", error);
+      };
+      await ui.visible(rowFor(batchKeys[0]), 10_000);
+      await eachRow((row) => ui.visible(row), 1);
+      expect(await readPinnedSessionState()).toEqual(pinState(false, true));
       // A legacy shared pin is not a personal navigation preference.
-      expect(
-        await rowFor(batchKeys[0])
-          .getByRole("button", { name: "Pin session", exact: true })
-          .count(),
-      ).toBe(1);
-      const listCountBeforeBatch = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      expect(await ui.button(rowFor(batchKeys[0]), "Pin session").count()).toBe(1);
+      const initialLists = await ui.requestCount(gateway, "sessions.list", rosterMatch);
 
-      for (const key of batchKeys) {
-        await rowFor(key).click({ modifiers: ["Alt"] });
-      }
+      await eachRow((row) => row.click({ modifiers: ["Alt"] }));
       await rowFor(batchKeys[0]).click({ button: "right" });
       const batchMenu = page.locator("openclaw-session-menu");
-      const archiveItem = batchMenu.getByRole("menuitem", {
-        name: `Archive ${batchKeys.length}`,
-      });
-      await archiveItem.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await archiveItem.isDisabled()).toBe(false);
-      expect(
-        await batchMenu.getByRole("menuitem", { name: `Delete ${batchKeys.length}…` }).isDisabled(),
-      ).toBe(true);
-      await captureUiProof(suite, page, "sidebar-multi-select-archive-menu.png");
+      const archiveItem = ui.menuItem(batchMenu, `Archive ${batchKeys.length}`, false);
+      await ui.visible(archiveItem, 10_000);
+      const deleteItem = ui.menuItem(batchMenu, `Delete ${batchKeys.length}…`, false);
+      expect([await archiveItem.isDisabled(), await deleteItem.isDisabled()]).toEqual([
+        false,
+        true,
+      ]);
+
       await page.keyboard.press("A");
-      let confirm = await waitForConfirmModal(page);
+      let confirm = await support.waitForConfirmModal(page);
       await confirm.getByText("This selection contains active work.", { exact: false }).waitFor();
-      await captureUiProof(suite, page, "sidebar-multi-select-archive-confirm.png");
+
       expect(await gateway.getRequests("sessions.patchMany")).toEqual([]);
       if (scenario === "refreshed") {
-        await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
-        for (const key of batchKeys) {
-          await rowFor(key).waitFor({ state: "visible" });
-        }
+        await ui.button(confirm, "Cancel").click();
+        await eachRow((row) => ui.visible(row));
         expect(await gateway.getRequests("sessions.patchMany")).toEqual([]);
         await rowFor(batchKeys[0]).click({ button: "right" });
-        await page
-          .locator("openclaw-session-menu")
-          .getByRole("menuitem", { name: "Archive 3" })
-          .click();
-        confirm = await waitForConfirmModal(page);
+        await ui.menuItem(page.locator("openclaw-session-menu"), "Archive 3", false).click();
+        confirm = await support.waitForConfirmModal(page);
       }
-      await confirm.getByRole("button", { name: "Archive 3", exact: true }).click();
+      await ui.button(confirm, "Archive 3").click();
 
       const patchMany = await gateway.waitForRequest("sessions.patchMany");
-      for (const key of batchKeys) {
-        await rowFor(key).waitFor({ state: "detached" });
-      }
+      await eachRow((row) => row.waitFor({ state: "detached" }));
       expect(await page.locator(".app-toast").count()).toBe(0);
       expect(await gateway.getRequests("sessions.patchMany")).toHaveLength(1);
-      await captureUiProof(suite, page, "sidebar-multi-select-archive-pending.png");
+
       if (scenario !== "refreshed") {
         await gateway.deferNext("sessions.list", rosterMatch);
       }
       await gateway.resolveDeferred("sessions.patchMany");
-      const patchManyParams = requireRecord(patchMany.params);
-      expect(patchManyParams.patch).toEqual({ archived: true });
-      expect(patchManyParams.targets).toEqual(
-        batchKeys.map((key) => ({
+      const patchManyParams = support.requireRecord(patchMany.params);
+      expect({ patch: patchManyParams.patch, targets: patchManyParams.targets }).toEqual({
+        patch: { archived: true },
+        targets: batchKeys.map((key) => ({
           key,
           agentId: "main",
           expectedSessionId: `session:${key}`,
         })),
-      );
-      expect(await gateway.getRequests("sessions.patch")).toEqual([]);
-      expect(await gateway.getRequests("sessions.abort")).toEqual([]);
-      expect(await gateway.getRequests("agent.wait")).toEqual([]);
+      });
+      await ui.expectNoRequests(gateway, "sessions.patch", "sessions.abort", "agent.wait");
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length, {
+        .poll(async () => await ui.requestCount(gateway, "sessions.list", rosterMatch), {
           timeout: 10_000,
         })
-        .toBe(listCountBeforeBatch + 1);
-      if (scenario === "failed refresh" || scenario === "Undo with failed refresh") {
-        const error = {
-          code: "UNAVAILABLE",
-          message: "Archive list refresh unavailable",
-        };
-        // All roster readers must stay unavailable, including the active chat's child roster.
-        await gateway.setMethodResponse("sessions.list", { __mockError: error });
-        await gateway.rejectDeferred("sessions.list", error);
+        .toBe(initialLists + 1);
+      if (failedRefresh) {
+        await failRefresh("Archive list refresh unavailable");
       } else if (scenario === "Undo without restore events") {
-        // These committed events arrive while the original rows are still held.
-        // Undo must retire their confirmation even if its own events are dropped.
+        // Eventless Undo must retire archive confirmations received while the rows were held.
         const archivedAt = Date.now();
         for (const row of batchRows) {
           await gateway.emitGatewayEvent("sessions.changed", {
@@ -174,97 +149,53 @@ suite.define(() => {
         await gateway.resolveDeferred("sessions.list");
       }
       const toast = page.locator(".app-toast");
-      await expect.poll(() => toast.textContent()).toContain("Archived 3 sessions");
-      if (scenario === "failed refresh" || scenario === "Undo with failed refresh") {
-        await captureUiProof(suite, page, "batch-archive-failed-readback.png");
-      }
-      for (const key of batchKeys) {
-        await expect.poll(() => rowFor(key).count()).toBe(0);
-      }
-      if (scenario === "failed refresh" || scenario === "Undo with failed refresh") {
-        await expect
-          .poll(() => page.locator("[data-sidebar-session-error]").textContent())
-          .toContain("Archive list refresh unavailable");
-        expect(await readPinnedSessionState()).toEqual({
-          archived: true,
-          pinned: false,
-          pinnedAt: undefined,
-        });
+      await ui.expectText(toast, "Archived 3 sessions");
+
+      await eachRow((row) => ui.expectCount(row, 0));
+      if (failedRefresh) {
+        await ui.expectText(sidebarError, "Archive list refresh unavailable");
+        expect(await readPinnedSessionState()).toEqual(pinState(true));
       } else {
-        await expect.poll(() => page.locator("[data-sidebar-session-error]").count()).toBe(0);
+        await ui.expectCount(sidebarError, 0);
       }
-      await captureUiProof(suite, page, "sidebar-multi-select-archive-settled.png");
+
       if (scenario === "refreshed") {
         await page.waitForTimeout(500);
-        expect((await gateway.getRequests("sessions.list", rosterMatch)).length).toBe(
-          listCountBeforeBatch + 1,
-        );
-      } else if (
-        scenario === "Undo without restore events" ||
-        scenario === "Undo with failed refresh"
-      ) {
-        const listCountBeforeUndo = (await gateway.getRequests("sessions.list", rosterMatch))
-          .length;
+        expect(await ui.requestCount(gateway, "sessions.list", rosterMatch)).toBe(initialLists + 1);
+      } else if (undo) {
+        const listCountBeforeUndo = await ui.requestCount(gateway, "sessions.list", rosterMatch);
         await gateway.deferNext("sessions.patchMany");
         await gateway.deferNext("sessions.list", rosterMatch);
-        await activateSelfRemovingControl(toast.getByRole("button", { name: "Undo", exact: true }));
-        const undo = await gateway.waitForRequest("sessions.patchMany", { after: 1 });
-        expect(requireRecord(undo.params)).toEqual({
+        await support.activateSelfRemovingControl(ui.button(toast, "Undo"));
+        const restored = await gateway.waitForRequest("sessions.patchMany", { after: 1 });
+        expect(support.requireRecord(restored.params)).toEqual({
           targets: patchManyParams.targets,
           patch: { archived: false },
         });
-        // Generated replies commit the canonical fixture without emitting session events.
-        // Sidebar Undo restores archive state, never re-pins shared session metadata.
+        // Eventless Undo restores archive state without re-pinning shared session metadata.
         await gateway.resolveDeferred("sessions.patchMany");
         expect(await gateway.getRequests("sessions.patchMany")).toHaveLength(2);
-        if (scenario === "Undo with failed refresh") {
-          expect(await readPinnedSessionState()).toEqual({
-            archived: false,
-            pinned: false,
-            pinnedAt: undefined,
-          });
+        if (failedRefresh) {
+          expect(await readPinnedSessionState()).toEqual(pinState(false));
         }
         await gateway.waitForRequest("sessions.list", {
           after: listCountBeforeUndo,
           match: rosterMatch,
         });
-        if (scenario === "Undo with failed refresh") {
-          const error = {
-            code: "UNAVAILABLE",
-            message: "Undo list refresh unavailable",
-          };
-          // All roster readers must stay unavailable, including the active chat's child roster.
-          await gateway.setMethodResponse("sessions.list", { __mockError: error });
-          await gateway.rejectDeferred("sessions.list", error);
-          await expect
-            .poll(() => page.locator("[data-sidebar-session-error]").textContent())
-            .toContain("Undo list refresh unavailable");
+        if (failedRefresh) {
+          await failRefresh("Undo list refresh unavailable");
+          await ui.expectText(sidebarError, "Undo list refresh unavailable");
         } else {
           await gateway.resolveDeferred("sessions.list");
         }
-        try {
-          for (const key of batchKeys) {
-            await expect.poll(() => rowFor(key).count()).toBe(1);
-          }
-          await expect.poll(readPinnedSessionState).toMatchObject({
-            archived: false,
-            pinned: false,
-            pinnedAt: undefined,
-          });
-          expect(
-            await rowFor(batchKeys[0])
-              .getByRole("button", { name: "Pin session", exact: true })
-              .count(),
-          ).toBe(1);
-          expect(await gateway.getRequests("sessions.patchMany")).toHaveLength(2);
-          expect(await gateway.getRequests("sessions.patch")).toEqual([]);
-          expect(new URL(page.url()).pathname).toBe(controlUiSessionPath("agent:main:main"));
-        } finally {
-          await captureUiProof(suite, page, "batch-archive-undo-without-events.png");
-        }
+
+        await eachRow((row) => ui.expectCount(row, 1));
+        await expect.poll(readPinnedSessionState).toMatchObject(pinState(false));
+        expect(await ui.button(rowFor(batchKeys[0]), "Pin session").count()).toBe(1);
+        expect(await gateway.getRequests("sessions.patchMany")).toHaveLength(2);
+        expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+        expect(new URL(page.url()).pathname).toBe(support.controlUiSessionPath("agent:main:main"));
       }
-    } finally {
-      await context.close();
-    }
-  });
+    }),
+  );
 });

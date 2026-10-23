@@ -23,11 +23,7 @@ import { loadAcpBindingRuntime, loadSessionBindingRuntime } from "./handler-runt
 import type { MatrixHandlerRuntimeConfig } from "./handler-types.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
-import {
-  isMatrixAudioContent,
-  resolveMatrixPreflightAudioTranscript,
-  matrixPreflightAudio,
-} from "./preflight-audio.js";
+import { isMatrixAudioContent, matrixPreflightAudio } from "./preflight-audio.js";
 import { createRoomHistoryTracker, type HistoryEntry } from "./room-history.js";
 import { resolveMatrixInboundRouteAsync } from "./route.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -44,7 +40,6 @@ export async function resolveMatrixIngressContent(config: {
   senderId: string;
   roomHistoryTracker: ReturnType<typeof createRoomHistoryTracker>;
   resolveThreadContext: ReturnType<typeof createMatrixEventContextResolver>;
-  commitInboundEventIfClaimed: () => Promise<void>;
 }) {
   const {
     handler,
@@ -58,7 +53,6 @@ export async function resolveMatrixIngressContent(config: {
     senderId,
     roomHistoryTracker,
     resolveThreadContext,
-    commitInboundEventIfClaimed,
   } = config;
   const {
     client,
@@ -87,7 +81,6 @@ export async function resolveMatrixIngressContent(config: {
     historyThreadId,
     discardReservedHistorySlot,
     markReservedHistorySlotConsumed,
-    commitInboundEventIfClaimedAndDiscardReserved,
     roomConfig,
     allowBotsMode,
     isConfiguredBotSender,
@@ -127,7 +120,7 @@ export async function resolveMatrixIngressContent(config: {
   const pendingHistoryPollText =
     !pendingHistoryText && isPollEvent && historyLimit > 0 ? (await getPollSnapshot())?.text : "";
   if (!mentionPrecheckText && !mediaUrl && !isPollEvent) {
-    await commitInboundEventIfClaimedAndDiscardReserved();
+    discardReservedHistorySlot();
     return undefined;
   }
 
@@ -220,15 +213,21 @@ export async function resolveMatrixIngressContent(config: {
   if (shouldRunMatrixAudioPreflight) {
     preflightMedia = await downloadMedia(preflightAudioMediaUrl);
     if (preflightMedia) {
-      preflightAudioTranscript = await resolveMatrixPreflightAudioTranscript({
-        mediaPath: preflightMedia.path,
-        mediaContentType: preflightMedia.contentType,
-        cfg,
-        accountId,
-        chatType: isDirectMessage ? "direct" : "channel",
-        originatingTo: `room:${roomId}`,
-        messageThreadId: thread.threadId,
-        sessionKey: _route.sessionKey,
+      preflightAudioTranscript = await matrixPreflightAudio.resolve({
+        request: {
+          ctx: {
+            media: [{ path: preflightMedia.path, contentType: preflightMedia.contentType }],
+            Provider: "matrix",
+            Surface: "matrix",
+            OriginatingChannel: "matrix",
+            OriginatingTo: `room:${roomId}`,
+            AccountId: accountId,
+            MessageThreadId: thread.threadId,
+            ChatType: isDirectMessage ? "direct" : "channel",
+            SessionKey: _route.sessionKey,
+          },
+          cfg,
+        },
       });
     }
   }
@@ -254,7 +253,7 @@ export async function resolveMatrixIngressContent(config: {
     logVerboseMessage(
       `matrix: drop configured bot sender=${senderId} (allowBots=mentions, missing mention, ${roomMatchMeta})`,
     );
-    await commitInboundEventIfClaimedAndDiscardReserved();
+    discardReservedHistorySlot();
     return undefined;
   }
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
@@ -283,7 +282,7 @@ export async function resolveMatrixIngressContent(config: {
       reason: "control command (unauthorized)",
       target: senderId,
     });
-    await commitInboundEventIfClaimedAndDiscardReserved();
+    discardReservedHistorySlot();
     return undefined;
   }
   const configuredRequireMention = isRoom
@@ -348,7 +347,6 @@ export async function resolveMatrixIngressContent(config: {
       }
     }
     logger.info("skipping room message", { roomId, reason: "no-mention" });
-    await commitInboundEventIfClaimed();
     return undefined;
   }
   if (preflightAudioTranscript) {
@@ -407,7 +405,7 @@ export async function resolveMatrixIngressContent(config: {
         : `${bodyText}\n${transcriptBody}`;
   }
   if (!bodyText) {
-    await commitInboundEventIfClaimedAndDiscardReserved();
+    discardReservedHistorySlot();
     return undefined;
   }
   const commandBodyText = hasControlCommandInMessage ? commandCheckText : bodyText;
@@ -419,14 +417,8 @@ export async function resolveMatrixIngressContent(config: {
       configuredBinding: _configuredBinding,
     });
     if (!ensured.ok) {
-      logInboundDrop({
-        log: logVerboseMessage,
-        channel: "matrix",
-        reason: "configured ACP binding unavailable",
-        target: _configuredBinding.spec.conversationId,
-      });
       discardReservedHistorySlot();
-      return undefined;
+      throw new Error(`Matrix configured ACP binding is unavailable: ${ensured.error}`);
     }
   }
   if (_runtimeBindingId) {
@@ -473,6 +465,7 @@ export async function resolveMatrixIngressContent(config: {
     shouldBypassMention,
     canDetectMention,
     commandAuthorized,
+    isControlCommand: allowTextCommands && hasControlCommandInMessage,
     inboundHistory,
     senderName,
     bodyText,

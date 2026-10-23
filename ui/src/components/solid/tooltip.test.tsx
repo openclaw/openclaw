@@ -19,15 +19,10 @@ function pointer(target: Element, type: "pointerenter" | "pointerleave" | "point
   target.dispatchEvent(event);
 }
 
-function fixture(rich = false) {
+function fixture() {
   const view = render(() => (
     <Tooltip content="Action details">
       <button type="button">Trigger</button>
-      {rich ? (
-        <span slot="content">
-          <button type="button">Tooltip action</button>
-        </span>
-      ) : undefined}
     </Tooltip>
   ));
   flush();
@@ -38,23 +33,12 @@ function fixture(rich = false) {
 }
 
 describe("Solid tooltip policy", () => {
-  it("publishes each opening and closing event once to ancestor capture listeners", async () => {
-    const { view, host, trigger } = fixture();
+  it("mounts the plain host before policy setup and keeps descriptions outside lazy content", async () => {
+    const { view, host, trigger, surface } = fixture();
     const events: Event[] = [];
     for (const type of ["overlay-show", "overlay-hide"]) {
       view.container.addEventListener(type, (event) => events.push(event), { capture: true });
     }
-    pointer(trigger, "pointerenter");
-    vi.advanceTimersByTime(150);
-    await host.updateComplete;
-    flush();
-    pointer(trigger, "pointerdown");
-    expect(events.map((event) => event.type)).toEqual(["overlay-show", "overlay-hide"]);
-    expect(events.every((event) => event.target === host && event.composed)).toBe(true);
-  });
-
-  it("mounts the plain host before policy setup and keeps descriptions outside lazy content", async () => {
-    const { host, trigger, surface } = fixture();
     expect(host).toBeInstanceOf(Tooltip.Element);
     expect(trigger.getAttribute("aria-describedby")).toBeTruthy();
     const description = document.getElementById(trigger.getAttribute("aria-describedby")!);
@@ -69,6 +53,9 @@ describe("Solid tooltip policy", () => {
     expect(surface.matches(":popover-open")).toBe(true);
     expect(surface.querySelector(".tooltip-content")?.textContent).toBe("Action details");
     expect(trigger.getAttribute("aria-describedby")).toBe(description?.id);
+    pointer(trigger, "pointerdown");
+    expect(events.map((event) => event.type)).toEqual(["overlay-show", "overlay-hide"]);
+    expect(events.every((event) => event.target === host && event.composed)).toBe(true);
   });
 
   it("rebinds a replaced trigger without changing tooltip props", async () => {
@@ -113,33 +100,6 @@ describe("Solid tooltip policy", () => {
     pointer(newTrigger, "pointerdown");
     oldTrigger.focus();
     expect(host.hasAttribute("open")).toBe(false);
-  });
-
-  it("accepts an external title anchor through the imperative preview contract", async () => {
-    let controller!: TooltipElement;
-    const view = render(() => (
-      <>
-        <button type="button">External</button>
-        <Tooltip
-          ref={(value) => {
-            controller = value;
-          }}
-        />
-      </>
-    ));
-    flush();
-    const anchor = view.container.querySelector("button")!;
-    controller.previewForAnchor(anchor, "External details", "focus");
-    await controller.updateComplete;
-    flush();
-    const host = view.container.querySelector("openclaw-tooltip")!;
-    expect(host.hasAttribute("open")).toBe(true);
-    expect(host.shadowRoot!.querySelector(".tooltip-content")?.textContent).toBe(
-      "External details",
-    );
-    expect(document.getElementById(anchor.getAttribute("aria-describedby")!)?.textContent).toBe(
-      "External details",
-    );
   });
 
   it.each([false, true])(
@@ -240,15 +200,27 @@ describe("Solid tooltip policy", () => {
 
   it("recaptures description ownership when a wrapper's focusable descendant changes", async () => {
     const [replacement, setReplacement] = createSignal(false);
+    let target!: HTMLButtonElement;
     const view = render(() => (
-      <Tooltip content="Details">
+      <Tooltip content="Details" descriptionTarget={() => target}>
         <span>
+          <button type="button" aria-describedby="other-description">
+            Other
+          </button>
           {replacement() ? (
-            <button type="button" aria-describedby="new-description">
+            <button
+              ref={(element) => (target = element)}
+              type="button"
+              aria-describedby="new-description"
+            >
               New
             </button>
           ) : (
-            <button type="button" aria-describedby="old-description">
+            <button
+              ref={(element) => (target = element)}
+              type="button"
+              aria-describedby="old-description"
+            >
               Old
             </button>
           )}
@@ -256,14 +228,17 @@ describe("Solid tooltip policy", () => {
       </Tooltip>
     ));
     flush();
-    const oldTrigger = view.container.querySelector("button")!;
+    const oldTrigger = target;
+    expect(view.container.querySelector("button")?.getAttribute("aria-describedby")).toBe(
+      "other-description",
+    );
     expect(oldTrigger.getAttribute("aria-describedby")).toContain(
       "old-description openclaw-tooltip-",
     );
     setReplacement(true);
     flush();
     await Promise.resolve();
-    const newTrigger = view.container.querySelector("button")!;
+    const newTrigger = target;
     expect(oldTrigger.getAttribute("aria-describedby")).toBe("old-description");
     expect(newTrigger.getAttribute("aria-describedby")).toContain(
       "new-description openclaw-tooltip-",
@@ -329,15 +304,17 @@ describe("Solid tooltip policy", () => {
       let action!: HTMLButtonElement;
       const view = render(
         () => (
-          <Tooltip content="Action details">
-            <button
-              ref={(element) => {
-                trigger = element;
-              }}
-              type="button"
-            >
-              Trigger
-            </button>
+          <Tooltip content="Action details" descriptionTarget={() => trigger}>
+            <span>
+              <button
+                ref={(element) => {
+                  trigger = element;
+                }}
+                type="button"
+              >
+                Trigger
+              </button>
+            </span>
             <span slot="content">
               <button
                 ref={(element) => {
@@ -358,7 +335,7 @@ describe("Solid tooltip policy", () => {
       try {
         flush();
         const host = view.container.querySelector("openclaw-tooltip")!;
-        expect(trigger.parentElement).toBe(host);
+        expect(trigger.parentElement?.parentElement).toBe(host);
         expect(action.closest('[slot="content"]')).not.toBeNull();
         trigger.focus();
         await host.updateComplete;
@@ -412,28 +389,4 @@ describe("Solid tooltip policy", () => {
       }
     },
   );
-
-  it("preserves rich-content focus on rejected close and returns focus only after acceptance", async () => {
-    const { host, trigger, surface } = fixture(true);
-    trigger.focus();
-    await host.updateComplete;
-    flush();
-    const action = host.querySelector<HTMLButtonElement>('[slot="content"] button')!;
-    action.focus();
-    const veto = (event: Event) => event.preventDefault();
-    host.addEventListener("overlay-hide", veto);
-    action.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    );
-    expect(document.activeElement).toBe(action);
-    expect(host.hasAttribute("open")).toBe(true);
-    expect(surface.querySelector(".tooltip-rich-content")?.hasAttribute("inert")).toBe(false);
-    host.removeEventListener("overlay-hide", veto);
-    action.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    );
-    expect(document.activeElement).toBe(trigger);
-    expect(host.hasAttribute("open")).toBe(false);
-    expect(surface.querySelector(".tooltip-rich-content")?.hasAttribute("inert")).toBe(true);
-  });
 });

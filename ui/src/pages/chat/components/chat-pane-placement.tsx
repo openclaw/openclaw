@@ -1,21 +1,29 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
-import "../../../components/elapsed-time.tsx";
 import { resolveCloudWorkerStopAction } from "../../../components/cloud-worker-stop.ts";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import {
   repositorySessionNeedsWorker,
   sessionPlacementRetry,
 } from "../../../components/session-placement-action.ts";
-import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
-import { Icon } from "../../../components/solid/icon.tsx";
+import { isCloudWorkerPlacementState } from "../../../components/session-row-badge-presentation.ts";
+import { Icon, type IconName } from "../../../components/solid/icon.tsx";
+import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
+import { registerSessionMachineEnglish } from "../../../i18n/locales/en-session-machine.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { resolveChatPaneWorkerPresentation } from "../chat-pane-placement.ts";
 
-export function ChatPanePlacement(props: {
+registerEnglishCatalog(registerSessionMachineEnglish);
+
+let nextPlacementId = 0;
+
+export type ChatPanePlacementProps = {
+  /** Native environment catalog label; never the session title. */
+  machineName?: string;
   session: GatewaySessionRow | undefined;
   placementStartupStatus?: Pick<ApplicationPlacementStartupStatus, "phase" | "targetKind"> | null;
   placementMoving?: boolean;
@@ -26,13 +34,15 @@ export function ChatPanePlacement(props: {
   onPlacementMove?: () => void;
   onPlacementReclaim?: () => void;
   onPlacementRecover?: () => void;
-}) {
-  const state = createMemo(() => {
+};
+
+export function createChatMachinePresentation(props: ChatPanePlacementProps) {
+  return createMemo(() => {
     const session = props.session;
     const placement = session?.placement;
-    const placementState = placement?.state;
+    const placementState = placement?.state ?? "local";
     const dispatchRequired = repositorySessionNeedsWorker(session);
-    if (!session || (!isCloudWorkerPlacementState(placementState) && !dispatchRequired)) {
+    if (!session) {
       return null;
     }
     const placementMove = session.placementMove;
@@ -94,7 +104,15 @@ export function ChatPanePlacement(props: {
       : dispatchRequired || placementState === "active" || hasFacts
         ? undefined
         : `${placementState}${age ? ` · ${age}` : ""}`;
+    const machineIcon: IconName =
+      runner?.kind === "device" || placementState === "local" ? "monitor" : "cloud";
     return {
+      showPlacementMenu: isCloudWorkerPlacementState(placementState) || dispatchRequired,
+      machineName:
+        props.machineName ||
+        environmentId ||
+        (placementState === "local" ? t("sessionsView.moveSessionGatewayTarget") : worker.label),
+      machineIcon,
       label,
       exceptionState,
       hasFacts,
@@ -114,11 +132,17 @@ export function ChatPanePlacement(props: {
       actions: [
         {
           id: "move",
-          visible: placementState === "active" || Boolean(retry),
-          className: `chat-pane__placement-move ${destructiveMove ? "session-menu__item--destructive" : ""}`,
+          visible:
+            placementState === "active" ||
+            Boolean(retry) ||
+            (placementState === "local" && !dispatchRequired && Boolean(props.onPlacementMove)),
+          className: [
+            "chat-pane__placement-move",
+            { "session-menu__item--destructive": destructiveMove },
+          ],
           destructive: destructiveMove,
           disabledReason: moveDisabledReason,
-          icon: "monitor" as const,
+          icon: "arrowLeftRight" as const,
           label: t(
             retry
               ? "sessionsView.retrySessionMove"
@@ -151,84 +175,67 @@ export function ChatPanePlacement(props: {
       ],
     };
   });
+}
+
+export type ChatPanePlacementTrigger = {
+  content: (view: ChatMachinePresentation) => JSX.Element;
+  label: (view: ChatMachinePresentation) => string;
+  class?: JSX.ClassValue;
+};
+
+export function ChatPanePlacement(
+  props: ChatPanePlacementProps & { trigger?: ChatPanePlacementTrigger },
+) {
+  const id = `chat-placement-${++nextPlacementId}`;
+  const state = createChatMachinePresentation(props);
+  const items = createMemo((): MenuEntry[] =>
+    (state()?.actions ?? [])
+      .filter((action) => action.visible)
+      .map((action) => ({
+        id: action.id,
+        label: action.label,
+        class: ["session-menu__item", action.className],
+        variant: action.destructive ? "danger" : undefined,
+        disabled: Boolean(action.disabledReason),
+        attributes: { title: action.disabledReason },
+        icon: (
+          <span class="session-menu__icon" aria-hidden="true">
+            <Icon name={action.icon} />
+          </span>
+        ),
+        content: <span class="session-menu__text">{action.label}</span>,
+      })),
+  );
   return (
-    <Show when={state()}>
+    <Show when={state()?.showPlacementMenu && state()}>
       {(view) => (
         <div class="chat-pane__placement-control">
-          <wa-dropdown class="chat-pane__placement-menu" placement="bottom-start">
-            <button slot="trigger" class="chat-pane__placement-chip" type="button">
-              {view().label}
-            </button>
+          <Menu
+            lazy
+            id={id}
+            class="chat-pane__placement-menu"
+            placement="bottom-start"
+            label={props.trigger?.label(view()) ?? view().label}
+            trigger={props.trigger?.content(view())}
+            triggerClass={props.trigger?.class ?? "chat-pane__placement-chip"}
+            items={items()}
+            onSelect={(item) =>
+              view()
+                .actions.find((action) => action.id === item.id)
+                ?.onClick?.()
+            }
+          >
             <Show when={view().exceptionState}>
               {(message) => <div class="chat-pane__placement-state">{message()}</div>}
             </Show>
-            <Show when={view().hasFacts}>
-              <dl class="chat-pane__placement-facts">
-                <For
-                  each={
-                    [
-                      ["sessionsView.placementFactService", view().providerId],
-                      ["sessionsView.placementFactProfile", view().profileId],
-                      [
-                        "sessionsView.placementFactMachine",
-                        view().environmentId && `…${view().environmentId!.slice(-6)}`,
-                      ],
-                    ] as const
-                  }
-                >
-                  {(entry) => (
-                    <Show when={entry[1]}>
-                      <dt>{t(entry[0])}</dt>
-                      <dd>{entry[1]}</dd>
-                    </Show>
-                  )}
-                </For>
-                <Show when={view().inferenceWorker}>
-                  <dt>{t("sessionsView.placementFactInference")}</dt>
-                  <dd>{t("sessionsView.inferenceWorker")}</dd>
-                </Show>
-                <dt>{t("sessionsView.placementFactState")}</dt>
-                <dd>
-                  {view().placementState}
-                  {view().age ? ` · ${view().age}` : ""}
-                </dd>
-                <Show when={view().diskSpace}>
-                  {(disk) => (
-                    <>
-                      <dt>{t("sessionsView.placementFactDisk")}</dt>
-                      <dd>
-                        {t("sessionsView.placementDiskFree", {
-                          free: formatBytes(disk().availableBytes),
-                        })}
-                      </dd>
-                    </>
-                  )}
-                </Show>
-              </dl>
-            </Show>
-            <For each={view().actions} keyed={(action) => action.id}>
-              {(action) => (
-                <Show when={action().visible}>
-                  <wa-dropdown-item
-                    class={`session-menu__item ${action().className}`}
-                    variant={action().destructive ? "danger" : undefined}
-                    disabled={Boolean(action().disabledReason)}
-                    title={action().disabledReason}
-                    onClick={() => {
-                      if (!action().disabledReason) {
-                        action().onClick?.();
-                      }
-                    }}
-                  >
-                    <span slot="icon" class="session-menu__icon" aria-hidden="true">
-                      <Icon name={action().icon} />
-                    </span>
-                    <span class="session-menu__text">{action().label}</span>
-                  </wa-dropdown-item>
-                </Show>
-              )}
-            </For>
-          </wa-dropdown>
+            <div class="chat-pane__placement-heading">
+              <strong>{view().machineName}</strong>
+              <Show when={view().environmentId}>
+                {(environmentId) => <span>…{environmentId().slice(-6)}</span>}
+              </Show>
+            </div>
+            <ChatMachineFacts view={view()} />
+          </Menu>
           <Show
             when={view().deviceOffline}
             fallback={
@@ -238,7 +245,7 @@ export function ChatPanePlacement(props: {
                   <Show when={view().syncElapsed !== undefined}>
                     <div class="chat-pane__placement-note" role="status">
                       {t("sessionsView.syncingCloudFilesDetail")} ·{" "}
-                      <openclaw-elapsed-time prop:startMs={view().syncElapsed} />
+                      <ElapsedTime startMs={view().syncElapsed} />
                     </div>
                   </Show>
                 }
@@ -259,5 +266,85 @@ export function ChatPanePlacement(props: {
   );
 }
 
-export const renderChatPanePlacement = (props: Parameters<typeof ChatPanePlacement>[0]) =>
-  solidContent(ChatPanePlacement, props);
+type ChatMachinePresentation = NonNullable<
+  ReturnType<ReturnType<typeof createChatMachinePresentation>>
+>;
+
+export function ChatMachineFacts(props: {
+  view: ChatMachinePresentation;
+  group?: "configuration" | "state";
+  includeId?: boolean;
+}) {
+  const facts = createMemo(() => {
+    const view = props.view;
+    const configuration: {
+      label: string;
+      value: string | undefined;
+      icon?: IconName;
+    }[] = [
+      ...(props.includeId
+        ? [
+            {
+              label: t("sessionsView.machineId"),
+              value: view.environmentId && `…${view.environmentId.slice(-6)}`,
+              icon: "hash" as const,
+            },
+          ]
+        : []),
+      { label: t("sessionsView.placementFactService"), value: view.providerId, icon: "server" },
+      { label: t("sessionsView.placementFactProfile"), value: view.profileId, icon: "settings" },
+      {
+        label: t("sessionsView.placementFactInference"),
+        value: view.inferenceWorker ? t("sessionsView.inferenceWorker") : undefined,
+        icon: "cpu",
+      },
+    ];
+    const state = [
+      {
+        label: t("sessionsView.placementFactState"),
+        value:
+          view.placementState === "local"
+            ? undefined
+            : `${view.placementState}${view.age ? ` · ${view.age}` : ""}`,
+        icon: "activity" as const,
+      },
+      {
+        label: t("sessionsView.placementFactDisk"),
+        value: view.diskSpace
+          ? t("sessionsView.placementDiskFree", {
+              free: formatBytes(view.diskSpace.availableBytes),
+            })
+          : undefined,
+        icon: "archive" as const,
+      },
+    ];
+    return (
+      props.group === "configuration"
+        ? configuration
+        : props.group === "state"
+          ? state
+          : [...configuration, ...state]
+    ).filter((fact) => fact.value);
+  });
+  return (
+    <Show when={facts().length}>
+      <dl class="chat-pane__placement-facts">
+        <For each={facts()}>
+          {(fact) => (
+            <div class="chat-pane__placement-fact">
+              <dt>
+                <span class="chat-pane__placement-fact-icon" aria-hidden="true">
+                  <Show when={fact.icon} fallback="#">
+                    {(icon) => <Icon name={icon()} />}
+                  </Show>
+                </span>
+                {fact.label}
+              </dt>
+              <dd>{fact.value}</dd>
+            </div>
+          )}
+        </For>
+      </dl>
+    </Show>
+  );
+}

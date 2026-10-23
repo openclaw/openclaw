@@ -17,6 +17,12 @@ export async function createNostrRelayFixture(
     onEvent?: (event: Event) => void;
   } = {},
 ) {
+  const subscriptions: unknown[][] = [];
+  let acceptSubscription: (() => void) | undefined;
+  const subscribed = new Promise<void>((resolve) => {
+    acceptSubscription = resolve;
+  });
+  const inboundSends: Array<(events: Event[]) => void> = [];
   const events: Event[] = [];
   const acknowledgements: Array<["OK", string, boolean, string]> = [];
   const errors: unknown[] = [];
@@ -49,8 +55,19 @@ export async function createNostrRelayFixture(
     socket.on("error", (error) => errors.push(error));
     socket.on("message", (data) => {
       try {
-        const [kind, value] = JSON.parse(rawDataToString(data)) as [string, string | Event];
+        const [kind, value, ...filters] = JSON.parse(rawDataToString(data)) as [
+          string,
+          string | Event,
+          ...unknown[],
+        ];
         if (kind === "REQ" && typeof value === "string") {
+          subscriptions.push(filters);
+          inboundSends.push((incoming) => {
+            for (const event of incoming) {
+              socket.send(JSON.stringify(["EVENT", value, event]));
+            }
+          });
+          acceptSubscription?.();
           // Settle the real pool's EOSE timer through the wire, including cleanup paths.
           socket.send(JSON.stringify(["EOSE", value]));
         } else if (kind === "EVENT" && typeof value !== "string") {
@@ -121,6 +138,13 @@ export async function createNostrRelayFixture(
     }
     return {
       url: `ws://127.0.0.1:${address.port}/`,
+      subscribed,
+      subscriptions,
+      sendIncoming: (incoming: Event[]) => {
+        for (const send of inboundSends) {
+          send(incoming);
+        }
+      },
       events,
       acknowledgements,
       errors,

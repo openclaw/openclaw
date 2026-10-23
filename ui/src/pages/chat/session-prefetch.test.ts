@@ -1,8 +1,6 @@
 /* @vitest-environment jsdom */
-import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
@@ -68,7 +66,7 @@ describe("session navigation intent prefetch", () => {
   let fixture: ReturnType<typeof createSessionPrefetchFixture>;
   let cache: ChatMessageCache;
   let store: SessionSnapshotStore;
-  let host: HTMLElement & ReactiveControllerHost;
+  let host: ReturnType<typeof createSessionPrefetchFixture>["host"];
   let updatePrefetch: ReturnType<typeof createSessionPrefetchFixture>["updatePrefetch"];
 
   beforeEach(() => {
@@ -135,33 +133,21 @@ describe("session navigation intent prefetch", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { name: "replacement incarnation", patch: { sessionId: "replacement" } },
-    { name: "branch reset", patch: { activeLeafEntryId: "new-leaf" } },
-    { name: "updated transcript", patch: { updatedAt: NOW + 1 } },
-    { name: "new activity", patch: { lastActivityAt: NOW + 1 } },
-    { name: "active run custody", patch: { hasActiveRun: true } },
-  ])("rejects a prefetch when an alias gains $name", async ({ patch }) => {
+  it("does not publish history for a replaced session", async () => {
     const key = "agent:main:main";
     const response = createDeferred<ReturnType<typeof historyResult>>();
     const request = vi.fn(() => response.promise);
-    const original = { ...row(key, NOW - 1), sessionId: "original", activeLeafEntryId: "leaf" };
+    const original = { ...row(key, NOW - 1), sessionId: "original" };
     const snapshot = prefetchState(request, [original]);
     updatePrefetch(snapshot);
     intend(key);
     await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
 
-    const changed: GatewaySessionRow = {
-      ...original,
-      key: "global",
-      kind: "global",
-      ...patch,
-    };
     updatePrefetch({
       ...snapshot,
       listRevision: 2,
-      rows: [original, changed],
+      rows: [{ ...original, sessionId: "replacement" }],
     });
     response.resolve(historyResult(key));
     await settlePromises();
@@ -169,41 +155,6 @@ describe("session navigation intent prefetch", () => {
     await store.flush();
     expect(await store.read(cacheKey(key))).toBeNull();
   });
-
-  it.each([
-    { name: "an older alias", aliasActivityAt: NOW - 2, keepOriginal: true },
-    { name: "only an older alias", aliasActivityAt: NOW - 2, keepOriginal: false },
-  ])(
-    "requires the captured history to survive beside $name",
-    async ({ aliasActivityAt, keepOriginal }) => {
-      const key = "agent:main:main";
-      const response = createDeferred<ReturnType<typeof historyResult>>();
-      const request = vi.fn(() => response.promise);
-      const original = { ...row(key, NOW - 1), sessionId: `id:${key}` };
-      const snapshot = prefetchState(request, [original]);
-      updatePrefetch(snapshot);
-      intend(key);
-      await advancePrefetch(300);
-      expect(request).toHaveBeenCalledOnce();
-      updatePrefetch({
-        ...snapshot,
-        listRevision: 2,
-        rows: [
-          ...(keepOriginal ? [{ ...original }] : []),
-          { ...row("global", aliasActivityAt), kind: "global", sessionId: original.sessionId },
-        ],
-      });
-      response.resolve(historyResult(key));
-      await settlePromises();
-      expect(
-        readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })?.messages ?? null,
-      ).toEqual(keepOriginal ? historyResult(key).messages : null);
-      await store.flush();
-      expect((await store.read(cacheKey(key)))?.messages ?? null).toEqual(
-        keepOriginal ? historyResult(key).messages : null,
-      );
-    },
-  );
 
   it.each([
     "client replacement",
@@ -285,17 +236,6 @@ describe("session navigation intent prefetch", () => {
 
   it("does not fetch unopened history on connect or roster refresh without navigation intent", async () => {
     const request = historyRequest();
-    const locksRequest = vi.fn(
-      async (
-        _name: string,
-        _options: LockOptions,
-        callback: (lock: Lock | null) => Promise<void>,
-      ) => await callback({ name: "openclaw-chat-prefetch", mode: "exclusive" } as Lock),
-    );
-    Object.defineProperty(navigator, "locks", {
-      configurable: true,
-      value: { request: locksRequest },
-    });
     const state = prefetchState(request, [
       row("agent:main:recent", NOW),
       row("agent:main:older", NOW - 1),
@@ -305,7 +245,6 @@ describe("session navigation intent prefetch", () => {
     updatePrefetch({ ...state, listRevision: 2 });
     await advancePrefetch(31_000);
 
-    expect(locksRequest).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -736,56 +675,17 @@ describe("session navigation intent prefetch", () => {
     );
   });
 
-  it("skips the cycle when another tab holds the Web Lock", async () => {
-    const request = vi.fn();
-    const locksRequest = vi.fn(
-      async (
-        _name: string,
-        _options: LockOptions,
-        callback: (lock: Lock | null) => Promise<void>,
-      ) => await callback(null),
-    );
-    Object.defineProperty(navigator, "locks", {
-      configurable: true,
-      value: { request: locksRequest },
-    });
-    updatePrefetch(prefetchState(request, [row("agent:main:locked", NOW - 1)]));
-    intend("agent:main:locked");
-
-    await advancePrefetch(2_000);
-
-    expect(locksRequest).toHaveBeenCalledOnce();
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("pauses intent while hidden and resumes when the tab becomes visible", async () => {
     const request = historyRequest();
-    const locksRequest = vi.fn(
-      async (
-        _name: string,
-        _options: LockOptions,
-        callback: (lock: Lock | null) => Promise<void>,
-      ) => await callback({ name: "openclaw-chat-prefetch", mode: "exclusive" } as Lock),
-    );
-    Object.defineProperty(navigator, "locks", {
-      configurable: true,
-      value: { request: locksRequest },
-    });
     updatePrefetch(prefetchState(request, [row("agent:main:hidden", NOW - 1)]));
     intend("agent:main:hidden");
     fixture.setVisibility("hidden");
     await advancePrefetch(300);
 
-    expect(locksRequest).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
     fixture.setVisibility("visible");
     document.dispatchEvent(new Event("visibilitychange"));
     await advancePrefetch(75);
-    expect(locksRequest).toHaveBeenCalledWith(
-      "openclaw-chat-prefetch",
-      { ifAvailable: true },
-      expect.any(Function),
-    );
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:hidden"]);
   });
 

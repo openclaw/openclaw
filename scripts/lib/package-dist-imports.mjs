@@ -11,8 +11,8 @@ function stripSpecifierSuffix(value) {
   return value.replace(/[?#].*$/u, "");
 }
 
-function hasJavaScriptFileExtension(value) {
-  return /\.(?:cjs|js|mjs)$/u.test(path.posix.basename(stripSpecifierSuffix(value)));
+function hasRuntimeFileExtension(value) {
+  return /\.(?:cjs|js|mjs|exe)$/u.test(path.posix.basename(stripSpecifierSuffix(value)));
 }
 
 function literal(node) {
@@ -79,10 +79,16 @@ function resolvesCommonJs(importedPath, fileSet, packageJsons) {
 
 function appendImportEdges(source, importerPath, imports, sourceType) {
   function visit(node) {
+    // These leaves cannot contain import edges; avoid allocating property lists for them.
+    if (node.type === "Identifier" || node.type === "Literal" || node.type === "TemplateElement") {
+      return;
+    }
     let kind;
     let specifier;
     if (
-      ["ImportDeclaration", "ExportNamedDeclaration", "ExportAllDeclaration"].includes(node.type)
+      node.type === "ImportDeclaration" ||
+      node.type === "ExportNamedDeclaration" ||
+      node.type === "ExportAllDeclaration"
     ) {
       specifier = literal(node.source);
     } else if (node.type === "ImportExpression") {
@@ -116,7 +122,7 @@ function appendImportEdges(source, importerPath, imports, sourceType) {
     }
     if (
       specifier?.startsWith(".") &&
-      (kind !== "import-meta-url" || hasJavaScriptFileExtension(specifier))
+      (kind !== "import-meta-url" || hasRuntimeFileExtension(specifier))
     ) {
       const importedPath = path.posix.normalize(
         path.posix.join(
@@ -134,14 +140,18 @@ function appendImportEdges(source, importerPath, imports, sourceType) {
         imports.push({ importerPath, importedPath, ...(kind === "require" ? { kind } : {}) });
       }
     }
-    for (const value of Object.values(node)) {
+    for (const key in node) {
+      const value = node[key];
+      if (!value || typeof value !== "object") {
+        continue;
+      }
       if (Array.isArray(value)) {
         for (const child of value) {
           if (child && typeof child.type === "string") {
             visit(child);
           }
         }
-      } else if (value && typeof value.type === "string") {
+      } else if (typeof value.type === "string") {
         visit(value);
       }
     }

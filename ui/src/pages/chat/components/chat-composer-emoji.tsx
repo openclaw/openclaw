@@ -1,195 +1,240 @@
-import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
-import { createEffect, For, onCleanup, Show, untrack } from "solid-js";
-import { TextareaTokenAnchor } from "../../../components/textarea-token-anchor.ts";
+import { createStore, For, onSettled, Show } from "solid-js";
 import {
-  emojiForShortcode,
-  EmojiTargetResolver,
-  suggestEmoji,
-  type EmojiTarget,
-} from "../../../lib/chat/emoji.ts";
+  createOverlay,
+  findOverlayParent,
+  type Overlay,
+} from "../../../components/overlay-lifecycle.ts";
+import { createTextareaTokenAnchor } from "../../../components/textarea-token-anchor.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import "../../../components/solid/overlay.css";
+import type { EmojiTarget, EmojiTargetResolver } from "../../../lib/chat/emoji.ts";
+import { createIdleImport } from "../../../lib/idle-import.ts";
+import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
 import "../../../styles/chat/emoji-menu.css";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import {
   handleComposerMenuKeydown,
   ComposerMenu,
-  renderComposerMenuOption,
+  renderComposerMenuOption as ComposerMenuOption,
 } from "./chat-composer-menu.tsx";
 
+registerEnglishCatalog(registerChatComposerEnglish);
+
+type EmojiMenuState = {
+  target: EmojiTarget | null;
+  items: string[];
+  index: number;
+  dismissed: { value: string; caret: number } | null;
+};
+
 /** Local editing state; both composer owners keep their existing draft/input pipeline. */
-export class ComposerEmojiMenu {
-  private target: EmojiTarget | null = null;
-  private items: string[] = [];
-  private index = 0;
-  private dismissed: { value: string; caret: number } | null = null;
-  private readonly resolver = new EmojiTargetResolver();
-  private inserting = false;
-  private acceptedEnter = false;
-  private requestUpdate: (() => void) | null = null;
-  private readonly anchor = new TextareaTokenAnchor(() => {
-    const update = this.requestUpdate;
-    this.dismiss(this.textarea);
-    update?.();
+export function createComposerEmojiMenu() {
+  const [state, setState] = createStore<EmojiMenuState>({
+    target: null,
+    items: [],
+    index: 0,
+    dismissed: null,
   });
-  private popup: WaPopup | null = null;
-  private textarea: HTMLTextAreaElement | null = null;
-  readonly popupRef = (element?: Element) => {
-    this.popup = element instanceof WaPopup ? element : null;
-    this.syncAnchor();
-  };
-
-  private syncAnchor() {
-    if (this.popup && this.textarea && this.target && this.open) {
-      this.anchor.update(this.popup, this.textarea, this.target.start);
-    } else {
-      this.anchor.close();
-    }
-  }
-
-  get open() {
-    return this.items.length > 0;
-  }
-  close() {
-    this.acceptedEnter = false;
-    this.anchor.close();
-    this.requestUpdate = null;
-    this.textarea = null;
-    this.target = null;
-    this.items = [];
-    this.index = 0;
-    this.dismissed = null;
-    this.resolver.reset();
-  }
-  dismiss(textarea: HTMLTextAreaElement | null) {
-    this.close();
-    // Window-level picker dismissal runs before the textarea key handler.
-    this.dismissed = textarea ? { value: textarea.value, caret: textarea.selectionStart } : null;
-  }
-  activeId(paneId: string) {
-    return this.open ? paneDomId(paneId, `emoji-option-${this.index}`) : null;
-  }
-  activeLabel() {
-    return this.open ? `:${this.items[this.index]}:` : "";
-  }
-
-  update(target: HTMLTextAreaElement, requestUpdate: () => void, enabled = true) {
-    if (
-      this.dismissed &&
-      this.dismissed.caret === target.selectionStart &&
-      this.dismissed.value === target.value
-    ) {
-      return;
-    }
-    const next =
-      enabled &&
-      target.isConnected &&
-      target.ownerDocument.activeElement === target &&
-      !target.disabled &&
-      !target.readOnly &&
-      target.selectionStart === target.selectionEnd
-        ? this.resolver.find(target.value, target.selectionStart)
-        : null;
-    if (
-      next?.start === this.target?.start &&
-      next?.query === this.target?.query &&
-      next?.end === this.target?.end
-    ) {
-      if (next) {
-        this.syncAnchor();
+  let emoji: typeof import("../../../lib/chat/emoji.ts") | undefined;
+  let resolver: EmojiTargetResolver | undefined;
+  let emojiEnabled = true;
+  // These guards cover synchronous native editing events, before Solid commits.
+  let inserting = false;
+  let acceptedEnter = false;
+  let popup: Overlay | null = null;
+  let unsubscribePopup: (() => void) | undefined;
+  let textarea: HTMLTextAreaElement | null = null;
+  const anchor = createTextareaTokenAnchor(() => dismiss(textarea));
+  const catalog = createIdleImport(
+    () => import("../../../lib/chat/emoji.ts"),
+    (loaded) => {
+      emoji = loaded;
+      resolver = new loaded.EmojiTargetResolver();
+      // Read the current draft and caret; never replay an edit made while loading.
+      if (textarea) {
+        update(textarea, emojiEnabled);
       }
-      return;
-    }
-    const wasOpen = this.open;
-    this.target = next;
-    this.items = next ? suggestEmoji(next.query) : [];
-    this.index = 0;
-    this.dismissed = null;
-    if (wasOpen || this.open) {
-      requestUpdate();
+    },
+  );
+
+  function updatePresentation(target: HTMLTextAreaElement, start: number | null) {
+    textarea = target;
+    if (popup && start !== null) {
+      anchor.updateNative(popup, target, start);
+    } else {
+      anchor.close();
     }
   }
 
-  private insert(
-    textarea: HTMLTextAreaElement,
-    target: EmojiTarget,
-    emoji: string,
-    requestUpdate: () => void,
-  ) {
-    if (textarea.disabled || textarea.readOnly || this.inserting) {
+  function popupRef(overlay?: Overlay) {
+    unsubscribePopup?.();
+    popup = overlay ?? null;
+    // A close edge dismisses the editing target even if the overlay reopens before rendering.
+    unsubscribePopup = popup?.subscribe((open) => {
+      if (!open && state.items.length) {
+        dismiss(textarea);
+      }
+    });
+    if (!popup) {
+      anchor.close();
+    }
+  }
+
+  function reset(draft: EmojiMenuState) {
+    acceptedEnter = false;
+    draft.items.length = 0;
+    draft.target = null;
+    draft.index = 0;
+    draft.dismissed = null;
+    resolver?.reset();
+    // Overlay retirement notifies synchronously; it must see the closed draft.
+    anchor.close();
+    textarea = null;
+  }
+
+  function close() {
+    setState(reset);
+  }
+
+  function dismiss(target: HTMLTextAreaElement | null) {
+    close();
+    // Overlay dismissal runs before the textarea key handler.
+    setState((draft) => {
+      draft.dismissed = target ? { value: target.value, caret: target.selectionStart } : null;
+    });
+  }
+
+  function update(target: HTMLTextAreaElement, enabled = true) {
+    emojiEnabled = enabled;
+    setState((draft) => {
+      if (
+        draft.dismissed?.caret === target.selectionStart &&
+        draft.dismissed.value === target.value
+      ) {
+        return;
+      }
+      const eligible =
+        enabled &&
+        target.isConnected &&
+        target.ownerDocument.activeElement === target &&
+        !target.disabled &&
+        !target.readOnly &&
+        target.selectionStart === target.selectionEnd;
+      if (
+        eligible &&
+        !emoji &&
+        /:[a-z0-9_+-]+$/u.test(
+          target.value.slice(Math.max(0, target.selectionStart - 64), target.selectionStart),
+        )
+      ) {
+        textarea = target;
+        // Emoji is optional: native typing continues and a later input retries a failed import.
+        void catalog.load().catch(() => undefined);
+      }
+      const next = eligible ? (resolver?.find(target.value, target.selectionStart) ?? null) : null;
+      if (
+        next?.start === draft.target?.start &&
+        next?.query === draft.target?.query &&
+        next?.end === draft.target?.end
+      ) {
+        if (next) {
+          updatePresentation(target, next.start);
+        }
+        return;
+      }
+      draft.target = next;
+      draft.items = next ? emoji!.suggestEmoji(next.query) : [];
+      draft.index = 0;
+      draft.dismissed = null;
+      updatePresentation(target, next?.start ?? null);
+    });
+  }
+
+  function insert(target: HTMLTextAreaElement, token: EmojiTarget, replacement: string) {
+    if (target.disabled || target.readOnly || inserting) {
       return false;
     }
-    textarea.focus({ preventScroll: true });
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    this.inserting = true;
-    this.close();
-    textarea.setSelectionRange(target.start, target.end);
-    // Unlike value/setRangeText, the browser editing command records an undoable
-    // replacement. Its input event goes through the host's canonical draft owner.
+    target.focus({ preventScroll: true });
+    const start = target.selectionStart;
+    const end = target.selectionEnd;
+    inserting = true;
+    close();
+    target.setSelectionRange(token.start, token.end);
+    // The browser editing command records undo and sends input through the draft owner.
     let inserted = false;
     try {
-      inserted = textarea.ownerDocument.execCommand?.("insertText", false, emoji) ?? false;
+      inserted = target.ownerDocument.execCommand?.("insertText", false, replacement) ?? false;
     } finally {
-      this.inserting = false;
+      inserting = false;
     }
     if (!inserted) {
-      textarea.setSelectionRange(start, end);
+      target.setSelectionRange(start, end);
     }
-    requestUpdate();
     return inserted;
   }
 
-  complete(event: InputEvent, requestUpdate: () => void, enabled = true): boolean {
-    const textarea = event.target;
+  function complete(event: InputEvent, enabled = true): boolean {
+    const target = event.target;
     if (
       !enabled ||
-      this.inserting ||
+      !emoji ||
+      inserting ||
       event.isComposing ||
       event.inputType !== "insertText" ||
       event.data !== ":" ||
-      !(textarea instanceof HTMLTextAreaElement) ||
-      textarea.selectionStart !== textarea.selectionEnd ||
+      !(target instanceof HTMLTextAreaElement) ||
+      target.selectionStart !== target.selectionEnd ||
       !event.cancelable
     ) {
       return false;
     }
-    const caret = textarea.selectionStart;
-    const target = this.resolver.find(textarea.value, caret);
-    const emoji = target && emojiForShortcode(target.query);
-    if (
-      !target ||
-      !emoji ||
-      !this.insert(textarea, { ...target, end: caret }, emoji, requestUpdate)
-    ) {
+    const caret = target.selectionStart;
+    const token = resolver?.find(target.value, caret);
+    const replacement = token && emoji.emojiForShortcode(token.query);
+    if (!token || !replacement || !insert(target, { ...token, end: caret }, replacement)) {
       return false;
     }
     event.preventDefault();
     return true;
   }
 
-  handleKeyup(event: KeyboardEvent) {
-    if (event.key === "Enter") {
-      this.acceptedEnter = false;
+  function selection(target: HTMLTextAreaElement, draft: EmojiMenuState, index = draft.index) {
+    const token = resolver?.find(target.value, target.selectionStart);
+    const replacement = emoji?.emojiForShortcode(draft.items[index] ?? "");
+    return token &&
+      replacement &&
+      token.start === draft.target?.start &&
+      token.query === draft.target.query
+      ? { token, emoji: replacement }
+      : null;
+  }
+
+  function select(target: HTMLTextAreaElement, index: number) {
+    const chosen: { value: ReturnType<typeof selection> } = { value: null };
+    setState((draft) => {
+      chosen.value = selection(target, draft, index);
+    });
+    if (chosen.value) {
+      insert(target, chosen.value.token, chosen.value.emoji);
     }
   }
 
-  handleKeydown(event: KeyboardEvent, paneId: string, requestUpdate: () => void) {
+  function handleKeydown(event: KeyboardEvent, paneId: string) {
     if (event.key === "Enter") {
       if (!event.repeat) {
-        this.acceptedEnter = false;
-      } else if (this.acceptedEnter) {
+        acceptedEnter = false;
+      } else if (acceptedEnter) {
         event.preventDefault();
         return true;
       }
     }
-    const textarea = event.target;
+    const target = event.target;
     if (
-      !this.open ||
-      !(textarea instanceof HTMLTextAreaElement) ||
-      textarea.disabled ||
-      textarea.readOnly ||
-      textarea.selectionStart !== textarea.selectionEnd ||
+      !(target instanceof HTMLTextAreaElement) ||
+      target.disabled ||
+      target.readOnly ||
+      target.selectionStart !== target.selectionEnd ||
       event.shiftKey ||
       event.altKey ||
       event.isComposing ||
@@ -197,76 +242,95 @@ export class ComposerEmojiMenu {
     ) {
       return false;
     }
-    return handleComposerMenuKeydown(event, {
-      count: this.items.length,
-      index: this.index,
-      consumeEmpty: false,
-      close: () => {
-        this.dismiss(textarea);
-        requestUpdate();
-      },
-      move: (index) => {
-        this.index = index;
-        requestUpdate();
-        return this.activeId(paneId);
-      },
-      select: (key) => {
-        this.select(textarea, requestUpdate);
-        // Keep the accepting press consumed after insertion closes the menu.
-        this.acceptedEnter = key === "Enter";
-      },
+    let handled = false;
+    const chosen: { value: ReturnType<typeof selection> } = { value: null };
+    setState((draft) => {
+      if (!draft.items.length) {
+        return;
+      }
+      handled = handleComposerMenuKeydown(event, {
+        count: draft.items.length,
+        index: draft.index,
+        consumeEmpty: false,
+        close: () => {
+          reset(draft);
+          draft.dismissed = { value: target.value, caret: target.selectionStart };
+        },
+        move: (index) => {
+          draft.index = index;
+          return paneDomId(paneId, `emoji-option-${index}`);
+        },
+        select: () => {
+          chosen.value = selection(target, draft);
+        },
+      });
     });
-  }
-
-  private select(textarea: HTMLTextAreaElement, requestUpdate: () => void, index = this.index) {
-    const target = this.resolver.find(textarea.value, textarea.selectionStart);
-    const emoji = emojiForShortcode(this.items[index] ?? "");
-    if (
-      !target ||
-      !emoji ||
-      target.start !== this.target?.start ||
-      target.query !== this.target.query
-    ) {
-      return;
+    if (chosen.value) {
+      insert(target, chosen.value.token, chosen.value.emoji);
     }
-    this.insert(textarea, target, emoji, requestUpdate);
+    // Keep the accepting press consumed after insertion closes the menu.
+    if (handled) {
+      acceptedEnter = event.key === "Enter";
+    }
+    return handled;
   }
 
-  render(paneId: string, textarea: HTMLTextAreaElement | null, requestUpdate: () => void) {
-    return solidTemplate(EmojiMenu, { args: [this, paneId, textarea, requestUpdate] });
-  }
-
-  updatePresentation(textarea: HTMLTextAreaElement, requestUpdate: () => void) {
-    this.requestUpdate = requestUpdate;
-    this.textarea = textarea;
-    this.syncAnchor();
-  }
-
-  renderOptions(paneId: string, textarea: HTMLTextAreaElement, requestUpdate: () => void) {
-    return (
-      <For each={this.items} keyed={(name) => name}>
-        {(name, index) =>
-          renderComposerMenuOption({
-            id: paneDomId(paneId, `emoji-option-${index()}`),
-            active: index() === this.index,
-            select: () => this.select(textarea, requestUpdate, index()),
-            hover: () => {
-              this.index = index();
-              requestUpdate();
-            },
-            icon: emojiForShortcode(name()),
-            iconHidden: true,
-            name: `:${name()}:`,
-            description: undefined,
-          })
-        }
-      </For>
-    );
-  }
+  return {
+    get open() {
+      return state.items.length > 0;
+    },
+    state,
+    close,
+    dismiss,
+    update,
+    complete,
+    handleKeydown,
+    handleKeyup(event: KeyboardEvent) {
+      if (event.key === "Enter") {
+        acceptedEnter = false;
+      }
+    },
+    activeId(paneId: string) {
+      return state.items.length ? paneDomId(paneId, `emoji-option-${state.index}`) : null;
+    },
+    activeLabel: () => (state.items.length ? `:${state.items[state.index]}:` : ""),
+    popupRef,
+    dispose() {
+      // Retire the native target without publishing state from the disposed view.
+      textarea = null;
+      catalog.dispose();
+      popupRef();
+    },
+    updatePresentation,
+    renderOptions(paneId: string, target: HTMLTextAreaElement) {
+      return (
+        <For each={state.items} keyed={(name) => name}>
+          {(name, index) => (
+            <ComposerMenuOption
+              id={paneDomId(paneId, `emoji-option-${index()}`)}
+              active={index() === state.index}
+              select={() => select(target, index())}
+              hover={() =>
+                setState((draft) => {
+                  draft.index = index();
+                })
+              }
+              icon={emoji?.emojiForShortcode(name())}
+              iconHidden={true}
+              name={`:${name()}:`}
+              description={undefined}
+            />
+          )}
+        </For>
+      );
+    },
+  };
 }
 
+export type ComposerEmojiMenu = ReturnType<typeof createComposerEmojiMenu>;
+
 export function EmojiMenu(props: {
-  args: [ComposerEmojiMenu, string, HTMLTextAreaElement | null, () => void];
+  args: [ComposerEmojiMenu, string, HTMLTextAreaElement | null];
 }) {
   const textarea = () => {
     const target = props.args[2];
@@ -276,15 +340,7 @@ export function EmojiMenu(props: {
   };
   return (
     <Show when={textarea()}>
-      {(target) => (
-        <EmojiPopup
-          menu={props.args[0]}
-          paneId={props.args[1]}
-          textarea={target()}
-          requestUpdate={props.args[3]}
-          revision={props.args}
-        />
-      )}
+      {(target) => <EmojiPopup menu={props.args[0]} paneId={props.args[1]} textarea={target()} />}
     </Show>
   );
 }
@@ -293,35 +349,42 @@ function EmojiPopup(props: {
   menu: ComposerEmojiMenu;
   paneId: string;
   textarea: HTMLTextAreaElement;
-  requestUpdate: () => void;
-  revision: unknown;
 }) {
-  createEffect(
-    () => props.revision,
-    () => {
-      props.menu.updatePresentation(props.textarea, props.requestUpdate);
-    },
-  );
-  onCleanup(() => props.menu.popupRef());
-  const activeId = () => {
-    void props.revision;
-    return props.menu.activeId(props.paneId) ?? undefined;
-  };
-  const options = () => {
-    void props.revision;
-    return props.menu.renderOptions(props.paneId, props.textarea, props.requestUpdate);
-  };
+  let surface!: HTMLDivElement;
+  onSettled(() => {
+    const menu = props.menu;
+    const target = props.textarea;
+    const overlay = createOverlay(paneDomId(props.paneId, "emoji-popup"), undefined, {
+      acquireOcclusion: acquireNativeOverlaySurface,
+      exclusiveGroup: "menu",
+      dismissOutsideFocus: false,
+    });
+    overlay.bindSurface(surface);
+    overlay.setParent(findOverlayParent(target));
+    menu.popupRef(overlay);
+    menu.updatePresentation(target, menu.state.target?.start ?? null);
+    return () => {
+      menu.popupRef();
+      overlay.dispose();
+    };
+  });
   return (
-    <wa-popup ref={(node) => untrack(() => props.menu.popupRef(node))} class="emoji-menu-popup">
+    <div
+      ref={(node) => {
+        surface = node;
+      }}
+      class="oc-overlay emoji-menu-popup"
+      popover="manual"
+    >
       <ComposerMenu
         class="emoji-menu"
         id={paneDomId(props.paneId, "emoji-menu-listbox")}
         label={t("chat.composer.emojiSuggestions")}
-        activeId={activeId()}
-        revision={props.revision}
+        activeId={props.menu.activeId(props.paneId)}
+        revision={props.menu.state.items}
       >
-        {options()}
+        {props.menu.renderOptions(props.paneId, props.textarea)}
       </ComposerMenu>
-    </wa-popup>
+    </div>
   );
 }

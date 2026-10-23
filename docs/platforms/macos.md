@@ -44,12 +44,16 @@ Building from source also requires the toolchain listed in
 
 ## Download
 
-Get macOS app builds from [OpenClaw GitHub releases](https://github.com/openclaw/openclaw/releases).
-When a release ships macOS app assets, look for:
+Download a macOS installer from the published **2026.10.3** release:
 
-- `OpenClaw-<version>.dmg` (preferred)
-- `OpenClaw-<version>.zip`
+| Your Mac                              | Installer                                                                                                           |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Apple Silicon                         | [Apple Silicon DMG](https://github.com/openclaw/openclaw/releases/download/v2026.10.3/OpenClaw-2026.10.3-arm64.dmg) |
+| Intel                                 | [Intel DMG](https://github.com/openclaw/openclaw/releases/download/v2026.10.3/OpenClaw-2026.10.3-x86_64.dmg)        |
+| Either architecture, or you're unsure | [Universal DMG](https://github.com/openclaw/openclaw/releases/download/v2026.10.3/OpenClaw-2026.10.3.dmg)           |
 
+These download links are pinned to **2026.10.3**. For newer builds or ZIP archives,
+see [OpenClaw GitHub releases](https://github.com/openclaw/openclaw/releases).
 Some releases only ship CLI, evidence, or Windows assets. If the newest release
 has no macOS app asset, use the newest one that does, or build from source with
 [macOS dev setup](/platforms/mac/dev-setup).

@@ -2,12 +2,10 @@ import Foundation
 import OpenClawKit
 
 struct VoicePermissions: Sendable {
-    let supported: @Sendable () -> Bool
     let granted: @Sendable () -> Bool
     let ensure: @Sendable (Bool) async -> Bool
 
     static let live = Self(
-        supported: { voiceWakeSupported },
         granted: { PermissionManager.voiceWakePermissionsGranted() },
         ensure: { await PermissionManager.ensureVoiceWakePermissions(interactive: $0) })
 }

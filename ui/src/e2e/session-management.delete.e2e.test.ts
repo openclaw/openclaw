@@ -1,88 +1,84 @@
-import path from "node:path";
-import { expect, it } from "vitest";
+import { it, expect } from "vitest";
 import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
-import {
-  captureUiProof,
-  captureUiProofEnabled,
-  activateSelfRemovingControl,
-  createSessionManagementE2eSuite,
-  installMockGateway,
-  sessionsListResponse,
-  waitForConfirmModal,
-} from "./session-management.test-support.ts";
+import * as ui from "./session-management.compact.test-support.ts";
+import * as support from "./session-management.test-support.ts";
 
-const suite = createSessionManagementE2eSuite(true);
+const suite = support.createSessionManagementE2eSuite(true);
+const changedMessage = "changed before deletion. Retry.";
+
+const basicOptions = {
+  locale: "en-US",
+  serviceWorkers: "block",
+} satisfies import("playwright").BrowserContextOptions;
+
+const desktopOptions = { ...basicOptions, viewport: { height: 900, width: 1280 } };
 
 suite.define(() => {
   it.each(["delete", "archive"] as const)(
     "recovers an offline workspace for sidebar %s only after loss consent",
-    async (action) => {
-      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-      const page = await context.newPage();
-      const main = sessionRow("agent:main:main", "Main", 2);
-      const target = sessionRow("agent:main:offline-workspace", "Offline workspace", 1);
-      const method = action === "delete" ? "sessions.delete" : "sessions.patch";
-      const gateway = await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "sessions.move"],
-        methodResponses: {
-          "sessions.delete": { ok: true, deleted: true },
-          "sessions.list": sessionsListResponse([main, target]),
-        },
-        sessionArchiveFiltering: true,
-        sessionKey: main.key,
-      });
-      const row = page.locator(`.sidebar-recent-session[data-session-key="${target.key}"]`);
-      const openRecovery = async (after: number) => {
-        await gateway.deferNext(method, { key: target.key });
-        await row.waitFor({ state: "visible" });
-        await row.hover();
-        await row.click({ button: "right" });
-        if (action === "delete") {
-          await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-        }
-        await activateSelfRemovingControl(
-          page.locator("openclaw-session-menu").getByRole("menuitem", {
-            name: action === "delete" ? "Delete…" : "Archive session",
-          }),
-        );
-        if (action === "delete") {
-          const confirmation = await waitForConfirmModal(page);
-          await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
-        }
-        await gateway.waitForRequest(method, { after, match: { key: target.key } });
-        await gateway.rejectDeferred(method, {
-          code: "UNAVAILABLE",
-          message: "Reconnect the device to preserve its workspace.",
-          details: {
-            code: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
-            cause: "device_offline",
-            recoveryAction: "continue_on_gateway",
-            sessionId: target.sessionId,
-            source: { generation: 5, environmentId: "offline-device", ownerEpoch: 70 },
-          },
+    (action) =>
+      suite.withPage(basicOptions, async ({ page }) => {
+        const main = sessionRow("agent:main:main", "Main", 2);
+        const target = sessionRow("agent:main:offline-workspace", "Offline workspace", 1);
+        const method = action === "delete" ? "sessions.delete" : "sessions.patch";
+        const gateway = await ui.installSessionRows(page, [main, target], {
+          featureMethods: [...defaultControlUiFeatureMethods, "sessions.move"],
+          methodResponses: { "sessions.delete": { ok: true, deleted: true } },
+          sessionArchiveFiltering: true,
+          sessionKey: main.key,
         });
-        const recovery = await waitForConfirmModal(page);
-        await recovery.getByRole("button", { name: `Discard changes and ${action}` }).waitFor();
-        await expect
-          .poll(() => recovery.textContent())
-          .toContain("Reconnect it to keep those changes");
-        return recovery;
-      };
-      try {
+        const row = page.locator(`.sidebar-recent-session[data-session-key="${target.key}"]`);
+        const openRecovery = async (after: number) => {
+          await gateway.deferNext(method, { key: target.key });
+          await ui.visible(row);
+          await row.hover();
+          await row.click({ button: "right" });
+          if (action === "delete") {
+            await ui.menuItem(page, "Advanced").click();
+          }
+          await support.activateSelfRemovingControl(
+            ui.menuItem(
+              page.locator("openclaw-session-menu"),
+              action === "delete" ? "Delete…" : "Archive session",
+              false,
+            ),
+          );
+          if (action === "delete") {
+            const confirmation = await support.waitForConfirmModal(page);
+            await ui.button(confirmation, "Delete").click();
+          }
+          await gateway.waitForRequest(method, { after, match: { key: target.key } });
+          await gateway.rejectDeferred(method, {
+            code: "UNAVAILABLE",
+            message: "Reconnect the device to preserve its workspace.",
+            details: {
+              code: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
+              cause: "device_offline",
+              recoveryAction: "continue_on_gateway",
+              sessionId: target.sessionId,
+              source: { generation: 5, environmentId: "offline-device", ownerEpoch: 70 },
+            },
+          });
+          const recovery = await support.waitForConfirmModal(page);
+          await ui.button(recovery, `Discard changes and ${action}`, false).waitFor();
+          await ui.expectText(recovery, "Reconnect it to keep those changes");
+          return recovery;
+        };
+
         await page.goto(`${suite.server.baseUrl}chat`);
         const cancelled = await openRecovery(0);
-        await cancelled.getByRole("button", { name: "Cancel", exact: true }).click();
+        await ui.button(cancelled, "Cancel").click();
         await cancelled.waitFor({ state: "detached" });
-        await row.waitFor({ state: "visible" });
+        await ui.visible(row);
         expect(await gateway.getRequests("sessions.move")).toEqual([]);
         await expectRequestCountStable(gateway, method, 1, undefined, { key: target.key });
 
         const confirmed = await openRecovery(1);
         await gateway.deferNext("sessions.move");
-        await confirmed.getByRole("button", { name: `Discard changes and ${action}` }).click();
+        await ui.button(confirmed, `Discard changes and ${action}`, false).click();
         expect(await gateway.waitForRequest("sessions.move")).toMatchObject({
           params: {
             key: target.key,
@@ -94,7 +90,7 @@ suite.define(() => {
         });
         await expectRequestCountStable(gateway, method, 2, undefined, { key: target.key });
         if (action === "delete") {
-          await gateway.setSessionsListResponse(sessionsListResponse([main]));
+          await gateway.setSessionsListResponse(support.sessionsListResponse([main]));
         }
         await gateway.resolveDeferred("sessions.move", { ok: true });
         await gateway.waitForRequest(method, { after: 2, match: { key: target.key } });
@@ -102,51 +98,42 @@ suite.define(() => {
         await expectRequestCountStable(gateway, method, 3, undefined, { key: target.key });
         expect(await gateway.getRequests("sessions.move")).toHaveLength(1);
         expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
-      } finally {
-        await context.close();
-      }
-    },
+      }),
   );
 
-  it("retires confirmed single and batch drafts in both stores without touching siblings or no-ops", async () => {
-    const retired = [
-      "agent:main:single",
-      "agent:main:batch-a",
-      "agent:main:batch-b",
-      "agent:main:external",
-    ];
-    const sibling = "agent:main:sibling";
-    const noOp = "agent:main:no-op";
-    const replacement = "agent:main:replacement";
-    const keys = [...retired, sibling, noOp, replacement];
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.delete": { ok: true, deleted: true },
-        "sessions.list": sessionsListResponse(
-          keys.map((key, index) => sessionRow(key, key, index)),
-        ),
-      },
-      sessionKey: "agent:main:main",
-    });
+  it("retires confirmed single and batch drafts in both stores without touching siblings or no-ops", () =>
+    suite.withPage(basicOptions, async ({ page }) => {
+      const retired = ["single", "batch-a", "batch-b", "external"].map(
+        (key) => `agent:main:${key}`,
+      );
+      const sibling = "agent:main:sibling";
+      const noOp = "agent:main:no-op";
+      const replacement = "agent:main:replacement";
+      const keys = [...retired, sibling, noOp, replacement];
 
-    try {
+      const gateway = await ui.installSessionRows(
+        page,
+        keys.map((key, index) => sessionRow(key, key, index)),
+        {
+          methodResponses: { "sessions.delete": { ok: true, deleted: true } },
+          sessionKey: "agent:main:main",
+        },
+      );
       await page.goto(`${suite.server.baseUrl}sessions`);
-      const applicationHandle = await getControlUiContextHandle(page);
-      await page.waitForFunction((application) => {
-        const client = application.gateway.snapshot.client;
+      const application = await getControlUiContextHandle(page);
+      await page.waitForFunction((app) => {
+        const client = app.gateway.snapshot.client;
         return client?.recoveryScopeReady === true && Boolean(client.recoveryScope);
-      }, applicationHandle);
-      const draftStore = await page.evaluateHandle<
+      }, application);
+      const storeHandle = await page.evaluateHandle<
         typeof import("../lib/chat/composer-draft-store.runtime.ts")
       >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
-      const outboxStore = await page.evaluateHandle<typeof import("../lib/chat/outbox-store.ts")>(
+      const outboxHandle = await page.evaluateHandle<typeof import("../lib/chat/outbox-store.ts")>(
         'import("/src/lib/chat/outbox-store.ts")',
       );
-      const owner = await applicationHandle.evaluate(
-        async (application, { store, outbox, sessionKeys }) => {
-          const client = application.gateway.snapshot.client;
+      const drafts = await application.evaluateHandle(
+        async (app, { store, outbox, keys: seededKeys, replacement: replacementKey }) => {
+          const client = app.gateway.snapshot.client;
           if (!client?.recoveryScope) {
             throw new Error("Gateway recovery scope unavailable");
           }
@@ -155,12 +142,18 @@ suite.define(() => {
             client.gatewayUrl,
             recoveryScope,
           );
+          const scope = (key: string) => ({
+            gatewayOwner,
+            recoveryScope,
+            scopeKey: `chat:v3:${key}\u0000agent:main`,
+          });
           const sessions = Object.fromEntries(
-            sessionKeys.map((key, index) => [
+            seededKeys.map((key, index) => [
               `${key}\u0000agent:main`,
               {
                 draft: `local ${key}`,
                 draftRevision: index + 1,
+                updatedAt: index + 1,
                 queue: [
                   {
                     id: `queued-${index}`,
@@ -169,7 +162,6 @@ suite.define(() => {
                     storageScope: JSON.stringify([gatewayOwner, recoveryScope]),
                   },
                 ],
-                updatedAt: index + 1,
               },
             ]),
           );
@@ -178,9 +170,9 @@ suite.define(() => {
             JSON.stringify({ version: 4, gatewayOwner, sessions, recovery: {} }),
           );
           await Promise.all(
-            sessionKeys.map((key, index) =>
+            seededKeys.map((key, index) =>
               store.writeDurableComposerDraft(
-                { gatewayOwner, recoveryScope, scopeKey: `chat:v3:${key}\u0000agent:main` },
+                scope(key),
                 {
                   revision: index + 1,
                   text: `durable ${key}`,
@@ -190,18 +182,85 @@ suite.define(() => {
               ),
             ),
           );
-          return { gatewayOwner, recoveryScope, storageKey };
+          type LocalDraft = {
+            draft?: string;
+            draftRevision?: number;
+            queue?: unknown[];
+            updatedAt?: number;
+          };
+          const readLocal = () =>
+            JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
+              sessions: Record<string, LocalDraft>;
+            };
+          return {
+            async read(targets: string[]) {
+              const local = readLocal();
+              return Object.fromEntries(
+                await Promise.all(
+                  targets.map(async (key) => {
+                    const draft = local.sessions?.[`${key}\u0000agent:main`];
+                    const durable = await store.readDurableComposerDraft(scope(key));
+                    return [
+                      key,
+                      {
+                        local: Boolean(draft?.draft || draft?.queue?.length),
+                        durable: durable.status === "found" ? durable.draft.text : durable.status,
+                      },
+                    ];
+                  }),
+                ),
+              );
+            },
+            async replace(postConfirmed: boolean) {
+              const receipt = postConfirmed
+                ? await store.readDurableComposerDraft(scope(replacementKey))
+                : undefined;
+              if (receipt && receipt.status !== "not-found") {
+                throw new Error("confirmed deletion did not leave a durable retirement fence");
+              }
+              // New edits must advance the retirement fence even when it leads the wall clock.
+              const revision = postConfirmed
+                ? Math.max(Date.now(), (receipt?.revision ?? 0) + 1)
+                : Date.now();
+              const local = readLocal();
+              local.sessions[`${replacementKey}\u0000agent:main`] = {
+                draft: postConfirmed ? "post-confirm local replacement" : "in-flight local edit",
+                draftRevision: revision,
+                ...(!postConfirmed ? { updatedAt: Date.now() } : {}),
+              };
+              sessionStorage.setItem(storageKey, JSON.stringify(local));
+              const written = await store.writeDurableComposerDraft(
+                scope(replacementKey),
+                {
+                  revision,
+                  text: postConfirmed
+                    ? "post-confirm durable replacement"
+                    : "in-flight durable edit",
+                  attachments: [],
+                },
+                {
+                  expectedRevision: postConfirmed ? (receipt?.revision ?? 0) : 7,
+                  ...(postConfirmed ? { expectedWriteId: receipt?.writeId } : {}),
+                  writeId: postConfirmed ? "post-confirm-replacement" : "in-flight-edit",
+                },
+              );
+              if (postConfirmed && written.status !== "persisted") {
+                throw new Error(`post-confirm replacement failed: ${written.status}`);
+              }
+              return revision;
+            },
+          };
         },
-        { store: draftStore, outbox: outboxStore, sessionKeys: keys },
+        { store: storeHandle, outbox: outboxHandle, keys, replacement },
       );
       const deleteSessions = (sessionKeys: string[]) =>
-        applicationHandle.evaluate(async (application, targets) => {
-          const sessions = application.sessions;
-          return targets.length === 1
-            ? sessions.delete(targets[0]!, { agentId: "main" })
-            : sessions.deleteMany(targets.map((key) => ({ key, agentId: "main" })));
-        }, sessionKeys);
-
+        application.evaluate(
+          async (app, targets) =>
+            targets.length === 1
+              ? await app.sessions.delete(targets[0]!, { agentId: "main" })
+              : await app.sessions.deleteMany(targets.map((key) => ({ key, agentId: "main" }))),
+          sessionKeys,
+        );
       await expect(deleteSessions([retired[0]!])).resolves.toMatchObject({ deleted: true });
       await expect(deleteSessions(retired.slice(1, 3))).resolves.toMatchObject({
         deleted: retired.slice(1, 3),
@@ -214,194 +273,63 @@ suite.define(() => {
         agentId: "main",
         reason: "delete",
       });
-
       await gateway.setMethodResponse("sessions.delete", { ok: true, deleted: true });
       await gateway.deferNext("sessions.delete", { key: replacement });
-      const requestsBeforeReplacement = (await gateway.getRequests("sessions.delete")).length;
+      const requestsBeforeReplacement = await ui.requestCount(gateway, "sessions.delete");
       const replacementDelete = deleteSessions([replacement]);
       await gateway.waitForRequest("sessions.delete", { after: requestsBeforeReplacement });
-      const inFlightRevision = await page.evaluate(
-        async ({ store, key, scopeOwner }) => {
-          const storageKey = scopeOwner.storageKey;
-          const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
-            sessions: Record<string, unknown>;
-          };
-          const revision = Date.now();
-          local.sessions[`${key}\u0000agent:main`] = {
-            draft: "in-flight local edit",
-            draftRevision: revision,
-            updatedAt: Date.now(),
-          };
-          sessionStorage.setItem(storageKey, JSON.stringify(local));
-          await store.writeDurableComposerDraft(
-            { ...scopeOwner, scopeKey: `chat:v3:${key}\u0000agent:main` },
-            { revision, text: "in-flight durable edit", attachments: [] },
-            { expectedRevision: 7, writeId: "in-flight-edit" },
-          );
-          return revision;
-        },
-        { store: draftStore, key: replacement, scopeOwner: owner },
-      );
+      const inFlightRevision = await drafts.evaluate((fixture) => fixture.replace(false));
       await expect
         .poll(() => page.evaluate((revision) => Date.now() > revision, inFlightRevision))
         .toBe(true);
       await gateway.resolveDeferred("sessions.delete", { ok: true, deleted: true });
       await expect(replacementDelete).resolves.toMatchObject({ deleted: true });
-
       await expect
         .poll(() =>
-          page.evaluate(
-            async ({ store, key, scopeOwner }) => {
-              const storageKey = scopeOwner.storageKey;
-              const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
-                sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
-              };
-              const scopeKey = `${key}\u0000agent:main`;
-              const localDraft = local.sessions?.[scopeKey];
-              const durable = await store.readDurableComposerDraft({
-                ...scopeOwner,
-                scopeKey: `chat:v3:${scopeKey}`,
-              });
-              return {
-                local: Boolean(localDraft?.draft || localDraft?.queue?.length),
-                durable: durable.status === "found" ? durable.draft.text : durable.status,
-              };
-            },
-            { store: draftStore, key: replacement, scopeOwner: owner },
-          ),
+          drafts.evaluate(async (fixture, key) => (await fixture.read([key]))[key], replacement),
         )
         .toEqual({ local: false, durable: "not-found" });
-
-      await page.evaluate(
-        async ({ store, key, scopeOwner }) => {
-          const storageKey = scopeOwner.storageKey;
-          const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
-            sessions: Record<string, { draft?: string; draftRevision?: number }>;
-          };
-          const scopeKey = `${key}\u0000agent:main`;
-          const durable = await store.readDurableComposerDraft({
-            ...scopeOwner,
-            scopeKey: `chat:v3:${scopeKey}`,
-          });
-          if (durable.status !== "not-found") {
-            throw new Error("confirmed deletion did not leave a durable retirement fence");
-          }
-          // Retirement fences can lead the wall clock; a new edit must advance that fence.
-          const revision = Math.max(Date.now(), (durable.revision ?? 0) + 1);
-          local.sessions[scopeKey] = {
-            draft: "post-confirm local replacement",
-            draftRevision: revision,
-          };
-          sessionStorage.setItem(storageKey, JSON.stringify(local));
-          const written = await store.writeDurableComposerDraft(
-            { ...scopeOwner, scopeKey: `chat:v3:${scopeKey}` },
-            { revision, text: "post-confirm durable replacement", attachments: [] },
-            {
-              expectedRevision: durable.revision ?? 0,
-              expectedWriteId: durable.writeId,
-              writeId: "post-confirm-replacement",
-            },
-          );
-          if (written.status !== "persisted") {
-            throw new Error(`post-confirm replacement failed: ${written.status}`);
-          }
-        },
-        { store: draftStore, key: replacement, scopeOwner: owner },
-      );
-
+      await drafts.evaluate((fixture) => fixture.replace(true));
       await expect
-        .poll(() =>
-          page.evaluate(
-            async ({ store, sessionKeys, scopeOwner }) => {
-              const local = JSON.parse(sessionStorage.getItem(scopeOwner.storageKey) ?? "{}") as {
-                sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
-              };
-              return Object.fromEntries(
-                await Promise.all(
-                  sessionKeys.map(async (key) => {
-                    const scopeKey = `${key}\u0000agent:main`;
-                    const localDraft = local.sessions?.[scopeKey];
-                    const durable = await store.readDurableComposerDraft({
-                      ...scopeOwner,
-                      scopeKey: `chat:v3:${scopeKey}`,
-                    });
-                    return [
-                      key,
-                      {
-                        local: Boolean(localDraft?.draft || localDraft?.queue?.length),
-                        durable: durable.status === "found" ? durable.draft.text : durable.status,
-                      },
-                    ];
-                  }),
-                ),
-              );
-            },
-            { store: draftStore, sessionKeys: keys, scopeOwner: owner },
-          ),
-        )
+        .poll(() => drafts.evaluate((fixture, targets) => fixture.read(targets), keys))
         .toEqual({
-          [retired[0]!]: { local: false, durable: "not-found" },
-          [retired[1]!]: { local: false, durable: "not-found" },
-          [retired[2]!]: { local: false, durable: "not-found" },
-          [retired[3]!]: { local: false, durable: "not-found" },
+          ...Object.fromEntries(
+            retired.map((key) => [key, { local: false, durable: "not-found" }]),
+          ),
           [sibling]: { local: true, durable: `durable ${sibling}` },
           [noOp]: { local: true, durable: `durable ${noOp}` },
-          [replacement]: {
-            local: true,
-            durable: "post-confirm durable replacement",
-          },
+          [replacement]: { local: true, durable: "post-confirm durable replacement" },
         });
-      await applicationHandle.dispose();
-    } finally {
-      await context.close();
-    }
-  });
+      await drafts.dispose();
+      await application.dispose();
+    }));
 
-  it("keeps bulk deletion fenced to the session selected before confirmation", async () => {
-    const key = "agent:main:confirmed";
-    const original = sessionRow(key, "Original session", 1, {
-      sessionId: "confirmed-session",
-    });
-    const replacement = sessionRow(key, "Replacement session", 2, {
-      sessionId: "replacement-session",
-    });
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      recordVideo: captureUiProofEnabled
-        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-    });
-    const page = await context.newPage();
-    const proofVideo = page.video();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.delete": { ok: true, deleted: true },
-        "sessions.list": sessionsListResponse([original]),
-      },
-      sessionKey: "agent:main:main",
-    });
+  it("keeps bulk deletion fenced to the session selected before confirmation", () =>
+    suite.withPage(desktopOptions, async ({ page }) => {
+      const key = "agent:main:confirmed";
+      const original = sessionRow(key, "Original session", 1, {
+        sessionId: "confirmed-session",
+      });
+      const replacement = sessionRow(key, "Replacement session", 2, {
+        sessionId: "replacement-session",
+      });
 
-    try {
+      const gateway = await ui.installSessionRows(page, [original], {
+        methodResponses: { "sessions.delete": { ok: true, deleted: true } },
+        sessionKey: "agent:main:main",
+      });
+
       await page.goto(`${suite.server.baseUrl}sessions`);
       const replacementLabel = page.locator(".sessions-table").getByText("Replacement session", {
         exact: true,
       });
       await page.getByRole("checkbox", { name: `Select session: ${key}` }).check();
-      await page.locator(".data-table-bulk-bar").getByRole("button", { name: "Delete" }).click();
-      const confirmModal = await waitForConfirmModal(page);
-      await captureUiProof(
-        suite,
-        page,
-        "sessions-bulk-delete-original-confirm.png",
-        confirmModal.locator("dialog"),
-        [confirmModal.getByRole("button", { name: "Delete", exact: true })],
-      );
+      await ui.button(page.locator(".data-table-bulk-bar"), "Delete", false).click();
+      const confirmModal = await support.waitForConfirmModal(page);
 
-      await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
+      await gateway.setSessionsListResponse(support.sessionsListResponse([replacement]));
       await gateway.deferNext("sessions.delete");
-      await confirmModal.getByRole("button", { name: "Delete", exact: true }).click();
+      await ui.button(confirmModal, "Delete").click();
 
       const request = await gateway.waitForRequest("sessions.delete");
       expect(request).toMatchObject({
@@ -409,11 +337,9 @@ suite.define(() => {
       });
       await gateway.rejectDeferred("sessions.delete", {
         code: "INVALID_REQUEST",
-        message: `Session ${key} changed before deletion. Retry.`,
+        message: `Session ${key} ${changedMessage}`,
       });
-      await expect
-        .poll(() => page.locator(".sessions-error[role=alert]").textContent())
-        .toContain("changed before deletion. Retry.");
+      await ui.expectText(page.locator(".sessions-error[role=alert]"), changedMessage);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...replacement,
         reason: "update",
@@ -424,173 +350,96 @@ suite.define(() => {
         false,
       );
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(1);
-      await captureUiProof(suite, page, "sessions-bulk-delete-replacement-protected.png");
-    } finally {
-      await context.close();
-      if (proofVideo) {
-        await proofVideo.saveAs(path.join(suite.artifactDir, "sessions-bulk-delete-replaced.webm"));
+    }));
+
+  it.each([false, true])("handles sidebar deletion outcomes (preserved worktree=%s)", (preserved) =>
+    suite.withPage(desktopOptions, async ({ page }) => {
+      const key = preserved ? "agent:main:snapshot-failed" : "agent:main:research";
+      const nativeDialogs: string[] = [];
+      if (!preserved) {
+        // Native dialogs must not be required by bridge-less WebViews.
+        page.on("dialog", (dialog) => {
+          nativeDialogs.push(dialog.message());
+          void dialog.dismiss();
+        });
       }
-    }
-  });
-
-  it("rejects deleting a same-key replacement after the in-app confirm", async () => {
-    const key = "agent:main:research";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      recordVideo: captureUiProofEnabled
-        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-    });
-    const page = await context.newPage();
-    const proofVideo = page.video();
-    // Playwright auto-dismisses native dialogs, which is exactly how a
-    // bridge-less WebView behaves. Deleting must not depend on one.
-    const nativeDialogs: string[] = [];
-    page.on("dialog", (dialog) => {
-      nativeDialogs.push(dialog.message());
-      void dialog.dismiss();
-    });
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.delete": { ok: true, deleted: true },
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
-          sessionRow(key, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
-        ]),
-      },
-      sessionKey: "agent:main:main",
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
-      await row.waitFor({ state: "visible", timeout: 10_000 });
-      await row.hover();
-      await row.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-      await page
-        .locator("openclaw-session-menu")
-        .getByRole("menuitem", { name: "Delete…" })
-        .click();
-
-      const confirmModal = await waitForConfirmModal(page);
-      await captureUiProof(
-        suite,
+      const gateway = await ui.installSessionRows(
         page,
-        "sidebar-delete-session-confirm.png",
-        confirmModal.locator("dialog"),
-        [confirmModal.getByRole("button", { name: "Delete", exact: true })],
-      );
-      await gateway.deferNext("sessions.delete");
-      await confirmModal.getByRole("button", { name: "Delete", exact: true }).evaluate((button) => {
-        if (!(button instanceof HTMLButtonElement)) {
-          throw new Error("expected delete confirmation button");
-        }
-        button.click();
-        button.click();
-      });
-
-      const request = await gateway.waitForRequest("sessions.delete");
-      expect(request).toMatchObject({
-        params: { deleteTranscript: true, expectedSessionId: `session:${key}`, key },
-      });
-      await expectRequestCountStable(gateway, "sessions.delete", 1);
-      await gateway.rejectDeferred("sessions.delete", {
-        code: "INVALID_REQUEST",
-        message: `Session ${key} changed before deletion. Retry.`,
-      });
-      const visibleError = page.locator("[data-sidebar-session-error]");
-      await expect
-        .poll(() => visibleError.textContent())
-        .toContain("changed before deletion. Retry.");
-      expect(await visibleError.textContent()).not.toContain("GatewayRequestError");
-      await row.waitFor({ state: "visible" });
-      await captureUiProof(suite, page, "sidebar-delete-session-replaced-error.png");
-      expect(nativeDialogs).toEqual([]);
-    } finally {
-      await context.close();
-      if (proofVideo) {
-        await proofVideo.saveAs(
-          path.join(suite.artifactDir, "sidebar-delete-session-replaced.webm"),
-        );
-      }
-    }
-  });
-
-  it("shows the preserved worktree reason before offering forced removal", async () => {
-    const key = "agent:main:snapshot-failed";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      recordVideo: captureUiProofEnabled
-        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-    });
-    const page = await context.newPage();
-    const proofVideo = page.video();
-    const gateway = await installMockGateway(page, {
-      featureMethods: [...defaultControlUiFeatureMethods, "worktrees.remove"],
-      methodResponses: {
-        "sessions.delete": {
-          ok: true,
-          key,
-          deleted: true,
-          archived: [],
-          worktreePreserved: {
-            id: "wt-snapshot-failed",
-            branch: "openclaw/snapshot-failed",
-            path: "/worktrees/snapshot-failed",
-            reason: "snapshot-failed",
+        [
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            key,
+            preserved ? "Snapshot failed" : "Research notes",
+            Date.parse("2026-07-01T15:00:00.000Z"),
+          ),
+        ],
+        {
+          ...(preserved
+            ? { featureMethods: [...defaultControlUiFeatureMethods, "worktrees.remove"] }
+            : {}),
+          methodResponses: {
+            "sessions.delete": {
+              ok: true,
+              deleted: true,
+              ...(preserved
+                ? {
+                    key,
+                    archived: [],
+                    worktreePreserved: {
+                      id: "wt-snapshot-failed",
+                      branch: "openclaw/snapshot-failed",
+                      path: "/worktrees/snapshot-failed",
+                      reason: "snapshot-failed",
+                    },
+                  }
+                : {}),
+            },
           },
+          sessionKey: "agent:main:main",
         },
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
-          sessionRow(key, "Snapshot failed", Date.parse("2026-07-01T15:00:00.000Z")),
-        ]),
-      },
-      sessionKey: "agent:main:main",
-    });
-
-    try {
+      );
       await page.goto(`${suite.server.baseUrl}chat`);
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
-      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await ui.visible(row, 10_000);
       await row.hover();
       await row.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-      await page
-        .locator("openclaw-session-menu")
-        .getByRole("menuitem", { name: "Delete…" })
-        .click();
-
-      const deleteModal = await waitForConfirmModal(page);
-      await deleteModal.getByRole("button", { name: "Delete", exact: true }).click();
-      await gateway.waitForRequest("sessions.delete");
-
-      const worktreeModal = await waitForConfirmModal(page);
-      await expect
-        .poll(() => worktreeModal.textContent())
-        .toContain("OpenClaw could not create a safety snapshot");
-      await expect.poll(() => worktreeModal.textContent()).toContain("Remove?");
-      await captureUiProof(
-        suite,
-        page,
-        "sidebar-delete-preserved-snapshot-failed.png",
-        worktreeModal.locator("dialog"),
-        [worktreeModal.getByRole("button", { name: "Cancel", exact: true })],
-      );
-      await worktreeModal.getByRole("button", { name: "Cancel", exact: true }).click();
-      expect(await gateway.getRequests("worktrees.remove")).toHaveLength(0);
-    } finally {
-      await context.close();
-      if (proofVideo) {
-        await proofVideo.saveAs(
-          path.join(suite.artifactDir, "sidebar-delete-preserved-snapshot-failed.webm"),
-        );
+      await ui.menuItem(page, "Advanced").click();
+      await ui.menuItem(page.locator("openclaw-session-menu"), "Delete…", false).click();
+      const confirmation = await support.waitForConfirmModal(page);
+      if (preserved) {
+        await ui.button(confirmation, "Delete").click();
+      } else {
+        await gateway.deferNext("sessions.delete");
+        await ui.button(confirmation, "Delete").evaluate((control) => {
+          if (!(control instanceof HTMLButtonElement)) {
+            throw new Error("expected delete confirmation button");
+          }
+          control.click();
+          control.click();
+        });
       }
-    }
-  });
+      const request = await gateway.waitForRequest("sessions.delete");
+      if (!preserved) {
+        expect(request).toMatchObject({
+          params: { deleteTranscript: true, expectedSessionId: `session:${key}`, key },
+        });
+        await expectRequestCountStable(gateway, "sessions.delete", 1);
+        await gateway.rejectDeferred("sessions.delete", {
+          code: "INVALID_REQUEST",
+          message: `Session ${key} ${changedMessage}`,
+        });
+        const error = page.locator("[data-sidebar-session-error]");
+        await ui.expectText(error, changedMessage);
+        expect(await error.textContent()).not.toContain("GatewayRequestError");
+        await ui.visible(row);
+        expect(nativeDialogs).toEqual([]);
+      } else {
+        const worktree = await support.waitForConfirmModal(page);
+        await ui.expectText(worktree, "OpenClaw could not create a safety snapshot");
+        await ui.expectText(worktree, "Remove?");
+        await ui.button(worktree, "Cancel").click();
+        expect(await gateway.getRequests("worktrees.remove")).toHaveLength(0);
+      }
+    }),
+  );
 });

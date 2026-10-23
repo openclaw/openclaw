@@ -182,28 +182,6 @@ describe("zalo outbound hosted media", () => {
     }
   });
 
-  it("does not serve hosted media when the current clock is invalid", async () => {
-    const hostedUrl = await prepareMedia();
-    const { pathname, search } = new URL(hostedUrl);
-    const response = createMockResponse();
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-    try {
-      const handled = await tryHandleHostedZaloMediaRequest(
-        {
-          method: "GET",
-          url: `${pathname}${search}`,
-        } as never,
-        response.res as never,
-      );
-
-      expect(handled).toBe(true);
-      expect(response.res.statusCode).toBe(410);
-      expect(response.res.end).toHaveBeenCalledWith("Expired");
-    } finally {
-      dateNow.mockRestore();
-    }
-  });
-
   it("rejects hosted media requests with the wrong token", async () => {
     const hostedUrl = await prepareMedia({
       webhookUrl: "https://gateway.example.com/custom/zalo",

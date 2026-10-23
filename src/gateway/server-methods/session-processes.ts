@@ -3,8 +3,6 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import {
   SessionsProcessesListParamsSchema,
   SessionsProcessesStopParamsSchema,
-  SessionsProcessesListResultSchema,
-  SessionsProcessesStopResultSchema,
   type SessionsProcessesListResult,
   type SessionsProcessesStopResult,
 } from "../../../packages/gateway-protocol/src/schema/session-processes.js";
@@ -171,10 +169,9 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
     // output after a reset, a sharing change, or an execution placement replacement.
     await withReadySessionRows(projection, queries, () => {
       assertCurrent();
-      const expected = stop ? SessionsProcessesStopResultSchema : SessionsProcessesListResultSchema;
       if (
-        !Value.Check(expected, result) ||
-        (!stop && "sessionId" in result && result.sessionId !== sessionId)
+        "processes" in result === stop ||
+        ("sessionId" in result && result.sessionId !== sessionId)
       ) {
         throw new Error("Worker returned an invalid process observation; reconnect and retry.");
       }

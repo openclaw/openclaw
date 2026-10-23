@@ -47,8 +47,10 @@ import {
   type QualificationAdmissionDispatch,
 } from "./lib/full-release-dispatch-request.mts";
 import { execPlainGh } from "./lib/plain-gh.mjs";
+import { validateCandidateChangelog } from "./lib/release-candidate-changelog.mts";
 import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { resolveQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { validatePackageSourceRef } from "./package-source-preflight.mjs";
 import { buildQualificationAdmissionRequest } from "./release-qualification-admission.mjs";
 
@@ -150,6 +152,40 @@ function requiredPositiveInteger(value: unknown, label: string): number {
     throw new Error(`${label} must be a positive integer`);
   }
   return normalized;
+}
+
+export function fullReleaseConcurrencyBranchPrefix(
+  workflowSha: string,
+  selection: { inputs: DispatchInputs; effectiveSoak: boolean },
+): string {
+  const target = String(selection.inputs.expected_sha || selection.inputs.ref || "");
+  const rerunGroup = String(selection.inputs.rerun_group || "");
+  const selectedProfile = String(selection.inputs.release_profile || "");
+  const profile = selectedProfile === "minimum" ? "beta" : selectedProfile;
+  requireDispatch(
+    SHA_PATTERN.test(workflowSha),
+    "Concurrency identity requires an exact Tooling SHA",
+  );
+  requireDispatch(
+    SHA_PATTERN.test(target),
+    "Concurrency identity requires an exact Validation SHA",
+  );
+  requireDispatch(RERUN_GROUPS.has(rerunGroup), "Concurrency identity requires a rerun group");
+  requireDispatch(
+    ["beta", "stable", "full"].includes(profile),
+    "Concurrency identity requires a release profile",
+  );
+  const identity = JSON.stringify({
+    target,
+    workflowSha,
+    rerunGroup,
+    profile,
+    soak: selection.effectiveSoak,
+  });
+  const suffix = `1${BigInt(`0x${createHash("sha256").update(identity).digest("hex").slice(0, 15)}`)
+    .toString()
+    .padStart(18, "0")}`;
+  return `release-ci/${workflowSha.slice(0, 12)}-${suffix}`;
 }
 
 function usage() {
@@ -581,7 +617,19 @@ export function verifyTargetRef(
   if (!targetRef) {
     return targetSha;
   }
-  const identity = resolveReleaseContextIdentity(targetRef, targetVersion);
+  let identity: ReturnType<typeof resolveReleaseContextIdentity>;
+  try {
+    identity = resolveReleaseContextIdentity(targetRef, targetVersion);
+  } catch (error) {
+    const context = parseReleaseContextRef(targetRef);
+    const preparation =
+      context?.kind === "release tag"
+        ? `Prepare the candidate from a commit whose package.json version matches ${context.ref}, push that tag, then rerun with its candidate SHA.`
+        : `Update package.json on ${targetRef} to the intended release version, commit and push the release branch, then rerun with the new candidate SHA.`;
+    throw new Error(`${error instanceof Error ? error.message : String(error)} ${preparation}`, {
+      cause: error,
+    });
+  }
   if (!identity) {
     throw new Error("Target ref must be a canonical OpenClaw release branch or tag");
   }
@@ -672,6 +720,37 @@ function preflightTargetShaFetch(targetSha: string) {
   } finally {
     rmSync(directory, { force: true, recursive: true });
   }
+}
+
+// pnpm release:candidate applies these gates after validation finishes; check
+// them first so an unpublishable candidate never spends a validation run.
+// Extended-stable publication does not use that checklist.
+function validatePublishCandidateChangelog(
+  targetSha: string,
+  targetContextRef: string,
+  targetVersion: string,
+) {
+  const packaged = parseReleaseVersion(targetVersion);
+  if (packaged && classifyReleaseTrain(packaged) === "extended-stable") {
+    return;
+  }
+  const releaseTag =
+    resolveReleaseContextIdentity(targetContextRef, targetVersion)?.releaseTag ??
+    `v${targetVersion}`;
+  try {
+    validateCandidateChangelog({
+      rootDir: process.cwd(),
+      repository: REPOSITORY,
+      tag: releaseTag,
+      targetSha,
+    });
+  } catch (error) {
+    throw new Error(
+      `Candidate ${targetSha} would fail the pnpm release:candidate changelog gates for ${releaseTag}: ${error instanceof Error ? error.message : String(error)}. Fix the release notes or contribution record on the release branch (its recorded target must be reachable from the candidate), then validate the new candidate SHA.`,
+      { cause: error },
+    );
+  }
+  console.log(`Release notes and contribution record pass the ${releaseTag} candidate gates`);
 }
 
 function targetVersionForTarget(targetSha: string): string {
@@ -965,6 +1044,119 @@ function readDispatchRuns(request: DispatchRequest) {
     );
   }
   throw new Error("Dispatch run inventory exceeded its page bound");
+}
+
+function readActiveConcurrencyRuns(request: DispatchRequest) {
+  const runs: Record<string, unknown>[] = [];
+  for (const status of ACTIVE_RUN_STATUSES) {
+    let total: number | undefined;
+    let statusCount = 0;
+    for (let page = 1; page <= MAX_RUN_PAGES; page += 1) {
+      const response = parseGhHttpResponse(
+        readGhApi(`repos/${REPOSITORY}/actions/workflows/${request.workflowId}/runs`, [
+          "--include",
+          "-f",
+          "event=workflow_dispatch",
+          "-f",
+          `status=${status}`,
+          "-f",
+          `per_page=${RUN_PAGE_SIZE}`,
+          "-f",
+          `page=${page}`,
+        ]),
+      );
+      requireDispatch(
+        response.status === 200,
+        "Active run inventory returned a non-success response",
+      );
+      const value: unknown = JSON.parse(response.body);
+      requireDispatch(
+        isJsonRecord(value) &&
+          Array.isArray(value.workflow_runs) &&
+          Number.isSafeInteger(value.total_count) &&
+          Number(value.total_count) >= 0 &&
+          Number(value.total_count) <= RUN_PAGE_SIZE * MAX_RUN_PAGES,
+        "Active run inventory is incomplete or exceeds its bound",
+      );
+      total ??= Number(value.total_count);
+      requireDispatch(
+        value.total_count === total &&
+          value.workflow_runs.length === Math.min(RUN_PAGE_SIZE, total - statusCount),
+        "Active run pagination changed or is incomplete",
+      );
+      for (const item of value.workflow_runs) {
+        requireDispatch(
+          isJsonRecord(item) &&
+            item.status === status &&
+            Number.isSafeInteger(item.id) &&
+            Number(item.id) > 0 &&
+            !runs.some((other) => other.id === item.id),
+          "Active run inventory contains invalid or repeated runs",
+        );
+        runs.push(item);
+        statusCount += 1;
+      }
+      const next = response.headers.get("link")?.match(/<([^>]+)>;\s*rel="next"/u)?.[1];
+      if (statusCount === total) {
+        requireDispatch(!next, "Active run pagination is uncertain");
+        break;
+      }
+      requireDispatch(next, "Active run inventory omitted its next page");
+      const url = new URL(next);
+      requireDispatch(
+        url.origin === "https://api.github.com" &&
+          url.pathname === `/repos/${REPOSITORY}/actions/workflows/${request.workflowId}/runs` &&
+          url.searchParams.get("page") === String(page + 1) &&
+          url.searchParams.get("event") === "workflow_dispatch" &&
+          url.searchParams.get("status") === status &&
+          url.searchParams.get("per_page") === String(RUN_PAGE_SIZE),
+        "Active run pagination changed scope",
+      );
+    }
+    requireDispatch(statusCount === total, "Active run inventory exceeded its page bound");
+  }
+  return runs;
+}
+
+function assertNoActiveConcurrencyRun(request: DispatchRequest) {
+  const branchPrefix = fullReleaseConcurrencyBranchPrefix(request.workflowSha, {
+    inputs: request.inputs,
+    effectiveSoak: request.effectiveSoak,
+  });
+  const active = readActiveConcurrencyRuns(request).filter((workflowRun) =>
+    stringValue(workflowRun.head_branch).startsWith(branchPrefix),
+  );
+  for (const workflowRun of active) {
+    const headBranch = isJsonRecord(workflowRun) ? stringValue(workflowRun.head_branch) : "";
+    requireDispatch(
+      isJsonRecord(workflowRun) &&
+        Number.isSafeInteger(workflowRun.id) &&
+        Number(workflowRun.id) > 0 &&
+        workflowRun.workflow_id === request.workflowId &&
+        workflowRun.head_sha === request.workflowSha &&
+        headBranch.startsWith(branchPrefix) &&
+        workflowRun.event === request.event &&
+        [
+          request.workflowPath,
+          `${request.workflowPath}@${headBranch}`,
+          `${request.workflowPath}@refs/heads/${headBranch}`,
+        ].includes(stringValue(workflowRun.path)) &&
+        workflowRun.html_url ===
+          `https://github.com/${REPOSITORY}/actions/runs/${String(workflowRun.id)}`,
+      "Same-concurrency-group run identity is invalid",
+    );
+  }
+  if (active.length > 0) {
+    const runs = active
+      .map(
+        (workflowRun) =>
+          `${stringValue(workflowRun.html_url)} (${stringValue(workflowRun.status)})`,
+      )
+      .join(", ");
+    throw new Error(
+      `Same-concurrency-group Full Release Validation is already active: ${runs}. Refusing a replacement that would wait behind it; wait for completion or cancel that exact run explicitly.`,
+    );
+  }
 }
 
 function assertDispatchRun(workflowRun: unknown, request: DispatchRequest, expected: DispatchRun) {
@@ -1766,11 +1958,25 @@ async function main() {
   validatePackageSourceRef(targetSha, {
     allowUnreleasedChangelog: args.inputs.allow_unreleased_changelog === "true",
   });
+  if (args.inputs.validation_purpose === "publish") {
+    validatePublishCandidateChangelog(targetSha, targetContextRef, targetVersion);
+  }
   if (trustedWorkflowHarness.contract === "1") {
     args.inputs.reuse_evidence = "false";
   }
-  const shortSha = workflowSha.slice(0, 12);
-  const branch = `release-ci/${shortSha}-${Date.now()}`;
+  const concurrencyInputs: DispatchInputs = {
+    ref: targetSha,
+    expected_sha: targetSha,
+    ...args.inputs,
+  };
+  const branchPrefix = fullReleaseConcurrencyBranchPrefix(workflowSha, {
+    inputs: concurrencyInputs,
+    effectiveSoak:
+      String(args.inputs.run_release_soak) === "true" ||
+      concurrencyInputs.release_profile === "stable" ||
+      concurrencyInputs.release_profile === "full",
+  });
+  const branch = `${branchPrefix}${Date.now()}`;
   const remoteBranchRef = `refs/heads/${branch}`;
   const dispatchInputs = {
     ref: targetSha,
@@ -1910,6 +2116,9 @@ async function executeFrozenDispatch(options: {
     record = next;
   };
   try {
+    if (record) {
+      assertNoActiveConcurrencyRun(record.request);
+    }
     if (record?.admission) {
       record = await qualifyAdmission(record, retain, qualificationDispatchClient);
       selection = {

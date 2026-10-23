@@ -126,7 +126,7 @@ reload mode, hook policy changes hot-reload the existing plugin runtime.
   `plugins.entries.<id>.hooks.allowConversationAccess: true` for
   `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`,
   `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
-  `agent_end`, and `before_agent_run`. Bundled plugins are allowed unless this
+  `agent_end`, `before_agent_run`, and `before_channel_ingress`. Bundled plugins are allowed unless this
   option is explicitly `false`.
 - `session_end` remains available as a metadata-only lifecycle hook without
   that grant. Its bounded `ctx.endedTranscript` reader is available only when
@@ -163,6 +163,7 @@ plugin instance and reruns registration with the new settings.
 | Task                                               | Hook                                                                        |
 | -------------------------------------------------- | --------------------------------------------------------------------------- |
 | Reply without a model call                         | `before_agent_reply` → `{ handled: true, reply }`; omit `reply` for silence |
+| Sanitize a channel event before durable ingress    | `before_channel_ingress` → `{ event }`                                      |
 | Add context or narrow tools for a turn             | `before_prompt_build`                                                       |
 | Gate model input on a supported runner             | `before_agent_run` → `{ outcome: "block", reason, message? }`               |
 | Block a tool or request approval                   | `before_tool_call`                                                          |
@@ -182,6 +183,36 @@ must use a supported local runner. Do not rely on this hook as a Codex or Copilo
 transcript, and compaction boundaries also differ. See
 [Codex hook boundaries](/plugins/codex-harness-runtime#hook-boundaries) and
 [Agent harness plugins](/plugins/sdk-agent-harness).
+
+### Before durable channel ingress
+
+Check `api.runtime.capabilities?.includes("channel-ingress-transform-v1")`
+before registering `before_channel_ingress`. A plugin that requires pre-storage
+privacy must refuse unsupported hosts and verify that its handler is registered;
+an absent or permission-blocked handler does not protect intake. Existing
+`openclaw plugins inspect <id> --runtime --json` reports registered `typedHooks`.
+
+The handler receives `{ event }` and `{ channelId, accountId, signal }`. `event`
+is the provider's raw transport value, not a normalized chat message. Validate
+its shape in the policy plugin, read current settings through
+`api.runtime.config.current()`, and return `{ event: replacement }`; `void` or an
+omitted `event` keeps the preceding value. Higher-priority handlers run first,
+and each handler receives an isolated copy of the latest replacement. Do not
+mutate retained values after returning them.
+
+Discord emits this hook inside ordered admission before serializing or writing
+its durable queue. Other channel plugins can opt in through the
+[ingress monitor preparation contract](/plugins/sdk-channel-outbound#durable-ingress-monitors).
+The channel revalidates provider identity and lane after transformation. Errors,
+timeouts (15 seconds by default), cancellation, and retired plugin authority
+refuse intake; they never fall back to storing the original event. Error
+diagnostics omit policy exception contents because they may contain private
+payloads. Pass `signal` into policy I/O and bound plugin-owned work.
+
+The hook does not rewrite existing queue rows or run again when an already
+sanitized row is claimed. Direct queue callers retain their own preparation
+contract. It runs before `inbound_claim`, `message_received`, and transcript
+hooks, which cannot protect the raw durable ingress payload.
 
 ## Troubleshooting
 

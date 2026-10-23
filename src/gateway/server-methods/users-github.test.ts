@@ -121,6 +121,24 @@ async function connect(client = alice) {
   }
   return { ...connection, selection: connection.selection };
 }
+function blockAlice() {
+  config.gateway = {
+    roles: {
+      definitions: { blocked: { scopes: [], agents: [], sessions: { others: "none" } } },
+      default: "blocked",
+    },
+  };
+  setUserProfileRole(owner(), "blocked");
+  invalidateOperatorRolePolicy(owner());
+}
+async function pendingRefresh() {
+  expireUserGitHubAccessToken(owner());
+  const refresh = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
+  network.refresh.mockReturnValueOnce(refresh.promise);
+  const pending = lifecycle.personal.refresh(owner());
+  await vi.waitFor(() => expect(network.refresh).toHaveBeenCalledOnce());
+  return { refresh, pending };
+}
 
 beforeEach(async () => {
   state = await createOpenClawTestState({ scenario: "minimal", applyEnv: true });
@@ -325,10 +343,11 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
           expect(disconnected?.selection).toEqual({ kind: "disconnected" });
         },
       );
-      expect(warning).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("personal.cancelAuthorizationAsync"),
-        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
-      );
+      const warningOptions = { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" };
+      expect(warning.mock.calls).toEqual([
+        [expect.stringContaining("personal.cancelAuthorizationAsync"), warningOptions],
+        [expect.stringContaining("personal.disconnectAsync"), warningOptions],
+      ]);
     } finally {
       unobserve();
       warning.mockRestore();
@@ -360,14 +379,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
           if (race === "disconnect") {
             await rpc(alice, "users.github.disconnect");
           } else {
-            config.gateway = {
-              roles: {
-                definitions: { blocked: { scopes: [], agents: [], sessions: { others: "none" } } },
-                default: "blocked",
-              },
-            };
-            setUserProfileRole(owner(), "blocked");
-            invalidateOperatorRolePolicy(owner());
+            blockAlice();
           }
         }
         return await verify(token, options);
@@ -382,9 +394,6 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     "reports a %s personal profile unavailable despite native authentication",
     async (failure) => {
       const connected = await connect();
-      if (connected.selection.kind !== "connected") {
-        throw new Error("Expected connected profile");
-      }
       const dir = resolveManagedGitHubProfileDir({
         scope: "personal",
         agentId: "",
@@ -673,14 +682,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         linkEmail("alice@example.test", owner(bob));
       }
       if (race === "role") {
-        config.gateway = {
-          roles: {
-            definitions: { blocked: { scopes: [], agents: [], sessions: { others: "none" } } },
-            default: "blocked",
-          },
-        };
-        setUserProfileRole(owner(), "blocked");
-        invalidateOperatorRolePolicy(owner());
+        blockAlice();
       }
       if (race === "expiry") {
         expireUserGitHubAuthorization(owner());
@@ -926,13 +928,13 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       const lease = vi
         .spyOn(stateLease, "withOpenClawStateLease")
         .mockImplementation((options, run) =>
-          acquire(options, async (owned) => {
+          acquire(options, async (owned, identity) => {
             updateUserGitHubConnection(
               owner(),
               () => current,
               () => owned.assertOwned(),
             );
-            return run(owned);
+            return run(owned, identity);
           }),
         );
       try {
@@ -948,11 +950,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
 
   it("preserves rotated tokens across merge and local materialization failure without preserving old action authority", async () => {
     const connection = await connect();
-    expireUserGitHubAccessToken(owner());
-    const refresh = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
-    network.refresh.mockReturnValueOnce(refresh.promise);
-    const pending = lifecycle.personal.refresh(owner());
-    await vi.waitFor(() => expect(network.refresh).toHaveBeenCalledOnce());
+    const { refresh, pending } = await pendingRefresh();
     linkEmail("alice@example.test", owner(bob));
     network.verify.mockResolvedValueOnce({ status: "unverified" });
     refresh.resolve({
@@ -976,11 +974,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
 
   it("does not resurrect a disconnected selection from a late remote refresh", async () => {
     await connect();
-    expireUserGitHubAccessToken(owner());
-    const refresh = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
-    network.refresh.mockReturnValueOnce(refresh.promise);
-    const pending = lifecycle.personal.refresh(owner());
-    await vi.waitFor(() => expect(network.refresh).toHaveBeenCalledOnce());
+    const { refresh, pending } = await pendingRefresh();
     await rpc(alice, "users.github.disconnect");
     const generation = (await readConnection(owner()))?.generation;
     refresh.resolve({ status: "refreshed", tokens });
@@ -1018,14 +1012,10 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
 
   it("drains a remotely rotated refresh during shutdown and reopens the exact durable connection", async () => {
     const connection = await connect();
-    expireUserGitHubAccessToken(owner());
-    const refreshed = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
-    network.refresh.mockReturnValueOnce(refreshed.promise);
-    const pending = lifecycle.personal.refresh(owner());
-    await vi.waitFor(() => expect(network.refresh).toHaveBeenCalledOnce());
+    const { refresh, pending } = await pendingRefresh();
     const stop = lifecycle.stop();
     expect(network.refresh.mock.calls[0]?.[0]).not.toHaveProperty("signal");
-    refreshed.resolve({
+    refresh.resolve({
       status: "refreshed",
       tokens: { ...tokens, refreshToken: "shutdown-rotated" },
     });

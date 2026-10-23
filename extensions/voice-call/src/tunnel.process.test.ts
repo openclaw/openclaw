@@ -50,15 +50,6 @@ async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<boo
   }
 }
 
-async function waitForRescueProcessExit(pid: number): Promise<boolean> {
-  try {
-    await expect.poll(() => isProcessAlive(pid), { timeout: 1_000, interval: 20 }).toBe(false);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function withNgrok(
   script: string[],
   run: (paths: { pidPath: string; signalPath: string; evidencePath: string }) => Promise<void>,
@@ -98,7 +89,10 @@ async function withNgrok(
           const pid = Number.parseInt(await fs.readFile(paths.pidPath, "utf8").catch(() => ""), 10);
           if (Number.isInteger(pid) && pid > 0 && isProcessAlive(pid)) {
             process.kill(pid, "SIGKILL");
-            await waitForRescueProcessExit(pid);
+            await expect
+              .poll(() => isProcessAlive(pid), { timeout: 1_000, interval: 20 })
+              .toBe(false)
+              .catch(() => {});
           }
         }
       },

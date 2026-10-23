@@ -1,3 +1,4 @@
+import util from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
@@ -39,27 +40,8 @@ export type SubsystemLogger = {
 
 type ChalkInstance = InstanceType<typeof Chalk>;
 
-const inspectValue: ((value: unknown) => string) | null = (() => {
-  try {
-    const inspect = process.getBuiltinModule?.("util").inspect;
-    return typeof inspect === "function" ? inspect : null;
-  } catch {
-    return null;
-  }
-})();
-
 function formatRuntimeArg(arg: unknown): string {
-  if (typeof arg === "string") {
-    return arg;
-  }
-  if (inspectValue) {
-    return inspectValue(arg);
-  }
-  try {
-    return JSON.stringify(arg);
-  } catch {
-    return String(arg);
-  }
+  return typeof arg === "string" ? arg : util.inspect(arg);
 }
 
 function isRichConsoleEnv(): boolean {
@@ -368,7 +350,9 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     if (
       level === "error" ||
       level === "fatal" ||
-      (areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventInterest("log.record"))
+      (level !== "info" &&
+        areDiagnosticsEnabledForProcess() &&
+        hasInternalDiagnosticEventInterest("log.record"))
     ) {
       return fileChild;
     }
@@ -383,6 +367,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
     const consoleEnabled =
+      meta?.consoleMessage !== false &&
       isLogLevelEnabled(level, consoleSettings.level) &&
       shouldLogSubsystemToConsole(resolvedSubsystem);
     const fileEnabled = isFileLogLevelEnabled(level);
@@ -393,9 +378,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     let fileMeta = meta;
     let consoleFields = meta;
     if (meta && Object.keys(meta).length > 0) {
-      const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
-        consoleMessage?: unknown;
-      };
+      const { consoleMessage, ...rest } = meta;
       if (typeof consoleMessage === "string") {
         consoleMessageOverride = consoleMessage;
       }

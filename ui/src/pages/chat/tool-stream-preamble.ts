@@ -14,8 +14,7 @@ function normalizePreambleProgressText(value: unknown): string {
   const stripped = stripInlineDirectiveTagsForDelivery(value)
     .text.replace(/^(?:[ \t]*\r?\n)+/u, "")
     .trimEnd();
-  const normalized = stripped.replace(/^[\s*_`~]+|[\s*_`~]+$/gu, "").trim();
-  return /^NO_REPLY$/iu.test(normalized) ? "" : stripped;
+  return stripped;
 }
 
 export function handlePreambleProgress(

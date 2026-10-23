@@ -1,13 +1,15 @@
-import { createEffect, createSignal, For, onCleanup, Show, untrack, useContext } from "solid-js";
+import { createMemo, createSignal, For, Show, useContext } from "solid-js";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { resolveToolDisplayIcon } from "../../../lib/chat/tool-display-icon.ts";
-import { LitContent, SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { createInterval } from "../../../lib/reactive/timers.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ActivityHeadline } from "./chat-activity-headline-selection.ts";
-import { renderToolIcon } from "./chat-tool-cards.ts";
+import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
 
 export type ChatActivityHeadlineProps = {
+  contentRef?: (element: HTMLSpanElement) => void;
   scope: string;
   activity: ActivityHeadline | undefined;
   summary: string;
@@ -18,87 +20,70 @@ export type ChatActivityHeadlineProps = {
 
 /** One disclosure owns its readable cadence; fast calls replace pending copy, not a queue. */
 export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
-  // Retained Lit ranges can initialize this presentation state during their parent's commit.
-  const [shown, setShown] = createSignal<ActivityHeadline | undefined>(undefined, {
-    ownedWrite: true,
+  const presented = useContext(ContentPresentation);
+  const [cadence, advanceCadence] = createSignal(0);
+  const display = createMemo<{
+    scope: string;
+    active: boolean;
+    headline: ActivityHeadline | undefined;
+    shownAt: number;
+    held: boolean;
+  }>((previous) => {
+    cadence();
+    const active = presented();
+    const scope = props.scope;
+    const activity = props.activity;
+    const currentActivity = props.currentActivity;
+    const now = Date.now();
+    if (!active) {
+      return {
+        scope: previous?.scope ?? scope,
+        active: false,
+        headline: previous?.headline,
+        shownAt: previous?.shownAt ?? now,
+        held: false,
+      };
+    }
+    const reset = previous?.scope !== scope;
+    const shown = reset ? undefined : previous?.headline;
+    if (
+      !activity ||
+      !shown ||
+      !previous?.active ||
+      activity.status === "failed" ||
+      activity.status === "blocked" ||
+      shown.key === activity.key ||
+      now - previous.shownAt >= 3_000
+    ) {
+      return {
+        scope,
+        active,
+        headline: activity,
+        shownAt:
+          reset || shown?.key !== activity?.key || shown?.title !== activity?.title
+            ? now
+            : (previous?.shownAt ?? now),
+        held: false,
+      };
+    }
+    // Held copy follows the original operation's current outcome while its deadline stays fixed.
+    const current = currentActivity?.find((item) => (item.toolCallId ?? item.itemId) === shown.key);
+    return {
+      scope,
+      active,
+      headline: currentActivity ? { ...shown, status: current?.status } : shown,
+      shownAt: previous.shownAt,
+      held: true,
+    };
   });
-  const presented = useContext(SolidContentPresentation);
-  let scope: string | undefined;
-  let wasPresented = true;
-  let shownAt = 0;
-  let pending: ActivityHeadline | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const clearTimer = () => {
-    if (timer !== undefined) {
-      clearTimeout(timer);
-    }
-    timer = undefined;
-  };
-  const show = (activity: ActivityHeadline) => {
-    const previous = untrack(shown);
-    if (previous?.key !== activity.key || previous.title !== activity.title) {
-      shownAt = Date.now();
-    }
-    setShown(activity);
-  };
-  createEffect(
-    () => ({
-      scope: props.scope,
-      activity: props.activity,
-      current: props.currentActivity,
-      active: presented(),
-    }),
-    (input) => {
-      clearTimer();
-      if (!input.active) {
-        wasPresented = false;
-        return;
-      }
-      const reset = scope !== input.scope;
-      scope = input.scope;
-      const previous = reset ? undefined : untrack(shown);
-      const activity = input.activity;
-      const resume = !wasPresented;
-      wasPresented = true;
-      pending = undefined;
-      if (!activity) {
-        setShown(undefined);
-        return;
-      }
-      const remaining = 3_000 - (Date.now() - shownAt);
-      if (
-        reset ||
-        !previous ||
-        resume ||
-        activity.status === "failed" ||
-        activity.status === "blocked" ||
-        previous.key === activity.key ||
-        remaining <= 0
-      ) {
-        if (reset) {
-          shownAt = Date.now();
-        }
-        show(activity);
-      } else {
-        // Held copy follows the original operation's current outcome, not its obsolete running state.
-        const current = input.current?.find(
-          (item) => (item.toolCallId ?? item.itemId) === previous.key,
-        );
-        if (input.current) {
-          setShown({ ...previous, status: current?.status });
-        }
-        pending = activity;
-        timer = setTimeout(() => {
-          timer = undefined;
-          if (pending) {
-            show(pending);
-            pending = undefined;
-          }
-        }, remaining);
-      }
+  createInterval(
+    () => advanceCadence((value) => value + 1),
+    () => {
+      const current = display();
+      return current.held ? Math.max(1, current.shownAt + 3_000 - Date.now()) : undefined;
     },
   );
-  onCleanup(clearTimer);
+  const shown = () => display().headline;
   const name = () => shown()?.name;
   return (
     <>
@@ -111,16 +96,15 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
       >
         <Show when={name()} fallback={<Icon name="listTree" />}>
           {(tool) => (
-            <LitContent
-              value={renderToolIcon(
-                shown()?.commandBearing ? "squareTerminal" : resolveToolDisplayIcon(tool()),
-                { toolName: tool(), pluginToolIcons: props.pluginToolIcons },
-              )}
+            <ChatToolIcon
+              style={{ display: "contents" }}
+              name={shown()?.commandBearing ? "squareTerminal" : resolveToolDisplayIcon(tool())}
+              tool={{ toolName: tool(), pluginToolIcons: props.pluginToolIcons }}
             />
           )}
         </Show>
       </span>
-      <span class="chat-tool-disclosure__content">
+      <span ref={(element) => props.contentRef?.(element)} class="chat-tool-disclosure__content">
         <Show
           when={shown()?.title}
           keyed

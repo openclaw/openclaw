@@ -1,180 +1,90 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 
-const tempDirs = new Set<string>();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(async () => {
-  await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
-  tempDirs.clear();
-});
-
-type UpdateCase = {
-  title: string;
-  file?: string;
-  initial: string;
-  changes: string[];
-  expected: string;
-};
-
-async function runUpdate(testCase: UpdateCase): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-apply-patch-update-"));
-  tempDirs.add(dir);
-  const file = testCase.file ?? "source.txt";
-  const filePath = path.join(dir, file);
-  await fs.writeFile(filePath, testCase.initial);
-  const patch = [
-    "*** Begin Patch",
-    `*** Update File: ${file}`,
-    ...testCase.changes,
-    "*** End Patch",
-  ].join("\n");
-
-  await createApplyPatchTool({ cwd: dir }).execute("test", { input: patch }, undefined);
-
-  return fs.readFile(filePath, "utf8");
+async function runUpdate(initial: string, changes: string): Promise<string> {
+  const dir = tempDirs.make("openclaw-apply-patch-update-");
+  const file = path.join(dir, "source.txt");
+  await fs.writeFile(file, initial);
+  const input = `*** Begin Patch\n*** Update File: source.txt\n${changes}\n*** End Patch`;
+  await createApplyPatchTool({ cwd: dir }).execute("test", { input }, undefined);
+  return fs.readFile(file, "utf8");
 }
 
-describe("apply_patch update byte preservation", () => {
-  it.each<UpdateCase>([
-    {
-      title: "preserves changed and context CRLF lines",
-      initial:
-        'class Program {\r\n  static void Main() {\r\n    Console.WriteLine("hello");\r\n  }\r\n}\r\n',
-      changes: [
-        "@@",
-        "  static void Main() {",
-        '-    Console.WriteLine("hello");',
-        '+    Console.WriteLine("world");',
-        "  }",
-      ],
-      expected:
-        'class Program {\r\n  static void Main() {\r\n    Console.WriteLine("world");\r\n  }\r\n}\r\n',
-    },
-    {
-      title: "preserves CRLF across a whole-file hunk",
-      initial: "foo\r\nbar\r\n",
-      changes: ["@@", " foo", "-bar", "+baz"],
-      expected: "foo\r\nbaz\r\n",
-    },
-    {
-      title: "uses CRLF for inserted lines",
-      initial: "foo\r\nbar\r\n",
-      changes: ["@@ foo", "+middle"],
-      expected: "foo\r\nmiddle\r\nbar\r\n",
-    },
-    {
-      title: "keeps LF files on LF",
-      initial: "foo\nbar\n",
-      changes: ["@@", " foo", "-bar", "+baz"],
-      expected: "foo\nbaz\n",
-    },
-    {
-      title: "adds the first line to an empty file",
-      initial: "",
-      changes: ["@@", "+first"],
-      expected: "first\n",
-    },
-    {
-      title: "preserves trailing whitespace on context lines",
-      file: "notes.md",
-      initial: "# Notes\nfirst line  \nsecond line  \nold value\ntail\n",
-      changes: ["@@", " first line", " second line", "-old value", "+new value", " tail"],
-      expected: "# Notes\nfirst line  \nsecond line  \nnew value\ntail\n",
-    },
-    {
-      title: "preserves punctuation on fuzzy context lines",
-      file: "notes.md",
-      initial: "It’s done\nold value\n",
-      changes: ["@@", " It's done", "-old value", "+new value"],
-      expected: "It’s done\nnew value\n",
-    },
-    {
-      title: "preserves mixed endings outside the changed hunk",
-      initial: "first\r\nsecond\nthird\r\n",
-      changes: ["@@", "-second", "+changed"],
-      expected: "first\r\nchanged\nthird\r\n",
-    },
-    {
-      title: "preserves a replaced line ending in a mixed file",
-      initial: "first\r\nsecond\r\nthird\n",
-      changes: ["@@", " first", "-second", "+changed", " third"],
-      expected: "first\r\nchanged\r\nthird\n",
-    },
-    {
-      title: "preserves a UTF-8 BOM when replacing the first line",
-      initial: "\uFEFFheading\nkeep\n",
-      changes: ["@@", "-heading", "+title", " keep"],
-      expected: "\uFEFFtitle\nkeep\n",
-    },
-    {
-      title: "preserves a missing final newline",
-      initial: "foo\nbar",
-      changes: ["@@", " foo", "-bar", "+baz"],
-      expected: "foo\nbaz",
-    },
-    {
-      title: "preserves final-newline state when one line expands",
-      initial: "head\r\nold",
-      changes: ["@@", " head", "-old", "+new one", "+new two"],
-      expected: "head\r\nnew one\r\nnew two",
-    },
-    {
-      title: "keeps the predecessor terminator when deleting an unterminated final line",
-      initial: "first\nlast",
-      changes: ["@@", " first", "-last"],
-      expected: "first\n",
-    },
-    {
-      title: "inserts at the requested context",
-      initial: "alpha\nanchor\nomega\n",
-      changes: ["@@ anchor", "+inserted"],
-      expected: "alpha\nanchor\ninserted\nomega\n",
-    },
-    {
-      title: "keeps later insertion contexts in source coordinates",
-      initial: "a\nb\nc\n",
-      changes: ["@@ a", "+after-a", "@@ b", "+after-b"],
-      expected: "a\nafter-a\nb\nafter-b\nc\n",
-    },
-    {
-      title: "inserts at the end of a file",
-      initial: "line1\n",
-      changes: ["@@", "+line2", "*** End of File"],
-      expected: "line1\nline2\n",
-    },
-    {
-      title: "preserves a missing final newline after an end-of-file insertion",
-      initial: "line1",
-      changes: ["@@", "+line2", "*** End of File"],
-      expected: "line1\nline2",
-    },
-    // Fuzzy whitespace matching locates source lines; replacement content stays literal.
-    {
-      title: "writes replacement lines literally inside a tab-indented block",
-      file: "run.py",
-      initial: "def run(x):\n\tif x:\n\t\tprepare()\n\t\tvalue = 1\n\t\treturn value\n\treturn 0\n",
-      changes: [
-        "@@",
-        "     if x:",
-        "         prepare()",
-        "-        value = 1",
-        "+        value = 2",
-        "         return value",
-      ],
-      expected:
-        "def run(x):\n\tif x:\n\t\tprepare()\n        value = 2\n\t\treturn value\n\treturn 0\n",
-    },
-    {
-      title: "keeps an explicit replacement indentation change",
-      file: "run.py",
-      initial: "def run(x):\n\tif x:\n\t\tvalue = 1\n",
-      changes: ["@@", "     if x:", "-        value = 1", "+    value = 2"],
-      expected: "def run(x):\n\tif x:\n    value = 2\n",
-    },
-  ])("$title", async (testCase) => {
-    expect(await runUpdate(testCase)).toBe(testCase.expected);
-  });
+it.each([
+  [
+    "changed/context CRLF",
+    "top\r\n  block\r\n    old\r\n  end\r\ntail\r\n",
+    "@@\n  block\n-    old\n+    new\n  end",
+    "top\r\n  block\r\n    new\r\n  end\r\ntail\r\n",
+  ],
+  ["whole-file CRLF", "foo\r\nbar\r\n", "@@\n foo\n-bar\n+baz", "foo\r\nbaz\r\n"],
+  ["inserted CRLF", "foo\r\nbar\r\n", "@@ foo\n+middle", "foo\r\nmiddle\r\nbar\r\n"],
+  ["LF", "foo\nbar\n", "@@\n foo\n-bar\n+baz", "foo\nbaz\n"],
+  ["empty file", "", "@@\n+first", "first\n"],
+  [
+    "context trailing whitespace",
+    "head\na  \nb  \nold\ntail\n",
+    "@@\n a\n b\n-old\n+new\n tail",
+    "head\na  \nb  \nnew\ntail\n",
+  ],
+  [
+    "fuzzy punctuation context",
+    "It’s done\nold\n",
+    "@@\n It's done\n-old\n+new",
+    "It’s done\nnew\n",
+  ],
+  ["mixed endings outside hunk", "a\r\nb\nc\r\n", "@@\n-b\n+new", "a\r\nnew\nc\r\n"],
+  ["mixed endings within hunk", "a\r\nb\r\nc\n", "@@\n a\n-b\n+new\n c", "a\r\nnew\r\nc\n"],
+  ["UTF-8 BOM", "\uFEFFheading\nkeep\n", "@@\n-heading\n+title\n keep", "\uFEFFtitle\nkeep\n"],
+  ["missing final newline", "foo\nbar", "@@\n foo\n-bar\n+baz", "foo\nbaz"],
+  [
+    "unterminated line expansion",
+    "head\r\nold",
+    "@@\n head\n-old\n+one\n+two",
+    "head\r\none\r\ntwo",
+  ],
+  ["unterminated final line deletion", "first\nlast", "@@\n first\n-last", "first\n"],
+  ["context insertion", "a\nanchor\nz\n", "@@ anchor\n+inserted", "a\nanchor\ninserted\nz\n"],
+  ["source-coordinate insertions", "a\nb\nc\n", "@@ a\n+x\n@@ b\n+y", "a\nx\nb\ny\nc\n"],
+  ["EOF insertion", "line1\n", "@@\n+line2\n*** End of File", "line1\nline2\n"],
+  ["unterminated EOF insertion", "line1", "@@\n+line2\n*** End of File", "line1\nline2"],
+  // Matching may ignore indentation; changed lines must still be written literally.
+  [
+    "literal replacement in tab block",
+    "def f():\n\tif x:\n\t\ta()\n\t\told\n\t\tb()\n\tend\n",
+    "@@\n     if x:\n         a()\n-        old\n+        new\n         b()",
+    "def f():\n\tif x:\n\t\ta()\n        new\n\t\tb()\n\tend\n",
+  ],
+  [
+    "explicit indentation change",
+    "def f():\n\tif x:\n\t\told\n",
+    "@@\n     if x:\n-        old\n+    new",
+    "def f():\n\tif x:\n    new\n",
+  ],
+])("preserves update bytes: %s", async (_case, initial, changes, expected) => {
+  expect(await runUpdate(initial, changes)).toBe(expected);
+});
+
+it("applies a hunk larger than the engine's call argument limit", async () => {
+  const added = Array.from({ length: 200_000 }, (_, index) => `+line ${index}`);
+  const output = await runUpdate("start\nend\n", ["@@", " start", ...added, " end"].join("\n"));
+  const lines = output.split("\n");
+  expect(lines).toHaveLength(200_003);
+  expect(lines.at(1)).toBe("line 0");
+  expect(lines.at(-2)).toBe("end");
+});
+
+it("keeps context-heavy large hunks linear", async () => {
+  const count = 100_000;
+  const initial = Array.from({ length: count }, (_, index) => `keep ${index}`);
+  const changes = ["@@", ...initial.flatMap((line) => [` ${line}`, `+added ${line}`])].join("\n");
+  const output = await runUpdate(`${initial.join("\n")}\n`, changes);
+  const lines = output.split("\n");
+  expect(lines).toHaveLength(count * 2 + 1);
+  expect(lines.slice(0, 2)).toEqual(["keep 0", "added keep 0"]);
 });

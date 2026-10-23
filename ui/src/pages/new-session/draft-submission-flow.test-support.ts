@@ -1,18 +1,21 @@
 import { createRouter } from "@openclaw/uirouter";
-import { onTestFinished, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import type { RouteId } from "../../app-routes.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { registerChatAttachmentPayload } from "../chat/attachment-payload-store.ts";
+import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionCallbacks } from "./draft-submission-contract.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 type FixtureOptions = {
+  onChange?: () => void;
+  updateComplete?: () => Promise<unknown>;
   gateway?: ApplicationContext["gateway"];
   takePreparedTitle?: () => string | undefined;
   retainForHandoff?: DraftSubmissionCallbacks["retainForHandoff"];
@@ -26,6 +29,24 @@ type FixtureOptions = {
   modelCatalog?: (params?: unknown) => Promise<unknown>;
   placementPolicy?: () => Promise<unknown>;
 };
+
+export const backgroundCreateOptions = {
+  reconciliation: "background",
+  signal: expect.any(AbortSignal),
+};
+
+export async function readyChatRoute() {
+  queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+}
+
+export function resetSubmissionMocks() {
+  document.body.replaceChildren();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  sessionStorage.clear();
+  localStorage.clear();
+}
 
 export function createDraftFixture(options: FixtureOptions = {}) {
   const request = vi.fn((method: string, params?: unknown) => {
@@ -59,15 +80,21 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     ],
   };
   // The roster carries the placement policy; a scripted policy arrives with a roster refresh.
+  const agentListeners = new Set<() => void>();
   const agents = {
-    state: {
-      agentsList: options.placementPolicy ? roster : { ...roster, sessionPlacement: {} },
+    subscribe(listener: () => void) {
+      agentListeners.add(listener);
+      return () => agentListeners.delete(listener);
     },
+    state: { agentsList: options.placementPolicy ? roster : { ...roster, sessionPlacement: {} } },
     refreshList: async () => {
       // A failed refresh publishes no policy, like the roster owner.
       const policy = await options.placementPolicy?.().catch(() => undefined);
       if (policy) {
         agents.state.agentsList = Object.assign({}, roster, policy);
+        for (const listener of agentListeners) {
+          listener();
+        }
       }
       return agents.state.agentsList;
     },
@@ -101,6 +128,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     },
     agents,
     sessions: {
+      subscribe: () => () => undefined,
       state: { result: null },
       createResult: vi.fn(),
       describe: ((params, describeOptions) => {
@@ -110,27 +138,26 @@ export function createDraftFixture(options: FixtureOptions = {}) {
         return describeOptions.client.request("sessions.describe", params);
       }) satisfies ApplicationContext["sessions"]["describe"],
     },
-    placementStartup: {
-      get: vi.fn(() => undefined),
-      hasPendingTurn: vi.fn(() => false),
-    },
+    placementStartup: { get: vi.fn(() => undefined), hasPendingTurn: vi.fn(() => false) },
     chatSubmissions: createChatSubmissions(),
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
-    config: { current: { cliAgentsEnabled: true, terminalEnabled: true } },
+    config: {
+      subscribe: () => () => undefined,
+      current: { cliAgentsEnabled: true, terminalEnabled: true },
+    },
     basePath: "",
     replace: vi.fn(),
     navigateAndWait: vi.fn(async () => undefined),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
+  Object.assign(context, { agentIdentity: createAgentIdentityCapability(context.gateway) });
   // The navigation spy represents an admitted Chat route; route ownership is
   // exercised with the real router in the transition tests.
   void router.navigate("chat", context);
   vi.mocked(context.gateway.setSessionKey).mockImplementation((sessionKey) => {
     context.gateway.snapshot.sessionKey = sessionKey;
   });
-  const host = new TestReactiveControllerHost();
   const gateway = new DraftGatewayState(
-    host,
     () => ({
       context,
       data: options.data,
@@ -149,8 +176,8 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     }),
     {
       readAgents: () => context.agents,
-      requestUpdate: vi.fn(),
-      updateComplete: () => Promise.resolve(),
+      changed: vi.fn(options.onChange),
+      updateComplete: options.updateComplete ?? (() => Promise.resolve()),
       onInvalidate: vi.fn(),
       onVisibilityRetired: () => flow?.setVisibility("normal"),
       onCloudProfileCleared: () => place?.clearCloudProfile(),
@@ -163,20 +190,15 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     },
   );
   const browser = new DraftPlaceBrowser(
-    host,
     gateway,
-    () => ({
-      context,
-      isAdmin: place?.isAdmin() ?? false,
-    }),
+    () => ({ context, isAdmin: place?.isAdmin() ?? false }),
     {
-      requestUpdate: vi.fn(),
+      changed: vi.fn(options.onChange),
+      updateComplete: () => Promise.resolve(),
       onProjectMissing: () => place?.clearProjectSelection(),
       onSelectProject: (projectId) => place?.selectProjectId(projectId),
       onApprovedListing: (listing) => place?.recordGatewayApprovedListing(listing),
-      querySelector: () => null,
       activeElement: () => null,
-      body: () => null,
     },
   );
   const place = new DraftPlaceState(
@@ -189,27 +211,27 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       pendingPlacementSessionKey: flow?.pendingPlacement.sessionKey ?? "",
     }),
     {
-      requestUpdate: vi.fn(),
+      changed: vi.fn(options.onChange),
       onError: (error) => flow?.setError(error),
       onClearError: (error) => flow?.clearError(error),
     },
   );
-  const requestUpdate = vi.fn();
+  const changed = vi.fn(options.onChange);
   const flow = new DraftSubmissionFlow(
     gateway,
     place,
     () => ({ context, data: options.data, isConnected: phase === "connected" }),
     {
-      requestUpdate,
+      changed,
       closeTransientUi: vi.fn(),
       takePreparedTitle: options.takePreparedTitle,
       retainForHandoff: options.retainForHandoff,
     },
   );
   gateway.synchronize(context.gateway);
-  place.setAgentsHydrated(true);
+  place.agentsHydrated = true;
   place.adoptAgentDefaults();
-  return { capabilities: flow.capabilities, context, flow, gateway, place, request, requestUpdate };
+  return { capabilities: flow.capabilities, context, flow, gateway, place, request, changed };
 }
 
 export function registerTextPayload(id: string) {
@@ -224,6 +246,12 @@ export function stubObjectUrls(...urls: string[]) {
   const createObjectURL = vi.fn();
   urls.forEach((url) => createObjectURL.mockReturnValueOnce(url));
   const revokeObjectURL = vi.fn();
-  vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = createObjectURL;
+      static override revokeObjectURL = revokeObjectURL;
+    },
+  );
   return revokeObjectURL;
 }

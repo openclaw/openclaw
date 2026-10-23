@@ -22,6 +22,7 @@ import type {
   DeleteSessionEntryLifecycleParams,
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
+import { retainConversationWorkerPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import { prepareSessionDeletionInDatabase } from "./session-accessor.sqlite-deletion-plan.js";
 import { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
 import { publishSessionEntryWorkerInvalidations } from "./session-accessor.sqlite-entry-worker-publication.js";
@@ -68,6 +69,13 @@ function hasNativeReclamationOwner(): boolean {
   );
 }
 
+export function runSessionDeletionPlanning<Planning extends SessionDeletionPlanningOperation>(
+  resolved: ReturnType<typeof resolveSqliteStoreScope>,
+  params: DeleteSessionEntryLifecycleParams,
+  planning: Planning,
+  assertCurrent: () => void,
+  diagnostics?: SqliteSessionReclamationDiagnostics,
+): Promise<Extract<SessionDeletionPlanningResult, { operation: Planning["operation"] }>>;
 export async function runSessionDeletionPlanning(
   resolved: ReturnType<typeof resolveSqliteStoreScope>,
   params: DeleteSessionEntryLifecycleParams,
@@ -95,23 +103,25 @@ export async function runSessionDeletionPlanning(
       diagnostics,
     );
   }
-  const result = await runSqliteSessionReclamation({
-    diagnostics,
-    assertCommitAllowed: assertCurrent,
-    plan: {
-      kind: "deletion-plan",
-      databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
-      materializedPlans: [],
-      planning,
+  return withSessionEntryWorker(
+    resolveSessionReclamationDatabaseOptions(databaseOptions),
+    undefined,
+    assertCurrent,
+    async (execution, source) => {
+      await execution.prepare(source);
+      const result = await execution.runExisting(source, (worker) =>
+        worker.execute({ type: "session.lifecycle.deletePlan", input: planning }),
+      );
+      assertCurrent();
+      if (!result) {
+        throw new Error("Session deletion planning lost its admitted database");
+      }
+      return result;
     },
-  });
-  if (result.kind !== "deletion-plan") {
-    throw new Error(`SQLite session deletion planning returned ${result.kind}`);
-  }
-  return result.value;
+  );
 }
 
-export async function runSqliteSessionReclamation(params: {
+type SqliteSessionReclamationParams = {
   diagnostics?: SqliteSessionReclamationDiagnostics;
   assertCommitAllowed?: () => void;
   refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
@@ -122,7 +132,23 @@ export async function runSqliteSessionReclamation(params: {
     databaseIdentity: string | symbol,
   ) => void;
   plan: SqliteSessionReclamationPlan;
-}): Promise<SqliteSessionReclamationResult> {
+};
+
+type SqliteSessionReclamationReply<Kind extends SqliteSessionReclamationPlan["kind"]> = Extract<
+  SqliteSessionReclamationResult,
+  {
+    kind:
+      | Kind
+      | (Kind extends "maintenance-plan" | "maintenance-age" ? "maintenance-plan-stale" : never);
+  }
+>;
+
+export function runSqliteSessionReclamation<Plan extends SqliteSessionReclamationPlan>(
+  params: Omit<SqliteSessionReclamationParams, "plan"> & { plan: Plan },
+): Promise<SqliteSessionReclamationReply<Plan["kind"]>>;
+export async function runSqliteSessionReclamation(
+  params: SqliteSessionReclamationParams,
+): Promise<SqliteSessionReclamationResult> {
   if (params.diagnostics) {
     params.diagnostics.kind = params.plan.kind;
   }
@@ -440,9 +466,6 @@ async function runPreparedSqliteSessionReclamation(
 ): Promise<SqliteSessionReclamationResult> {
   const { claim, worker, assertRequestCurrent } = owner;
   const identity = claim.identity;
-  if (typeof identity !== "string") {
-    throw new Error("SQLite reclamation Worker requires an admitted file generation");
-  }
   const { plan } = params;
   const assertCommitAllowed = () => {
     worker.assertCurrent(plan.databaseOptions, claim);
@@ -458,15 +481,38 @@ async function runPreparedSqliteSessionReclamation(
       await runExclusiveSqliteSessionWrite(
         plan.databaseOptions,
         async () => {
+          const conversations = retainConversationWorkerPublication(
+            identity,
+            plan.databaseOptions.path,
+          );
           let refusal: { error: unknown } | undefined;
           let publishCommitted: (() => void) | undefined;
           try {
             assertCommitAllowed();
             publishCommitted = prepareReclamationPublication(plan, identity);
+            if (
+              ![
+                "lifecycle-projection-plan",
+                "archive-publish-prepare",
+                "maintenance-pages",
+              ].includes(plan.kind)
+            ) {
+              conversations.begin();
+            }
           } catch (error) {
             refusal = { error };
           }
-          const completed = await run(refusal);
+          let completed: SqliteSessionReclamationResult | undefined;
+          try {
+            completed = await run(refusal);
+          } finally {
+            conversations.settle(
+              completed?.conversationPublication,
+              completed === undefined &&
+                refusal === undefined &&
+                reclamationAdmission.releaseCause !== "preliminary-release",
+            );
+          }
           if (completed) {
             // Publish captured identities after transaction settlement, before releasing the writer.
             const publishRemoval =

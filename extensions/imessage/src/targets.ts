@@ -110,7 +110,16 @@ export function inferIMessageTargetChatType(raw: string): "direct" | "group" | u
     if (parsed.kind === "handle") {
       return "direct";
     }
-    return "group";
+    const identifier =
+      parsed.kind === "chat_guid"
+        ? parsed.chatGuid
+        : parsed.kind === "chat_identifier"
+          ? parsed.chatIdentifier
+          : "";
+    if (/^(?:imessage|sms|any);[-+];.+$/i.test(identifier)) {
+      return identifier.includes(";+;") ? "group" : "direct";
+    }
+    return undefined;
   } catch {
     return undefined;
   }

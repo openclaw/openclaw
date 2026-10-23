@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as bundledChannelCatalog from "../../channels/bundled-channel-catalog-read.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
@@ -9,6 +10,37 @@ import {
   resolveAgentRuntimePluginLoadPlan,
   resolveAgentRuntimePluginSelectionOwners,
 } from "./runtime-plugin-load-plan.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+it.each([
+  { channels: [], enabled: false, expected: ["fixture-memory"] },
+  { channels: ["telegram"], enabled: false, expected: [] },
+  { channels: ["telegram"], enabled: true, expected: ["fixture-memory"] },
+])("uses admitted memory channel ownership: %j", ({ channels, enabled, expected }) => {
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [{ id: "fixture-memory", kind: "memory", channels }],
+  });
+  metadataSnapshot.index.plugins[0]!.startup.memory = true;
+  const catalog = vi
+    .spyOn(bundledChannelCatalog, "listBundledChannelCatalogEntries")
+    .mockReturnValue([]);
+  const plan = resolveAgentRuntimePluginLoadPlan({
+    config: {
+      channels: { telegram: { enabled } },
+      plugins: {
+        slots: { memory: "fixture-memory" },
+        entries: { "fixture-memory": { enabled: true } },
+      },
+    },
+    workspaceDir: "/fixture/workspace",
+    basePluginIds: [],
+    selections: [],
+    metadataSnapshot,
+  });
+  expect(plan.pluginIds).toEqual(expected);
+  expect(catalog.mock.calls.length).toBe(0);
+});
 
 describe("executor plugin runtime activation", () => {
   it.each([true, false])(

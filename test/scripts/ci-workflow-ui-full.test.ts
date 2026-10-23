@@ -42,6 +42,12 @@ function uiCoverage(outputs: Record<string, string>) {
   };
 }
 
+function runUi(options: Omit<Parameters<typeof runCiManifestFixture>[0], "bundledPlanner">) {
+  const result = runCiManifestFixture({ bundledPlanner: true, uiE2eSelectorSource, ...options });
+  expect(result.status, result.output).toBe(0);
+  return uiCoverage(result.outputs);
+}
+
 describe("ci:full UI coverage", () => {
   it.each([
     { full: false, uiOwner: false, runNode: true },
@@ -50,8 +56,7 @@ describe("ci:full UI coverage", () => {
     { full: true, uiOwner: true, runNode: true },
     { full: true, uiOwner: false, runNode: false },
   ])("selects UI inventories for %j", ({ full, uiOwner, runNode }) => {
-    const manifest = runCiManifestFixture({
-      bundledPlanner: true,
+    const coverage = runUi({
       eventName: "pull_request",
       runNode,
       changedPaths: [uiOwner ? "ui/src/owner.ts" : "src/owner.ts"],
@@ -60,7 +65,6 @@ describe("ci:full UI coverage", () => {
         expectDefined(targets.ui[0], "unit fixture"),
         expectDefined(targets.mocked[0], "E2E fixture"),
       ],
-      uiE2eSelectorSource,
       changedPlannerSource: `
         export const hasUiE2eAffectingChange = () => ${uiOwner};
         export const createChangedNodeTestShards = () => [];
@@ -70,8 +74,6 @@ describe("ci:full UI coverage", () => {
         OPENCLAW_CI_RUN_UI_TESTS: String(uiOwner),
       },
     });
-    expect(manifest.status, manifest.output).toBe(0);
-    const coverage = uiCoverage(manifest.outputs);
     expect(coverage.unit).toEqual(full || uiOwner ? targets.ui : [targets.ui[0]]);
     expect(coverage.e2e).toEqual(full ? [...targets.mocked, ...targets.real] : [targets.mocked[0]]);
     expect(coverage.real).toEqual(full ? targets.real : []);
@@ -82,22 +84,17 @@ describe("ci:full UI coverage", () => {
   });
 
   it("matches scheduled main UI matrices and inventories", () => {
-    const run = (eventName: "schedule" | "pull_request") => {
-      const manifest = runCiManifestFixture({
-        bundledPlanner: true,
+    const run = (eventName: "schedule" | "pull_request") =>
+      runUi({
         eventName,
         changedPaths: eventName === "schedule" ? null : ["src/owner.ts"],
         selectedTestTargets: ["src/owner.test.ts"],
-        uiE2eSelectorSource,
         scopeEnv: {
           OPENCLAW_CI_FULL: String(eventName === "pull_request"),
           OPENCLAW_CI_RUN_UI_TESTS: String(eventName === "schedule"),
           OPENCLAW_CI_VALIDATION_TIER: eventName === "schedule" ? "main" : "full",
         },
       });
-      expect(manifest.status, manifest.output).toBe(0);
-      return uiCoverage(manifest.outputs);
-    };
     expect(run("pull_request")).toEqual(run("schedule"));
   });
 });

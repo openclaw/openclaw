@@ -66,6 +66,7 @@ const GENERATED_LOCALES = [
   ["pl"],
   ["th"],
   ["ru"],
+  ["sv"],
 ].map(([language, dir = language]) => ({
   language,
   dir,

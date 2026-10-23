@@ -1,6 +1,7 @@
-import { createEffect, createMemo, createUniqueId, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, Show } from "solid-js";
 import type { BoardTab } from "../../lib/board/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createResizeObserver } from "../../lib/reactive/observers.ts";
 import { Menu } from "../solid/menu.tsx";
 import { Tabs } from "../solid/tabs.tsx";
 
@@ -17,6 +18,7 @@ export function BoardTabs(props: {
   onSelect: (tabId: string) => void;
 }) {
   const overflowId = createUniqueId();
+  const showTabs = createMemo(() => props.tabs.length > 1);
   const visible = createMemo(() => {
     const tabs = props.tabs.slice(0, 6);
     const active = props.tabs.find((tab) => tab.tabId === props.activeTabId);
@@ -29,18 +31,33 @@ export function BoardTabs(props: {
     const visibleIds = new Set(visible().map((tab) => tab.tabId));
     return props.tabs.filter((tab) => !visibleIds.has(tab.tabId));
   });
-  let track: HTMLDivElement | undefined;
+  const [nodes, setNodes] = createSignal<{
+    track: HTMLDivElement;
+    tab: (value: string) => HTMLElement | undefined;
+  }>();
   const layoutKey = createMemo(() =>
     JSON.stringify([props.activeTabId, visible().map((tab) => tab.tabId)]),
   );
-  createEffect(layoutKey, () => {
-    // Read selection after the keyed tab items have committed.
-    queueMicrotask(() => {
-      const scroller = track;
-      const selected = scroller?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
-      if (!scroller || !selected) {
+  createResizeObserver(
+    () => {
+      layoutKey();
+      if (!showTabs()) {
+        return [];
+      }
+      const current = nodes();
+      if (!current) {
+        return [];
+      }
+      const selected = current.tab(props.activeTabId);
+      return selected ? [current.track, selected] : [current.track];
+    },
+    () => {
+      const current = nodes();
+      const selected = current?.tab(props.activeTabId);
+      if (!current || !selected) {
         return;
       }
+      const scroller = current.track;
       const viewport = scroller.getBoundingClientRect();
       const tab = selected.getBoundingClientRect();
       if (tab.left < viewport.left) {
@@ -48,14 +65,14 @@ export function BoardTabs(props: {
       } else if (tab.right > viewport.right) {
         scroller.scrollLeft += tab.right - viewport.right;
       }
-    });
-  });
+    },
+  );
   return (
-    <Show when={props.tabs.length > 1}>
+    <Show when={showTabs()}>
       <nav class="board-tabs" aria-label={t("board.tabsLabel")}>
         <Tabs
-          ref={(element) => {
-            track = element;
+          ref={(element, tab) => {
+            setNodes({ track: element, tab });
           }}
           class="board-tabs__track"
           active={props.activeTabId}
@@ -64,13 +81,11 @@ export function BoardTabs(props: {
           items={visible().map((tab) => ({
             value: tab.tabId,
             label: tab.title,
-            className: [
-              "board-tabs__tab",
-              tab.tabId === props.activeTabId ? "board-tabs__tab--active" : "",
-              tab.tabId === props.hoverTabId ? "board-tabs__tab--drop" : "",
-            ]
-              .filter(Boolean)
-              .join(" "),
+            className: {
+              "board-tabs__tab": true,
+              "board-tabs__tab--active": tab.tabId === props.activeTabId,
+              "board-tabs__tab--drop": tab.tabId === props.hoverTabId,
+            },
             attributes: { "data-board-tab-id": tab.tabId },
           }))}
           onSelect={(tabId) => props.onSelect(tabId)}

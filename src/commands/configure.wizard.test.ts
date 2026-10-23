@@ -4,7 +4,6 @@ import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { committedConfigFiles } from "./committed-config.test-support.js";
 import {
-  createWizardTestRuntime as createRuntime,
   EMPTY_CONFIG_SNAPSHOT,
   queueWizardTestPrompts as queueWizardPrompts,
   runConfigureWizard,
@@ -16,10 +15,13 @@ import {
 const { configureCommandFromSectionsArg } = await import("./configure.commands.js");
 
 const written = () => mocks.writeConfigFile.mock.calls.at(-1)![0];
-const configureWeb = () => runConfigureWizard({ sections: ["web"] }, createRuntime());
+const configureWeb = () => runConfigureWizard({ sections: ["web"] });
 const nativeSearchConfig: OpenClawConfig = {
   auth: { profiles: { "openai:default": { provider: "openai", mode: "oauth" } } },
 };
+const copilotConfig = (config: Record<string, string>): OpenClawConfig => ({
+  plugins: { entries: { "github-copilot": { enabled: false, config } } },
+});
 
 function agentConfig(config: OpenClawConfig) {
   setupBaseWizardState(config);
@@ -61,8 +63,8 @@ describe("runConfigureWizard", () => {
       valid: false,
       issues: [{ path: "browser.actionTimeoutTypoMs", message: "Unknown key" }],
     });
-    const runtime = createRuntime();
-    await runConfigureWizard({}, runtime);
+    const runtime = mocks.runtime;
+    await runConfigureWizard({});
     expect(mocks.clackOutro).toHaveBeenCalledWith(
       "Config invalid. Run `openclaw doctor --fix` to apply supported repairs, then re-run configure.",
     );
@@ -83,7 +85,7 @@ describe("runConfigureWizard", () => {
         search: { ...candidate.memory?.search, provider: "openai", model: "embedding-model" },
       },
     }));
-    await configureCommandFromSectionsArg(["memory"], createRuntime(), { interactive: true });
+    await configureCommandFromSectionsArg(["memory"]);
     expect(mocks.runMemorySetupFlow).toHaveBeenCalledOnce();
     expect(written().memory?.search).toEqual({
       cache: { enabled: false },
@@ -99,7 +101,7 @@ describe("runConfigureWizard", () => {
     async (flag) => {
       setupBaseWizardState({ gateway: { mode: "local" } });
       queueWizardPrompts({ select: ["local", "memory", "__continue"], confirm: [] });
-      await runConfigureWizard(flag ? { sections: ["memory"] } : {}, createRuntime());
+      await runConfigureWizard(flag ? { sections: ["memory"] } : {});
       expect(mocks.runMemorySetupFlow).toHaveBeenCalledOnce();
       expect(mocks.writeConfigFile).not.toHaveBeenCalled();
       expect(mocks.clackOutro).toHaveBeenCalledWith("No configuration changes selected.");
@@ -143,21 +145,8 @@ describe("runConfigureWizard", () => {
   });
 
   it("preserves concurrent nested plugin writes on conflict (#64188)", async () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: { "github-copilot": { enabled: false, config: { region: "us-east-1" } } },
-      },
-    };
-    const updated: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "github-copilot": {
-            enabled: false,
-            config: { region: "us-east-1", accessToken: "plugin-wrote-this" },
-          },
-        },
-      },
-    };
+    const config = copilotConfig({ region: "us-east-1" });
+    const updated = copilotConfig({ region: "us-east-1", accessToken: "plugin-wrote-this" });
     queueWizardPrompts({ select: [], confirm: [] });
     const snapshot = (source: OpenClawConfig, hash: string) => ({
       ...EMPTY_CONFIG_SNAPSHOT,
@@ -179,7 +168,7 @@ describe("runConfigureWizard", () => {
         await mocks.writeConfigFile(nextConfig);
         return committedConfigFiles.write(nextConfig);
       });
-    await runConfigureWizard({ sections: ["workspace"] }, createRuntime());
+    await runConfigureWizard({ sections: ["workspace"] });
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
     expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(3);
@@ -194,7 +183,7 @@ describe("runConfigureWizard", () => {
         retryable: false,
       });
     });
-    await expect(runConfigureWizard({ sections: ["workspace"] }, createRuntime())).rejects.toThrow(
+    await expect(runConfigureWizard({ sections: ["workspace"] })).rejects.toThrow(
       "config path changed since last load",
     );
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
@@ -216,10 +205,7 @@ describe("runConfigureWizard", () => {
       options?.onPostWriteHook?.({ channel: "matrix", accountId: "beta", run: hook });
       return config;
     });
-    await runConfigureWizard(
-      { sections: ["workspace", "plugins", "skills", "channels"] },
-      createRuntime(),
-    );
+    await runConfigureWizard({ sections: ["workspace", "plugins", "skills", "channels"] });
     expect(written().agents).toEqual({
       ownership: "explicit",
       defaults: { workspace: "/tmp/global" },
@@ -251,7 +237,7 @@ describe("runConfigureWizard", () => {
     agentConfig({ agents: { entries: { ops: { workspace: "/tmp/ops" } } } });
     mocks.ensureWorkspaceAndSessions.mockRejectedValueOnce(new Error("workspace is unwritable"));
     await expect(
-      runConfigureWizard({ sections: ["workspace", "plugins", "skills"] }, createRuntime()),
+      runConfigureWizard({ sections: ["workspace", "plugins", "skills"] }),
     ).rejects.toThrow("workspace is unwritable");
     expect(mocks.setupPluginConfig).not.toHaveBeenCalled();
     expect(mocks.setupSkills).not.toHaveBeenCalled();
@@ -264,14 +250,15 @@ describe("runConfigureWizard", () => {
     };
     agentConfig(config);
     mocks.clackSelect.mockResolvedValueOnce("remove");
-    await runConfigureWizard({ sections: ["channels"] }, createRuntime());
+    await runConfigureWizard({ sections: ["channels"] });
     expect(mocks.setupChannels).not.toHaveBeenCalled();
     expect(mocks.clackSelect).toHaveBeenCalledOnce();
     expect(written()).toEqual(config);
   });
   it("rejects non-interactive configure before prompting (#93953)", async () => {
-    const runtime = createRuntime();
-    await configureCommandFromSectionsArg(undefined, runtime, { interactive: false });
+    const runtime = mocks.runtime;
+    mocks.isTerminalInteractive.mockReturnValue(false);
+    await configureCommandFromSectionsArg(undefined);
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.error).toHaveBeenCalledOnce();
     const message = runtime.error.mock.calls[0]?.[0];
@@ -284,16 +271,14 @@ describe("runConfigureWizard", () => {
 
   it("opens the full wizard for Commander's empty section list", async () => {
     queueWizardPrompts({ select: ["local", "__continue"], confirm: [] });
-    await configureCommandFromSectionsArg([], createRuntime(), { interactive: true });
+    await configureCommandFromSectionsArg([]);
     expect(written().gateway?.mode).toBe("local");
     expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
   });
 
   it("dispatches trimmed section names through the wizard", async () => {
     queueWizardPrompts({ select: ["configure"], confirm: [] });
-    await configureCommandFromSectionsArg(["  channels  ", "\tplugins\t"], createRuntime(), {
-      interactive: true,
-    });
+    await configureCommandFromSectionsArg(["  channels  ", "\tplugins\t"]);
     expect(mocks.setupChannels).toHaveBeenCalledOnce();
     expect(mocks.setupPluginConfig).toHaveBeenCalledOnce();
     expect(mocks.promptGatewayConfig).not.toHaveBeenCalled();
@@ -303,8 +288,9 @@ describe("runConfigureWizard", () => {
   it.each([["  ", '""']])(
     "rejects section %j before the terminal guard",
     async (section, diagnostic) => {
-      const runtime = createRuntime();
-      await configureCommandFromSectionsArg(["channels", section], runtime, { interactive: false });
+      const runtime = mocks.runtime;
+      mocks.isTerminalInteractive.mockReturnValue(false);
+      await configureCommandFromSectionsArg(["channels", section]);
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringContaining(`Invalid --section: ${diagnostic}`),

@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
@@ -46,22 +47,12 @@ import {
   pluginCacheStatSync,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
-import type { PluginOrigin } from "./plugin-origin.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
-import { groupPluginRecords } from "./record-groups.js";
+import { groupPluginRecords, PLUGIN_ORIGIN_PRIORITIES } from "./record-groups.js";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
   record: PluginManifestRecord;
-};
-
-// Canonicalize identical physical plugin roots with the most explicit source.
-// This only applies when multiple candidates resolve to the same on-disk plugin.
-const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
-  config: 0,
-  workspace: 1,
-  global: 2,
-  bundled: 3,
 };
 
 function rejectCaseFoldedIdCollisions(
@@ -134,25 +125,17 @@ function dedupePluginDiagnostics(
   diagnostics: PluginDiagnostic[],
   discoveryDiagnostics: ReadonlySet<PluginDiagnostic>,
 ): PluginDiagnostic[] {
-  const seen = new Set<string>();
-  const deduped: PluginDiagnostic[] = [];
-  for (const diagnostic of diagnostics) {
-    // Discovery diagnostics belong to package roots; generated compatibility warnings belong to ids.
-    const key = JSON.stringify([
+  // Discovery diagnostics belong to package roots; generated compatibility warnings belong to ids.
+  return dedupeByKey(diagnostics, (diagnostic) =>
+    JSON.stringify([
       diagnostic.level,
       diagnostic.pluginId ?? "",
       diagnostic.message,
       diagnostic.level === "error" || discoveryDiagnostics.has(diagnostic)
         ? (diagnostic.source ?? "")
         : "",
-    ]);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(diagnostic);
-  }
-  return deduped;
+    ]),
+  );
 }
 
 function isStaleForeignBundledPin(params: {
@@ -484,7 +467,10 @@ export function buildPluginManifestRegistry(
         }
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
-        if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
+        if (
+          PLUGIN_ORIGIN_PRIORITIES[candidate.origin]?.explicit <
+          PLUGIN_ORIGIN_PRIORITIES[existing.candidate.origin]?.explicit
+        ) {
           seenIds.set(effectivePluginId, { candidate, record });
         }
         continue;

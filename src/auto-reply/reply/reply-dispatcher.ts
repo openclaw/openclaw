@@ -10,7 +10,6 @@ import {
 import { toErrorObject } from "../../infra/errors.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -21,7 +20,6 @@ import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { settleReplyPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
@@ -98,7 +96,6 @@ function replaceDispatchPayload(
 export type { ReplyDispatchBeforeDeliver };
 export { composeReplyDispatchBeforeDeliver, markReplyDispatchBeforeDeliverDeadlineOwned };
 
-const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
 const { deliveryOutcomeTrackers, undeliveredFallbacks, conversationContextsByDispatcher } =
   resolveGlobalSingleton(Symbol.for("openclaw.replyDispatcherState"), () => ({
     deliveryOutcomeTrackers: new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>(),
@@ -291,14 +288,6 @@ export function createReplyDispatcher(
       await Promise.all([sent, settled]);
     } while (sent !== sendChain || settled !== settlementChain);
   };
-
-  const buildReceipt = (): ReplyDispatchReceipt => ({
-    counts: mapReplyDispatchCounts(settledCounts, (counts) => ({ ...counts })),
-    anyVisibleDelivered: Object.values(settledCounts).some(
-      (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
-    ),
-    ...(hasPendingDelivery ? { hasPendingDelivery: true } : {}),
-  });
 
   const unregister = registerDispatcher(() => pending);
   const releasePending = () => {
@@ -514,7 +503,6 @@ export function createReplyDispatcher(
     deliveryOutcomeTrackers.delete(payload);
     const fallback = undeliveredFallbacks.get(payload);
     undeliveredFallbacks.delete(payload);
-    const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
     const normalizedPrimary =
       getReplyPayloadMetadata(payload)?.replyDispatcherNormalizationOwner === dispatcher
         ? ({ kind: "deliver", payload } as const)
@@ -532,13 +520,6 @@ export function createReplyDispatcher(
           : null;
     const normalizedInput = normalized ? replaceDispatchPayload(input, normalized) : null;
     if (!normalizedInput) {
-      if (kind === "final" && originalWasExactSilent) {
-        silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
-          hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
-          surface: options.silentReplyContext?.surface,
-          conversationType: options.silentReplyContext?.conversationType,
-        });
-      }
       return false;
     }
     let deliveryFallback =
@@ -624,14 +605,9 @@ export function createReplyDispatcher(
       return;
     }
     completeCalled = true;
-    // If no replies were enqueued (pending is still 1 = just the reservation),
-    // schedule clearing the reservation after current microtasks complete.
-    // This gives any in-flight enqueue() calls a chance to increment pending.
-    void Promise.resolve().then(() => {
-      if (pending === 1) {
-        releasePending();
-      }
-    });
+    if (pending === 1) {
+      releasePending();
+    }
   };
 
   const dispatcher: ReturnType<typeof createReplyDispatcher> = {
@@ -659,7 +635,13 @@ export function createReplyDispatcher(
     supportsSettledReceipt: true,
     waitForIdle: async () => {
       await waitForIdle();
-      const receipt = buildReceipt();
+      const receipt: ReplyDispatchReceipt = {
+        counts: mapReplyDispatchCounts(settledCounts, (counts) => ({ ...counts })),
+        anyVisibleDelivered: Object.values(settledCounts).some(
+          (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
+        ),
+        ...(hasPendingDelivery ? { hasPendingDelivery: true } : {}),
+      };
       if (
         options.propagateRetryableNoSendFailure === true &&
         !hasPendingDelivery &&

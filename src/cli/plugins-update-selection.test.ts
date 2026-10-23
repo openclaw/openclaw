@@ -1,35 +1,15 @@
-// Plugin update selection tests cover CLI plugin update target selection.
 import { describe, expect, it } from "vitest";
-import type { HookInstallRecord } from "../config/types.hooks.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   resolveHookPackUpdateSelection,
   resolvePluginUpdateSelection,
 } from "./plugins-update-selection.js";
 
-function createNpmInstall(params: {
-  spec: string;
-  installPath?: string;
-  resolvedName?: string;
-}): PluginInstallRecord {
+function createNpmInstall(spec: string, resolvedName?: string) {
   return {
-    source: "npm",
-    spec: params.spec,
-    installPath: params.installPath ?? "/tmp/plugin",
-    ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
-  };
-}
-
-function createNpmHookInstall(params: {
-  spec: string;
-  installPath?: string;
-  resolvedName?: string;
-}): HookInstallRecord {
-  return {
-    source: "npm",
-    spec: params.spec,
-    installPath: params.installPath ?? "/tmp/hook-pack",
-    ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
+    source: "npm" as const,
+    spec,
+    installPath: "/tmp/plugin",
+    ...(resolvedName ? { resolvedName } : {}),
   };
 }
 
@@ -38,8 +18,8 @@ describe("resolvePluginUpdateSelection", () => {
     expect(
       resolvePluginUpdateSelection({
         installs: {
-          pack: createNpmInstall({ spec: "@acme/pack@stable" }),
-          other: createNpmInstall({ spec: "@acme/other" }),
+          pack: createNpmInstall("@acme/pack@stable"),
+          other: createNpmInstall("@acme/other"),
         },
         installOwnerByPluginId: new Map([
           ["pack/one", "pack"],
@@ -54,53 +34,56 @@ describe("resolvePluginUpdateSelection", () => {
     expect(
       resolvePluginUpdateSelection({
         installs: {
-          pack: createNpmInstall({ spec: "@acme/pack", resolvedName: "@acme/pack" }),
+          pack: createNpmInstall("@acme/pack", "@acme/pack"),
         },
         rawIds: ["pack/two"],
       }),
     ).toEqual({ pluginIds: [], unmatchedIds: ["pack/two"] });
   });
 
-  it("rejects an ambiguous package owner for targeted and update-all selection", () => {
+  it.each([false, true])("rejects an ambiguous package owner (all: %s)", (all) => {
     const installs = {
-      pack: createNpmInstall({ spec: "@acme/pack" }),
-      stable: createNpmInstall({ spec: "@acme/stable" }),
+      pack: createNpmInstall("@acme/pack"),
+      stable: createNpmInstall("@acme/stable"),
     };
     const rejectedPluginIds = new Map([["pack", "ambiguous pack"]]);
-
-    expect(resolvePluginUpdateSelection({ installs, rejectedPluginIds, rawIds: ["pack"] })).toEqual(
-      {
-        pluginIds: [],
-        error: "ambiguous pack",
-      },
-    );
     expect(
-      resolvePluginUpdateSelection({ installs, rejectedPluginIds, rawIds: [], all: true }),
+      resolvePluginUpdateSelection({
+        installs,
+        rejectedPluginIds,
+        all,
+        rawIds: all ? [] : ["pack"],
+      }),
+    ).toEqual({ pluginIds: [], error: "ambiguous pack" });
+  });
+
+  it.each([false, true])("skips operator-managed ids (all: %s)", (all) => {
+    const installs = {
+      local: createNpmInstall("@acme/local"),
+      stable: createNpmInstall("@acme/stable"),
+    };
+    const skippedPluginIds = new Set(["local"]);
+
+    expect(
+      resolvePluginUpdateSelection({
+        installs,
+        skippedPluginIds,
+        all,
+        rawIds: all ? [] : ["@acme/local", "stable"],
+      }),
+    ).toEqual({ pluginIds: ["stable"], skippedIds: ["local"] });
+  });
+  it("maps an npm package spec to its tracked hook pack", () => {
+    expect(
+      resolveHookPackUpdateSelection({
+        installs: {
+          "demo-hooks": createNpmInstall("openclaw-demo-hooks@1.0.0", "openclaw-demo-hooks"),
+        },
+        rawIds: ["openclaw-demo-hooks"],
+      }),
     ).toEqual({
-      pluginIds: [],
-      error: "ambiguous pack",
+      hookIds: ["demo-hooks"],
+      specOverrides: { "demo-hooks": "openclaw-demo-hooks" },
     });
   });
-});
-
-describe("resolveHookPackUpdateSelection", () => {
-  it.each([{ packageName: "openclaw-demo-hooks", requestedSpec: "openclaw-demo-hooks" }])(
-    "maps npm package spec $requestedSpec to its tracked hook pack",
-    ({ packageName, requestedSpec }) => {
-      expect(
-        resolveHookPackUpdateSelection({
-          installs: {
-            "demo-hooks": createNpmHookInstall({
-              spec: `${packageName}@1.0.0`,
-              resolvedName: packageName,
-            }),
-          },
-          rawIds: [requestedSpec],
-        }),
-      ).toEqual({
-        hookIds: ["demo-hooks"],
-        specOverrides: { "demo-hooks": requestedSpec },
-      });
-    },
-  );
 });

@@ -12,12 +12,14 @@ import type { SkillLibraryReadInput, SkillLibraryReadOutput } from "./read.contr
 import {
   hydrateSkillLibraryWorkerAuthority,
   listSkillLibraryInDatabase,
+  projectSkillLibraryPresentation,
   readSkillLibraryMetadataInDatabase,
   resolveSkillLibraryPresentationInDatabase,
 } from "./service.kernel.js";
 import {
   selectSkillLibraryEntries,
   resolveSkillLibraryActor,
+  resolveSkillLibraryActorFromProfile,
   requireSkillLibraryEntry,
   requireSkillLibraryProfile,
   requireSkillLibraryUpload,
@@ -104,9 +106,35 @@ export const skillLibraryReadOperations = {
     }
     const profileIds = new Set<string>();
     const authority = hydrateSkillLibraryWorkerAuthority(input.authority, profileIds);
+    if (input.kind === "session") {
+      const actor = resolveSkillLibraryActorFromProfile(
+        authority,
+        input.authority.config,
+        input.sessionFacts.profile,
+      );
+      if (authority.profileId) {
+        profileIds.add(authority.profileId);
+      }
+      if (actor.profileId) {
+        profileIds.add(actor.profileId);
+      }
+      return {
+        type: "skillLibrary.read",
+        kind: "session",
+        value: {
+          selections:
+            !authority.profileId ||
+            getAdmittedSqliteSchemaFacts(db)?.tables.has("skill_library_entries") === false
+              ? []
+              : runSqliteDeferredTransactionSync(db, () => seed(db, authority, actor)),
+          presentation: projectSkillLibraryPresentation(actor, input.sessionFacts.multipleProfiles),
+        },
+        profileIds: [...profileIds],
+      };
+    }
     const value = runSqliteDeferredTransactionSync(db, () => {
       if (
-        !["profile", "presentation", "list", "seed", "session"].includes(input.kind) &&
+        !["profile", "presentation", "list", "seed"].includes(input.kind) &&
         !tableExists(db, "skill_library_entries")
       ) {
         if (input.kind === "pins" && !input.params.length) {
@@ -135,13 +163,6 @@ export const skillLibraryReadOperations = {
           return requireSkillLibraryUpload(db, input.params.uploadId, authority);
         case "seed":
           return seed(db, authority);
-        case "session": {
-          const actor = resolveSkillLibraryActor(db, authority);
-          return {
-            selections: seed(db, authority, actor),
-            presentation: resolveSkillLibraryPresentationInDatabase(db, authority, actor),
-          };
-        }
         case "change":
           return change(db, authority, input.params.current, input.params.params);
         case "pins":

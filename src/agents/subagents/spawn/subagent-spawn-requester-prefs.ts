@@ -83,5 +83,5 @@ export function resolveRequesterFastMode(
     model: model.model,
     agentId: params.requesterAgentId,
     sessionEntry: entry,
-  }).mode;
+  }).requestMode;
 }

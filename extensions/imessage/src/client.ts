@@ -5,14 +5,18 @@ import {
   captureChannelReadAuthority,
   captureEffectAuthority,
 } from "openclaw/plugin-sdk/fetch-runtime";
-import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { recoverIMessageBridge } from "./bridge-recovery.js";
 import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
+import { normalizeIMessageFullDiskAccessError } from "./process-diagnostics.js";
 
 // Match only the documented Contacts reconciliation diagnostic; other Apple
 // framework messages must keep their error level.
@@ -58,9 +62,22 @@ export class IMessageRpcRequestError extends Error {
   }
 }
 
-// Only imsg's helper wait error proves a bridge stall; our client timeout can
+// Only imsg's helper wait errors prove a bridge stall; our client timeout can
 // also mean a slow wrapper and must not evict a healthy capability cache.
+// imsg reports legacy waits as "Timed out waiting for response to '<action>'",
+// but bridge_v2 mutations (send-message) return structured delivery data whose
+// detail starts with the deadline sentence below.
 function isIMessageBridgeStall(error: unknown): boolean {
+  if (error instanceof IMessageRpcRequestError && isRecord(error.data)) {
+    const { transport, detail } = error.data;
+    if (
+      transport === "bridge_v2" &&
+      typeof detail === "string" &&
+      detail.startsWith("The bridge response deadline expired.")
+    ) {
+      return true;
+    }
+  }
   return error instanceof Error && error.message.includes("Timed out waiting for response");
 }
 
@@ -89,8 +106,6 @@ type PendingRequest = {
   reject: (error: Error) => void;
 };
 
-const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
-  "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
 const IMESSAGE_RPC_CLOSE_GRACE_MS = 500;
 
 function isTestEnv(): boolean {
@@ -99,14 +114,6 @@ function isTestEnv(): boolean {
   }
   const vitest = normalizeLowercaseStringOrEmpty(process.env.VITEST);
   return Boolean(vitest);
-}
-
-function normalizeIMessageFullDiskAccessError(message: string): string | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(message);
-  if (!normalized.includes("full disk access") || !normalized.includes("chat.db")) {
-    return undefined;
-  }
-  return PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR;
 }
 
 function createLfLineFramer(onLine: (line: string) => void): {
@@ -323,7 +330,8 @@ export class IMessageRpcClient {
           await recoverIMessageBridge(this.configuredCliPath);
         } catch (recoveryError) {
           this.runtime?.error?.(
-            `imessage: automatic bridge recovery failed: ${formatErrorMessage(recoveryError)}`,
+            normalizeIMessageFullDiskAccessError(formatErrorMessage(recoveryError)) ??
+              `imessage: automatic bridge recovery failed. ${BRIDGE_STALL_GUIDANCE}`,
           );
         }
         throw describeIMessageBridgeStall(err);
@@ -396,20 +404,20 @@ export class IMessageRpcClient {
     // the benign ones, so record before choosing the log level.
     this.recordProcessDiagnostic(trimmed);
     if (IMSG_APPLE_FRAMEWORK_STDERR_PATTERN.test(trimmed)) {
-      logVerbose(`imsg rpc: ${trimmed}`);
       return;
     }
-    this.runtime?.error?.(`imsg rpc: ${trimmed}`);
+    this.runtime?.error?.(
+      normalizeIMessageFullDiskAccessError(trimmed) ?? "imsg rpc: stderr diagnostic received",
+    );
   }
 
   private handleLine(line: string) {
     let parsed: IMessageRpcResponse<unknown>;
     try {
       parsed = JSON.parse(line) as IMessageRpcResponse<unknown>;
-    } catch (err) {
+    } catch {
       this.recordProcessDiagnostic(line);
-      const detail = formatErrorMessage(err);
-      this.runtime?.error?.(`imsg rpc: failed to parse ${line}: ${detail}`);
+      this.runtime?.error?.("imsg rpc: failed to parse JSON response");
       return;
     }
 

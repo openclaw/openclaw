@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { API } from "typescript/unstable/sync";
+import { API } from "typescript/sync";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   auditCanonicalCoercionExports,
@@ -38,13 +38,10 @@ describe("coercion helper declaration AST guard", () => {
       "const isValidAgentId = () => true;",
       "function containsAsciiControlCharacter() {}",
     ].join("\n");
+    using retainedSource = parser.createSourceFile("src/example.ts", source);
 
     expect(
-      findBannedCoercionHelperDeclarations(
-        source,
-        "src/example.ts",
-        parser.createSourceFile("src/example.ts", source),
-      ),
+      findBannedCoercionHelperDeclarations(source, "src/example.ts", retainedSource.sourceFile),
     ).toEqual([
       { file: "src/example.ts", kind: "function", line: 1, name: "readString" },
       { file: "src/example.ts", kind: "variable", line: 2, name: "isRecord" },
@@ -74,13 +71,10 @@ describe("coercion helper declaration AST guard", () => {
       "// function asRecord() {}",
       'const fixture = "function toError() {}";',
     ].join("\n");
+    using retainedSource = parser.createSourceFile("src/example.ts", source);
 
     expect(
-      findBannedCoercionHelperDeclarations(
-        source,
-        "src/example.ts",
-        parser.createSourceFile("src/example.ts", source),
-      ),
+      findBannedCoercionHelperDeclarations(source, "src/example.ts", retainedSource.sourceFile),
     ).toEqual([]);
   });
 
@@ -180,11 +174,9 @@ describe("coercion helper declaration AST guard", () => {
       "export { local as alias };",
       "export const VALUE = 1;",
     ].join("\n");
+    using retainedSource = parser.createSourceFile("src/owner.ts", source);
 
-    expect(findExportedCallableNames(parser.createSourceFile("src/owner.ts", source))).toEqual([
-      "alias",
-      "canonical",
-    ]);
+    expect(findExportedCallableNames(retainedSource.sourceFile)).toEqual(["alias", "canonical"]);
   });
 
   it("reports unclassified exports and stale, duplicate, or blank deferred entries", () => {

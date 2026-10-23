@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Client, SdkErrorCode } from "@modelcontextprotocol/client";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { settlesWithin } from "../shared/settle-within.js";
@@ -142,6 +142,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
   it.each([
     "Streamable HTTP error: Error POSTing to endpoint: bearer=body-secret",
     "Error POSTing to endpoint (HTTP 500): bearer=body-secret",
+    'Streamable HTTP error: Error POSTing to endpoint: {\n"token":"body-secret"\n}',
   ])("redacts an HTTP response body from %s", (message) => {
     const redacted = redactMcpDiagnosticError(new Error(message));
     expect(redacted).not.toContain("body-secret");
@@ -227,7 +228,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       try {
         await client.connect(transport);
         const error = await client
-          .callTool({ name: "oversized", arguments: {} }, undefined, { timeout: 100 })
+          .callTool({ name: "oversized", arguments: {} }, { timeout: 100 })
           .then(
             () => undefined,
             (reason: unknown) => reason,
@@ -924,7 +925,10 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     });
     const client = new Client({ name: "test", version: "1" });
     await client.connect(transport);
-    await expect(client.ping()).rejects.toThrow(/Streamable HTTP error/);
+    await expect(client.ping()).rejects.toMatchObject({
+      code: SdkErrorCode.ClientHttpNotImplemented,
+      status: 500,
+    });
     await expect(settlesWithin(cancelPromise, 1_000)).resolves.toBe(true);
     await client.close();
   });

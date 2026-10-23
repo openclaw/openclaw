@@ -37,10 +37,9 @@ restarting the Gateway.
 
 Custom instructions replace only the guidance. A fixed prefix keeps tools
 disabled and treats the conversation as evidence, not instructions. A fixed
-output contract requires a first line of `NO_CHANGE` or `CORRECTION` and limits
-corrections to 120 words. A second review verifies any correction using the
-unchanged, non-editable `APPROVE`/`REJECT` prompt before advice is delivered.
-The built-in prompt is unchanged from the evaluated version. Custom instructions
-are not covered by that evaluation.
+output contract asks for a first line of `NO_CHANGE` or `CORRECTION`, followed
+by one short correction. There is no second verification pass: a well-formed
+`CORRECTION` steers the active run directly, and any other reply delivers
+nothing. If the run already ended, the correction is dropped.
 
 <!-- openclaw-plugin-reference:manual-end -->

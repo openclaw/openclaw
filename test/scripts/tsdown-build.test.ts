@@ -28,7 +28,6 @@ import {
   createTsdownOutputScanner,
   describeInsufficientTsdownHeap,
   listTsdownOutputRoots,
-  parseTsdownBuildArgs,
   prepareTsdownBuildExecution,
   pruneStaleRootChunkFiles,
   pruneStaleRuntimeSymlinks,
@@ -205,14 +204,6 @@ function expectPathMissing(targetPath: string) {
 }
 
 describe("resolveTsdownBuildInvocation", () => {
-  it("parses wrapper help before any tsdown work", () => {
-    expect(parseTsdownBuildArgs(["--help"])).toEqual({ forwardedArgs: [], help: true });
-    expect(parseTsdownBuildArgs(["--format", "esm"])).toEqual({
-      forwardedArgs: ["--format", "esm"],
-      help: false,
-    });
-  });
-
   it("prints wrapper help without invoking pnpm or tsdown", () => {
     const result = spawnSync(
       process.execPath,
@@ -585,6 +576,23 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.invocations[1]?.args).not.toContain("--filter");
   });
 
+  it.each([
+    { label: "defaults", env: {}, limit: "3GiB" },
+    { label: "explicit tuning", env: { GOMEMLIMIT: "6GiB" }, limit: "6GiB" },
+  ])("bounds native declaration compiler memory with $label", ({ env, limit }) => {
+    const cpus = vi.spyOn(os, "availableParallelism").mockReturnValue(8);
+    onTestFinished(() => cpus.mockRestore());
+    const result = resolveTsdownBuildInvocation({
+      args: ["--filter", "openclaw-dts"],
+      env: { CI: "true", ...env },
+      physicalMemoryBytes: 16 * GiB,
+      cgroupMemoryLimitBytes: 16 * GiB,
+    });
+    expect(result.options.env.GOMEMLIMIT).toBe(limit);
+    expect(result.options.env.GOMAXPROCS).toBe("2");
+    expect(result.options.env.GOGC).toBe("30");
+  });
+
   it("keeps the selected Windows runtime and literal compiler arguments", () => {
     const args = ["--format", "esm", "--concurrency", "2"];
     const result = resolveTsdownBuildInvocation({
@@ -608,7 +616,13 @@ describe("resolveTsdownBuildInvocation", () => {
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
       windowsVerbatimArguments: undefined,
-      env: { NODE_OPTIONS: "--max-old-space-size=8192", npm_execpath: "/unrelated/pnpm.cjs" },
+      env: {
+        NODE_OPTIONS: "--max-old-space-size=8192",
+        npm_execpath: "/unrelated/pnpm.cjs",
+        GOGC: "30",
+        GOMAXPROCS: "2",
+        GOMEMLIMIT: "3GiB",
+      },
     });
   });
 

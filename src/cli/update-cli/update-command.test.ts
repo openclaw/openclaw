@@ -271,9 +271,9 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
   it.each(["rejected", "unknown"] as const)(
     "reports and records an uninspectable LaunchAgent without repairing it (%s)",
     async (probe) => {
-      mockProcessPlatform("darwin");
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-probe-failure-") };
       const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      mockProcessPlatform("darwin");
       const service = createMockGatewayService();
       const readState = vi.spyOn(gatewayService, "readGatewayServiceState");
       const reason = "launchctl denied";
@@ -400,7 +400,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
           env,
           supervisorKeepsAlive: true,
           requirePluginHealth: false,
-          settle: { probes: 12 },
+          requireChannelHealth: false,
         });
       } else {
         expect(waitForHealthy).not.toHaveBeenCalled();

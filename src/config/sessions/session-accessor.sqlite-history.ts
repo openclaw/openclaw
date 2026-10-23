@@ -56,26 +56,19 @@ import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-ru
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { SessionEntry } from "./types.js";
 
-export async function readSessionTaskArchivePageReadOnly(
-  scope: SessionAccessScope,
-  options: TranscriptArchivePageOptions,
-): Promise<TranscriptArchivePageResult | undefined> {
-  return readTaskArchivePage(scope, options);
-}
-
 /** Revalidate retained bytes and unique run membership before disclosing a prepared page. */
 export async function verifySessionTranscriptArchivePageBindingReadOnly(
   scope: SessionAccessScope,
   runId: string,
   binding: TranscriptArchivePageBinding,
 ): Promise<void> {
-  const result = await readTaskArchivePage(scope, { runId }, binding);
+  const result = await readSessionTaskArchivePageReadOnly(scope, { runId }, binding);
   if (!result) {
     throw new Error("Archived transcript is no longer available.");
   }
 }
 
-async function readTaskArchivePage(
+export async function readSessionTaskArchivePageReadOnly(
   scope: SessionAccessScope,
   options: TranscriptArchivePageOptions,
   verifyBinding?: TranscriptArchivePageBinding,
@@ -150,6 +143,7 @@ export function listTranscriptInstancesFromDatabase(params: {
     .select([
       "session_id",
       "session_key",
+      "previous_session_id",
       "created_at",
       "updated_at",
       "channel",
@@ -217,6 +211,7 @@ export function listTranscriptInstancesFromDatabase(params: {
         ...(currentIsExact && current ? structuredClone(current) : {}),
         sessionId: row.session_id,
         updatedAt: updatedAtMs,
+        ...(row.previous_session_id ? { previousSessionId: row.previous_session_id } : {}),
         ...(row.parent_session_key ? { parentSessionKey: row.parent_session_key } : {}),
         ...(row.spawned_by ? { spawnedBy: row.spawned_by, spawnDepth: 1 } : {}),
         ...(chatType ? { chatType } : {}),

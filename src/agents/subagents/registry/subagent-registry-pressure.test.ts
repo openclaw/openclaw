@@ -11,6 +11,16 @@ import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { createSubagentSweeperHarness as createHarness } from "./subagent-registry-sweeper.test-support.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+function suspended(suspendedAt = Date.now(), lastError?: string): SubagentRunRecord["delivery"] {
+  return { status: "suspended", suspendedAt, suspendedReason: "expiry", lastError };
+}
+
+const pressureWarning = (suspendedCount: number) => [
+  "subagent suspended delivery backlog reached warning threshold",
+  { suspendedCount, warningThreshold: 25 },
+];
 
 function createSuspendedBacklog(count: number) {
   const entries = Array.from({ length: count }, (_, index) =>
@@ -24,7 +34,7 @@ function createSuspendedBacklog(count: number) {
       endedAt: Date.now() - 60_000,
       outcome: { status: "ok" },
       retainAttachmentsOnKeep: true,
-      delivery: { status: "suspended", suspendedAt: Date.now(), suspendedReason: "expiry" },
+      delivery: suspended(),
     }),
   );
   const harness = createHarness({}, entries[0]);
@@ -65,10 +75,7 @@ describe("subagent suspended delivery pressure", () => {
         try {
           await sweeper.sweepOnce();
           expect(runs.size).toBe(25);
-          expect(warn).toHaveBeenCalledExactlyOnceWith(
-            "subagent suspended delivery backlog reached warning threshold",
-            { suspendedCount: 25, warningThreshold: 25 },
-          );
+          expect(warn.mock.calls).toEqual([pressureWarning(25)]);
           runs.clear();
           await sweeper.sweepOnce();
           expect(runs.size).toBe(0);
@@ -91,10 +98,7 @@ describe("subagent suspended delivery pressure", () => {
     const { entries, runs, completeCleanupBookkeeping, sweeper, warn } = createSuspendedBacklog(50);
     for (const count of [25, 26, 50, 49, 24, 25]) {
       for (const [index, entry] of entries.entries()) {
-        entry.delivery =
-          index < count
-            ? { status: "suspended", suspendedAt: Date.now(), suspendedReason: "expiry" }
-            : { status: "delivered" };
+        entry.delivery = index < count ? suspended() : { status: "delivered" };
       }
       await sweeper.sweepOnce();
       await sweeper.sweepOnce();
@@ -102,12 +106,7 @@ describe("subagent suspended delivery pressure", () => {
     await sweeper.reset();
     await sweeper.sweepOnce();
     await sweeper.sweepOnce();
-    expect(warn.mock.calls).toEqual(
-      [25, 26, 50, 49, 25, 25].map((suspendedCount) => [
-        "subagent suspended delivery backlog reached warning threshold",
-        { suspendedCount, warningThreshold: 25 },
-      ]),
-    );
+    expect(warn.mock.calls).toEqual([25, 26, 50, 49, 25, 25].map(pressureWarning));
     expect(runs.size).toBe(50);
     expect(completeCleanupBookkeeping).not.toHaveBeenCalled();
   });
@@ -115,12 +114,7 @@ describe("subagent suspended delivery pressure", () => {
   it("counts suspended backlog pressure after same-pass seven-day expiry", async () => {
     const { entry, runs, discardTerminalDelivery, completeCleanupBookkeeping, sweeper, warn } =
       createSuspendedBacklog(25);
-    entry.delivery = {
-      status: "suspended",
-      suspendedAt: Date.now() - 7 * 24 * 60 * 60_000,
-      suspendedReason: "expiry",
-      lastError: "requester unavailable",
-    };
+    entry.delivery = suspended(Date.now() - 7 * 24 * 60 * 60_000, "requester unavailable");
     discardTerminalDelivery.mockImplementation((discarded) => {
       discarded.delivery = { status: "discarded" };
     });
@@ -130,7 +124,6 @@ describe("subagent suspended delivery pressure", () => {
     expect(discardTerminalDelivery).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
       Date.now(),
-      "expired",
     );
     expect(entry.delivery?.status).toBe("suspended");
     expect(runs.get(entry.runId)?.delivery?.status).toBe("discarded");
@@ -151,25 +144,24 @@ describe("subagent suspended delivery pressure", () => {
   });
 
   it("still reports and deduplicates suspended backlog pressure when a sweep fails", async () => {
-    const { entry, resumeRequesterSettleWake, sweeper, warn } = createSuspendedBacklog(25);
-    entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
-    resumeRequesterSettleWake.mockImplementation(() => {
-      throw new Error("requester wake failed");
+    const { entry, discardTerminalDelivery, sweeper, warn } = createSuspendedBacklog(25);
+    entry.delivery = suspended(Date.now() - 7 * 24 * 60 * 60_000);
+    discardTerminalDelivery.mockImplementation(() => {
+      throw new Error("discard failed");
     });
 
     await sweeper.runTick();
     await sweeper.runTick();
 
     expect(warn.mock.calls).toEqual([
-      [
-        "subagent suspended delivery backlog reached warning threshold",
-        { suspendedCount: 25, warningThreshold: 25 },
-      ],
-      ["subagent run sweep failed: requester wake failed"],
-      ["subagent run sweep failed: requester wake failed"],
+      pressureWarning(25),
+      ["subagent run sweep failed: discard failed"],
+      ["subagent run sweep failed: discard failed"],
     ]);
-    resumeRequesterSettleWake.mockReset();
+    discardTerminalDelivery.mockReset();
     await sweeper.sweepOnce();
-    expect(warn).toHaveBeenCalledTimes(3);
+    expect(warn.mock.calls.slice(3).map(([message]) => message)).toEqual([
+      "subagent suspended delivery discarded",
+    ]);
   });
 });

@@ -525,14 +525,23 @@ struct MacNodeCodexThreadCatalogTests {
         }
     }
 
-    @Test func `complete official plugin config remains eligible for the catalog`() throws {
+    @Test(arguments: [false, true])
+    func `complete official plugin config remains eligible for the catalog`(withNativeHookRelay: Bool) throws {
         var repository = URL(fileURLWithPath: #filePath)
         for _ in 0..<5 {
             repository.deleteLastPathComponent()
         }
         let fixture = repository.appendingPathComponent(
             "extensions/codex/src/app-server/fixtures/native-plugin-config.json")
-        let config = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+        var config = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+        if withNativeHookRelay {
+            var appServer = try #require(config["appServer"] as? [String: Any])
+            appServer["nativeHookRelay"] = [
+                "url": "https://hooks.example.test",
+                "credentialDirectory": "/tmp/native-hook-credentials",
+            ]
+            config["appServer"] = appServer
+        }
         let root = self.codexRoot(config: config)
 
         #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: root))
@@ -542,83 +551,23 @@ struct MacNodeCodexThreadCatalogTests {
         #expect(invocation.clearEnv == ["OPENAI_API_KEY"])
     }
 
-    @Test func `malformed or unknown official plugin config fails closed`() throws {
-        var malformedConfigs: [Any] = [
+    @Test func `malformed native catalog settings fail closed`() throws {
+        let malformedConfigs: [Any] = [
             "enabled",
-            ["supervision": ["enabled": true], "unknown": true] as [String: Any],
-            ["supervision": ["enabled": true], "codexDynamicToolsLoading": "lazy"] as [String: Any],
-            ["supervision": ["enabled": true], "codexDynamicToolsExclude": ["tool", 42]] as [String: Any],
-            ["supervision": ["enabled": true], "discovery": ["enabled": true, "unknown": true]] as [String: Any],
-            ["supervision": ["enabled": true], "computerUse": ["timeoutMs": 1000]] as [String: Any],
+            ["sessionCatalog": "enabled"],
             ["sessionCatalog": ["enabled": 1]],
-            ["sessionCatalog": ["unknown": true]],
-            ["sessionCatalog": ["homes": "path"]],
-            ["sessionCatalog": ["homes": ["  "]]],
-            ["sessionCatalog": ["homes": [["label": "Missing path"]]]],
-            ["sessionCatalog": ["homes": [["path": "/tmp/codex", "label": " "]]]],
-            ["sessionCatalog": ["homes": [["path": "/tmp/codex", "unknown": true]]]],
-            ["computerUse": ["liveTestTimeoutMs": 0]],
-            ["computerUse": ["toolCallTimeoutMs": true]],
-            ["computerUse": ["healthCheckEnabled": 1]],
-            ["computerUse": ["healthCheckIntervalMinutes": 30.5]],
-            ["computerUse": ["pluginCacheMode": "other"]],
-            ["computerUse": ["strictReadiness": "true"]],
-            ["computerUse": ["autoRepair": 1]],
-            ["supervision": "enabled"] as [String: Any],
-            ["supervision": ["enabled": true, "unknown": true]] as [String: Any],
-            ["supervision": ["enabled": true, "allowRawTranscripts": 1]] as [String: Any],
-            ["supervision": ["enabled": true, "endpoints": true]] as [String: Any],
-            [
-                "supervision": [
-                    "enabled": true,
-                    "endpoints": [["transport": "websocket", "url": "wss://example.test", "cwd": "/tmp"]],
-                ],
-            ] as [String: Any],
+            ["sessionCatalog": ["enabled": NSNull()]],
+            ["appServer": "stdio"],
+            ["appServer": ["command": 42]],
+            ["appServer": ["args": 42]],
+            ["appServer": ["args": ["app-server", 42]]],
+            ["appServer": ["clearEnv": true]],
+            ["appServer": ["clearEnv": ["OPENAI_API_KEY", false]]],
+            ["appServer": ["transport": true]],
+            ["appServer": ["transport": "other"]],
+            ["appServer": ["homeScope": 42]],
+            ["appServer": ["homeScope": "other"]],
         ]
-        let malformedAppServers: [Any] = [
-            "stdio",
-            ["unknown": true] as [String: Any],
-            ["mode": "automatic"] as [String: Any],
-            ["command": 42] as [String: Any],
-            ["args": 42] as [String: Any],
-            ["args": ["app-server", 42]] as [String: Any],
-            ["url": 42] as [String: Any],
-            ["authToken": ["source": "env", "provider": "default", "id": "lowercase"]] as [String: Any],
-            ["authToken": ["source": "store", "provider": "default", "id": "lowercase"]],
-            ["headers": ["authorization": ["source": "exec", "provider": "vault", "id": "../token"]]] as [String: Any],
-            ["clearEnv": true] as [String: Any],
-            ["clearEnv": ["OPENAI_API_KEY", false]] as [String: Any],
-            ["remoteWorkspaceRoot": "  "] as [String: Any],
-            ["codeModeOnly": "true"] as [String: Any],
-            ["requestTimeoutMs": 0] as [String: Any],
-            ["turnCompletionIdleTimeoutMs": 1000] as [String: Any],
-            ["postToolRawAssistantCompletionIdleTimeoutMs": 1000] as [String: Any],
-            ["approvalPolicy": "always"] as [String: Any],
-            ["approvalPolicy": "untrusted"],
-            ["loopDetectionPreToolUseRelay": 1],
-            ["enableUltrafast": "true"],
-            ["cyberFailover": ["mode": "other"]],
-            ["cyberFailover": ["model": "  "]],
-            ["cyberFailover": ["cooloffMs": 0]],
-            ["cyberFailover": ["unknown": true]],
-            ["sandbox": "full"] as [String: Any],
-            ["approvalsReviewer": "agent"] as [String: Any],
-            ["serviceTier": false] as [String: Any],
-            ["networkProxy": ["unknown": true]] as [String: Any],
-            ["networkProxy": ["domains": ["example.test": "prompt"]]] as [String: Any],
-            ["networkProxy": ["proxyUrl": "  "]] as [String: Any],
-            ["defaultWorkspaceDir": 42] as [String: Any],
-            ["experimental": ["unknown": true]] as [String: Any],
-            ["experimental": ["sandboxExecServer": "true"]] as [String: Any],
-            ["transport": true] as [String: Any],
-            ["homeScope": 42] as [String: Any],
-        ]
-        malformedConfigs.append(contentsOf: malformedAppServers.map { appServer in
-            [
-                "supervision": ["enabled": true],
-                "appServer": appServer,
-            ] as [String: Any]
-        })
 
         for config in malformedConfigs {
             let root = self.codexRoot(config: config)

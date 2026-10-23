@@ -120,10 +120,7 @@ export async function prepareContextEngineSubagentSpawn(params: {
   requesterInternalKey: string;
   childSessionKey: string;
   runTimeoutSeconds: number;
-}): Promise<
-  | { status: "ok"; preparation: PreparedContextEngineSubagentSpawn }
-  | { status: "error"; error: string }
-> {
+}): Promise<PreparedContextEngineSubagentSpawn> {
   let engine: ContextEngine | undefined;
   let disposal: Promise<void> | undefined;
   const dispose = () =>
@@ -159,29 +156,25 @@ export async function prepareContextEngineSubagentSpawn(params: {
     });
     let rollback: Promise<void> | undefined;
     return {
-      status: "ok",
-      preparation: {
-        rollback: () =>
-          (rollback ??= (async () => {
-            try {
-              await preparation?.rollback();
-            } finally {
-              await dispose();
-            }
-          })()),
-        async dispose() {
-          // Cancellation may already be rolling back while its caller unwinds.
-          await rollback?.catch(() => {});
-          await dispose();
-        },
+      rollback: () =>
+        (rollback ??= (async () => {
+          try {
+            await preparation?.rollback();
+          } finally {
+            await dispose();
+          }
+        })()),
+      async dispose() {
+        // Cancellation may already be rolling back while its caller unwinds.
+        await rollback?.catch(() => {});
+        await dispose();
       },
     };
   } catch (err) {
     await dispose().catch(() => {});
-    return {
-      status: "error",
-      error: `Context engine subagent preparation failed: ${summarizeSpawnError(err)}`,
-    };
+    throw new Error(`Context engine subagent preparation failed: ${summarizeSpawnError(err)}`, {
+      cause: err,
+    });
   }
 }
 

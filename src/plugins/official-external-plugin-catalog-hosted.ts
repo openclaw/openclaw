@@ -1,5 +1,5 @@
 // Loads hosted official catalogs while preserving feed authority and snapshot freshness.
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -55,13 +55,8 @@ class HostedCatalogSnapshotWriteError extends Error {
   }
 }
 
-type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-
-function sha256Hex(value: string): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
-
-function parseHostedCatalogContentLength(raw: string | null, maxBytes: number): void {
+function parseHostedCatalogContentLength(raw: string | null): void {
+  const maxBytes = DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES;
   const normalized = normalizeOptionalString(raw);
   if (!normalized) {
     return;
@@ -75,24 +70,24 @@ function parseHostedCatalogContentLength(raw: string | null, maxBytes: number): 
   }
 }
 
-async function readHostedCatalogResponseText(params: {
-  response: Response;
-  maxBytes: number;
-  chunkTimeoutMs: number;
-}): Promise<string> {
-  parseHostedCatalogContentLength(params.response.headers.get("content-length"), params.maxBytes);
-  const streamless = !params.response.body || typeof params.response.body.getReader !== "function";
+async function readHostedCatalogResponseText(response: Response): Promise<string> {
+  parseHostedCatalogContentLength(response.headers.get("content-length"));
+  const streamless = !response.body || typeof response.body.getReader !== "function";
   // Hosted remote feeds are untrusted input, so fail closed when Fetch cannot
   // provide a streaming body instead of trusting Content-Length before read.
   if (streamless) {
     throw new Error("hosted catalog feed streaming response body unavailable");
   }
-  const buffer = await readResponseWithLimit(params.response, params.maxBytes, {
-    chunkTimeoutMs: params.chunkTimeoutMs,
-    onOverflow: ({ maxBytes }) => new Error(`hosted catalog feed exceeds ${maxBytes} bytes`),
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`hosted catalog feed read timed out after ${chunkTimeoutMs}ms`),
-  });
+  const buffer = await readResponseWithLimit(
+    response,
+    DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES,
+    {
+      chunkTimeoutMs: DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS,
+      onOverflow: ({ maxBytes }) => new Error(`hosted catalog feed exceeds ${maxBytes} bytes`),
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`hosted catalog feed read timed out after ${chunkTimeoutMs}ms`),
+    },
+  );
   return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
 }
 
@@ -149,13 +144,8 @@ async function parseHostedCatalogFeedBody(params: {
         `hosted catalog feed id "${verification.feed.id}" did not match expected "${params.expectedFeedId}"`,
       );
     }
-    const generatedAtMs = parseOfficialExternalPluginCatalogTimestamp(
-      verification.feed.generatedAt,
-    );
+    const generatedAtMs = Date.parse(verification.feed.generatedAt.trim());
     const expiresAt = normalizeOptionalString(verification.feed.expiresAt);
-    if (generatedAtMs === undefined) {
-      throw new Error("hosted catalog signed feed requires a valid generatedAt value");
-    }
     let expired: boolean;
     if (!expiresAt) {
       if (params.allowMissingExpiry !== true) {
@@ -243,20 +233,13 @@ async function loadHostedCatalogSnapshotResult(params: {
   snapshot: HostedOfficialExternalPluginCatalogSnapshot;
   error: unknown;
   expectedSha256?: string;
-  ifNoneMatch?: string;
-  ifModifiedSince?: string;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
   requireManifestInstallSourceRef?: boolean;
   expectedFeedId?: string;
   verification?: OfficialExternalPluginCatalogFeedVerification;
   now: Date;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
-  assertSnapshotMatchesRequestValidators({
-    snapshot: params.snapshot,
-    ifNoneMatch: params.ifNoneMatch,
-    ifModifiedSince: params.ifModifiedSince,
-  });
-  const checksum = sha256Hex(params.snapshot.body);
+  const checksum = `sha256:${sha256Hex(params.snapshot.body)}`;
   if (checksum !== params.snapshot.metadata.checksum) {
     throw new Error("hosted catalog snapshot checksum mismatch");
   }
@@ -313,31 +296,12 @@ function removeOfficialExternalPluginCatalogInstallAuthority(
   };
 }
 
-function assertSnapshotMatchesRequestValidators(params: {
-  snapshot: HostedOfficialExternalPluginCatalogSnapshot;
-  ifNoneMatch?: string;
-  ifModifiedSince?: string;
-}): void {
-  if (params.ifNoneMatch && params.snapshot.metadata.etag !== params.ifNoneMatch) {
-    throw new Error("hosted catalog snapshot ETag did not match request validator");
-  }
-  if (
-    !params.ifNoneMatch &&
-    params.ifModifiedSince &&
-    params.snapshot.metadata.lastModified !== params.ifModifiedSince
-  ) {
-    throw new Error("hosted catalog snapshot Last-Modified did not match request validator");
-  }
-}
-
 async function snapshotOrBundledFallbackResult(params: {
   error: unknown;
   snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore;
   url: string;
   metadata?: HostedOfficialExternalPluginCatalogLoadResult["metadata"];
   expectedSha256?: string;
-  ifNoneMatch?: string;
-  ifModifiedSince?: string;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
   requireManifestInstallSourceRef?: boolean;
   expectedFeedId?: string;
@@ -383,12 +347,6 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   feedUrl?: string;
   feedProfile?: string;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
-  fetchImpl?: FetchLike;
-  timeoutMs?: number;
-  maxBytes?: number;
-  chunkTimeoutMs?: number;
-  ifNoneMatch?: string;
-  ifModifiedSince?: string;
   expectedSha256?: string;
   offline?: boolean;
   requireSnapshotWrite?: boolean;
@@ -436,17 +394,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     });
   }
   const headers = new Headers();
-  const ifNoneMatch = normalizeOptionalString(params?.ifNoneMatch);
   const signedOperation = source.verification?.mode === "signed";
-  const ifModifiedSince = signedOperation
-    ? undefined
-    : normalizeOptionalString(params?.ifModifiedSince);
-  if (ifNoneMatch) {
-    headers.set("if-none-match", ifNoneMatch);
-  }
-  if (ifModifiedSince) {
-    headers.set("if-modified-since", ifModifiedSince);
-  }
   if (signedOperation) {
     headers.set("accept", DSSE_ENVELOPE_MEDIA_TYPE);
   }
@@ -461,8 +409,6 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       url: url.href,
       metadata,
       expectedSha256,
-      ifNoneMatch,
-      ifModifiedSince,
       catalogConfig: params?.catalogConfig,
       requireManifestInstallSourceRef,
       expectedFeedId: source.expectedFeedId,
@@ -485,11 +431,10 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     const { fetchWithSsrFGuard } = await import("../infra/net/fetch-guard.js");
     const guarded = await fetchWithSsrFGuard({
       url: url.href,
-      fetchImpl: params?.fetchImpl,
       init: { method: "GET", headers },
       requireHttps: true,
       maxRedirects: 2,
-      timeoutMs: params?.timeoutMs ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS,
+      timeoutMs: DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS,
       policy: { hostnameAllowlist: source.hostnameAllowlist },
       auditContext: "official-external-plugin-catalog-feed",
     });
@@ -509,13 +454,8 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         base,
       );
     }
-    const body = await readHostedCatalogResponseText({
-      response,
-      maxBytes: params?.maxBytes ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES,
-      chunkTimeoutMs:
-        params?.chunkTimeoutMs ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS,
-    });
-    const checksum = sha256Hex(body);
+    const body = await readHostedCatalogResponseText(response);
+    const checksum = `sha256:${sha256Hex(body)}`;
     const metadata = { ...base, checksum };
     if (expectedSha256 && expectedSha256 !== checksum) {
       return await loadFallback(

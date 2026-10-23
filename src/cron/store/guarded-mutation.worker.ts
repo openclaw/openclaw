@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import { requestSessionEntryCurrentAdmission } from "../../config/sessions/session-entry-current-admission.worker.js";
+import { operatorApprovalPublication } from "../../gateway/operator-approval-store.publication.js";
+import { consumeOperatorApprovalAllowOnceInDatabase } from "../../gateway/operator-approval-store.transitions.worker.js";
+import { assertNoPendingLegacyExecApprovals } from "../../infra/exec-approvals-migration-gate.js";
+import { snapshotFromExecApprovalsDatabase } from "../../infra/exec-approvals-sqlite.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
+import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
@@ -10,9 +16,10 @@ import { CronAgentDeletionBlockedError } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
-import { planCronJobMutation, resolveCronJobMutationSnapshot } from "./job-mutations.worker.js";
-import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
-import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
+import { cronStreamExecApprovalBinding } from "../stream-exec-authority.js";
+import type { CronStoredJob, CronStoreFile } from "../types.js";
+import { planCronJobMutation } from "./job-mutations.js";
+import { updateCronRuntimeRow } from "./row-codec.js";
 import { recordSkippedCronRequestInDatabase } from "./run-history.kernel.js";
 import {
   findActiveCronRunReceiptInDatabase,
@@ -20,33 +27,37 @@ import {
 } from "./run-receipt-store.js";
 import { retireCronRunTriggerStateInDatabase } from "./run-receipt-trigger-state.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
-import { loadCronRuntimeAuthorities } from "./runtime-authority-store.js";
-import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
+import type {
+  CronStreamMutationAdmissionFacts,
+  CronRuntimeWorkerOperations,
+} from "./runtime-worker.types.js";
 import { CronJobsStoreChangedError } from "./save-error.js";
-import { saveCronStoreChangesInDatabase, prepareCronStoreChanges } from "./save.kernel.js";
+import {
+  loadCronStoreForChanges,
+  saveCronStoreChangesInDatabase,
+  prepareCronStoreChanges,
+} from "./save.kernel.js";
 import type { PreparedCronStoreChanges } from "./save.types.js";
+import {
+  getCronSchedulerSnapshot,
+  installCronSchedulerSnapshot,
+} from "./scheduler-config.worker.js";
+import { projectCronJobStateThroughStorageCodec } from "./state-codec.js";
 import type { CronAdmittedStoreTransactionHooks } from "./transaction-hooks.types.js";
 
 type MutationInput = CronRuntimeWorkerOperations["cron.mutateJobs"]["input"];
-
-function loadCronMutationStore(db: EngineConnection, storeKey: string) {
-  const rows = loadCronRows(db, storeKey);
-  const store = loadedCronStoreFromRows(rows).store;
-  loadCronRuntimeAuthorities({ db, storeKey, jobs: store.jobs });
-  return store;
-}
 
 function retireCronMutationTriggerState(
   db: EngineConnection,
   storeKey: string,
   jobId: string,
+  job: CronStoredJob | undefined,
 ): void {
   const active = findActiveCronRunReceiptInDatabase({ database: db, storePath: storeKey, jobId });
   if (active) {
     retireCronRunTriggerStateInDatabase({ database: db, handle: active });
     return;
   }
-  const job = loadedCronStoreFromRows(loadCronRows(db, storeKey, new Set([jobId]))).store.jobs[0];
   const startedAtMs = job?.state.runningAtMs;
   if (!job || startedAtMs === undefined) {
     return;
@@ -78,9 +89,7 @@ function applyCronReceiptMutation(
     if (!nextJob) {
       throw new Error("Cron schedule mutation has no target job");
     }
-    const current = loadedCronStoreFromRows(
-      loadCronRows(db, input.storeKey, new Set([mutation.jobId])),
-    ).store.jobs[0];
+    const current = changes.previousById.get(mutation.jobId);
     if (current?.state.runningAtMs !== undefined) {
       // Each committed edit must remain distinct when a passive editor observed an older run.
       nextJob.state.runningScheduleChangeId = randomUUID();
@@ -89,7 +98,12 @@ function applyCronReceiptMutation(
     }
   }
   if (mutation.triggerStateChanged) {
-    retireCronMutationTriggerState(db, input.storeKey, mutation.jobId);
+    retireCronMutationTriggerState(
+      db,
+      input.storeKey,
+      mutation.jobId,
+      changes.previousById.get(mutation.jobId),
+    );
   }
 }
 
@@ -97,8 +111,8 @@ function cancelChangedQueuedRuns(
   db: EngineConnection,
   input: MutationInput,
   changes: PreparedCronStoreChanges,
-  previousJobs: ReturnType<typeof loadCronMutationStore>["jobs"],
-  currentStore: ReturnType<typeof loadCronMutationStore>,
+  previousJobs: CronStoredJob[],
+  currentStore: CronStoreFile,
   receiptSchema: ReturnType<typeof prepareCronRunReceiptWriteSchema>,
 ): void {
   const currentJobs = new Map(currentStore.jobs.map((job) => [job.id, job]));
@@ -131,7 +145,9 @@ function cancelChangedQueuedRuns(
         receiptSchema,
         handle: receipt,
         pendingReceiptId:
-          current?.state.runningAtMs === undefined ? undefined : current.state.runningReceiptId,
+          current?.state.runningAtMs === undefined
+            ? receipt.receiptId
+            : current.state.runningReceiptId,
         status: "skipped",
         finishedAtMs: input.snapshot.nowMs,
         error,
@@ -158,18 +174,26 @@ export function mutateCronJobsInWorker(
   database: OpenClawStateDatabase,
   input: MutationInput,
 ): CronRuntimeWorkerOperations["cron.mutateJobs"]["output"] {
-  const mutationSnapshot = resolveCronJobMutationSnapshot(
-    input.storeKey,
-    input.snapshot,
-    database.path,
-  );
+  const scheduler = input.snapshot.scheduler
+    ? installCronSchedulerSnapshot(input.storeKey, input.snapshot.scheduler, database.path)
+    : getCronSchedulerSnapshot(input.storeKey, database.path);
+  const mutationSnapshot = { ...scheduler?.config, nowMs: input.snapshot.nowMs };
+  // Runtime postimages retain cleared fields as undefined; compare their persisted
+  // state without normalizing the observed definition or private authority.
+  const preconditionJob = input.preconditionJob
+    ? {
+        ...input.preconditionJob,
+        state: projectCronJobStateThroughStorageCodec(input.preconditionJob.state),
+      }
+    : undefined;
   let transactionRefusal: CronJobsStoreChangedError | undefined;
   try {
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         try {
           const receiptSchema = prepareCronRunReceiptWriteSchema(db);
-          const previous = loadCronMutationStore(db, input.storeKey);
+          const inventory = loadCronStoreForChanges(db, input.storeKey);
+          const previous = inventory.store;
           if (input.agentId !== undefined && isAgentDeletionBlocked(input.agentId, {}, db)) {
             throw new CronAgentDeletionBlockedError(input.agentId);
           }
@@ -184,17 +208,55 @@ export function mutateCronJobsInWorker(
           ) {
             throw new CronJobsStoreChangedError(input.storeKey);
           }
-          // Compare the transported representation without rerunning an effectful host precondition.
-          if (
-            input.preconditionJob &&
-            !isDeepStrictEqual(
-              structuredClone(previous.jobs.find((job) => job.id === input.preconditionJob?.id)),
-              input.preconditionJob,
-            )
-          ) {
-            throw new CronJobsStoreChangedError(input.storeKey);
+          // Compare persisted state without rerunning the host precondition.
+          // Cloning matches its wire representation: authority payloads use null prototypes.
+          if (preconditionJob) {
+            const current = previous.jobs.find((job) => job.id === preconditionJob.id);
+            if (
+              !current ||
+              !isDeepStrictEqual(
+                {
+                  ...structuredClone(current),
+                  state: projectCronJobStateThroughStorageCodec(current.state),
+                },
+                preconditionJob,
+              )
+            ) {
+              throw new CronJobsStoreChangedError(input.storeKey);
+            }
           }
           const plan = planCronJobMutation(previous, input.jobMutation, mutationSnapshot);
+          const streamSecurity = input.streamSecurity;
+          const unchangedDeclaration =
+            input.jobMutation.kind === "add" && plan.created === false && plan.updated === false;
+          const streamFacts: CronStreamMutationAdmissionFacts | undefined =
+            streamSecurity && plan.job
+              ? {
+                  mutation: {
+                    method: streamSecurity.method,
+                    job: plan.job,
+                    previousJob: previous.jobs.find((job) => job.id === plan.job?.id),
+                  },
+                  unchangedDeclaration,
+                  ...(streamSecurity.checkExecPolicy && !unchangedDeclaration
+                    ? { execApprovals: snapshotFromExecApprovalsDatabase(db).file }
+                    : {}),
+                }
+              : undefined;
+          if (streamSecurity) {
+            if (!streamFacts) {
+              throw new Error("Stream mutation has no planned job");
+            }
+            if (streamSecurity.checkExecPolicy && !unchangedDeclaration) {
+              assertNoPendingLegacyExecApprovals({
+                env: getSqliteWorkerStateContext().environment,
+              });
+            }
+            requestSessionEntryCurrentAdmission(streamSecurity.sessionEntryCurrentSource, {
+              stage: "transaction",
+              facts: streamFacts,
+            });
+          }
           const changes = prepareCronStoreChanges(previous, plan.next);
           const hooks: CronAdmittedStoreTransactionHooks = {
             receiptSchema,
@@ -209,14 +271,53 @@ export function mutateCronJobsInWorker(
             input.storeKey,
             input.storeKey,
             changes,
+            inventory,
             undefined,
             hooks,
           );
           cancelChangedQueuedRuns(db, input, changes, previous.jobs, store, receiptSchema);
+          const approval = streamSecurity
+            ? operatorApprovalPublication.capture(db, () => {
+                if (
+                  !streamSecurity.approval ||
+                  !streamFacts ||
+                  streamFacts.unchangedDeclaration ||
+                  streamSecurity.approval.binding !==
+                    cronStreamExecApprovalBinding(streamFacts.mutation)
+                ) {
+                  return undefined;
+                }
+                const consumption = consumeOperatorApprovalAllowOnceInDatabase({
+                  ...streamSecurity.approval.input,
+                  databaseOptions: { database },
+                });
+                if (consumption.outcome !== "consumed") {
+                  throw new Error(
+                    "Stream approval expired or was already consumed; ask for approval again.",
+                  );
+                }
+                return consumption.record;
+              })
+            : undefined;
+          if (streamSecurity) {
+            deferSqliteWorkerCommitReceipt(
+              db,
+              {
+                approvalFacts: operatorApprovalPublication.bound(approval!.receipt),
+                consumedStreamApproval: approval?.result,
+              },
+              "commit",
+            );
+            requestSessionEntryCurrentAdmission(streamSecurity.sessionEntryCurrentSource, {
+              stage: "commit",
+              facts: streamFacts,
+            });
+          }
           return {
             outcome: {
               store,
-              names: readCronJobNamesInDatabase(db, undefined, input.storeKey),
+              ...(approval?.result ? { consumedStreamApproval: approval.result } : {}),
+              names: inventory.names,
               changed: changes.changedIds.size > 0,
               notifications: plan.notifications,
               logs: plan.logs,

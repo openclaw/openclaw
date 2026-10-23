@@ -47,7 +47,10 @@ export function buildXaiRealtimeTranscriptionProvider(
       const callbacks = { ...req };
       let lastTranscript: string | undefined;
       let speechStarted = false;
+      let lockedTranscript = "";
       const emitTranscript = (text: string) => {
+        lockedTranscript = "";
+        speechStarted = false;
         if (text === lastTranscript) {
           return;
         }
@@ -59,7 +62,7 @@ export function buildXaiRealtimeTranscriptionProvider(
         providerId: "xai",
         callbacks,
         url: () => {
-          const url = new URL(normalizeXaiRealtimeBaseUrl(baseUrl));
+          const url = new URL(baseUrl);
           url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
           url.pathname = `${url.pathname.replace(/\/+$/, "")}/stt`;
           url.searchParams.set("sample_rate", String(config.sampleRate ?? 8000));
@@ -97,6 +100,14 @@ export function buildXaiRealtimeTranscriptionProvider(
         connectClosedBeforeReadyMessage:
           "xAI realtime transcription connection closed before ready",
         reconnectLimitMessage: "xAI realtime transcription reconnect limit reached",
+        onOpen: () => {
+          // A replacement stream cannot finalize the previous stream's locked chunks.
+          if (lockedTranscript) {
+            emitTranscript(lockedTranscript);
+          }
+          speechStarted = false;
+          lastTranscript = undefined;
+        },
         sendAudio: (audio, transport) => {
           transport.sendBinary(audio);
         },
@@ -125,11 +136,15 @@ export function buildXaiRealtimeTranscriptionProvider(
                 callbacks.onSpeechStart?.();
               }
               if (event.is_final && event.speech_final) {
+                // xAI already stitches every chunk into the utterance final.
                 emitTranscript(text);
-                speechStarted = false;
                 return;
               }
-              callbacks.onPartial?.(text);
+              const partial = lockedTranscript ? `${lockedTranscript} ${text}` : text;
+              if (event.is_final) {
+                lockedTranscript = partial;
+              }
+              callbacks.onPartial?.(partial);
               return;
             }
             case "transcript.done": {
@@ -137,6 +152,7 @@ export function buildXaiRealtimeTranscriptionProvider(
               if (text) {
                 emitTranscript(text);
               }
+              lockedTranscript = "";
               transport.closeNow();
               return;
             }

@@ -119,39 +119,8 @@ function resolveBrowserProxyConfig(cfg = loadBrowserConfigForRuntimeRefresh()) {
   };
 }
 
-let browserControlReady: Promise<void> | null = null;
-let admittedBrowserControlState: ReturnType<typeof getBrowserControlState> = null;
-
 export function hasBrowserNodeHostWork(): boolean {
   return hasBrowserControlWork() || hasBrowserProxyUploadWork();
-}
-
-async function ensureBrowserControlService(): Promise<void> {
-  const current = getBrowserControlState();
-  // Admission survives config refresh only for this exact live runtime generation.
-  if (current && current === admittedBrowserControlState) {
-    return;
-  }
-  if (browserControlReady) {
-    return browserControlReady;
-  }
-  const startup = (async () => {
-    const cfg = loadBrowserConfigForRuntimeRefresh();
-    const resolved = resolveBrowserConfig(cfg.browser, cfg);
-    if (!resolved.enabled) {
-      throw new Error(await describeBrowserControlUnavailable(cfg));
-    }
-    const started = await startBrowserControlServiceFromConfig();
-    if (!started) {
-      throw new Error(await describeBrowserControlUnavailable(cfg));
-    }
-    admittedBrowserControlState = started;
-  })();
-  browserControlReady = startup.finally(() => {
-    // Share pending failures, but never keep settled startup as runtime authority.
-    browserControlReady = null;
-  });
-  return browserControlReady;
 }
 
 function collectBrowserProxyPaths(payload: unknown): string[] {
@@ -313,7 +282,9 @@ export async function runBrowserProxyCommand(
     throw new Error("INVALID_REQUEST: owned tab close requires POST");
   }
 
-  await ensureBrowserControlService();
+  if (!(await startBrowserControlServiceFromConfig())) {
+    throw new Error(await describeBrowserControlUnavailable());
+  }
   invocationSignal?.throwIfAborted();
   const cfg = loadBrowserConfigForRuntimeRefresh();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);

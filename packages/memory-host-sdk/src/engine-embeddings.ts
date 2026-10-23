@@ -57,5 +57,9 @@ export {
   resolveEmbeddingInputFormatVersion,
   type EmbeddingInput,
 } from "./host/embedding-inputs.js";
-export { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./host/remote-http.js";
+export {
+  buildRemoteBaseUrlPolicy,
+  withRemoteHttpResponse,
+  type RemoteEmbeddingRequestAuth,
+} from "./host/remote-http.js";
 export { classifyMemoryMultimodalPath } from "./host/multimodal.js";

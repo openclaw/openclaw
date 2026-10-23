@@ -241,8 +241,18 @@ describe("Doctor gateway config writer ordering", () => {
             expect(ctx.cfgForPersistence).toBe(persistedBeforeService);
             expect(ctx.cfg.gateway?.auth?.token).toBeUndefined();
             expect(service.install).not.toHaveBeenCalled();
-            expect(ctx.runtime.error).toHaveBeenCalledWith(
+            expect(ctx.updateWarnings).toContainEqual(
               expect.stringContaining("Failed to persist gateway.auth.token before service repair"),
+            );
+            expect(ctx.healthFindings).toContainEqual(
+              expect.objectContaining({
+                category: "fix-now",
+                severity: "error",
+                message: expect.stringContaining(
+                  "Failed to persist gateway.auth.token before service repair",
+                ),
+                fixHint: expect.stringContaining("gateway status --deep"),
+              }),
             );
             expect(await fs.readFile(configPath, "utf8")).toBe(initialBytes);
             expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(initialBackup);
@@ -262,8 +272,16 @@ describe("Doctor gateway config writer ordering", () => {
             );
             expect(ctx.cfg).toEqual(ctx.cfgForPersistence);
             if (outcome === "service-failure") {
-              expect(ctx.runtime.error).toHaveBeenCalledWith(
-                "Gateway service update failed: Error: fixture service install failed",
+              expect(ctx.updateWarnings).toContain(
+                "core/doctor/gateway-service: Gateway service update failed: Error: fixture service install failed",
+              );
+              expect(ctx.healthFindings).toContainEqual(
+                expect.objectContaining({
+                  category: "fix-now",
+                  severity: "error",
+                  message: "Gateway service update failed: Error: fixture service install failed",
+                  fixHint: expect.stringContaining("doctor --fix"),
+                }),
               );
             }
           }
@@ -395,8 +413,15 @@ describe("Doctor gateway config writer ordering", () => {
       expect(service.install).not.toHaveBeenCalled();
       expect(service.stage).not.toHaveBeenCalled();
       expect(service.restart).not.toHaveBeenCalled();
-      expect(ctx.runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to persist gateway.auth.token before service repair"),
+      expect(ctx.healthFindings).toContainEqual(
+        expect.objectContaining({
+          category: "fix-now",
+          severity: "error",
+          message: expect.stringContaining(
+            "Failed to persist gateway.auth.token before service repair",
+          ),
+          fixHint: expect.stringContaining("gateway status --deep"),
+        }),
       );
       const snapshot = await readConfigFileSnapshot();
       expect(snapshot.valid).toBe(true);

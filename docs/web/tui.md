@@ -179,11 +179,17 @@ Session controls:
 Session lifecycle:
 
 - `/new` (spawn a fresh, isolated session under a new key). It does not affect other TUI clients on the old session.
-- `/reset` (reset the current session key in place)
+- `/reset` (reset the current session key in place). `/reset soft [message]` is forwarded to the Gateway, which keeps the transcript and reruns startup; it is not available in local mode.
 - `/abort` (abort the active run)
 - `/stop` (stop the active or queued run)
 - `/settings`
 - `/exit` (or `/quit`)
+
+During Gateway startup, messages and `/new` wait up to five minutes. Stop cancels
+requests that are still waiting for startup admission. Once a request is sent, the
+TUI keeps its response and original deadline; repeated input cannot submit a
+second copy while that response is pending. Stop still asks the Gateway to abort
+active runs.
 
 When the current session is reset, the TUI reports it after refreshing the transcript. This includes resets started by another client.
 
@@ -214,7 +220,7 @@ No pairing code is requested for supported local native bootstrap. Chrome still
 requires its own extension installation and permission approval, and existing
 pairings and automatic-setup opt-outs are preserved.
 
-These commands are deterministic local CLI operations, not messages to the agent.
+These commands are local CLI operations, not messages to the agent.
 Do not paste credentials into them. `/stop`, `/abort`, Escape, or exiting the TUI
 cancels a pending setup command. After interruption, inspect again to reconcile
 any preparation that already completed. When the TUI runs through SSH, setup runs
@@ -358,7 +364,7 @@ No output after sending a message:
 
 ## Connection troubleshooting
 
-- `disconnected`: ensure the Gateway is running and your `--url/--token/--password` are correct.
+- `disconnected`: check that the Gateway is running and your `--url/--token/--password` are correct.
 - No agents in picker: check `openclaw agents list` and your routing config.
 - Empty session picker: you might be in global scope or have no sessions yet.
 

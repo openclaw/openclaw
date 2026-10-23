@@ -6,6 +6,7 @@ Welcome to the lobster tank! 🦞
 
 - **GitHub:** https://github.com/openclaw/openclaw
 - **Vision:** [`VISION.md`](VISION.md)
+- **Support:** https://community.openclaw.ai/
 - **Discord:** https://discord.gg/clawd
 - **X/Twitter:** [@openclaw](https://x.com/openclaw)
 
@@ -20,20 +21,20 @@ OpenClaw people page: https://www.openclaw.org/people
 2. **New features / architecture** → Start a [GitHub Issue](https://github.com/openclaw/openclaw/issues/new/choose) or ask in Discord first. Most features are not accepted and should be third party plugins instead using our plugin SDK.
 3. **Refactor-only PRs** → Don't open a PR. We are not accepting refactor-only changes unless a maintainer explicitly asks for them as part of a concrete fix.
 4. **Test/CI-only PRs for known `main` failures** → Don't open a PR. The Maintainer team is already tracking those failures, and PRs that only tweak tests or CI to chase them will be closed unless they are required to validate a new fix.
-5. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
+5. **Questions and setup help** → [Official OpenClaw support](https://community.openclaw.ai/)
 
 ## Issue, PR, and Contact Routing
 
 Start from this routing map before creating GitHub items:
 
-| Situation                                                | Use                                                                                                                                                                                  | Required evidence                                                                                                   |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| Product bug, regression, crash, or behavior defect       | [Bug report](https://github.com/openclaw/openclaw/issues/new?template=bug_report.yml)                                                                                                | Repro steps, expected vs actual behavior, version, OS, model/provider route when relevant, logs/screenshots, impact |
-| Documentation bug or missing/contradictory docs          | [Docs bug report](https://github.com/openclaw/openclaw/issues/new?template=docs_bug_report.yml)                                                                                      | Affected docs path or URL, verification steps, expected docs content, actual docs content, impact, evidence         |
-| New feature, architecture change, or product improvement | [Feature request](https://github.com/openclaw/openclaw/issues/new?template=feature_request.yml) or Discord first                                                                     | Problem, proposed solution, alternatives, impact, examples or prior art                                             |
-| Onboarding, setup help, or general support question      | Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828) | Do not open a GitHub issue unless there is a concrete product defect or docs gap                                    |
-| Security vulnerability                                   | See [Report a Vulnerability](#report-a-vulnerability) below                                                                                                                          | Do not file public issues for private security reports                                                              |
-| PR for an existing or newly filed issue                  | Use the [PR template](.github/pull_request_template.md)                                                                                                                              | Visible `Closes #<issue>` or `Related: #<issue>`, problem, shipped solution, user impact, validation evidence       |
+| Situation                                                | Use                                                                                                              | Required evidence                                                                                                   |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Product bug, regression, crash, or behavior defect       | [Bug report](https://github.com/openclaw/openclaw/issues/new?template=bug_report.yml)                            | Repro steps, expected vs actual behavior, version, OS, model/provider route when relevant, logs/screenshots, impact |
+| Documentation bug or missing/contradictory docs          | [Docs bug report](https://github.com/openclaw/openclaw/issues/new?template=docs_bug_report.yml)                  | Affected docs path or URL, verification steps, expected docs content, actual docs content, impact, evidence         |
+| New feature, architecture change, or product improvement | [Feature request](https://github.com/openclaw/openclaw/issues/new?template=feature_request.yml) or Discord first | Problem, proposed solution, alternatives, impact, examples or prior art                                             |
+| Onboarding, setup help, or general support question      | [Official OpenClaw support](https://community.openclaw.ai/)                                                      | Do not open a GitHub issue unless there is a concrete product defect or docs gap                                    |
+| Security vulnerability                                   | See [Report a Vulnerability](#report-a-vulnerability) below                                                      | Do not file public issues for private security reports                                                              |
+| PR for an existing or newly filed issue                  | Use the [PR template](.github/pull_request_template.md)                                                          | Visible `Closes #<issue>` or `Related: #<issue>`, problem, shipped solution, user impact, validation evidence       |
 
 For agent-authored or otherwise non-trivial work, create or reuse the issue first, then open the PR against it. Bugs and very small fixes may go straight to PR, but still link existing context when it exists and fill out the PR template.
 
@@ -82,7 +83,7 @@ must declare their own development dependencies rather than rely on hoisting.
 ## Before You PR
 
 - Use **Node 24.16+ LTS** or **Node 26.1+** for source checkouts. Older Node releases can truncate SQLite TEXT reads; Node 22, 23, and 25 are unsupported. See [Node install guidance](docs/install/node.md) if your local version is too old.
-- Run focused Vitest 5 tests on Node 24.16+ or Node 26.1+, matching the packaged runtime floor.
+- Local tests and `pnpm dev` use the pinned OpenClaw Bun fork. See [local development tools](https://docs.openclaw.ai/reference/test/local#openclaw-bun-fork) for supported platforms, automatic staging, runtime/tool overrides, and fallbacks, and [CI runtime selection](https://docs.openclaw.ai/ci/pipeline#test-runtime-selection) for CI policy.
 - Test locally with your OpenClaw instance
 - An explicit maintainer repair-and-land request covers internal database scheduling, admission, and lifecycle decisions. The implementer owns the design and its verification. Get separate design acceptance when changing public contracts, schemas, durability, retention, or permissions; see the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.
@@ -98,7 +99,7 @@ must declare their own development dependencies rather than rely on hoisting.
   - `pnpm test:extension --list` to see valid extension ids
   - If you changed shared plugin or channel surfaces, run `pnpm test:contracts`
   - For targeted shared-surface work, use `pnpm test:contracts:channels` or `pnpm test:contracts:plugins`
-  - These commands also cover the shared seam/smoke files that the default unit lane skips
+  - These commands also cover the shared integration/smoke files that the default unit lane skips
   - For broader runtime changes, select focused tests that cover the touched contracts; PR CI runs the wider lanes (`pnpm test:extensions`, `pnpm test:channels`, or `pnpm test`) before landing
 - If you touched bundled-plugin boundaries in shared code, run the matching inventories:
   - `node --import tsx scripts/check-src-extension-import-boundary.mts --json` for `src/**`
@@ -109,7 +110,7 @@ must declare their own development dependencies rather than rely on hoisting.
 - Do not submit refactor-only PRs unless a maintainer explicitly requested that refactor for an active fix or deliverable.
 - Do not submit test or CI-config fixes for failures already red on `main` CI. If a failure is already visible in the [main branch CI runs](https://github.com/openclaw/openclaw/actions), it's a known issue the Maintainer team is tracking, and a PR that only addresses those failures will be closed automatically. If you spot a _new_ regression not yet shown in main CI, report it as an issue first.
 - Do not submit test-only PRs that just try to make known `main` CI failures pass. Test changes are acceptable when they are required to validate a new fix or cover new behavior in the same PR.
-- Ensure CI checks pass
+- Check that CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
@@ -160,6 +161,11 @@ for check behavior and enforcement setup.
 
 ## Local commit hook
 
+`pnpm format` and the formatting hook share the [local development tool selector](https://docs.openclaw.ai/reference/test/local#openclaw-bun-fork).
+Use `OPENCLAW_FORMAT_TOOL=oxfmt pnpm format` to force oxfmt. The linked reference
+covers the pinned fork, supported platforms, overrides, fallbacks, and CI parity.
+Dedicated artifact formatters are listed in the [formatter caller inventory](scripts/README.md#formatting-and-lint-selection).
+
 The normal `pnpm install` setup enables the repository's pre-commit formatting hook
 when `core.hooksPath` is unset. Existing hook selections, including an explicitly
 empty value, are preserved. Git scopes initialization to the current checkout.
@@ -197,20 +203,12 @@ enforcement: bypassing or disabling hooks also bypasses this check.
 
 After your PR receives Barnacle, ClawSweeper, or maintainer feedback, read the [pull request review flow](https://docs.openclaw.ai/reference/pull-request-review-flow) for how to interpret rank-up moves, proof guidance, re-review requests, and review conversation follow-up.
 
-## Control UI Decorators
+## Control UI
 
-The Control UI uses Lit with **legacy** decorators (current Rollup parsing does not support
-`accessor` fields required for standard decorators). When adding reactive fields, keep the
-legacy style:
-
-```ts
-@state() foo = "bar";
-@property({ type: Number }) count = 0;
-```
-
-The root `tsconfig.json` is configured for legacy decorators (`experimentalDecorators: true`)
-with `useDefineForClassFields: false`. Avoid flipping these unless you are also updating the UI
-build tooling to support standard decorators.
+The Control UI uses **Solid 2** and native primitives, not Lit or decorator-based
+reactive fields. Before changing UI code, read the [Control UI guide](ui/AGENTS.md)
+and the [Solid skill](.agents/skills/solid/SKILL.md) for the current patterns and
+validation requirements.
 
 ## AI/Vibe-Coded PRs Welcome! 🤖
 
@@ -282,4 +280,4 @@ For issues that don't fit a specific repo, or if you're unsure, email **security
 7. **Environment**
 8. **Remediation Advice**
 
-Reports without reproduction steps, demonstrated impact, and remediation advice will be deprioritized. Given the volume of AI-generated scanner findings, we must ensure we're receiving vetted reports from researchers who understand the issues.
+Reports without reproduction steps, demonstrated impact, and remediation advice will be deprioritized. Given the volume of AI-generated scanner findings, we need reports that researchers have checked and understand.

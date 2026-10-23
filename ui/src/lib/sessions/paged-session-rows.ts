@@ -47,7 +47,7 @@ export async function fetchPagedSessionRows(params: {
         expectedTotal = totalCount;
       }
       // Optional later-page counts must never erase a known larger roster.
-      if (typeof totalCount === "number") {
+      if (totalCount !== undefined) {
         expectedTotal = Math.max(expectedTotal ?? 0, totalCount);
       }
       const rows = params.mapPageRows?.(result.sessions) ?? result.sessions;
@@ -58,8 +58,7 @@ export async function fetchPagedSessionRows(params: {
       const hasMore =
         pagination?.hasMore ??
         result.hasMore ??
-        (typeof result.totalCount === "number" &&
-          offset + result.sessions.length < result.totalCount);
+        (result.totalCount !== undefined && offset + result.sessions.length < result.totalCount);
       if (!hasMore) {
         break;
       }

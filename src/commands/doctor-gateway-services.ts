@@ -4,7 +4,6 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { formatGatewayServiceInstallationDrift } from "../cli/daemon-cli/shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
@@ -20,7 +19,10 @@ import {
 import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
-import { readDaemonRuntimePin } from "../daemon/runtime-pin-state.js";
+import {
+  readDaemonRuntimePin,
+  withDaemonRuntimePinMigration,
+} from "../daemon/runtime-pin-state.js";
 import {
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration,
@@ -40,6 +42,7 @@ import {
 } from "../daemon/service-types.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUnitActive } from "../daemon/systemd.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -67,17 +70,7 @@ import {
 } from "./doctor-gateway-legacy-services.js";
 import { buildExpectedGatewayServicePlan } from "./doctor-gateway-runtime-plan.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
-import {
-  formatServiceConfigIssues,
-  formatGatewayServiceRepairPreview,
-  reportGatewayServiceConfigAudit,
-  hasRepairableServiceDefinitionDrift,
-  isOperatorOwnedEnvironmentIssue,
-  isPreservedLaunchdTimeoutWarning,
-  isServiceDefinitionOnlyRepair,
-  isServiceInstallationOnlyRepair,
-  reportServiceDefinitionDrift,
-} from "./doctor-service-audit.js";
+import * as auditUi from "./doctor-service-audit.js";
 import {
   confirmDoctorServiceRepair,
   formatServiceRepairDeferredNote,
@@ -89,6 +82,7 @@ import {
 export { maybeResolveDuelingSystemdGatewayScopes } from "./doctor-gateway-dueling.js";
 
 type GatewayServiceConfigRepairOptions = {
+  onFinding?: (finding: HealthFinding) => void;
   allowExecSecretRefs?: boolean;
   /** Resolves with the persisted candidate; refusal must reject before service mutation. */
   writeConfig: (nextConfig: OpenClawConfig) => Promise<OpenClawConfig>;
@@ -200,14 +194,13 @@ async function cleanupLegacyDarwinServices(
   const failed: string[] = [];
 
   for (const svc of services) {
-    const plistPath = svc.sourcePath;
-    if (!plistPath) {
+    if (!svc.sourcePath) {
       failed.push(`${svc.label} (missing plist path)`);
       continue;
     }
     const result = await cleanupLegacyLaunchdService({
       label: svc.label,
-      plistPath,
+      plistPath: svc.sourcePath,
     });
     if (result.status === "removed") {
       removed.push(result.destination ? `${svc.label} -> ${result.destination}` : svc.label);
@@ -267,21 +260,23 @@ export async function maybeRepairGatewayServiceConfig(
       command: null,
       platform: process.platform,
     });
-    reportServiceDefinitionDrift(audit);
+    auditUi.reportServiceDefinitionDrift(audit);
     if (audit.issues.length > 0) {
-      note(formatServiceConfigIssues(audit.issues).join("\n"), "Gateway service config");
+      note(auditUi.formatServiceConfigIssues(audit.issues).join("\n"), "Gateway service config");
     }
     return cfg;
   }
   const managedDefinition = resolveManagedGatewayServiceCommand(command) ?? command;
   note(
     formatGatewayHeapLimitReport(
-      inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS, {}, command.programArguments),
+      inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS, command.programArguments),
     ),
     "Gateway heap",
   );
   const managedWrapperPath = managedDefinition.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
-  const pinSnapshot = readDaemonRuntimePin({ kind: "gateway", env: process.env }, command);
+  const pinSnapshot = await withDaemonRuntimePinMigration(process.env, () =>
+    readDaemonRuntimePin({ kind: "gateway", env: process.env }, command),
+  );
   const serviceInstallEnv: NodeJS.ProcessEnv = {
     ...process.env,
     ...(managedWrapperPath && !Object.hasOwn(process.env, OPENCLAW_WRAPPER_ENV_KEY)
@@ -363,12 +358,12 @@ export async function maybeRepairGatewayServiceConfig(
     expectedPort: repairPort,
     ...(installationDrift ? { expectedCommand: expectedPlan } : {}),
   });
-  reportServiceDefinitionDrift(audit);
+  auditUi.reportServiceDefinitionDrift(audit);
   const definitionRepair =
     !installationDrift &&
     Boolean(expectedRoot) &&
     !expectedLayout?.entrypointSourceCheckout &&
-    hasRepairableServiceDefinitionDrift(audit);
+    auditUi.hasRepairableServiceDefinitionDrift(audit);
   if (audit.runtimeNote) {
     note(audit.runtimeNote, "Gateway runtime");
   }
@@ -451,16 +446,17 @@ export async function maybeRepairGatewayServiceConfig(
     note(serviceRewriteBlock, "Gateway service config");
   }
 
-  const sourceCheckoutWarningToShow = reportGatewayServiceConfigAudit(
+  const sourceCheckoutWarningToShow = auditUi.reportGatewayServiceConfigAudit(
     audit,
     serviceLayout,
     definitionRepair,
   );
+  audit.issues = audit.issues.filter((issue) => issue.repair !== "host");
   if (audit.issues.length === 0 && !definitionRepair) {
     return cfg;
   }
   // A short custom timeout is diagnostic, not permission to overwrite native policy.
-  if (!definitionRepair && !installationDrift && isPreservedLaunchdTimeoutWarning(audit)) {
+  if (!definitionRepair && !installationDrift && auditUi.isPreservedLaunchdTimeoutWarning(audit)) {
     return cfg;
   }
   if (
@@ -507,7 +503,11 @@ export async function maybeRepairGatewayServiceConfig(
         (isExecStartRepairIssue(issue) && hasGatewayServiceLauncherOverride(command)) ||
         (issue.code === SERVICE_AUDIT_CODES.gatewayPortMismatch &&
           hasGatewayServiceLauncherOverride(command, { includeWorkingDirectory: false })) ||
-        isOperatorOwnedEnvironmentIssue(issue, command, expectedPlan.environmentValueSources),
+        auditUi.isOperatorOwnedEnvironmentIssue(
+          issue,
+          command,
+          expectedPlan.environmentValueSources,
+        ),
     )
   ) {
     const unitName = resolveSystemdUnitNameFromServicePath(command.sourcePath);
@@ -528,13 +528,14 @@ export async function maybeRepairGatewayServiceConfig(
   const needsConfigWrite =
     !tokenRefConfigured && !configuredGatewayToken && Boolean(gatewayTokenForRepair);
   const { preview, unresolvedFindings: unresolvedRepairFindings } =
-    formatGatewayServiceRepairPreview({
+    auditUi.formatGatewayServiceRepairPreview({
       command,
       managedDefinition,
       plan: expectedRuntimePlan,
       currentLayout: serviceLayout,
       plannedLayout: runtimeLayout,
       missingSystemNode: needsNodeRuntime && !systemNodePath,
+      runtimeIssues: audit.issues,
       definitionDrift: audit.definitionDrift,
     });
   note(preview, "Gateway service repair preview");
@@ -547,22 +548,11 @@ export async function maybeRepairGatewayServiceConfig(
     initialValue: needsConfigWrite ? false : needsAggressive ? prompter.shouldForce : true,
     requiresInteractiveConfirmation:
       needsConfigWrite ||
-      (!(installationDrift && isServiceInstallationOnlyRepair(audit)) &&
-        !(definitionRepair && isServiceDefinitionOnlyRepair(audit))),
+      (!(installationDrift && auditUi.isServiceInstallationOnlyRepair(audit)) &&
+        !(definitionRepair && auditUi.isServiceDefinitionOnlyRepair(audit))),
   });
   if (!repair) {
-    if (needsConfigWrite) {
-      note(
-        "Skipped Gateway token preservation and service repair. Rerun `openclaw doctor --fix` in an interactive terminal to approve saving a store SecretRef in gateway.auth.token.",
-        "Gateway service config",
-      );
-    }
-    if (sourceCheckoutWarningToShow === null) {
-      note(
-        `Run \`${formatCliCommand("openclaw gateway install --force")}\` when you want to replace the gateway service definition.`,
-        "Gateway service config",
-      );
-    }
+    auditUi.noteDeclinedGatewayServiceRepair(needsConfigWrite, sourceCheckoutWarningToShow);
     return cfg;
   }
   try {
@@ -580,7 +570,11 @@ export async function maybeRepairGatewayServiceConfig(
       }
     }
   } catch (err) {
-    runtime.error(`Gateway service repair blocked: ${String(err)}`);
+    auditUi.reportGatewayServiceFailure(
+      `Gateway service repair blocked: ${String(err)}`,
+      runtime,
+      options.onFinding,
+    );
     return cfg;
   }
   let cfgForServiceInstall = cfg;
@@ -614,7 +608,11 @@ export async function maybeRepairGatewayServiceConfig(
       if (err instanceof ConfigWritePostCommitError) {
         throw err;
       }
-      runtime.error(`Failed to persist gateway.auth.token before service repair: ${String(err)}`);
+      auditUi.reportGatewayServiceFailure(
+        `Failed to persist gateway.auth.token before service repair: ${String(err)}`,
+        runtime,
+        options.onFinding,
+      );
       return cfg;
     }
   }
@@ -629,6 +627,7 @@ export async function maybeRepairGatewayServiceConfig(
     pinnedRuntimePath: pinSnapshot.pin?.path,
   });
   await installDoctorGatewayService({
+    onFinding: options.onFinding,
     service,
     command,
     maintenance: options.serviceMaintenance,
@@ -655,7 +654,7 @@ export async function maybeRepairGatewayServiceConfig(
     },
   });
   if (unresolvedRepairFindings.length > 0) {
-    note(unresolvedRepairFindings.join("\n"), "Gateway service findings still unresolved");
+    auditUi.reportUnresolvedGatewayServiceFindings(unresolvedRepairFindings, options.onFinding);
   }
   return cfgForServiceInstall;
 }

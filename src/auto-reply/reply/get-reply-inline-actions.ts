@@ -36,8 +36,9 @@ import {
   shouldSkipMessageByAbortCutoff,
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
+import { isBangCommandInput } from "./bash-command-input.js";
 import { takeCommandSessionMetadataChangesFromTargets } from "./command-session-metadata.js";
-import { resolveSlashCommandName } from "./commands-slash-parse.js";
+import { matchSlashCommandToken, resolveSlashCommandName } from "./commands-slash-parse.js";
 import type { CommandDispatchParams } from "./commands-types.js";
 import type { buildStatusReply } from "./commands.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
@@ -90,7 +91,6 @@ type InlineActionResult =
       kind: "continue";
       directives: InlineDirectives;
       abortedLastRun: boolean;
-      cleanedBody: string;
       queueModeOverride?: QueueMode;
       explicitSkillSelections?: ExplicitSkillSelection[];
     };
@@ -131,35 +131,8 @@ export async function handleInlineActions(
     skillFilter?: string[];
   },
 ): Promise<InlineActionResult> {
-  const commandParams = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    command: params.command,
-    initialSessionEntry: params.initialSessionEntry,
-    allowCreateSessionEntry: params.allowCreateSessionEntry,
-    previousSessionEntry: params.previousSessionEntry,
-    previousSessionMemory: params.previousSessionMemory,
-    previousSessionResetMessages: params.previousSessionResetMessages,
-    sessionStore: params.sessionStore,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    sessionScope: params.sessionScope,
-    workspaceDir: params.workspaceDir,
-    opts: params.opts,
-    thinkingCatalog: params.thinkingCatalog,
-    resolveModelLevels: params.resolveModelLevels,
-    resolvedElevatedLevel: params.resolvedElevatedLevel,
-    blockReplyChunking: params.blockReplyChunking,
-    resolvedBlockStreamingBreak: params.resolvedBlockStreamingBreak,
-    resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
-    provider: params.provider,
-    model: params.model,
-    contextTokens: params.contextTokens,
-    contextTokenProjection: params.contextTokenProjection,
-    isGroup: params.isGroup,
-    typing: params.typing,
-  };
+  // Native directive results also carry turn-local fast mode; commands resolve their own status.
+  const commandParams = { ...params, resolvedFastMode: undefined };
   const {
     ctx,
     sessionCtx,
@@ -266,9 +239,16 @@ export async function handleInlineActions(
 
   const slashCommandName = getStandaloneSlashCommandName(command.commandBodyNormalized);
   const explicitSkillReferenceBody = command.commandBodyNormalized;
+  const isExplicitFollowup =
+    allowTextCommands &&
+    command.isAuthorizedSender &&
+    matchSlashCommandToken(command.commandBodyNormalized, "/followup") !== null;
   const hasSkillReferences =
-    command.isAuthorizedSender && hasSkillReferenceCandidate(explicitSkillReferenceBody);
+    !isExplicitFollowup &&
+    command.isAuthorizedSender &&
+    hasSkillReferenceCandidate(explicitSkillReferenceBody);
   const hasSkillSlashCandidate =
+    !isExplicitFollowup &&
     command.isAuthorizedSender &&
     slashCommandName !== null &&
     (slashCommandName === "skill" || !getBuiltinSlashCommands().has(slashCommandName));
@@ -325,56 +305,52 @@ export async function handleInlineActions(
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const { createOpenClawToolsAsync } = await import("../../agents/openclaw-tools.js");
       const { hasAnyAuthProfileStoreSourceAsync } =
         await import("../../agents/auth-profiles/source-check.js");
       const authSourceAgentDir = agentDir?.trim();
       const authProfileStoreSource = authSourceAgentDir
         ? await hasAnyAuthProfileStoreSourceAsync(authSourceAgentDir)
         : false;
-      const authorizedTools = await resolveSkillDispatchTools(
-        {
-          message: {
-            surface: ctx.Surface,
-            provider: ctx.Provider,
-            accountId: ctx.AccountId,
-            senderId: ctx.SenderId,
-            senderName: ctx.SenderName,
-            senderUsername: ctx.SenderUsername,
-            senderE164: ctx.SenderE164,
-            originatingTo: ctx.OriginatingTo,
-            to: ctx.To,
-            nativeChannelId: ctx.NativeChannelId,
-            messageThreadId: ctx.MessageThreadId,
-            memberRoleIds: ctx.MemberRoleIds,
-          },
-          cfg,
-          agentId,
-          agentDir,
-          authProfileStoreSource,
-          sessionEntry: targetSessionEntry,
-          sessionKey,
-          workspaceDir,
-          provider,
-          model,
-          senderIsOwner: command.senderIsOwner,
-          senderId: command.senderId,
-          currentChannelId: command.channelId,
-          groupId: extractExplicitGroupId(ctx.From),
-          skillCommand: {
-            name: skillInvocation.command.name,
-            ...(skillInvocation.command.skillFile
-              ? { skillFile: skillInvocation.command.skillFile }
-              : {}),
-            skillName: skillInvocation.command.skillName,
-            ...(skillInvocation.command.skillSource
-              ? { skillSource: skillInvocation.command.skillSource }
-              : {}),
-            toolName: dispatch.toolName,
-          },
+      const authorizedTools = await resolveSkillDispatchTools({
+        message: {
+          surface: ctx.Surface,
+          provider: ctx.Provider,
+          accountId: ctx.AccountId,
+          senderId: ctx.SenderId,
+          senderName: ctx.SenderName,
+          senderUsername: ctx.SenderUsername,
+          senderE164: ctx.SenderE164,
+          originatingTo: ctx.OriginatingTo,
+          to: ctx.To,
+          nativeChannelId: ctx.NativeChannelId,
+          messageThreadId: ctx.MessageThreadId,
+          memberRoleIds: ctx.MemberRoleIds,
         },
-        { createOpenClawToolsAsync },
-      );
+        cfg,
+        agentId,
+        agentDir,
+        authProfileStoreSource,
+        sessionEntry: targetSessionEntry,
+        sessionKey,
+        workspaceDir,
+        provider,
+        model,
+        senderIsOwner: command.senderIsOwner,
+        senderId: command.senderId,
+        currentChannelId: command.channelId,
+        groupId: extractExplicitGroupId(ctx.From),
+        skillCommand: {
+          name: skillInvocation.command.name,
+          ...(skillInvocation.command.skillFile
+            ? { skillFile: skillInvocation.command.skillFile }
+            : {}),
+          skillName: skillInvocation.command.skillName,
+          ...(skillInvocation.command.skillSource
+            ? { skillSource: skillInvocation.command.skillSource }
+            : {}),
+          toolName: dispatch.toolName,
+        },
+      });
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
@@ -480,6 +456,7 @@ export async function handleInlineActions(
 
   // Standalone commands use ordinary dispatch even when the prompt contains extra context.
   const inlineCommand =
+    !isExplicitFollowup &&
     allowTextCommands &&
     command.isAuthorizedSender &&
     !skillInvocation &&
@@ -587,7 +564,8 @@ export async function handleInlineActions(
     (inlineCommand !== undefined ||
       directiveAck !== undefined ||
       inlineStatusRequested ||
-      command.commandBodyNormalized.trim().startsWith("/"));
+      command.commandBodyNormalized.trimStart().startsWith("/") ||
+      isBangCommandInput(command.commandBodyNormalized));
   if (shouldRunCommandHandlers) {
     const strippedBody = stripStructuralPrefixes(cleanedBody);
     const remainingBodyAfterInlineStatus = (
@@ -601,19 +579,9 @@ export async function handleInlineActions(
       return finishCommand();
     }
 
-    const commandBodyBeforeRun = command.commandBodyNormalized;
-    const bodyBeforeRun = sessionCtx.agentText;
     const commandResult = await runCommands(command);
     if (!commandResult.shouldContinue) {
       return finishCommand(commandResult.reply);
-    }
-    if (command.commandBodyNormalized !== commandBodyBeforeRun) {
-      cleanedBody = command.commandBodyNormalized;
-    } else {
-      const bodyAfterRun = sessionCtx.agentText;
-      if (bodyAfterRun !== undefined && bodyAfterRun !== bodyBeforeRun) {
-        cleanedBody = bodyAfterRun;
-      }
     }
   }
 
@@ -621,7 +589,6 @@ export async function handleInlineActions(
     kind: "continue",
     directives,
     abortedLastRun,
-    cleanedBody,
     ...(queueModeOverride ? { queueModeOverride } : {}),
     ...(skillSelections ? { explicitSkillSelections: skillSelections } : {}),
   };

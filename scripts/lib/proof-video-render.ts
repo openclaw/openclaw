@@ -1,9 +1,16 @@
+import { validateProofAnnotations, type ProofAnnotation } from "./proof-annotations.ts";
+
 type Rect = { x: number; y: number; width: number; height: number };
 type TimedCue = { start: number; end: number };
 type CaptionCue = TimedCue & { kind: "caption"; text: string; image: string };
 type ZoomCue = TimedCue & { kind: "zoom"; rect: Rect; factor: number; ease: number };
 type SpeedCue = TimedCue & { kind: "speed"; factor: number };
-export type ProofVideoCue = CaptionCue | ZoomCue | SpeedCue;
+type AnnotationCue = TimedCue & {
+  kind: "annotation";
+  annotations: ProofAnnotation[];
+  image: string;
+};
+export type ProofVideoCue = CaptionCue | ZoomCue | SpeedCue | AnnotationCue;
 export type ProofVideoCues = {
   version: 1;
   video: string;
@@ -78,6 +85,11 @@ export function validateProofVideoCues(input: unknown): asserts input is ProofVi
       ) {
         fail("captions need nonempty text and a safe relative image path");
       }
+    } else if (cue.kind === "annotation") {
+      if (!path(cue.image) || !cue.image.endsWith(".png")) {
+        fail("annotations need a safe relative PNG path");
+      }
+      validateProofAnnotations(cue.annotations, { width, height });
     } else if (cue.kind === "zoom" || cue.kind === "speed") {
       const factor = number(cue.factor, `${cue.kind}.factor`, cue.kind === "zoom" ? 1 : 0);
       if (!factor) {
@@ -99,7 +111,7 @@ export function validateProofVideoCues(input: unknown): asserts input is ProofVi
         }
       }
     } else {
-      fail("cue.kind must be caption, zoom, or speed");
+      fail("cue.kind must be caption, zoom, speed, or annotation");
     }
   }
   for (const [kind, cues] of Object.entries(intervals)) {
@@ -155,6 +167,17 @@ export function planProofVideoRender(
     `${segments.map((_, index) => `[part${index}]`).join("")}concat=n=${segments.length}:v=1:a=0,fps=${n(fps)}[timed]`,
   );
   const { width, height } = cues.viewport;
+  const inputs: string[] = [];
+  let annotated = "[timed]";
+  // Composite at raw resolution before the camera transform so marks follow their targets.
+  for (const cue of cues.cues.filter((entry) => entry.kind === "annotation")) {
+    inputs.push(cue.image);
+    const output = `[annotation${inputs.length}]`;
+    filters.push(
+      `${annotated}[${inputs.length}:v]overlay=x=0:y=0:enable='gte(t,${n(remap(cue.start))})*lt(t,${n(remap(cue.end))})'${output}`,
+    );
+    annotated = output;
+  }
   const t = `(in/${n(fps)})`;
   const upscale = cues.scale === 1 ? 2 : 1;
   let z = "1";
@@ -177,9 +200,8 @@ export function planProofVideoRender(
   }
   const source = upscale === 1 ? "" : `scale=${width * 2}:${height * 2}:flags=lanczos,`;
   filters.push(
-    `[timed]${source}zoompan=z='${z}':x='clip((${x})-iw/zoom/2,0,iw-iw/zoom)':y='clip((${y})-ih/zoom/2,0,ih-ih/zoom)':d=1:s=${width}x${height}:fps=${n(fps)}[zoomed]`,
+    `${annotated}${source}zoompan=z='${z}':x='clip((${x})-iw/zoom/2,0,iw-iw/zoom)':y='clip((${y})-ih/zoom/2,0,ih-ih/zoom)':d=1:s=${width}x${height}:fps=${n(fps)}[zoomed]`,
   );
-  const inputs: string[] = [];
   let outputMap = "[zoomed]";
   for (const cue of cues.cues.filter((entry) => entry.kind === "caption")) {
     inputs.push(cue.image);

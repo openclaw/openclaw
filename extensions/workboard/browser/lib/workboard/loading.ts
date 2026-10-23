@@ -13,6 +13,7 @@ import type { WorkboardRefreshSource, WorkboardUiState } from "./types.ts";
 
 type LoadWorkboardParams = WorkboardClientContext & {
   force?: boolean;
+  more?: boolean;
   refreshDiagnostics?: boolean;
   preserveError?: boolean;
 };
@@ -24,7 +25,8 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
     !params.client ||
     state.dispatching ||
     workboardHasActiveWrites(state) ||
-    (!params.force && (state.loaded || state.loadAttempted))
+    (params.more && !state.nextCursor) ||
+    (!params.force && !params.more && (state.loaded || state.loadAttempted))
   ) {
     return false;
   }
@@ -63,18 +65,50 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
       }
       const payload = await client.request(
         "workboard.cards.list",
-        runtime.cardsRevision ? { sinceRevision: runtime.cardsRevision } : {},
+        params.more
+          ? { after: state.nextCursor }
+          : runtime.cardsRevision
+            ? { sinceRevision: runtime.cardsRevision }
+            : {},
       );
       if (runtime.loadPromise !== loadPromise) {
         return false;
       }
       const unchanged = isRecord(payload) && payload.unchanged === true;
       const normalized = unchanged ? state : normalizeCardsPayload(payload);
+      if (!unchanged && !params.more) {
+        // Refresh the held window through bounded pages; do not collapse a reader
+        // back to the first page after every live write.
+        while (normalized.nextCursor && normalized.cards.length < state.cards.length) {
+          const page = normalizeCardsPayload(
+            await client.request("workboard.cards.list", { after: normalized.nextCursor }),
+          );
+          if (runtime.loadPromise !== loadPromise) {
+            return false;
+          }
+          normalized.cards.push(...page.cards);
+          normalized.nextCursor = page.nextCursor;
+        }
+      }
       if (params.preserveError && shouldDeferWorkboardLiveRefresh(state)) {
         return false;
       }
-      runtime.cardsRevision = normalizeWorkboardChange(isRecord(payload) ? payload.revision : null);
-      setWorkboardCards(state, normalized.cards);
+      if (!params.more) {
+        runtime.cardsRevision = normalizeWorkboardChange(
+          isRecord(payload) ? payload.revision : null,
+        );
+      }
+      setWorkboardCards(
+        state,
+        params.more
+          ? [
+              ...new Map(
+                [...state.cards, ...normalized.cards].map((card) => [card.id, card]),
+              ).values(),
+            ]
+          : normalized.cards,
+      );
+      state.nextCursor = normalized.nextCursor;
       state.boards = normalized.boards;
       state.statuses = normalized.statuses;
       const recoveredLoadError = runtime.loadError;

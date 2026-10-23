@@ -2,18 +2,18 @@ import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema"
 import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import {
   assertRequiredParams,
   REQUIRED_PARAM_GROUPS,
   normalizeFileToolPathParam,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
-import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import {
@@ -24,9 +24,10 @@ import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 async function runToolCall(
   tool: AnyAgentTool,
-  toolCall: Parameters<typeof validateToolArguments>[1],
-  prompt: string,
+  args: Parameters<typeof validateToolArguments>[1]["arguments"],
+  id: string,
 ) {
+  const toolCall = { type: "toolCall" as const, id, name: tool.name, arguments: args };
   const events: AgentEvent[] = [];
   let streamCalls = 0;
   const streamFn: StreamFn = () => {
@@ -49,7 +50,7 @@ async function runToolCall(
   };
 
   const messages = await runAgentLoop(
-    [{ role: "user", content: prompt, timestamp: Date.now() }],
+    [{ role: "user", content: "Call the tool", timestamp: Date.now() }],
     { systemPrompt: "test", messages: [], tools: [tool] },
     {
       model: {
@@ -81,13 +82,8 @@ describe("direct process tool schema", () => {
     const execute = vi.spyOn(processTool, "execute");
     const { messages, events } = await runToolCall(
       processTool,
-      {
-        type: "toolCall",
-        id: "call-unknown-process-action",
-        name: "process",
-        arguments: { action: "delete" },
-      },
-      "inspect processes",
+      { action: "delete" },
+      "call-unknown-process-action",
     );
 
     expect(execute).not.toHaveBeenCalled();
@@ -213,29 +209,30 @@ function makeTool(parameters: TSchema, overrides: Partial<AnyAgentTool> = {}): A
   };
 }
 
-describe("normalizeToolParameters", () => {
+describe("finalized tool parameter schemas", () => {
   it("keeps deeply nested plugin tools callable through argument validation", async () => {
     let metadata: TSchema = { type: "string" };
     for (let depth = 0; depth < 5_000; depth++) {
       metadata = { type: "object", properties: { next: metadata } };
     }
     const execute = vi.fn().mockResolvedValue({ content: [], details: { called: true } });
-    const normalized = normalizeToolParameters(
-      makeTool(
-        {
-          type: "object",
-          properties: { message: { type: "string" }, metadata },
-          required: ["message"],
-        },
-        { execute },
-      ),
-    );
+    const [normalized] = finalizeAgentTools({
+      tools: [
+        makeTool(
+          {
+            type: "object",
+            properties: { message: { type: "string" }, metadata },
+            required: ["message"],
+          },
+          { execute },
+        ),
+      ],
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
+    assert.ok(normalized);
 
-    const { messages } = await runToolCall(
-      normalized,
-      { type: "toolCall", id: "deep-call", name: normalized.name, arguments: { message: "proof" } },
-      "Call the tool",
-    );
+    const { messages } = await runToolCall(normalized, { message: "proof" }, "deep-call");
 
     expect(execute).toHaveBeenCalledOnce();
     expect(messages.find((message) => message.role === "toolResult")).toMatchObject({
@@ -248,7 +245,12 @@ describe("normalizeToolParameters", () => {
     const hookContext = { agentId: "main", sessionId: "session-before-normalize" };
     const wrapped = wrapToolWithBeforeToolCallHook(source, hookContext);
 
-    const normalized = normalizeToolParameters(wrapped);
+    const [normalized] = finalizeAgentTools({
+      tools: [wrapped],
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
+    assert.ok(normalized);
     expect(isToolWrappedWithBeforeToolCallHook(normalized)).toBe(true);
     expect(getBeforeToolCallSourceTool(normalized)).toBe(source);
     expect(getBeforeToolCallHookContext(normalized)).toBe(hookContext);
@@ -258,18 +260,17 @@ describe("normalizeToolParameters", () => {
     const tool = makeTool(
       {
         type: "object",
-        allOf: [
-          {
-            type: "object",
-            properties: { q: { type: "string" } },
-            required: ["q"],
-          },
-        ],
+        allOf: [Type.Object({ q: Type.String() })],
       },
       { name: "query" },
     );
 
-    const normalized = normalizeToolParameters(tool);
+    const [normalized] = finalizeAgentTools({
+      tools: [tool],
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
+    assert.ok(normalized);
 
     expect(normalized.prepareArguments).toBeUndefined();
     expect(() =>
@@ -287,13 +288,14 @@ describe("normalizeToolParameters", () => {
       content: [{ type: "text", text: "wiki ok" }],
       details: { ok: true },
     });
-    const normalized = normalizeToolParameters({
-      name: "wiki_lint",
-      label: "wiki_lint",
-      description: "Lint wiki vault",
-      parameters: { type: "object", properties: {}, required: [] },
-      execute,
+    const [normalized] = finalizeAgentTools({
+      tools: [
+        makeTool({ type: "object", properties: {}, required: [] }, { name: "wiki_lint", execute }),
+      ],
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
     });
+    assert.ok(normalized);
     const tool = wrapToolWithBeforeToolCallHook(normalized, {
       agentId: "main",
       sessionKey: "e2e-null-args",
@@ -301,21 +303,17 @@ describe("normalizeToolParameters", () => {
     });
     const { messages, events, streamCalls } = await runToolCall(
       tool,
-      {
-        type: "toolCall",
-        id: "call-null-args",
-        name: "wiki_lint",
-        arguments: null as never,
-      },
-      "lint the wiki",
+      null as never,
+      "call-null-args",
     );
 
     expect(streamCalls).toBe(2);
-    const executeCall = execute.mock.calls[0];
-    expect(executeCall?.[0]).toBe("call-null-args");
-    expect(executeCall?.[1]).toEqual({});
-    expect(executeCall?.[2]).toBeUndefined();
-    expect(typeof executeCall?.[3]).toBe("function");
+    expect(execute.mock.calls[0]?.slice(0, 4)).toEqual([
+      "call-null-args",
+      {},
+      undefined,
+      expect.any(Function),
+    ]);
     const toolResult = messages.find((message) => message.role === "toolResult");
     expect(toolResult).toMatchObject({
       role: "toolResult",
@@ -360,12 +358,7 @@ describe("assertRequiredParams", () => {
     const execute = vi.fn(async (_id, args) => args);
     const tool = makeValidatedFileTool("edit", execute);
 
-    const edits = [
-      {
-        oldText: "literal old</arg_value>>",
-        newText: "literal new</arg_value>>",
-      },
-    ];
+    const edits = [{ oldText: "literal old</arg_value>>", newText: "literal new</arg_value>>" }];
     await tool.execute("id", { path: "notes.docxodex</arg_value>>>", edits });
 
     expect(execute).toHaveBeenCalledWith("id", { path: "notes.docx", edits }, undefined, undefined);

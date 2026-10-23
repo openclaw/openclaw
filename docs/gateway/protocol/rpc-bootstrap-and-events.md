@@ -22,6 +22,33 @@ Calling with `{}` preserves the acknowledgment-only response
 List parameters select the snapshot; they do not filter the connection's session
 event subscription.
 
+`sessions.subscribe` also accepts `includeMessageBodies: true` to retain complete
+roster `session.message` bodies on that connection, or `false` to release that
+preference. Omitting the option preserves the current preference. This option
+alone returns the acknowledgment without reading a list. Clients can set the
+initial preference with `includeSessionMessageBodies: true` in `connect`.
+
+The web Control UI advertises the additive `roster-message-bodies-optional`
+connect capability. For these clients, the Gateway omits only `message` from a
+visible `session.message` when the connection has no exact subscription for the
+resolved session and agent, and has not requested `includeMessageBodies`.
+Every exact subscription counts, including narration, approvals, and any
+`subscriptionId`. The event name, routing, message ID and sequence, run and
+ownership receipts, clocks, full session row, and ancestor coverage remain
+unchanged. Rows still use the connection's negotiated row codec. Clients without
+the capability, including native apps, continue receiving complete messages.
+Diagnostic event logs on opted-in roster-only clients consequently omit bodies.
+
+The Control UI plugin host retains complete roster bodies while any plugin has
+an `onEvent("session.message", ...)` listener. Listeners present before connect
+set the initial preference; runtime registration requests it with
+`sessions.subscribe`. Plugin delivery begins once the Gateway confirms full-body
+delivery for the connection. Bodyless frames already in flight are delivered to
+core UI consumers but never to plugin listeners. Removing the last listener
+releases the preference without reconnecting. Pending shared-reader canvas
+widgets retain their own exact subscription, including while parked, until their
+document loads or their lifetime ends.
+
 List views can pass `rowMode: "compact"` to omit repeated detail-only metadata:
 `contextWindows`, `contextWindowDefault`, `thinkingLevels`, `thinkingOptions`,
 `thinkingDefault`, `toolOverrides`, `providerReview`, `nativeRuntimeConsent`,
@@ -40,6 +67,46 @@ merge those partial objects into the row before reconciling it with cached state
 The row's own fields take precedence. Fields outside the sidebar projection are
 unrequested, not deletion receipts, just as with compact rows. Other clients can
 continue requesting compact or full rows without decoding shared facts.
+
+Sidebar replies include an opaque `rowsRevision`. A client can send it as
+`ifRowsRevision` on the same query to receive `rowsUnchanged: true` and an empty
+`sessions` array when the authorized rows are unchanged. Counts, defaults, and
+facets still describe the current full window.
+
+Compact and dashboard callers can opt into the same shared-fact and conditional
+row contract by sending `ifRowsRevision: ""` on the initial read. Subsequent reads
+send the returned revision, scoped to the same query and connection. Omitting
+`ifRowsRevision` preserves their ordinary full row arrays without shared facts.
+
+Clients that also accept row deltas send `ifRowsRevision: "delta:<revision>"`.
+When that query's previous row identities are still retained, `sessions` contains only
+changed or inserted rows, and `rowsDelta` contains `baseRevision` and `order`.
+Expand response-local shared facts, concatenate the cached base rows with those
+changed rows, then select the complete window by the integer indexes in `order`.
+Omitted base rows are removed; repeated raw keys across agents remain distinct. `count`
+still counts the complete window, including owner-first rows. Require a matching
+base revision before applying a delta. Revision misses, retired views, and reads
+without a useful delta return the normal full row array. Current authorization
+and selection always precede this comparison. The Gateway retains up to 32 prior
+identity vectors per bounded query view, including across runtime activity and selection
+revision updates such as membership changes. A selection revision refreshes the
+current selection without discarding previously served comparison identities.
+Each historical vector stores its revision and eight-byte numeric row identities;
+it does not retain the old row objects or their encoded JSON.
+Configuration, identity, and explicit selection resets retire the view and its history.
+Views are retained in least-recently-used order, with limits of 512 cache slots
+(selection and row presentation use separate slots) and 32 MiB of estimated
+retention per projection. The estimate counts history identities, current row
+references and cached row/fact encodings, serialized array buffers, selection and
+partition entries, query keys, and view overhead. Shared current row encodings are
+counted once per projection, while packed replies are charged per view. This is a
+retention estimate rather than whole-heap
+attribution. A response exceeding the budget is
+served without retaining its baseline. Eviction does not change authorization
+or selection; a later read can return full rows to establish a new baseline.
+
+This mode is optional: bare revision tokens never receive deltas, and older
+Gateways treat the prefixed token as a miss and return full rows.
 
 Control UI list requests use a bounded diagnostic `source`:
 `sidebar`, `dashboard`, `activity`, `sessions-page`, `chat-pane`, `agent-roster`,
@@ -139,7 +206,13 @@ or retractions; this final flush is exempt from the two-second interval.
 Newer tool activity or a change of run discards pending older text, so a delayed
 snapshot cannot replace a newer tool line or switch the sidebar back to an older run.
 Lifecycle, status, tool, final, abort, and error events retain their existing
-delivery. Raw thinking streams and in-progress preamble or answer-candidate text
+delivery. Narration-only tool events retain identity, phase, error and visibility
+metadata, but omit `args`, input `diff`, `partialResult`, and `result` bodies.
+Tool progress still arrives through activity items. Opening the session admits
+full streams before fetching history; persisted tool cards retrieve complete
+output on demand through `chat.message.get`. Full subscribers and clients that
+omit narration mode retain the existing tool payloads.
+Raw thinking streams and in-progress preamble or answer-candidate text
 are omitted; item completion and answer selection still arrive. Approval events
 still require `includeApprovals: true` and the normal
 approval authority. Queued narration is discarded on unsubscribe, mode changes,
@@ -163,6 +236,14 @@ updated. This is an additive protocol-v4 contract, with no capability negotiatio
 or protocol-version change.
 
 ## Common event families
+
+- `socket.drain`: session reset (`reset` or `new`) or deletion (`delete`) notice
+  for session-list and matching message subscribers. The payload includes
+  `sessionKey`, `reason`, `ts`, and, when available, `agentId` and `sessionId`.
+  It follows the same session access checks as other session events; clients
+  with `session-scoped-events` receive it only for their subscribed session.
+  This is a best-effort cache invalidation, not task completion, a WebSocket
+  transport drain, or a durable delivery receipt. Reconcile state after reconnects.
 
 - `chat`: UI chat updates such as `chat.inject` and other transcript-only chat
   events. A `state: "delta"` payload carries the append in `deltaText`.
@@ -196,6 +277,10 @@ or protocol-version change.
   `chat` stream. Subscribe to one text projection for a display; consuming both
   streams into one accumulator duplicates output. In-process agent observers
   retain their cumulative-text contract.
+  Non-tool agent events carry run/session identity and stream data, without a
+  session-row snapshot. Use `sessions.changed` and `session.message` for roster
+  metadata, including when observing channel-routed runs through an exact
+  session subscription.
   A client that renders assistant text solely from `chat` can advertise
   `chat-only-assistant-text` in its connect `caps`. The Gateway then omits
   text-bearing `agent` events with `stream: "assistant"` from that connection,
@@ -207,6 +292,15 @@ or protocol-version change.
   agent text separately from cumulative chat text should not advertise it.
 - `session.message`, `session.operation`, `session.tool`: transcript, in-flight
   session operation, and event-stream updates for a subscribed session.
+  `session.tool` carries the tool event's run identity, session address, sequence,
+  timestamp, and `data`; session-row metadata arrives through `session.message`
+  and `sessions.changed`. Exec tool results and updates retain their bounded
+  text in `content`, omitting the redundant `details.aggregated` output when text
+  content is present. Results with no text content retain bounded aggregated
+  output. Live `dispatch_action` results omit the raw target-result and tool
+  mirrors from `details`, keeping the existing bounded display content and
+  other details. Stored transcripts and internal tool-result callbacks keep the full
+  output; recipient subscription and native delivery rules are unchanged.
 - `session.narration`: bounded assistant-text snapshots for subscriptions with
   narration intent, paced and settled as described above.
 - `session.approval`: sanitized pending and terminal approval truth for an
@@ -225,6 +319,15 @@ or protocol-version change.
   `/clear` preserves `sessionId` and changes `lifecycleRevision`.
   Clients show its headline or inspector link only while the digest's exact `runId`
   is present in `activeRunIds`.
+- Committed transcript presentation is bounded per exact session/store/lifecycle.
+  If one publication is still executing, queued message notifications for the same
+  known lifecycle can collapse into one `sessions.changed` event with
+  `phase: "message"` and no `messageId` or `messageSeq`. Refetch history on that
+  invalidation; the durable transcript still contains every committed message.
+  Executing publication, other sessions, and live-source completion obligations
+  remain independent. Unknown legacy ownership and pending assistant errors are
+  not coalesced. A collapsed notification does not claim individual message
+  delivery, so unpublished assistant text retains its existing live fallback.
 - `sessions.changed`: session index or metadata changed. Keyed changes carry the
   affected row in `session`, presented for that connection. Nested rows in
   `sessions.changed` and `session.message` use the same full prepared metadata,
@@ -242,6 +345,11 @@ or protocol-version change.
   `chat.metadata.changed` invalidates commands unless `commandsChanged: false`.
   Usage-only and model-only publications leave commands available without another
   metadata RPC.
+  Successful usage-cache refreshes publish the latest `usageUpdatedAt` for each
+  agent at most once per 500 ms collection window. The underlying commits and
+  usage reads remain immediate. A refresh failure first publishes that agent's
+  pending success, then its failure receipt, so clients retain the last successful commit.
+  Model, authentication, and command invalidations do not use this window.
   Top-level lifecycle and capacity fields
   remain event receipts, including explicit clearing values. When a nested row
   omits an optional field, honor its top-level clearing tombstone; nested values
@@ -309,6 +417,7 @@ or protocol-version change.
   availability, and loaded cron bindings can produce broad invalidations.
   Activity-summary-only publications update opted-in Activity consumers; shared
   session and agent rosters do not refetch for those recap-only changes.
+  Ensuring an already-current recap does not announce an updating/current cycle.
   Held row updates preserve unfiltered and dashboard-filtered windows without
   refetching; title and preview enrichment flags do not change membership.
   Healthy row traffic retains one fallback read after at least 60 seconds.
@@ -322,8 +431,11 @@ or protocol-version change.
   archive, or uncertain filter changes still require an authoritative count read.
   Prepared row publications yield between bounded slices during bursts. Pending
   activity-summary updates for the same session generation share the latest
-  snapshot; lifecycle, capacity, transcript, deletion, and clearing receipts remain
-  distinct. Publication rechecks row readiness after each yield. Accepted recap
+  snapshot within a 750 ms window, leaving headroom for delivery within one second.
+  The deadline stays fixed during continuous
+  activity; lifecycle, capacity, transcript, deletion, and clearing receipts remain
+  immediate and distinct. Live activity indicators use those separate events,
+  not recap delivery. Publication rechecks row readiness after each yield. Accepted recap
   notifications outlive the compaction or scheduler work that triggered them.
   Queued session-change notifications also survive completion or cancellation of
   the request that committed the change, so connected clients still receive the row.
@@ -343,11 +455,18 @@ or protocol-version change.
   Clients must not delete a replacement with a different ID. A key-only delete event
   or a rowless global notification invalidates the saved session list; it does
   not identify the current generation as deleted.
-- `presence`: system presence snapshot updates.
+- `presence`: system presence snapshot updates, or keyed resets/deltas for clients
+  advertising `presence-deltas`. See [presence deltas](/gateway/protocol/presence#opt-in-presence-deltas)
+  for version matching, ordering, and full-snapshot recovery.
 - `tick`: periodic keepalive/liveness event.
 - `health`: gateway health snapshot update.
 - `heartbeat`: heartbeat event stream update.
-- `cron`: cron run/job change event.
+- `cron`: cron run/job change event with the changed job's identity and attention
+  state. The optional `job` contains `id`, `name`, `agentId`, `enabled`,
+  `updatedAtMs`, and the next/last run, running, and auto-disable fields in `state`.
+  Job definitions, run summaries, diagnostics, and delivery traces are omitted;
+  use `cron.get`, `cron.list`, or `cron.runs` when displaying those details.
+  Internal `cron_changed` plugin hooks still receive the full job snapshot.
 - `shutdown`: gateway shutdown notification.
 - `node.pair.requested` / `node.pair.resolved`: node pairing lifecycle.
 - `node.invoke.request`: node invoke request broadcast.
@@ -372,6 +491,58 @@ or protocol-version change.
   lifecycle.
 - `plugin.approval.requested` / `plugin.approval.resolved`: plugin approval
   lifecycle.
+
+## Session event row deltas
+
+The web Control UI advertises `session-row-deltas` in connect `caps`. For that
+connection, full `session` and `ancestorSessions` row slots in `sessions.changed`
+and `session.message` use either `{ key, agentId?, version, full }` or
+`{ key, agentId?, base, version, set, remove }`. Other clients retain the existing
+payloads. Ancestor references, top-level receipts, and message bodies are unchanged.
+
+Web clients also advertise `session-event-field-refs`. Together with
+`session-row-deltas`, this allows duplicate envelope values to be replaced by
+`sessionFieldRefs`: an array of zero-based indexes into the decoded `session`
+row's own field names sorted in JavaScript's default string order. Undefined
+fields are omitted, just as in JSON. Each index restores the matching field and
+value to the envelope; only equal values are referenced. Fields with different
+values, including clearing receipts absent from the row, remain explicit.
+Routing keys remain explicit too. The decoder restores these fields and removes
+`sessionFieldRefs` before dispatch, preserving the same complete payload for all
+listeners. Invalid indexes or conflicts with explicit envelope fields discard
+the frame and use the same reconnect recovery as an invalid row patch. Clients
+without this additive capability continue receiving explicit envelope fields;
+the protocol version is unchanged.
+
+The decoder replaces changed top-level fields from `set` and deletes fields named
+by `remove`; nested objects and arrays replace whole. A patch requires the same
+agent/key identity and exact held `base` version. The browser reconstructs full
+legacy payloads once before dispatching any event listener. A missing or invalid
+base discards the event and reconnects through the normal subscription recovery.
+
+First delivery, changed generation, eviction, or a patch no smaller than its full
+wrapper sends `full`. Both ends retain at most 1,024 rows in delivery-order LRU.
+The server also bounds its field-hash vectors to 2 MiB per connection; `retain:
+false` on a full wrapper instructs both ends to discard that baseline. No row-byte
+charge is sent. Subscription changes, ordinary fact updates (including broad
+notifications), hidden ancestors, and list reads invalidate ancestor certification
+but preserve wire baselines. Those baselines describe the last row delivered to
+the socket; current authorized fields still determine every patch. A response can
+follow a newly delivered row on the same socket.
+Connection retirement clears the state. A dropped event invalidates server
+baselines; subsequent rows are full, and sequence gaps trigger the existing
+reconnect behavior. List/describe replies
+do not establish event baselines or overwrite the decoder's held rows. Projection
+detach/attach also resets the server baselines.
+
+The Control UI's swarm roster consumes the reconstructed nested rows, including
+their authorized `swarm.groups[].children`. The outer event envelope can contain
+only aggregate swarm counts; it is not the source for member details. A complete
+nested row updates the roster without another `sessions.describe`. Summary-only
+rows and unknown ancestry still require detail reads. Explicit placement and
+goal recovery reads also remain fresh because they validate current state before
+continuing an operation. Shared descriptor reads retain their existing
+connection-scoped reuse, event invalidation, and explicit refresh behavior.
 
 ## Node helper methods
 
@@ -428,7 +599,10 @@ false` or `suppressNotifyOnExit: true` suppresses notifications. Denied events
 never enqueue a system event or wake agent work. Finished events notify only for
 timeout, nonzero or unknown exit code, or nonempty compacted output; successful
 exit 0 with no output stays quiet. Finished notifications with a run ID are
-deduplicated by resolved session and run ID. A heartbeat wake is requested only
-after a system event is queued.
+deduplicated by resolved session and run ID. While the `system.run` invocation
+that started the run still waits for its result, the Gateway holds the finished
+notification: the caller receives the output inline, and the notification is queued
+only if that invocation then fails (timeout, cancellation or disconnect). A
+heartbeat wake is requested only after a system event is queued.
 
 Node event delivery is best-effort, not a durable completion ledger.

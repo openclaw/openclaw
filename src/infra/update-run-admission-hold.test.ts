@@ -3,11 +3,11 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { executeSharedStateCommand } from "../state/openclaw-state-worker-runtime.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 import { captureUpdateRunRedactionFacts } from "./update-run-codec.js";
+import { executeUpdateRunCommand } from "./update-run-dispatch.worker.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import { openUpdateRunWriter } from "./update-run-mutation.worker.js";
 
@@ -76,28 +76,20 @@ it.each([false, true])(
       admission.service();
       return "ok";
     });
-    const unused = () => {
-      throw new Error("Unexpected shared-state write path");
-    };
     try {
+      const command: Parameters<typeof executeUpdateRunCommand>[0] = {
+        type: "updateRuns.recordPhase",
+        input: {
+          runId: run.runId,
+          redactionFacts: captureUpdateRunRedactionFacts(env),
+          phase: "validating",
+          patch: {},
+        },
+      };
       const execute = () =>
         runWithSqliteWorkerStateContext({ environment: env }, () =>
           workerAdmission.withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
-            executeSharedStateCommand(
-              {
-                type: "updateRuns.recordPhase",
-                input: {
-                  runId: run.runId,
-                  redactionFacts: captureUpdateRunRedactionFacts(env),
-                  phase: "validating",
-                  patch: {},
-                },
-              },
-              { databasePath },
-              unused,
-              unused,
-              () => writer,
-            ),
+            executeUpdateRunCommand(command, { path: databasePath, env }, () => writer),
           ),
         );
       if (revoke) {

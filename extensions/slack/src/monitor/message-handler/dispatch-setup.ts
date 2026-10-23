@@ -227,14 +227,10 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
             eventScope: prepared.eventScope,
           });
           if (reportFailure && !restored) {
-            try {
-              runtime.error?.(
-                "Slack session status could not return to active after processing. " +
-                  "Enable verbose logging to inspect the Slack API failure.",
-              );
-            } catch {
-              // Diagnostics must not prevent the remaining typing-reaction cleanup.
-            }
+            runtime.error?.(
+              "Slack session status could not return to active after processing. " +
+                "Enable verbose logging to inspect the Slack API failure.",
+            );
           }
         }
         // Tracked apart from the status write: a suppressed status refresh

@@ -4,13 +4,13 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
+import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { modelKey, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "../agents/model-visibility-policy.js";
-import { resolveContextConfigProviderForRuntime } from "../agents/openai-routing.js";
 import { resolveOperatorModelDefault } from "../agents/operator-model-policy.js";
 import {
   persistStickyModelSelectionBestEffort,
@@ -40,7 +40,6 @@ import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { resolveSessionWorkerPlacementContext } from "../gateway/session-worker-placement-context.js";
 import { prepareWorkerPlacementSessionRuntime } from "../gateway/worker-environments/placement-session-runtime-preparation.js";
 import { resolveWorkerPlacementCapabilities } from "../gateway/worker-environments/placement-session-runtime.js";
-import type { readSessionWorkerPlacementAsync } from "../gateway/worker-environments/session-placement-lifecycle.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -128,37 +127,6 @@ function rejectNotAllowed(provider: string, model: string): ApplySessionModelSel
     reason: "not-allowed",
     message: `Model ${provider}/${model} is not available for this agent.`,
   };
-}
-
-/**
- * Rejects a model selection when the candidate runtime is incompatible with an
- * active cloud-worker placement. Mirrors the sessions.patch guard so directive
- * model changes are validated before they persist.
- */
-function resolveActivePlacementModelSelectionError(
-  params: {
-    entry: SessionEntry;
-    readRuntimeCapabilities: () => ReturnType<typeof resolveWorkerPlacementCapabilities>;
-  },
-  prepared: {
-    placement: Awaited<ReturnType<typeof readSessionWorkerPlacementAsync>>;
-  },
-): string | undefined {
-  const sessionId = params.entry.sessionId;
-  if (!sessionId) {
-    return undefined;
-  }
-  const placement = prepared.placement;
-  if (!placement || placement.state === "local") {
-    return undefined;
-  }
-  const { executionMode } = params.readRuntimeCapabilities();
-  if (executionMode === placement.executionMode) {
-    return undefined;
-  }
-  return executionMode
-    ? `Session cannot change cloud placement execution mode while placement is ${placement.state}.`
-    : `Session cannot select a runtime without cloud placement support while cloud worker placement is ${placement.state}.`;
 }
 
 /** Applies one validated picker selection to the authoritative live session. */
@@ -249,6 +217,11 @@ export async function applySessionModelSelectionInternal(
   if (prepared.status === "rejected") {
     return prepared;
   }
+  const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  const pinnedProfile = !request.profileOverride && startingEntry.authProfileOverride?.trim();
+  const recordedProvider = pinnedProfile
+    ? await prepareAuthProfileProvider({ agentDir, profileId: pinnedProfile })
+    : undefined;
   const validateSelection = () =>
     validateOperatorSelection() ??
     params.validateAuthProfileSelection?.() ??
@@ -263,12 +236,13 @@ export async function applySessionModelSelectionInternal(
   const nextEntry = { ...startingEntry };
   const modelChange = applyModelOverrideWithAuthProfileCompatibility({
     cfg: params.cfg,
-    agentDir: resolveAgentDir(params.cfg, params.agentId),
+    agentDir,
     entry: nextEntry,
     currentProvider: params.currentProvider,
     selection: request,
     explicitDefaultSelection: request.isDefault,
     profileOverride: request.profileOverride,
+    recordedProvider,
     markLiveSwitchPending: params.markLiveSwitchPending,
   });
   const runtimeChange = applyModelRuntimeDirective(nextEntry, runtime);
@@ -286,14 +260,35 @@ export async function applySessionModelSelectionInternal(
     : undefined;
   using _ = { [Symbol.dispose]: () => placementAuthority?.release() };
   const placement = placementAuthority?.placement;
-  using placementRuntime = await prepareWorkerPlacementSessionRuntime({
+  const placementRuntime = await prepareWorkerPlacementSessionRuntime({
     cfg: params.cfg,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     entry: nextEntry,
   });
   const readRuntimeCapabilities = () =>
-    resolveWorkerPlacementCapabilities(placementRuntime.read(params.cfg, nextEntry));
+    resolveWorkerPlacementCapabilities(placementRuntime(params.cfg, nextEntry));
+  /**
+   * Rejects a model selection when the candidate runtime is incompatible with an
+   * active cloud-worker placement. Mirrors the sessions.patch guard so directive
+   * model changes are validated before they persist.
+   */
+  function resolveActivePlacementModelSelectionError(): string | undefined {
+    const sessionId = nextEntry.sessionId;
+    if (!sessionId) {
+      return undefined;
+    }
+    if (!placement || placement.state === "local") {
+      return undefined;
+    }
+    const { executionMode } = readRuntimeCapabilities();
+    if (executionMode === placement.executionMode) {
+      return undefined;
+    }
+    return executionMode
+      ? `Session cannot change cloud placement execution mode while placement is ${placement.state}.`
+      : `Session cannot select a runtime without cloud placement support while cloud worker placement is ${placement.state}.`;
+  }
   // An explicit selection retains the existing persistence and conflict semantics even when idempotent.
   nextEntry.updatedAt = Date.now();
   let persistedEntry: SessionEntry;
@@ -305,13 +300,7 @@ export async function applySessionModelSelectionInternal(
       placementError = "Session placement changed; retry model selection.";
       return placementError;
     }
-    placementError = resolveActivePlacementModelSelectionError(
-      {
-        entry: nextEntry,
-        readRuntimeCapabilities,
-      },
-      { placement },
-    );
+    placementError = resolveActivePlacementModelSelectionError();
     return (
       params.validateAuthProfileSelection?.() ??
       prepared.validateRuntimeSelection?.() ??
@@ -457,11 +446,6 @@ export async function applySessionModelSelectionInternal(
     });
   }
 
-  const contextProvider = resolveContextConfigProviderForRuntime({
-    provider,
-    runtimeId: agentRuntime,
-    config: params.cfg,
-  });
   return {
     status: "applied",
     provider,
@@ -471,7 +455,7 @@ export async function applySessionModelSelectionInternal(
     changed: selectionChanged,
     contextTokens: resolveContextTokens({
       cfg: params.cfg,
-      provider: contextProvider,
+      provider,
       model,
       modelContextWindow: selectedCatalogEntry?.contextWindow,
       modelContextTokens: selectedCatalogEntry?.contextTokens,

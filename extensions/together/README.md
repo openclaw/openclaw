@@ -19,5 +19,9 @@ For video, set your preferred Together model under
 `agents.defaults.mediaModels.video`. Text-to-video and image-to-video support
 depend on the selected model.
 
+Video task submission and polling use headers and proxy settings from
+`models.providers.together.request`. Generated video downloads do not inherit
+those task credentials or transport overrides.
+
 See the [Together AI guide](https://docs.openclaw.ai/providers/together) for model
 selection and supported video inputs.

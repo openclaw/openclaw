@@ -1,228 +1,129 @@
-// Openrouter tests cover media understanding provider plugin behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  getProviderHttpMocks,
+  installProviderHttpMockCleanup,
+  requireFirstPostJsonRecordRequest,
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import { expect, it, vi } from "vitest";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
-const transcribeOpenRouterAudio = openrouterMediaUnderstandingProvider.transcribeAudio;
-if (!transcribeOpenRouterAudio) {
-  throw new Error("expected OpenRouter audio transcription provider");
+const { postJsonRequestMock } = getProviderHttpMocks();
+const defaultModel = "openai/whisper-large-v3-turbo";
+
+installProviderHttpMockCleanup();
+
+const firstPostJsonRequest = () =>
+  requireFirstPostJsonRecordRequest(postJsonRequestMock, "STT request");
+
+function respond(body = JSON.stringify({ text: "ok" }), status = 200) {
+  const release = vi.fn(async () => {});
+  postJsonRequestMock.mockResolvedValue({ response: new Response(body, { status }), release });
+  return release;
 }
-
-const { postJsonRequestMock, resolveProviderHttpRequestConfigMock } = vi.hoisted(() => ({
-  postJsonRequestMock: vi.fn(),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  })),
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
-  postJsonRequest: postJsonRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-}));
-
-function firstPostJsonRequest(): { body?: unknown; headers?: Headers } {
-  const [request] = postJsonRequestMock.mock.calls[0] ?? [];
-  if (!request || typeof request !== "object") {
-    throw new Error("expected first OpenRouter JSON request");
+function transcribe(
+  overrides: Partial<
+    Parameters<NonNullable<typeof openrouterMediaUnderstandingProvider.transcribeAudio>>[0]
+  > = {},
+) {
+  const transcribeOpenRouterAudio = openrouterMediaUnderstandingProvider.transcribeAudio;
+  if (!transcribeOpenRouterAudio) {
+    throw new Error("expected OpenRouter audio transcription provider");
   }
-  return request as { body?: unknown; headers?: Headers };
+  return transcribeOpenRouterAudio({
+    buffer: Buffer.from("audio"),
+    fileName: "voice.wav",
+    mime: "audio/wav",
+    apiKey: "sk-openrouter",
+    timeoutMs: 5_000,
+    fetchFn: fetch,
+    ...overrides,
+  });
+}
+function inputAudio(data: string, format: string) {
+  return { data: Buffer.from(data).toString("base64"), format };
 }
 
-describe("openrouter media understanding provider", () => {
-  afterEach(() => {
-    postJsonRequestMock.mockReset();
-    resolveProviderHttpRequestConfigMock.mockClear();
+it("sends JSON STT payload to OpenRouter transcriptions endpoint", async () => {
+  const release = respond(JSON.stringify({ text: "hello world" }));
+  const result = await transcribe({
+    buffer: Buffer.from("audio-bytes"),
+    fileName: "voice.oga",
+    mime: "audio/ogg",
+    timeoutMs: 12_000,
+    language: " en ",
   });
 
-  it("sends JSON STT payload to OpenRouter transcriptions endpoint", async () => {
-    const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ text: "hello world" }), { status: 200 }),
-      release,
-    });
-
-    const result = await transcribeOpenRouterAudio({
-      buffer: Buffer.from("audio-bytes"),
-      fileName: "voice.oga",
-      mime: "audio/ogg",
-      apiKey: "sk-openrouter",
-      timeoutMs: 12_000,
-      language: " en ",
-      fetchFn: fetch,
-    });
-
-    expect(result).toEqual({
-      text: "hello world",
-      model: "openai/whisper-large-v3-turbo",
-    });
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith({
-      baseUrl: undefined,
-      defaultBaseUrl: "https://openrouter.ai/api/v1",
-      headers: undefined,
-      request: undefined,
-      defaultHeaders: {
-        Authorization: "Bearer sk-openrouter",
-        "Content-Type": "application/json",
-      },
-      provider: "openrouter",
-      api: "openrouter-stt",
-      capability: "audio",
-      transport: "media-understanding",
-    });
-    expect(postJsonRequestMock).toHaveBeenCalledWith({
-      url: "https://openrouter.ai/api/v1/audio/transcriptions",
-      headers: expect.any(Headers),
-      body: {
-        model: "openai/whisper-large-v3-turbo",
-        input_audio: {
-          data: Buffer.from("audio-bytes").toString("base64"),
-          format: "ogg",
-        },
-        language: "en",
-      },
-      timeoutMs: 12_000,
-      fetchFn: fetch,
-      allowPrivateNetwork: false,
-      dispatcherPolicy: undefined,
-      auditContext: "openrouter stt",
-    });
-    const headers = firstPostJsonRequest().headers;
-    if (!headers) {
-      throw new Error("expected OpenRouter request headers");
-    }
-    expect(headers.get("authorization")).toBe("Bearer sk-openrouter");
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("accepts temperature via provider query options", async () => {
-    const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),
-      release,
-    });
-
-    await transcribeOpenRouterAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "voice.webm",
-      apiKey: "sk-openrouter",
-      timeoutMs: 5_000,
-      query: { temperature: 0.2 },
-      fetchFn: fetch,
-    });
-
-    expect(firstPostJsonRequest().body).toEqual({
-      model: "openai/whisper-large-v3-turbo",
-      input_audio: {
-        data: Buffer.from("audio").toString("base64"),
-        format: "webm",
-      },
-      temperature: 0.2,
-    });
-  });
-
-  it("falls back to filename extension when mime is missing", async () => {
-    const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),
-      release,
-    });
-
-    await transcribeOpenRouterAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "voice.opus",
-      apiKey: "sk-openrouter",
-      timeoutMs: 5_000,
-      fetchFn: fetch,
-    });
-
-    expect(firstPostJsonRequest().body).toEqual({
-      model: "openai/whisper-large-v3-turbo",
-      input_audio: {
-        data: Buffer.from("audio").toString("base64"),
-        format: "ogg",
-      },
-    });
-  });
-
-  it("maps mp4 filename extension to m4a when mime is missing", async () => {
-    const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),
-      release,
-    });
-
-    await transcribeOpenRouterAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "voice.mp4",
-      apiKey: "sk-openrouter",
-      timeoutMs: 5_000,
-      fetchFn: fetch,
-    });
-
-    expect(firstPostJsonRequest().body).toEqual({
-      model: "openai/whisper-large-v3-turbo",
-      input_audio: {
-        data: Buffer.from("audio").toString("base64"),
-        format: "m4a",
-      },
-    });
-  });
-
-  it("throws when format cannot be resolved", async () => {
-    await expect(
-      transcribeOpenRouterAudio({
-        buffer: Buffer.from("audio"),
-        fileName: "voice.bin",
-        mime: "application/octet-stream",
-        apiKey: "sk-openrouter",
-        timeoutMs: 5_000,
-        fetchFn: fetch,
-      }),
-    ).rejects.toThrow("OpenRouter STT could not resolve audio format");
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-  });
-
-  const transcribeWavResponse = (body: string, status = 200) => {
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(body, { status }),
-      release: vi.fn(async () => {}),
-    });
-    return transcribeOpenRouterAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "voice.wav",
-      mime: "audio/wav",
-      apiKey: "sk-openrouter",
-      timeoutMs: 5_000,
-      fetchFn: fetch,
-    });
-  };
-
-  it.each(["", " \t\n"])(
-    "returns an empty transcript for silent audio (%j) without retrying",
-    async (text) => {
-      await expect(transcribeWavResponse(JSON.stringify({ text }))).resolves.toMatchObject({
-        text: "",
-      });
-      expect(postJsonRequestMock).toHaveBeenCalledOnce();
+  expect(result).toEqual({ text: "hello world", model: defaultModel });
+  expect(postJsonRequestMock).toHaveBeenCalledWith({
+    url: "https://openrouter.ai/api/v1/audio/transcriptions",
+    headers: expect.any(Headers),
+    body: {
+      model: defaultModel,
+      input_audio: inputAudio("audio-bytes", "ogg"),
+      language: "en",
     },
-  );
-
-  it.each([
-    ...[{}, { text: null }, { text: 42 }, { error: "upstream failed" }].map((payload) => ({
-      body: JSON.stringify(payload),
-      status: 200,
-      error: "OpenRouter transcription response missing text",
-    })),
-    ...["null", "[]", "{ nope"].map((body) => ({
-      body,
-      status: 200,
-      error: "openrouter.stt: malformed JSON response",
-    })),
-    { body: "unauthorized", status: 401, error: "OpenRouter audio transcription failed" },
-  ])("rejects status $status response $body", async ({ body, status, error }) => {
-    await expect(transcribeWavResponse(body, status)).rejects.toThrow(error);
+    timeoutMs: 12_000,
+    fetchFn: fetch,
+    allowPrivateNetwork: false,
+    dispatcherPolicy: undefined,
+    auditContext: "openrouter stt",
   });
+  const headers = firstPostJsonRequest().headers;
+  if (!(headers instanceof Headers)) {
+    throw new Error("expected OpenRouter request headers");
+  }
+  expect(headers.get("authorization")).toBe("Bearer sk-openrouter");
+  expect(headers.get("content-type")).toBe("application/json");
+  expect(release).toHaveBeenCalledOnce();
+});
+
+it.each([
+  ["webm", "webm", { temperature: 0.2 }],
+  ["opus", "ogg", {}],
+  ["mp4", "m4a", {}],
+] as const)("maps %s to %s and forwards query %j", async (extension, format, query) => {
+  respond();
+  await transcribe({ fileName: `voice.${extension}`, mime: undefined, query });
+  expect(firstPostJsonRequest().body).toEqual({
+    model: defaultModel,
+    input_audio: inputAudio("audio", format),
+    ...query,
+  });
+});
+
+it("throws when format cannot be resolved", async () => {
+  await expect(
+    transcribe({ fileName: "voice.bin", mime: "application/octet-stream" }),
+  ).rejects.toThrow("OpenRouter STT could not resolve audio format");
+  expect(postJsonRequestMock).not.toHaveBeenCalled();
+});
+
+const transcribeWavResponse = (body: string, status = 200) => {
+  respond(body, status);
+  return transcribe();
+};
+
+it.each(["", " \t\n"])(
+  "returns an empty transcript for silent audio (%j) without retrying",
+  async (text) => {
+    await expect(transcribeWavResponse(JSON.stringify({ text }))).resolves.toMatchObject({
+      text: "",
+    });
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+  },
+);
+
+it.each([
+  ...[{}, { text: null }, { text: 42 }, { error: "upstream failed" }].map((payload) => ({
+    body: JSON.stringify(payload),
+    status: 200,
+    error: "OpenRouter transcription response missing text",
+  })),
+  ...["null", "[]", "{ nope"].map((body) => ({
+    body,
+    status: 200,
+    error: "openrouter.stt: malformed JSON response",
+  })),
+  { body: "unauthorized", status: 401, error: "OpenRouter audio transcription failed" },
+])("rejects status $status response $body", async ({ body, status, error }) => {
+  await expect(transcribeWavResponse(body, status)).rejects.toThrow(error);
 });
