@@ -1,4 +1,4 @@
-import { readdir, realpath, rm } from "node:fs/promises";
+import { cp, readdir, realpath, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { chromium, webkit, type Browser } from "playwright";
@@ -14,6 +14,7 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -29,12 +30,22 @@ it("reloads a stale document onto the current build when an unvisited lazy route
   // An older chunk layout retires a real lazy import; build identity alone preserves asset hashes.
   await buildProductionControlUiE2e(rootA, buildA, { includeBootGroups: false });
   await buildProductionControlUiE2e(rootB, buildB);
+  const activityModuleA = controlUiE2eBuiltModuleRequest(
+    "ui/src/pages/activity/activity-route.tsx",
+    rootA,
+  );
   const activityAssetA = (await readdir(path.join(rootA, "assets"))).find((file) =>
-    /^activity-page-.*\.js$/u.test(file),
+    activityModuleA.test(`/assets/${file}`),
   );
   if (!activityAssetA) {
     throw new Error("Production build did not emit the Activity lazy chunk");
   }
+  // Keep unrelated old lazy assets available so only Activity triggers stale-build recovery.
+  await cp(path.join(rootA, "assets"), path.join(rootB, "assets"), {
+    recursive: true,
+    force: false,
+    filter: (source) => source !== path.join(rootA, "assets", activityAssetA),
+  });
   expect(await readdir(path.join(rootB, "assets"))).not.toContain(activityAssetA);
 
   let root: BundledRoot = { kind: "bundled", path: rootA, realPath: await realpath(rootA) };

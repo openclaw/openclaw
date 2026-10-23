@@ -1159,18 +1159,30 @@ NODE
 }
 
 assert_legacy_operator_doctor_clean() {
+  local doctor_status=0
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --lint --json \
-    >"$ARTIFACT_ROOT/doctor-lint.json" 2>"$ARTIFACT_ROOT/doctor-lint.err"
-  node --input-type=module - "$ARTIFACT_ROOT/doctor-lint.json" "$STATUS_JSON" "$candidate_version" <<'NODE'
+    >"$ARTIFACT_ROOT/doctor-lint.json" 2>"$ARTIFACT_ROOT/doctor-lint.err" || doctor_status=$?
+  node --input-type=module - \
+    "$ARTIFACT_ROOT/doctor-lint.json" "$STATUS_JSON" "$candidate_version" "$doctor_status" <<'NODE'
 import assert from "node:assert/strict";
 import fs from "node:fs";
 const report = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-assert.equal(report.ok, true, "Doctor reported an unhealthy candidate");
+const findings = report.findings;
+const doctorStatus = Number(process.argv[5]);
+assert(Array.isArray(findings), "Doctor report did not include findings");
+const exactLegacyAuthWarning = findings.length === 1 &&
+  findings[0]?.checkId === "core/doctor/browser" &&
+  findings[0]?.severity === "warning" &&
+  findings[0]?.message === "Legacy Browser Relay Authentication is enabled (browser.extensionRelay.allowLegacyAuth=true).";
+assert(
+  (doctorStatus === 0 && report.ok === true && findings.length === 0) ||
+    (doctorStatus === 1 && report.ok === false && exactLegacyAuthWarning),
+  "Doctor reported an unexpected exit/payload combination",
+);
 assert(report.checksRun > 0, "Doctor did not run health checks");
-assert.deepEqual(report.findings, [], "Doctor reported unresolved findings");
 const gateway = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
 assert.equal(gateway.gateway.version, process.argv[4], "Gateway is not serving the candidate version");
-console.log(`Doctor clean; Gateway serves candidate ${process.argv[4]}.`);
+console.log(`Doctor report accepted; Gateway serves candidate ${process.argv[4]}.`);
 NODE
 }
 

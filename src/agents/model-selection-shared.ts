@@ -1191,11 +1191,10 @@ export function buildConfiguredModelCatalog(params: {
       );
       const api = model.api ?? accepted?.api ?? provider.api;
       const baseUrl = model.baseUrl ?? accepted?.baseUrl ?? provider.baseUrl;
-      const parameterCount =
-        model.parameterCount ??
-        (accepted && modelTransportRoutesMatch(accepted, { api, baseUrl })
-          ? accepted.parameterCount
-          : undefined);
+      const routed =
+        accepted && modelTransportRoutesMatch(accepted, { api, baseUrl }) ? accepted : undefined;
+      const parameterCount = model.parameterCount ?? routed?.parameterCount;
+      const family = model.family ?? routed?.family;
       const name = normalizeOptionalString(model?.name) || id;
       const contextWindow =
         typeof model?.contextWindow === "number" && model.contextWindow > 0
@@ -1217,6 +1216,7 @@ export function buildConfiguredModelCatalog(params: {
         contextWindow,
         contextTokens,
         ...(parameterCount !== undefined ? { parameterCount } : {}),
+        ...(family ? { family } : {}),
         reasoning,
         ...(typeof model?.reasoning === "boolean" ? { configuredReasoning: model.reasoning } : {}),
         ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),

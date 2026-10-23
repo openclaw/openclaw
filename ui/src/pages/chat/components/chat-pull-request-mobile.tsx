@@ -1,4 +1,4 @@
-import { Errored, For, latest, Show } from "solid-js";
+import { For, Show } from "solid-js";
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
@@ -11,11 +11,11 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { sessionPullRequestStateIcons } from "../../../lib/session-pull-request-presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { createPullRequestCopy } from "./chat-pull-request-copy.ts";
-import { ChecksRows } from "./chat-pull-request-shared.tsx";
+import { ChecksRows, PullRequestCopyError } from "./chat-pull-request-shared.tsx";
 import { chatPullRequestId } from "./chat-pull-requests.ts";
 import "./chat-pull-request-presenters.css";
-import "./chat-ci-details.ts";
-import "./chat-ci-automation-control.ts";
+import "./chat-ci-details.tsx";
+import "./chat-ci-automation-control.tsx";
 
 registerGitHubEnglish();
 
@@ -273,17 +273,7 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
                 <Icon name="link" />
                 <span>{t("chat.pullRequests.copyLink")}</span>
               </button>
-              <Show when={!clipboard.copying()}>
-                <Errored
-                  fallback={
-                    <p class="chat-pr-menu__error" role="alert">
-                      {t("chat.pullRequests.copyFailed")}
-                    </p>
-                  }
-                >
-                  {latest(clipboard.outcome)}
-                </Errored>
-              </Show>
+              <PullRequestCopyError clipboard={clipboard} />
               <button
                 type="button"
                 class="chat-pr-mobile__hide"

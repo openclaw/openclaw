@@ -47,6 +47,7 @@ type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approva
 function createDatabaseOptions(): OpenClawStateDatabaseOptions {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-events-"));
   tempDirs.push(stateDir);
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
 
@@ -54,12 +55,14 @@ function createRuntime(
   params: Omit<
     Parameters<typeof createOperatorApprovalSessionEventRuntime>[0],
     "sessionMessageSubscribers" | "broadcastToConnIds"
-  >,
+  > & { now?: () => number },
 ) {
+  const { now = Date.now, ...runtimeParams } = params;
+  vi.spyOn(Date, "now").mockImplementation(now);
   const subscribers = createSessionMessageSubscriberRegistry();
   const broadcastToConnIds = vi.fn<GatewayBroadcastToConnIdsFn>();
   const runtime = createOperatorApprovalSessionEventRuntime({
-    ...params,
+    ...runtimeParams,
     sessionMessageSubscribers: subscribers,
     broadcastToConnIds,
   });
@@ -141,6 +144,7 @@ describe("operator approval session events", () => {
     vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
     }
@@ -325,7 +329,6 @@ describe("operator approval session events", () => {
       const nowMs = padded ? 2_000 : 5_000;
       const { runtime } = createRuntime({
         clients: padded ? [reviewerClient, other] : [],
-        databaseOptions,
         controlUiBasePath: padded ? undefined : "/operator",
         now: () => nowMs,
       });
@@ -384,7 +387,7 @@ describe("operator approval session events", () => {
       id: "committed-before-writer",
     });
     const reviewer = createClient({ connId: "reviewer", scopes: ["operator.admin"] });
-    const { runtime } = createRuntime({ clients: [reviewer], databaseOptions, now: () => 5_000 });
+    const { runtime } = createRuntime({ clients: [reviewer], now: () => 5_000 });
     // Warm read admission before holding a real transaction on the same physical database.
     (await runtime.replay(SOURCE_SESSION_KEY, reviewer)).release();
     const held = createDeferredCore();
@@ -455,7 +458,7 @@ describe("operator approval session events", () => {
       audienceSessionKeys,
     });
     const reviewer = createClient({ connId: "reviewer", scopes: ["operator.admin"] });
-    const { runtime } = createRuntime({ clients: [reviewer], databaseOptions, now: () => 5_000 });
+    const { runtime } = createRuntime({ clients: [reviewer], now: () => 5_000 });
     (await runtime.replay(audienceSessionKeys[0]!, reviewer)).release();
     const admissions = vi.spyOn(stateWorkerStore, "runOpenClawStateWorkerOperation");
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
@@ -498,7 +501,7 @@ describe("operator approval session events", () => {
         deviceId: connId === "other-reviewer" ? "other-device" : "reviewer-device",
       }),
     );
-    const { runtime } = createRuntime({ clients, databaseOptions, now: () => 5_000 });
+    const { runtime } = createRuntime({ clients, now: () => 5_000 });
     const { selected, reply, spy: delayed } = holdReplay();
     const revoked = runtime.replay(SOURCE_SESSION_KEY, clients[0]!);
     const rejected = expect(revoked).rejects.toThrow("replay authority is no longer current");
@@ -552,7 +555,6 @@ describe("operator approval session events", () => {
     const reviewerClient = createReviewer();
     const { runtime, subscribers, broadcastToConnIds } = createRuntime({
       clients: [reviewerClient],
-      databaseOptions,
       now: () => 5_000,
     });
     subscribers.subscribe("reviewer", SOURCE_SESSION_KEY, { includeApprovals: true });
@@ -606,7 +608,6 @@ describe("operator approval session events", () => {
       const requester = revoked ? createReviewer("requester", deviceId) : observer;
       const { runtime, subscribers, broadcastToConnIds } = createRuntime({
         clients: revoked ? [requester, observer] : [observer],
-        databaseOptions,
         now: () => 5_000,
       });
       subscribers.subscribe("observer", PARENT_SESSION_KEY, { includeApprovals: true });
@@ -661,7 +662,6 @@ describe("operator approval session events", () => {
     let replayAtMs = Date.now();
     const { runtime, subscribers, broadcastToConnIds } = createRuntime({
       clients: [reviewerClient],
-      databaseOptions,
       now: () => replayAtMs,
       reconcileTerminal: (record) => {
         reconciling.resolve();
@@ -749,8 +749,6 @@ describe("operator approval session events", () => {
     const parent = createReviewer("parent-reviewer", "parent-device");
     const harness = createRuntime({
       clients: [parent],
-      databaseOptions,
-      now: () => Date.now(),
       reconcileTerminal: (record) =>
         managerHolder.current?.reconcileDurableTerminal(record) ?? false,
       getLiveManager: () => managerHolder.current,

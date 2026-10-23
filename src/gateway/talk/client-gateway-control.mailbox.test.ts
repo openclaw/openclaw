@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { getExistingSessionControllerMailbox } from "../../sessions/session-controller.mailbox.js";
 import { resetSessionControllerStateForTest } from "../../sessions/session-lifecycle-admission.test-support.js";
+import type { AgentInputRecoveryAdmission } from "../../state/agent-input-recovery-context.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { createControlFixture } from "./client-control-fixture.test-support.js";
 
@@ -30,6 +34,7 @@ import {
   resetConsultFixture,
 } from "./client-gateway-control.agent-consult-fixture.test-support.js";
 import type { ConsultParams } from "./client-gateway-control.agent-consult.test-support.js";
+import { controlContext } from "./client-gateway-control.test-support.js";
 import { createTalkRunCancel } from "./realtime-run-control.js";
 
 const sessionTarget = {
@@ -69,7 +74,10 @@ function gate(backend = true) {
   return { started, release: () => released.resolve(), run };
 }
 
-function createOwner(flushTranscript: () => Promise<void> = async () => undefined) {
+function createOwner(
+  flushTranscript: () => Promise<void> = async () => undefined,
+  inputRecovery?: AgentInputRecoveryAdmission,
+) {
   const runner = createConsultRunner({
     context: { logGateway: { warn: vi.fn() } } as never,
     sessionTarget,
@@ -83,6 +91,7 @@ function createOwner(flushTranscript: () => Promise<void> = async () => undefine
     runToolAgentConsult: runner.runArgs,
     runAgentConsult: runner.runOwnedArgs,
     flushTranscript,
+    context: Object.assign(controlContext(), { inputRecovery }),
   });
   owner.control.bindBridge(bridge);
   owner.activate();
@@ -174,6 +183,100 @@ it.each([
     await owner.close();
   },
 );
+
+it.each(["recovered", "closed"] as const)(
+  "reserves Talk consults after saved input recovery, preserving arrival order: %s",
+  async (outcome) => {
+    const recovery = createDeferred();
+    const waiting = createDeferred();
+    let pending = true;
+    const fixture = createOwner(undefined, {
+      isPending: () => pending,
+      waitForAgentInputRecovery: (_agentId, options) => {
+        if (!pending) {
+          return undefined;
+        }
+        waiting.resolve();
+        return racePromiseWithAbortSignal(recovery.promise, options?.signal);
+      },
+    });
+    const first = gate();
+    const second = gate();
+    const target = captureSessionTarget({
+      storeScope: sessionTarget.storePath,
+      sessionKey: sessionTarget.canonicalKey,
+      agentId: sessionTarget.agentId,
+    });
+    fixture.consult("first", "first");
+    fixture.consult("second", "second");
+    await waiting.promise;
+    expect(getExistingSessionControllerMailbox(sessionTarget.canonicalKey, target)).toBeUndefined();
+    let savedRun: Promise<unknown> | undefined;
+    const saved = gate(false);
+    try {
+      if (outcome === "closed") {
+        await fixture.owner.close();
+        expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
+        expect(
+          getExistingSessionControllerMailbox(sessionTarget.canonicalKey, target),
+        ).toBeUndefined();
+        return;
+      }
+      savedRun = withSessionTurn(channelTurn, () => saved.run({ prompt: "saved" }));
+      await saved.started.promise;
+      pending = false;
+      recovery.resolve();
+      await vi.waitFor(() => expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledTimes(2));
+      expect(order).toEqual(["saved"]);
+      saved.release();
+      await first.started.promise;
+      expect(order).toEqual(["saved", "first"]);
+      first.release();
+      await second.started.promise;
+      expect(order).toEqual(["saved", "first", "second"]);
+      second.release();
+      await fixture.waitForResults(2);
+      expect(fixture.bridge.submitToolResult.mock.calls).toEqual([
+        ["first", { result: "answer: first" }],
+        ["second", { result: "answer: second" }],
+      ]);
+    } finally {
+      pending = false;
+      recovery.resolve();
+      saved.release();
+      first.release();
+      second.release();
+      await Promise.allSettled([savedRun, fixture.owner.close()]);
+    }
+  },
+);
+
+it("closes a native Talk consultation waiting for saved-input recovery before admission", async () => {
+  const recovery = createDeferred();
+  const waiting = createDeferred();
+  const fixture = createOwner(undefined, {
+    isPending: () => true,
+    waitForAgentInputRecovery: (_agentId, options) => {
+      waiting.resolve();
+      return racePromiseWithAbortSignal(recovery.promise, options?.signal);
+    },
+  });
+  const consultation = fixture.owner.runAgentConsult({ prompt: "native consult" });
+  void consultation.catch(() => {});
+  try {
+    await waiting.promise;
+    expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
+    await fixture.owner.close();
+    await expect(consultation).rejects.toMatchObject({
+      name: "AbortError",
+      cause: fixture.owner.signal.reason,
+    });
+    expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
+  } finally {
+    recovery.resolve();
+    await Promise.allSettled([consultation, fixture.owner.close()]);
+  }
+});
 
 it("cancels a running consult through Stop and keeps the session's waiting turn", async () => {
   const hook = vi.fn();

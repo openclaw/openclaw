@@ -15,6 +15,7 @@ import {
   appendChatCanvasBlocksToMessage,
   type ChatCanvasBlock,
 } from "./chat-display-projection.canvas.js";
+import { projectPluginInlineView } from "./chat-display-projection.inline-view.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import type { ChatRunState } from "./server-chat-state.js";
 
@@ -201,6 +202,22 @@ export function prepareAgentWirePayload(
       payload = {
         ...payload,
         data: { ...event.data, result: { ...result, details: liveDetails } },
+      };
+    }
+  }
+  if (event.stream === "tool" && event.data.phase === "result") {
+    const result = readRecord(payload.data.result);
+    const inline = !event.data.isError && projectPluginInlineView(result?.details, event.data);
+    if (inline && result) {
+      payload = {
+        ...payload,
+        data: {
+          ...payload.data,
+          result: {
+            ...result,
+            details: { ...readRecord(result.details), pluginView: inline },
+          },
+        },
       };
     }
   }

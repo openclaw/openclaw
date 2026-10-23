@@ -350,19 +350,16 @@ suite.define(() => {
         });
         const dialog = page.locator("openclaw-modal-dialog");
         await captureProviderProof("login-browser-callback-pending.png", dialog);
-        const openSignIn = dialog.getByRole("link", { name: "Open sign-in", exact: true });
+        const openSignIn = dialog.getByRole("link", { name: "Reopen browser tab", exact: true });
         await openSignIn.waitFor();
         expect(await openSignIn.getAttribute("href")).toBe("https://provider.example/sign-in");
         expect(
-          await dialog.getByRole("button", { name: "Copy link", exact: true }).isEnabled(),
+          await dialog.getByRole("button", { name: "Copy sign-in link", exact: true }).isEnabled(),
         ).toBe(true);
-        expect(await dialog.getByRole("button", { name: "Cancel", exact: true }).isEnabled()).toBe(
-          true,
-        );
-        await dialog
-          .getByRole("status")
-          .filter({ hasText: "Waiting for approval in your browser…" })
-          .waitFor();
+        expect(
+          await dialog.getByRole("button", { name: "Cancel sign-in", exact: true }).isEnabled(),
+        ).toBe(true);
+        await dialog.getByRole("status").filter({ hasText: "Waiting for" }).waitFor();
         expect(await dialog.getByRole("button", { name: "Continue", exact: true }).count()).toBe(0);
         expect(await dialog.locator('input[name="wizard-text"]').count()).toBe(0);
         const [signInPage] = await Promise.all([context.waitForEvent("page"), openSignIn.click()]);
@@ -484,7 +481,7 @@ suite.define(() => {
         await dialog.getByText("TEST-1234", { exact: true }).waitFor();
         expect(
           await dialog
-            .getByRole("link", { name: "Open sign-in", exact: true })
+            .getByRole("link", { name: "Reopen browser tab", exact: true })
             .getAttribute("href"),
         ).toBe("https://example.invalid/device");
         await captureProviderProof(
@@ -759,10 +756,10 @@ suite.define(() => {
         });
         await gateway.deferNext("wizard.next");
         await gateway.resolveDeferred("wizard.next");
-        await page.getByRole("link", { name: "Open sign-in", exact: true }).waitFor();
+        await page.getByRole("link", { name: "Reopen browser tab", exact: true }).waitFor();
         await expect.poll(() => popup.url()).toBe(signInUrl);
         expect(await popup.evaluate(() => window.opener)).toBeNull();
-        await page.getByRole("button", { name: "Copy link", exact: true }).waitFor();
+        await page.getByRole("button", { name: "Copy sign-in link", exact: true }).waitFor();
         expect(await dialog.textContent()).not.toContain(signInUrl);
         await captureProviderProof("login-browser-waiting.png", dialog);
         await gateway.resolveDeferred("wizard.next");

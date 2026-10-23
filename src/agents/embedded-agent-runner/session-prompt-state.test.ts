@@ -640,13 +640,17 @@ describe("session tool surface", () => {
     expect(JSON.stringify((await eventTurn[0]!.execute("x", {})).content)).toContain("exec ran");
   });
 
-  it("sends a definition with changed parameters as built", () => {
-    surface([tool("read")]);
-    const changed = surface([
-      { ...tool("read", "read v2"), parameters: { type: "object", properties: {} } },
-    ] as AnyAgentTool[]);
-    expect(changed.map((entry) => entry.description)).toEqual(["read v2"]);
-  });
+  it.each(["read tool", "read v2"])(
+    "sends changed parameters with description %s as built",
+    (description) => {
+      surface([tool("read")]);
+      const changed = surface([
+        { ...tool("read", description), parameters: { type: "object", properties: {} } },
+      ] as AnyAgentTool[]);
+      expect(changed.map((entry) => entry.description)).toEqual([description]);
+      expect(lease.state.pendingToolSurface?.tools).toEqual(definitions(changed));
+    },
+  );
 });
 
 describe("embedded session active project keys", () => {

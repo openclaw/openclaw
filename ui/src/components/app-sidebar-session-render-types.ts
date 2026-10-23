@@ -38,6 +38,7 @@ import type { ChannelAvatarProps } from "./solid/channel-avatar.tsx";
 import "./tooltip.ts";
 
 export interface SessionListHost {
+  loadMoreSidebarSessions(): Promise<void>;
   readonly presencePeople?: Map<string, HTMLElement>;
   readonly sidebarSnapshot?: import("./sidebar-snapshot-model.ts").SidebarSnapshotModel | null;
   readonly sidebarAgentsMode?: "chip" | "roster";

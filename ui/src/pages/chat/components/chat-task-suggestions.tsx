@@ -1,16 +1,16 @@
-import { createMemo, For, Show, onSettled } from "solid-js";
+import { createMemo, createUniqueId, For, Show, onSettled } from "solid-js";
 import type {
   ProjectRecord,
   TaskSuggestion,
   TaskSuggestionsAcceptParams,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { Menu } from "../../../components/solid/menu.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import { isAbsolutePath } from "../../new-session/path.ts";
-import { ChatTaskStartMenu } from "./chat-task-start-menu.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -134,6 +134,43 @@ function TaskSuggestionCard(props: {
       props.view.onAcceptTaskSuggestion?.(props.suggestion, mode, undefined);
     }
   };
+
+  function TaskStartMenu() {
+    const id = createUniqueId();
+    return (
+      <Menu
+        id={`task-start-${id}`}
+        placement="bottom-end"
+        label={t("chat.taskSuggestions.startOptions")}
+        disabled={busy() || !canAccept()}
+        triggerClass="btn task-suggestion__start task-suggestion__start--options"
+        triggerAttributes={{ title: canAccept() ? "" : t("chat.taskSuggestions.adminRequired") }}
+        trigger={<Icon name="chevronDown" />}
+        items={[
+          {
+            id: "local",
+            label: t("chat.taskSuggestions.startSession"),
+            disabled: busy() || !canAccept(),
+          },
+          {
+            id: "worktree",
+            label: t("chat.taskSuggestions.startWorktree"),
+            disabled: busy() || !canAccept(),
+          },
+          {
+            id: "session",
+            label: t("chat.taskSuggestions.startCurrentSession"),
+            disabled: busy() || !canAccept(),
+          },
+        ]}
+        onSelect={(item) => {
+          if (item.id === "local" || item.id === "worktree" || item.id === "session") {
+            accept(item.id);
+          }
+        }}
+      />
+    );
+  }
   return (
     <article
       class="task-suggestion"
@@ -302,7 +339,7 @@ function TaskSuggestionCard(props: {
                 <Icon name="play" />
                 {t(busy() ? "chat.taskSuggestions.starting" : "chat.taskSuggestions.startSession")}
               </button>
-              <ChatTaskStartMenu busy={busy()} canAccept={canAccept()} onSelect={accept} />
+              <TaskStartMenu />
             </>
           }
         >

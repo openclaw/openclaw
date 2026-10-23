@@ -9,10 +9,17 @@ export const uiIsolatedTestFiles = [
   "ui/src/app/bootstrap.test.ts",
   "ui/src/app/router-outlet.test.tsx",
   "ui/src/components/app-sidebar-native-gateways.test.ts",
+  // The cold-view proof holds imports that other sidebar suites already load.
+  "ui/src/components/app-sidebar-lazy-views.test.tsx",
   // Captured native frame functions must belong to this file's JSDOM window.
   "ui/src/components/app-sidebar.catalog-events.test.ts",
   // The catalog suite exceeds the CI deadline in a shared Bun worker.
   "ui/src/components/app-sidebar.catalog.test.ts",
+  // The held MCP renderer import must not be preloaded by another suite.
+  "ui/src/components/board/board-widget-cell-mcp-app.test.tsx",
+  // Holds the report chunk before first import to prove the cold widget boundary.
+  "ui/src/components/board/board-widget-cell-plugin.test.ts",
+  "ui/src/components/board/core-board-widget.test.tsx",
   "ui/src/components/gateway-url-confirmation.test.ts",
   "ui/src/components/link-reader-title-tooltip.test.ts",
   // Import rejection fixtures must not poison the shared module registry.
@@ -57,10 +64,13 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/components/chat-transcript-invalidation.test.ts",
   "ui/src/pages/chat/components/chat-transcript-message-reveal.test.ts",
   "ui/src/pages/chat/components/chat-transcript-render.test.ts",
+  // Deferred widget module mocks must not poison later lazy consumers.
+  "ui/src/pages/chat/components/widget-registration.test.tsx",
   "ui/src/pages/config/config-page.custom-theme.test.ts",
   "ui/src/pages/config/memory-mutation-owner.test.ts",
   "ui/src/pages/config/memory-page.test.ts",
   "ui/src/pages/new-session/draft-persistence.test.ts",
+  "ui/src/pages/new-session/new-session-attachment-lazy.test.ts",
   "ui/src/pages/sessions/sessions-page.archived.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 

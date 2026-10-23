@@ -1,9 +1,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   PluginStateEntry,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { DiscordActivitiesRuntime } from "./runtime.js";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { registerDiscordActivities } from "./register.js";
+import { DiscordActivitiesRuntime, getDiscordActivitiesRuntime } from "./runtime.js";
 import { DiscordActivityStore, openDiscordActivityStores } from "./store.js";
 
 export function createMemoryKeyedStore<T>(): PluginStateKeyedStore<T> & {
@@ -83,4 +87,47 @@ export function createActivityTestRuntime(
 ): DiscordActivitiesRuntime {
   const store = new DiscordActivityStore(openDiscordActivityStores(createMemoryKeyedStore));
   return new DiscordActivitiesRuntime(store, () => cfg, {});
+}
+
+export function createRegisteredActivityFixture(
+  cfg = createActivityTestConfig(),
+  vendorAssetPath = "/synthetic-missing-discord-activity-sdk.mjs",
+) {
+  const unsupported = () => {
+    throw new Error("unused Activity fixture store operation");
+  };
+  const routes: Array<Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]> = [];
+  const presenters: Array<Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[0]> = [];
+  registerDiscordActivities(
+    createTestPluginApi({
+      config: cfg,
+      runtime: createPluginRuntimeMock({
+        state: {
+          openKeyedStoreV2: <T>() => ({
+            ...createMemoryKeyedStore<T>(),
+            deleteIfEqual: unsupported,
+            lookupMany: unsupported,
+            entriesInKeyRange: unsupported,
+            moveEntriesFrom: unsupported,
+            count: unsupported,
+          }),
+        },
+        config: { current: () => cfg },
+      }),
+      resolvePath: () => vendorAssetPath,
+      registerHttpRoute: (route) => {
+        routes.push(route);
+      },
+      registerWidgetPresenter: (presenter) => {
+        presenters.push(presenter);
+      },
+    }),
+  );
+  const runtime = getDiscordActivitiesRuntime();
+  const route = routes[0];
+  const presenter = presenters[0];
+  if (!runtime || !route || !presenter || routes.length !== 1 || presenters.length !== 1) {
+    throw new Error("expected one registered Discord Activity route, presenter and runtime");
+  }
+  return { runtime, route, presenter };
 }

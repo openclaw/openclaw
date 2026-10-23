@@ -7,6 +7,7 @@ import {
   readStoredSessionRowTranscriptProjection,
 } from "../../gateway/session-row-transcript-preview.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
@@ -56,6 +57,7 @@ import {
 } from "./session-actor-transaction.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { PriorWorkspaceRewriteRows } from "./session-prior-workspace-boundary.js";
+import type { TranscriptWindowUpdate } from "./session-transcript-index-postgres.js";
 import {
   createTranscriptIndexAppenderInTransaction,
   deleteSessionTranscriptIndexInTransaction,
@@ -204,6 +206,7 @@ export function appendTranscriptEventInTransaction(
         withoutSqliteDatabaseWriteScope(database.db, () => JSON.stringify(persistedEvent));
       const serializedBytes = transcriptSerializedBytes(database.db, eventJson);
       let projectionNeedsRebuild = false;
+      let flushProjectionWithMutation: ((update: TranscriptWindowUpdate) => void) | undefined;
       let accepted = true;
       preserveSessionEntryCacheAcrossWrite(database, () => {
         const row = {
@@ -259,7 +262,18 @@ export function appendTranscriptEventInTransaction(
           createdAt,
         });
         if (!cursor.deferWrites) {
-          cursor.appendToIndex.flush();
+          if (
+            actor?.window &&
+            isPostgresSqlConnection(database.db) &&
+            !projectionNeedsRebuild &&
+            options.touchMutation !== false &&
+            options.persistActorMutation !== false
+          ) {
+            // The actor supplies current projection facts until the same transaction flushes.
+            flushProjectionWithMutation = cursor.appendToIndex.flush;
+          } else {
+            cursor.appendToIndex.flush();
+          }
         }
         if (actor) {
           appendSessionActorContextStats(
@@ -370,6 +384,7 @@ export function appendTranscriptEventInTransaction(
             deferWindowTouch ? windowUpdatedAt : undefined,
             cursor.rowTranscript,
             options.persistActorMutation,
+            flushProjectionWithMutation,
           );
         });
       }

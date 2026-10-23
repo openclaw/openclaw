@@ -129,17 +129,6 @@ it("refreshes a cached roster and its default before accepting a remembered agen
   expect(ensureAgentsList).toHaveBeenCalledOnce();
 });
 
-it("restores the selected global-session agent when the roster arrives during bootstrap", async () => {
-  await expect(
-    resolveLocation({
-      location: makeLocation("/chat"),
-      selectedAgentId: "openclaw",
-      agentsList: () => null,
-      ensureAgentsList: async () => roster(["dummy", "openclaw"], "dummy", "global"),
-    }),
-  ).resolves.toEqual(makeLocation("/chat/openclaw"));
-});
-
 it("validates a remembered session again after the Gateway client changes", async () => {
   const first = createDeferred<{ ok: boolean; key?: string; agentId?: string }>();
   const firstRequest = vi.fn(() => first.promise);

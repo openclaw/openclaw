@@ -561,7 +561,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         sessionId: "older-" + hook,
         resetTriggered: false,
       });
-      const prepared = prepareReplySourceInput(ctx, cfg, { abortSignal: origin.signal });
+      const prepared = await prepareReplySourceInput(ctx, cfg, { abortSignal: origin.signal });
       const input = prepared.input;
       if (!input) {
         throw new Error("missing prepared source");

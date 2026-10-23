@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { NativeSubagentsSnapshot } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -86,6 +87,8 @@ function createMetrics(identity: string): Metrics {
 
 export class SubagentsPanelData {
   rows: readonly SubagentsPanelRow[] = [];
+  nativeSnapshot: NativeSubagentsSnapshot | undefined;
+  nativeError: string | null = null;
   loading = false;
   private failure: { kind: "read" | "stop"; message: string } | null = null;
   get error(): string | null {
@@ -110,6 +113,8 @@ export class SubagentsPanelData {
   private observation: ReturnType<SessionCapability["observeList"]> | null = null;
   private pendingListRead: Promise<void> | null = null;
   private generation = 0;
+  private nativeRead: Promise<void> | null = null;
+  private nativeRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   private sessions: GatewaySessionRow[] = [];
   private metrics = new Map<string, Metrics>();
@@ -238,7 +243,55 @@ export class SubagentsPanelData {
     }
     this.metrics.clear();
     this.failure = null;
-    await this.readList();
+    await Promise.all([this.readList(), this.readNative()]);
+  }
+
+  private readNative(): Promise<void> {
+    const { input, scope, generation } = this;
+    if (this.nativeRead || !input || !scope || !this.current(generation)) {
+      return this.nativeRead ?? Promise.resolve();
+    }
+    clearTimeout(this.nativeRefreshTimer);
+    const query = this.childQuery(input);
+    const pending = Promise.resolve().then(async () => {
+      try {
+        if (!this.current(generation)) {
+          return;
+        }
+        const result = await scope.client.request<{
+          session: GatewaySessionRow | null;
+          nativeSubagents?: NativeSubagentsSnapshot;
+        }>("sessions.describe", {
+          key: query.spawnedBy,
+          ...(query.agentId ? { agentId: query.agentId } : {}),
+          includeNativeSubagents: true,
+        });
+        if (!this.current(generation)) {
+          return;
+        }
+        // Parent authorization and native generation are owned by this read.
+        // Absence is not a saved-history assertion and never creates sessions.
+        this.nativeSnapshot = result.session ? result.nativeSubagents : undefined;
+        this.nativeError = null;
+        this.changed();
+      } catch (error: unknown) {
+        if (this.current(generation)) {
+          this.nativeSnapshot = undefined;
+          this.nativeError = formatUiError(error);
+          this.changed();
+        }
+      } finally {
+        if (this.nativeRead === pending) {
+          this.nativeRead = null;
+          if (this.current(generation)) {
+            // Completion-paced and non-overlapping; hidden/disconnected owners retire.
+            this.nativeRefreshTimer = setTimeout(() => void this.readNative(), 5_000);
+          }
+        }
+      }
+    });
+    this.nativeRead = pending;
+    return pending;
   }
 
   private async readList(initialResult?: SessionsListResult): Promise<void> {
@@ -653,6 +706,10 @@ export class SubagentsPanelData {
     this.readCompletion = null;
     this.readResult = Promise.resolve();
     this.generation += 1;
+    clearTimeout(this.nativeRefreshTimer);
+    this.nativeRead = null;
+    this.nativeSnapshot = undefined;
+    this.nativeError = null;
     this.observation?.dispose();
     this.observation = null;
     this.pendingListRead = null;

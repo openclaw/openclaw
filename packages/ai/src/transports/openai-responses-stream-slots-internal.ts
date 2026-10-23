@@ -31,11 +31,6 @@ export type ResponsesStreamOutputSlot<TMessage, TToolCall> =
     }
   | { type: "toolCall"; toolCall: TToolCall };
 
-type DeferredTextSlot = {
-  pendingText: string | null;
-  collapseCandidate: { rendered: { prose: string } } | null;
-};
-
 type ResponsesOutputIdentityItem = {
   type: string;
   id?: string | null;
@@ -176,11 +171,12 @@ export function createResponsesOutputTracker(params: {
   };
 }
 
-export function appendResponsesPendingTextDelta<TSlot extends DeferredTextSlot>(
-  slot: TSlot,
-  delta: string,
-  materialize: (slot: TSlot) => void,
-): void {
+export function appendResponsesPendingTextDelta<
+  TSlot extends {
+    pendingText: string | null;
+    collapseCandidate: { rendered: { prose: string } } | null;
+  },
+>(slot: TSlot, delta: string, materialize: (slot: TSlot) => void): void {
   const offset = slot.pendingText?.length ?? 0;
   slot.pendingText = `${slot.pendingText ?? ""}${delta}`;
   const priorText = slot.collapseCandidate?.rendered.prose ?? "";

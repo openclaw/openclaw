@@ -46,12 +46,13 @@ const sessionReaderMocks = vi.hoisted(() => ({
     vi.fn<
       typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryInWorker
     >(),
-  withSessionEntryReadOnlyInWorker:
+  readSessionEntryReadOnlyInWorker:
     vi.fn<
-      typeof import("../../../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
+      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
     >(),
 }));
 
+// mock-isolation: Keep normalization entry fixtures outside the session database.
 vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => sessionReaderMocks);
 
 // mock-isolation: Normalization fixtures control transcript lookup and persistence without starting storage.
@@ -65,11 +66,7 @@ beforeEach(() => {
   sessionAccessorMocks.updateSessionEntry.mockReset().mockResolvedValue(undefined);
   sessionReaderMocks.readSessionEntrySummariesInWorker.mockReset().mockResolvedValue([]);
   sessionReaderMocks.readSessionEntryInWorker.mockReset().mockResolvedValue(undefined);
-  sessionReaderMocks.withSessionEntryReadOnlyInWorker
-    .mockReset()
-    .mockImplementation(async (_scope, assertCurrent, consume) =>
-      consume({ ok: true, value: undefined }, { kind: "file", assertCurrent }),
-    );
+  sessionReaderMocks.readSessionEntryReadOnlyInWorker.mockReset().mockResolvedValue(undefined);
 });
 
 it.each([0, 2])(
@@ -342,11 +339,11 @@ describe("normalizeEmbeddedRunAttempt session identity", () => {
           await gate.promise;
           return [{ sessionKey: "agent:main:main", entry }];
         });
-        sessionReaderMocks.withSessionEntryReadOnlyInWorker.mockImplementationOnce(
-          async (_scope, _assertCurrent, consume) => {
+        sessionReaderMocks.readSessionEntryReadOnlyInWorker.mockImplementationOnce(
+          async (_scope, _assertCurrent) => {
             started.resolve();
             await gate.promise;
-            return consume({ ok: true, value: entry }, { kind: "file", assertCurrent });
+            return entry;
           },
         );
         const pending = adopt(
@@ -382,7 +379,7 @@ describe("normalizeEmbeddedRunAttempt session identity", () => {
           expect(state.sessionTarget.sessionId).toBe("session-before");
         }
         sessionReaderMocks.readSessionEntrySummariesInWorker.mockReset();
-        sessionReaderMocks.withSessionEntryReadOnlyInWorker.mockReset();
+        sessionReaderMocks.readSessionEntryReadOnlyInWorker.mockReset();
       }
     },
   );
@@ -483,7 +480,7 @@ describe("normalizeEmbeddedRunAttempt session identity", () => {
     expect(await normalizeEmbeddedRunAttempt(input)).toMatchObject({ action: "proceed" });
 
     expect(sessionReaderMocks.readSessionEntrySummariesInWorker).not.toHaveBeenCalled();
-    expect(sessionReaderMocks.withSessionEntryReadOnlyInWorker).not.toHaveBeenCalled();
+    expect(sessionReaderMocks.readSessionEntryReadOnlyInWorker).not.toHaveBeenCalled();
     expect(state.adoptSessionId).not.toHaveBeenCalled();
     expect(state.sessionId).toBe("session-before");
     expect(state.sessionFile).toBe("agent:main:main");

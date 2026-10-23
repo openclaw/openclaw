@@ -197,7 +197,7 @@ suite.define(() => {
           .getByRole("button", { name: "Close", exact: true })
           .click();
         await mobileHost.waitFor({ state: "hidden" });
-        await openChatPanels(page);
+        await openChatPanels(page, "mobile");
         await mobileHost.waitFor();
         expect(await composer.inputValue()).toBe(draft);
         await page.setViewportSize({ width: 1440, height: 900 });

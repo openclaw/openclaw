@@ -397,29 +397,23 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
-  it("renders a reasoned submit block as an attached notice and keeps Start explanatory", () => {
+  it("keeps Start disabled and reports an attempted press to the owner", () => {
     const onSubmit = vi.fn();
+    const onBlockedSubmit = vi.fn();
     const { composer } = renderComposer({
       canSubmit: false,
       submitDisabledReason: "Restoring your last session setup…",
-      blockedSubmitNotice: "Restoring your last session setup…",
       onSubmit,
+      onBlockedSubmit,
     });
-    const notice = composer.querySelector<HTMLElement>(".new-session-page__blocked-submit");
-    const input = composer.querySelector<HTMLElement>(".agent-chat__input");
     const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
 
-    expect(notice?.getAttribute("role")).toBe("status");
-    expect(notice?.classList.contains("agent-chat__composer-status")).toBe(true);
-    expect(notice?.getAttribute("data-tone")).toBe("info");
-    expect(notice?.querySelector(".agent-chat__composer-status-band")).not.toBeNull();
-    expect(notice?.textContent?.trim()).toBe("Restoring your last session setup…");
-    expect(input?.contains(notice ?? null)).toBe(false);
-    expect(notice?.querySelector("svg")).not.toBeNull();
-    expect(start?.disabled).toBe(false);
+    expect(start?.disabled).toBe(true);
     expect(start?.getAttribute("aria-disabled")).toBe("true");
     start?.click();
-    expect(onSubmit).toHaveBeenCalledOnce();
+    expect(onSubmit).not.toHaveBeenCalled();
+    start?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+    expect(onBlockedSubmit).toHaveBeenCalledOnce();
   });
 
   it("previews dictation in a locked draft and reserves the primary slot for Send", () => {

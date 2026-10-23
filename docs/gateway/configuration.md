@@ -103,7 +103,7 @@ Startup migration uses the same fixed, prompt-free transforms as `openclaw docto
 
 When validation still fails:
 
-- The Gateway does not boot
+- `openclaw gateway run` reports the config issues and exits with code `78`, with SQLite or PostgreSQL state
 - Only diagnostic commands work (`openclaw doctor`, `openclaw logs`, `openclaw health`, `openclaw status`)
 - Run `openclaw doctor` to see exact issues
 - Run `openclaw doctor --fix` (`--repair` is the same flag, and `--yes` skips prompts) to apply repairs

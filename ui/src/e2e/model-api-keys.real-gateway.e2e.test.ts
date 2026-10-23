@@ -89,7 +89,7 @@ suite.define(() => {
           const card = await expandProvider(page, "fixture");
           await page.screenshot({ path: path.join(suite.artifactDir, "before-edit.png") });
           await card.getByRole("button", { name: "Set API key" }).click();
-          await card.getByLabel("API key").fill(key);
+          await card.getByLabel("API key", { exact: true }).fill(key);
           await card.getByRole("button", { name: "Save", exact: true }).click();
           await expect.poll(() => card.textContent()).toContain("Secret saved.");
           const saved = await persistedAuth();
@@ -105,7 +105,7 @@ suite.define(() => {
           expect(await card.textContent()).not.toContain("could not refresh");
 
           // Remove provider confirms first, then deletes the saved key.
-          await card.getByRole("button", { name: "Remove provider", exact: true }).click();
+          await card.getByRole("button", { name: "Remove provider: Fixture", exact: true }).click();
           await page
             .locator("openclaw-modal-dialog")
             .getByRole("button", { name: "Remove provider", exact: true })
@@ -161,7 +161,9 @@ suite.define(() => {
             await expandProvider(page, "fixture");
           }
           await expect
-            .poll(() => card.getByRole("button", { name: "Remove provider", exact: true }).count())
+            .poll(() =>
+              card.getByRole("button", { name: "Remove provider: Fixture", exact: true }).count(),
+            )
             .toBe(0);
           await page.screenshot({ path: path.join(suite.artifactDir, "after-cli-removal.png") });
         },

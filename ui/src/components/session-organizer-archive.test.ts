@@ -15,6 +15,7 @@ import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   archiveConfirmedSessionsWithUndo,
   archiveSessionWithUndo,
+  confirmSessionArchive,
 } from "./session-organizer-archive.runtime.ts";
 import {
   createHarness,
@@ -27,11 +28,17 @@ vi.mock("../lib/toast.ts", async (importOriginal) => ({
   showToast: vi.fn(),
 }));
 
-function prepareArchiveTree(harness: ReturnType<typeof createHarness>, rows: GatewaySessionRow[]) {
+function prepareArchiveTree(
+  harness: ReturnType<typeof createHarness>,
+  rows: GatewaySessionRow[],
+  childrenByParent?: ReadonlyMap<string, GatewaySessionRow[]>,
+) {
   let children: GatewaySessionRow[] = [];
   const describeSession = vi.fn(async () => ({ session: rows[0]! }));
   const refreshList = vi.fn(async (query?: SessionRefreshOptions) => {
-    children = rows.filter((row) => row.parentSessionKey === query?.spawnedBy);
+    children = childrenByParent
+      ? (childrenByParent.get(query?.spawnedBy ?? "") ?? [])
+      : rows.filter((row) => row.parentSessionKey === query?.spawnedBy);
   });
   harness.scope.sessions.describe = describeSession;
   harness.scope.sessions.refreshList = refreshList;
@@ -58,6 +65,80 @@ function guardedTarget(index: number) {
 }
 
 describe("session organizer nested archive choice", () => {
+  it("includes unexpanded persistent descendants through workers but excludes independent branches", async () => {
+    const modal = createModalDialogTestFixture();
+    onTestFinished(() => modal.cleanup());
+    const harness = createHarness();
+    const root = gatewayRow(0);
+    const worker = gatewayRow(1, { key: "agent:main:subagent:worker" });
+    const child = gatewayRow(2);
+    const grandchild = gatewayRow(3);
+    const children = new Map([
+      [
+        root.key,
+        [
+          worker,
+          gatewayRow(4, { sidebarRoot: true }),
+          gatewayRow(5, { category: "Work" }),
+          gatewayRow(6, { archived: true }),
+        ],
+      ],
+      [worker.key, [child]],
+      [child.key, [grandchild]],
+      [grandchild.key, [root]],
+    ]);
+    const reads = prepareArchiveTree(harness, [root], children);
+    const pending = modal.track(
+      confirmSessionArchive(
+        { ...sessionRow(0), hasArchiveDescendants: true },
+        harness.scope,
+        () => true,
+      ),
+    );
+    const actions = await waitForConfirmDialogActions();
+    expect(actions.textContent).toContain("Archive all (3)");
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(harness.request).not.toHaveBeenCalled();
+    answerConfirmDialog(actions, "confirm");
+    expect(await pending).toMatchObject({
+      kind: "tree",
+      rows: [
+        {
+          key: grandchild.key,
+          archiveGuard: { expectedSidebarAncestors: [guardedTarget(2), guardedTarget(0)] },
+        },
+        { key: child.key, archiveGuard: { expectedSidebarAncestors: [guardedTarget(0)] } },
+        { key: root.key, archiveGuard: { expectedSidebarAncestors: [] } },
+      ],
+    });
+    expect(reads.refreshList.mock.calls.map(([query]) => query?.spawnedBy)).toEqual([
+      root.key,
+      worker.key,
+      child.key,
+      grandchild.key,
+    ]);
+  });
+
+  it("does not return a partial tree when a child read fails or the connection changes", async () => {
+    const harness = createHarness();
+    const root = { ...sessionRow(0), hasArchiveDescendants: true };
+    const reads = prepareArchiveTree(harness, [gatewayRow(0)]);
+    const isCurrent = () => harness.host.sessionData.isSessionMutationScopeCurrent(harness.scope);
+    reads.refreshList.mockImplementation(async () => {
+      throw new Error("unavailable");
+    });
+    await expect(confirmSessionArchive(root, harness.scope, isCurrent)).rejects.toThrow(
+      "unavailable",
+    );
+    expect(await confirmSessionArchive(root, harness.scope, () => false)).toBeNull();
+    expect(reads.describeSession).toHaveBeenCalledOnce();
+    reads.refreshList.mockImplementation(async () => harness.retireScope());
+    expect(await confirmSessionArchive(root, harness.scope, isCurrent)).toBeNull();
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(harness.request).not.toHaveBeenCalled();
+  });
+
   it("returns a partial archive failure while retaining successful-only Undo after navigation", async () => {
     const rows = [sessionRow(1), sessionRow(2), sessionRow(3)];
     const undoError = new Error("Undo denied after navigation");

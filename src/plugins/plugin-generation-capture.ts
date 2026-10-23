@@ -83,6 +83,7 @@ function createPluginGenerationArtifact(
   const packageForFile = (filename: string) =>
     findPluginCapturedPackage(packages, filename, directory)?.owner;
   const capturedPaths = new Map<string, string>();
+  const hostModuleLinks = new Set<string>();
   const originalSources = new Map<string, string>();
   const hardlinkedSources = new Set<string>();
   const nativeAdmission = createPluginNativeAdmission(
@@ -192,6 +193,7 @@ function createPluginGenerationArtifact(
       directory,
       outputRoot,
       capturedPaths,
+      hostModuleLinks,
       originalSources,
       hardlinkedSources,
       sourceCapture,
@@ -257,19 +259,20 @@ function createPluginGenerationArtifact(
       resolveDependency,
       (name, dependency) => linkDependency(name, dependency, true),
     );
+    // References share a capture destination; real paths track filesystem ancestry.
     const scannedDirectories = new Set<string>();
-    const captureFile = (source: string): void => {
+    const captureFile = (source: string, directoryAncestors?: Set<string>): void => {
       const existingSource = capturedPaths.get(path.resolve(source));
       if (existingSource) {
         assertModuleAvailable(existingSource);
-      }
-      if (
-        existingSource &&
-        (!/\.[cm]?[jt]sx?$/.test(source) || moduleCaptures.has(existingSource))
-      ) {
-        return;
+        if (!/\.[cm]?[jt]sx?$/.test(source) || moduleCaptures.has(existingSource)) {
+          return;
+        }
       }
       const target = existingSource ?? path.join(destination, path.relative(root, source));
+      if (hostModuleLinks.has(target)) {
+        return;
+      }
       if (!existingSource) {
         const prepared = nativeAdmission.resolvePreparedSource(source);
         const real = fs.realpathSync(prepared?.path ?? source);
@@ -283,16 +286,21 @@ function createPluginGenerationArtifact(
           return;
         }
         if (fs.statSync(real).isDirectory()) {
-          if (scannedDirectories.has(real)) {
+          if (directoryAncestors?.has(real)) {
             throw new Error("Standalone plugin input contains a directory cycle");
           }
-          scannedDirectories.add(real);
-          for (const name of fs.readdirSync(real).toSorted()) {
-            if (isPluginSourceEntry(name)) {
-              captureFile(path.join(source, name));
+          if (!scannedDirectories.has(target)) {
+            const ancestors = directoryAncestors ?? new Set<string>();
+            ancestors.add(real);
+            scannedDirectories.add(target);
+            for (const name of fs.readdirSync(real).toSorted()) {
+              if (isPluginSourceEntry(name)) {
+                captureFile(path.join(source, name), ancestors);
+              }
             }
+            ancestors.delete(real);
+            scannedDirectories.delete(target);
           }
-          scannedDirectories.delete(real);
           return;
         }
         copy(source, target);
@@ -427,6 +435,10 @@ function createPluginGenerationArtifact(
             const sharedLink = path.join(destination, path.relative(boundary, local));
             if (linkPluginGenerationHostModule(sharedLink, shared)) {
               additions.add(sharedLink);
+            }
+            // Recovery can already contain the link; denied links still allow asset capture.
+            if (fs.lstatSync(sharedLink, { throwIfNoEntry: false })?.isSymbolicLink()) {
+              hostModuleLinks.add(sharedLink);
             }
           }
           return undefined;

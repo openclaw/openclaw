@@ -6,7 +6,6 @@ import {
   resolveTimeZoneDayStartMs,
   resolveTimezone,
 } from "./format-datetime.js";
-import { formatDurationParts, resolveSingleUnitDurationParts } from "./format-duration-internal.js";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -80,17 +79,13 @@ it("formats single-unit outputs and day threshold behavior", () => {
     [5000, "5s"],
     [180000, "3m"],
     [7200000, "2h"],
+    [43_200_000, "12h"],
     [23 * 3600000, "23h"],
     [24 * 3600000, "1d"],
     [25 * 3600000, "1d"],
+    [86_370_000, "1d"],
     [172800000, "2d"],
   ]);
-});
-it.each([
-  [86_370_000, "1 day"],
-  [43_200_000, "12 hours"],
-] as const)("formats rounded verbose duration for %j", (input, expected) => {
-  expect(formatDurationParts(resolveSingleUnitDurationParts(input), true)).toBe(expected);
 });
 it.each([
   [999, "999ms"],

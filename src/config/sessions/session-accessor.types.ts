@@ -498,7 +498,6 @@ export type SessionTranscriptTurnPersistOptions = {
 export interface SessionTranscriptTurnPersistResult {
   predicateSkipped?: boolean;
   sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
-  appendedCount: number;
   messages: TranscriptMessageAppendResult<unknown>[];
   rejectedReason?: "session-rebound";
   sessionEntry: SessionEntry | undefined;

@@ -297,7 +297,7 @@ suite.define(() => {
             fullPage: true,
           });
         }
-        await openaiCard.getByLabel("API key").fill("synthetic-main-provider-key");
+        await openaiCard.getByLabel("API key", { exact: true }).fill("synthetic-main-provider-key");
 
         const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
         await agentPicker.locator(".agent-select__trigger").click();

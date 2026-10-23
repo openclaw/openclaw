@@ -229,10 +229,7 @@ it("orders binding and pairing reads before rebinding without retaining provider
   order.length = 0;
   const warnings = createWarnLogCapture("web-push-storage-scope");
   onTestFinished(() => warnings.cleanup());
-  const delivery = createEventWebPushDelivery({
-    getRuntimeConfig: () => ({}),
-    stateDir,
-  });
+  const delivery = createEventWebPushDelivery(() => ({}));
   delivery.handleEvent("chat", { state: "final", runId: "scope-run" });
   await selected.promise;
   const mutation = upsertBinding(stateDir, "profile-b", 2).then(mutationSettled);

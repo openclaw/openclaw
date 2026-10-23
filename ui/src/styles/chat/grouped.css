@@ -174,8 +174,11 @@
 .chat-group-footer--persistent-identity .msg-meta__summary,
 .chat-group-footer--persistent-identity .chat-group-footer-actions {
   position: var(--chat-footer-detail-position, absolute);
-  opacity: var(--chat-footer-disclosure-opacity, 0);
-  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
+  opacity: var(--chat-footer-open-detail-opacity, var(--chat-footer-disclosure-opacity, 0));
+  pointer-events: var(
+    --chat-footer-open-detail-pointer-events,
+    var(--chat-footer-disclosure-pointer-events, none)
+  );
 }
 
 .chat-group:hover .chat-group-footer--persistent-identity,
@@ -184,13 +187,17 @@
   pointer-events: auto;
 }
 
+.chat-group-footer--persistent-identity:has(.msg-meta[open]) {
+  --chat-footer-detail-position: static;
+  --chat-footer-open-detail-opacity: 1;
+  --chat-footer-open-detail-pointer-events: auto;
+}
+
 .chat-group:hover
   .chat-group-footer--persistent-identity
   :is(.chat-confirm-wrap, .chat-group-timestamp, .msg-meta__summary, .chat-group-footer-actions),
 .chat-group:focus-within
   .chat-group-footer--persistent-identity
-  :is(.chat-confirm-wrap, .chat-group-timestamp, .msg-meta__summary, .chat-group-footer-actions),
-.chat-group-footer--persistent-identity:has(.msg-meta[open])
   :is(.chat-confirm-wrap, .chat-group-timestamp, .msg-meta__summary, .chat-group-footer-actions) {
   position: static;
   opacity: 1;

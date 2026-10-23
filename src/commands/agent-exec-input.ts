@@ -2,6 +2,7 @@ import { createReadStream, existsSync } from "node:fs";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mergeDeep } from "../infra/deep-merge.js";
 import { isPlainObject } from "../infra/plain-object.js";
@@ -31,9 +32,8 @@ export async function resolveAgentExecPrompt(
   positionalMessage: string | undefined,
   messageFile: string | undefined,
 ): Promise<string> {
-  const file = messageFile?.trim();
-  const hasPositional = positionalMessage !== undefined;
-  if (hasPositional && file) {
+  const file = readNonBlankString(messageFile);
+  if (positionalMessage !== undefined && file) {
     throw new Error("Use either the prompt argument or --message-file, not both.");
   }
   if (messageFile !== undefined && !file) {

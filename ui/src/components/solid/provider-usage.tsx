@@ -1,3 +1,5 @@
+/// <reference lib="es2024.collection" />
+
 // Shared provider usage content: plan windows, balances and provider-billed cost.
 // Surrounding headers (name, plan, icon) stay surface-owned.
 import { createMemo, For, Show } from "solid-js";

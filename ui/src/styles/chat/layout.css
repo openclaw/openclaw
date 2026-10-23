@@ -777,7 +777,7 @@ openclaw-pending-session-create {
   text-transform: uppercase;
 }
 
-.chat-history-boundary__action:not(:disabled):hover {
+.chat-history-boundary__action:not([aria-disabled="true"]):hover {
   color: var(--text);
 }
 
@@ -968,16 +968,6 @@ openclaw-pending-session-create {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-}
-
-.context-usage__title,
-.context-usage__section-label {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 1.2;
-  text-transform: uppercase;
 }
 
 .context-usage__context-value {
@@ -2076,13 +2066,6 @@ openclaw-chat-video-player {
   color: var(--danger);
 }
 
-.chat-swarm__task-name {
-  overflow: hidden;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chat-swarm__task-duration {
   font-variant-numeric: tabular-nums;
 }
@@ -3161,7 +3144,8 @@ openclaw-chat-ci-details {
     height: var(--chat-mobile-row-icon-size);
   }
 
-  .agent-chat__input--chat .chat-send-btn--stop {
+  /* Stop keeps its smaller target regardless of lazy composer stylesheet order. */
+  .agent-chat__input--chat .chat-send-btn.chat-send-btn--stop {
     width: var(--chat-mobile-row-target-size);
     min-width: var(--chat-mobile-row-target-size);
     height: var(--chat-mobile-row-target-size);

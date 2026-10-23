@@ -10462,7 +10462,9 @@ describe("ci workflow guards", () => {
         },
       };
       expect(evaluateWorkflowCondition(suiteStep.if, context)).toBe(hasSuiteTargets);
-      expect(evaluateWorkflowCondition(desktopStep.if, context)).toBe(row.run_desktop);
+      expect(evaluateWorkflowCondition(desktopStep.if, context)).toBe(
+        row.run_desktop && !hasSuiteTargets,
+      );
       if (!hasSuiteTargets) {
         expect(row.run_desktop).toBe(true);
       }
@@ -11079,7 +11081,7 @@ describe("ci workflow guards", () => {
     );
     expect(desktopProof).toEqual({
       name: "Prove desktop resize over node and SSH",
-      if: "${{ !cancelled() && steps.real_gateway_build.outcome == 'success' && matrix.run_desktop }}",
+      if: "${{ !cancelled() && steps.real_gateway_build.outcome == 'success' && matrix.run_desktop && (needs.preflight.outputs.frozen_target == 'true' || !matrix.run_tests || steps.ui_chromium.outcome != 'success') }}",
       env: {
         FROZEN_TARGET: "${{ needs.preflight.outputs.frozen_target }}",
         DESKTOP_PROOF_CHECKOUT_SHA: "${{ needs.preflight.outputs.checkout_revision }}",
@@ -11091,6 +11093,25 @@ describe("ci workflow guards", () => {
     });
     expect(uiE2eRealGateway.steps.indexOf(desktopProof)).toBeGreaterThan(realGatewayBuildIndex);
     expect(uiE2eRealGateway.steps.indexOf(desktopProof)).toBeLessThan(realGatewayIndex);
+    for (const frozen of [false, true]) {
+      for (const chromiumReady of [false, true]) {
+        for (const runTests of [false, true]) {
+          expect(
+            evaluateWorkflowCondition(desktopProof.if, {
+              eventName: "push",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              preflightOutputs: { frozen_target: String(frozen) },
+              matrix: { run_desktop: true, run_tests: runTests },
+              steps: {
+                real_gateway_build: { outputs: {}, outcome: "success" },
+                ui_chromium: { outputs: {}, outcome: chromiumReady ? "success" : "failure" },
+              },
+            }),
+          ).toBe(frozen || !runTests || !chromiumReady);
+        }
+      }
+    }
     const desktopUpload = expectDefined(
       uiE2eRealGateway.steps.find(
         (step: WorkflowStep) => step.name === "Upload sanitized desktop resize proof",
@@ -11117,6 +11138,11 @@ describe("ci workflow guards", () => {
       OPENCLAW_UI_E2E_DIAGNOSTIC_DIR:
         ".artifacts/control-ui-e2e-timeouts/real-gateway-attempt-${{ github.run_attempt }}",
       OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "${{ matrix.test_groups_gzip_base64 }}",
+      OPENCLAW_UI_E2E_RUN_DESKTOP: "${{ matrix.run_desktop }}",
+      DESKTOP_PROOF_CHECKOUT_SHA: "${{ needs.preflight.outputs.checkout_revision }}",
+      DESKTOP_PROOF_PR_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+      DESKTOP_PROOF_PR_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+      DESKTOP_PROOF_WORKFLOW_SHA: "${{ github.workflow_sha }}",
     });
     expect(proofUploadIndex).toBeGreaterThan(realGatewayIndex);
     expect(proofUpload.with.name).toBe(

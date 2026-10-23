@@ -40,11 +40,13 @@ it("retains the storage failure when unknown patch publication also fails", asyn
     ).rejects.toSatisfy((error: unknown) => {
       expect(hasSqliteWorkerOutcomeUnknown(error)).toBe(true);
       expect(formatErrorMessageWithCode(error)).toContain(publicationFailure.message);
+      const storageOutcome = classifyGatewayStorageFailure(error);
+      expect(storageOutcome).toBe("session_actor_reconciliation");
       expect(
         renderAssistantRequestFailureCopy({
-          storageFailure: classifyGatewayStorageFailure(error),
+          storageFailure: storageOutcome,
         }),
-      ).toContain("disk is full. Free up space");
+      ).toMatch(/check.*history.*before trying again/i);
       return true;
     });
     expect(update).toHaveBeenCalledOnce();

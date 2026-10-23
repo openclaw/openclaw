@@ -4,6 +4,7 @@ import { Agent, request as httpRequest } from "node:http";
 import path from "node:path";
 import { afterEach, assert, describe, expect, test, vi, type TestContext } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -344,6 +345,7 @@ function withRevokedHook(
         try {
           const { port, server } = gateway;
           await server.startupSettled;
+          await waitForGatewayStartup(port);
           const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
           const mainSessionKey = resolveMainSessionKeyFromConfig();
           const receipts = new Map<string, HookReceipt>();
@@ -472,6 +474,7 @@ describe("gateway hook admission", () => {
       observeHookReceipts((_text, receipt) => admitted.resolve(receipt));
       const request = withGatewayServer(async ({ port, server }) => {
         await server.startupSettled;
+        await waitForGatewayStartup(port);
         await expectResponse(await postWake(port, "first-hook", "first"));
         await expect((await admitted.promise).settled).resolves.toMatchObject({
           status: "completed",
@@ -510,6 +513,7 @@ describe("gateway hook admission", () => {
       observeHookReceipts((_text, receipt) => admitted.resolve(receipt));
       await withGatewayServer(async ({ port, server }) => {
         await server.startupSettled;
+        await waitForGatewayStartup(port);
         const request = postWake(port, "refresh-during-admission", "refresh");
         let response: Response;
         try {
@@ -589,6 +593,7 @@ describe("gateway hook admission", () => {
 
   test("admits an HTTP hook after placement while runtime preparation remains blocked", async () => {
     await withHookGateway(async ({ port }) => {
+      await waitForGatewayStartup(port);
       const placementAdmissionPublished = createDeferred();
       const runtimePreparation = createDeferred();
       let runnerEntered = false;
@@ -625,6 +630,7 @@ describe("gateway hook admission", () => {
 
   test("does not admit an HTTP hook when only cron session preparation enters its lane", async () => {
     await withHookGateway(async ({ port }) => {
+      await waitForGatewayStartup(port);
       cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
         const callbacks = params as {
           onLaneWait?: (info: { waiting: boolean; stage?: "session-preparation" }) => void;

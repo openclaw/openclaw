@@ -212,6 +212,9 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_worker_started_total`                           | counter   | `script`                                                                                  |
 | `openclaw_worker_retired_total`                           | counter   | `script`, `reason`                                                                        |
 | `openclaw_worker_messages_total`                          | counter   | `kind`, `direction`                                                                       |
+| `openclaw_session_row_selections_total`                   | counter   | `kind`, `task`                                                                            |
+| `openclaw_session_row_selection_rows_total`               | counter   | `kind`, `task`                                                                            |
+| `openclaw_session_row_selection_resets_total`             | counter   | none                                                                                      |
 | `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`                                                                       |
 | `openclaw_worker_message_unmeasured_total`                | counter   | `kind`, `direction`                                                                       |
 | `openclaw_child_process_spawn_total`                      | counter   | `family`, `operation`                                                                     |
@@ -255,6 +258,18 @@ does not cross the main-thread boundary.
 Foreign Worker instances with accessor or read-only methods, or nonextensible
 instances, retain CPU and lifecycle tracking but exclude per-message traffic.
 Instrumentation does not replace those protected methods.
+
+Session-row selection counters report successful resident selections and returned
+rows before federation and visibility filtering. `kind` is `broad`, `agent`,
+`store`, `exact`, `session-id`, `parent`, or `running-candidate`. The bounded `task`
+labels are `sessions.list`, `sessions.catalog.list`, `sessions.resolve`,
+`sessions.usage`, `status`, `control-ui-pr`, and `other`. The task is the enclosing
+instrumented operation, not necessarily the original cause of background work;
+detached work without a recognized task is `other`. No session or agent identities
+are exported. `openclaw_session_row_selection_resets_total` counts broad selection
+invalidations, including topology replacement and projection disposal. These
+process-lifetime totals travel with periodic memory samples; scrapes do not select
+rows, and repeated samples do not increase the counters.
 
 For model-call metrics, `observation_unit="request"` measures one observable
 provider request. `observation_unit="turn"` measures a synthetic Claude Code
@@ -1203,7 +1218,7 @@ attributes.
   <Accordion title="Series cap and overflow accounting">
     The exporter retains at most **16,384 aggregate label sets** across counters, gauges, and histograms. Each histogram consumes one entry, regardless of its bucket count; the rendered scrape has more time series. The WebSocket frame-size family is different: its nine cumulative scalar bounds each consume an entry, so 200 event names use 1,800 entries.
 
-    A fixed catalog of 134 metric families reserves **15,380 entries**, leaving **1,004 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
+    A fixed catalog of 137 metric families reserves **15,512 entries**, leaving **872 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
 
     The following reserves apply per family (all names have the `openclaw_` prefix):
 
@@ -1216,7 +1231,7 @@ attributes.
     | 384 | `gc_duration_seconds` |
     | 256 | All other `gateway_rpc_*` families; `gateway_ws_event_bytes_total`, `gateway_ws_event_wire_bytes_total`, `gateway_ws_events_total`, `gateway_ws_session_event_bytes_total`, `gateway_ws_session_event_frames_total`; `heap_space_bytes` |
     | 128 | `run_completed_total`, `run_duration_seconds`, `harness_run_total`, `harness_run_duration_seconds`, `model_call_total`, `model_call_duration_seconds`, `model_cost_usd_total`, `model_failover_total`, `model_tokens_total`, `model_usage_duration_seconds`, `gen_ai_client_token_usage`, `tool_catalog_total`, `tool_catalog_tools_total`, `tool_execution_blocked_total`, `tool_execution_total`, `tool_execution_duration_seconds`, `code_mode_worker_heap_bytes`, `code_mode_worker_memory_bytes`, `heap_old_generation_after_gc_bytes`, `heap_old_generation_after_gc_ratio`, `heap_size_limit_bytes`, `heap_used_ratio`, `memory_bytes`, `worker_count`, `worker_heap_sampled_count`, `worker_heap_used_bytes`, `worker_external_bytes`, `worker_array_buffers_bytes`, `worker_gc_collections_total`, `worker_gc_duration_seconds_total`, `worker_gc_reclaimed_bytes_total`, `worker_heap_used_high_water_bytes`, `worker_tasks_completed_total` |
-    | 64 | `worker_started_total`, `worker_retired_total`, `worker_message_payload_bytes_total`, `worker_message_unmeasured_total`, `worker_messages_total` |
+    | 64 | `session_row_selections_total`, `session_row_selection_rows_total`, `worker_started_total`, `worker_retired_total`, `worker_message_payload_bytes_total`, `worker_message_unmeasured_total`, `worker_messages_total` |
     | 32 | `chat_send_phase_seconds`, `worktree_preparation_seconds` |
     | 4 | Every other cataloged family |
 

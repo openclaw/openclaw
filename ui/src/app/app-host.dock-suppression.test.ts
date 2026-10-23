@@ -5,11 +5,16 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createApplicationRouter, type RouteId } from "../app-routes.ts";
+import {
+  DESKTOP_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+} from "../components/panel-toggle-contract.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import {
   createShellOwner,
+  connectShellEvents,
   mountShellView,
   refreshShellView,
 } from "./app-host-solid.test-support.ts";
@@ -33,8 +38,11 @@ it("applies route ownership to shell panels without session-gating desktop", asy
     vi.fn(() => ({ matches: false })),
   );
   const client = createTestGatewayClient(vi.fn());
+  const router = createApplicationRouter();
+  onTestFinished(() => router.stop());
   const row: GatewaySessionRow = { key: "agent:main:main", kind: "direct", updatedAt: 0 };
   const context = {
+    router,
     basePath: "",
     gateway: {
       snapshot: {
@@ -93,6 +101,7 @@ it("applies route ownership to shell panels without session-gating desktop", asy
     },
     runtimeConfig: {
       state: { configSchema: null, configForm: null, configSnapshot: null, configUiHints: null },
+      subscribe: () => () => {},
     },
     sessions: {
       state: {
@@ -135,15 +144,14 @@ it("applies route ownership to shell panels without session-gating desktop", asy
     preload: vi.fn(),
   } as unknown as ApplicationContext;
   const shell = createShellOwner();
-  const router = createApplicationRouter();
-  onTestFinished(() => router.stop());
   shell.runtime = { context, router } as ApplicationRuntime;
   shell.activeSessionKey = "agent:main:main";
   const container = shell.element;
   const panel = (kind: "assistant" | "terminal" | "desktop") =>
     container.querySelector(`openclaw-${kind}-panel`);
-  const expectHomeAvailable = (homeAvailable: boolean, rail = true) => {
+  const expectHomeAvailable = async (homeAvailable: boolean, rail = true) => {
     refreshShellView(shell);
+    await vi.dynamicImportSettled();
     expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     if (rail) {
@@ -155,8 +163,13 @@ it("applies route ownership to shell panels without session-gating desktop", asy
   };
 
   shell.routeState = { routeId: "appearance" };
+  window.history.replaceState(null, "", "/settings/appearance");
+  connectShellEvents(shell);
   mountShellView(shell);
+  window.dispatchEvent(new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT));
+  window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT));
   refreshShellView(shell);
+  await vi.dynamicImportSettled();
   await Promise.resolve();
   expect(panel("assistant")).toMatchObject({
     pageRouteId: "appearance",
@@ -222,7 +235,7 @@ it("applies route ownership to shell panels without session-gating desktop", asy
   // Home now lives in the retained rail, not duplicate floating chrome.
   // The shell still projects its access through permission, reconnect, and Gateway changes.
   context.navigation.snapshot.navCollapsed = true;
-  expectHomeAvailable(true);
+  await expectHomeAvailable(true);
   for (const phase of ["connected", "reconnecting", "offline", "connected"] as const) {
     context.gateway.snapshot.phase = phase;
     refreshShellView(shell);
@@ -232,19 +245,19 @@ it("applies route ownership to shell panels without session-gating desktop", asy
     role: "operator",
     scopes: ["operator.read", "operator.write"],
   };
-  expectHomeAvailable(true);
+  await expectHomeAvailable(true);
   context.gateway.snapshot.phase = "offline";
-  expectHomeAvailable(true);
+  await expectHomeAvailable(true);
   const acceptedHello = context.gateway.snapshot.hello!;
   context.gateway.connection.gatewayUrl = "ws://another-gateway.test";
   // The Gateway owner clears the previous identity's hello on connection replacement.
   context.gateway.snapshot.hello = null;
-  expectHomeAvailable(false, false);
+  await expectHomeAvailable(false, false);
   context.gateway.snapshot.phase = "connected";
   context.gateway.snapshot.hello = { ...acceptedHello };
-  expectHomeAvailable(true);
+  await expectHomeAvailable(true);
   context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
-  expectHomeAvailable(false, false);
+  await expectHomeAvailable(false, false);
   context.gateway.snapshot.phase = "offline";
-  expectHomeAvailable(false, false);
+  await expectHomeAvailable(false, false);
 });

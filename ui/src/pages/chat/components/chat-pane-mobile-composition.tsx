@@ -21,7 +21,6 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import type { SessionPlacementPresentation } from "../../../components/session-placement-move-dialog.tsx";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { closeMenusWithin } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
@@ -31,8 +30,8 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending } from "../../../lib/session-display.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { MobileHostDestination } from "../chat-mobile-host.ts";
-import { companionClearAction } from "../chat-pane-embedded-view.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
+import { companionClearAction } from "../chat-panel-header-actions.tsx";
 import { chatPaneLayoutModel, ChatPaneLayoutHeaderActions } from "./chat-header-panel-actions.tsx";
 import type { HeaderSessionMenuPage } from "./chat-header-session-menu-mobile.tsx";
 import { ChatHeaderSessionMenu } from "./chat-header-session-menu.tsx";
@@ -613,7 +612,6 @@ export function ChatPaneMobileComposition(props: {
             )
           }
           onOpenDetails={(source) => props.header.onOpenDetails?.(source)}
-          navigationIcon={<Icon name="sessionMenu" />}
           notice={
             props.header.gatewayStatus?.kind && props.header.gatewayStatus.kind !== "connected"
               ? {

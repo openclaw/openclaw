@@ -80,15 +80,6 @@
   stroke-linejoin: round;
 }
 
-.agent-chat__goal-copy,
-.agent-chat__goal-label,
-.agent-chat__goal-objective {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .agent-chat__goal-copy {
   display: flex;
   align-items: baseline;

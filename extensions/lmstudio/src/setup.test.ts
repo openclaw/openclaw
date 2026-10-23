@@ -553,10 +553,10 @@ describe("lmstudio setup", () => {
     await expect(setup).rejects.toMatchObject({ name: "AbortError" });
   });
 
-  it("interactive Docker setup defaults to the host LM Studio endpoint", async () => {
+  it("interactive Docker setup hints the host LM Studio endpoint and uses it for blank input", async () => {
     vi.stubEnv("OPENCLAW_DOCKER_SETUP", "1");
     const { prompter, text } = wizard({
-      baseUrl: "http://host.docker.internal:1234",
+      baseUrl: "",
       apiKey: "",
       context: "",
     });
@@ -567,7 +567,7 @@ describe("lmstudio setup", () => {
     expectFields(
       firstTextCall,
       {
-        initialValue: "http://host.docker.internal:1234",
+        initialValue: undefined,
         placeholder: "http://host.docker.internal:1234",
       },
       "first text prompt",

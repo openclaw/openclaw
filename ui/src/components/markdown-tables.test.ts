@@ -201,6 +201,25 @@ describe("Markdown table interactions", () => {
     expectCopy(copy, "Copy table");
   });
 
+  it("announces table copy outcomes in a status region", async () => {
+    vi.useFakeTimers();
+    stubProperty(
+      document,
+      "execCommand",
+      vi.fn(() => false),
+    );
+    const { shell, copy } = interactiveOwner();
+    const statusText = () => shell.querySelector('[role="status"]')?.textContent;
+    await copyTable(copy, "Copied!");
+    expect(statusText()).toBe("Copied!");
+
+    writeText.mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
+    await copyTable(copy, "Copy failed");
+    expect(statusText()).toBe("Copy failed");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(statusText()).toBe("");
+  });
+
   it("decorates cloned session links and retires their registrations on close", async () => {
     const titler = new SessionLinkTitler();
     installSessionTitleRegistrar((target, label) => titler.register(target, label));

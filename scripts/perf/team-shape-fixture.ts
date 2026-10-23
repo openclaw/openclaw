@@ -20,6 +20,7 @@ export function parseTeamShapeOptions(argv: string[]) {
       "state-dir": { type: "string" },
       sessions: { type: "string" },
       runs: { type: "string" },
+      "settled-runs": { type: "boolean" },
       approvals: { type: "string" },
       cron: { type: "string" },
       projects: { type: "string" },
@@ -83,6 +84,7 @@ export function parseTeamShapeOptions(argv: string[]) {
     stateDir: path.resolve(values["state-dir"] ?? "."),
     sessions,
     retainedRuns,
+    settledRuns: values["settled-runs"] ?? false,
     approvals: integer("approvals", 200),
     cronJobs: integer("cron", 100),
     projects,
@@ -201,6 +203,7 @@ async function main() {
   if (options.help) {
     console.log(`Usage: node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts --state-dir <new-dir> [options]
   --sessions 5000 --runs 6000 --approvals 200 --cron 100 --projects 12
+  --settled-runs           Keep run history terminal and delivered, without a subagent recovery backlog.
   --seed 967 --now <epoch-ms> --transcript-mib 64
   --long-transcript-entries 0 --long-transcript-sessions 4
   --worktree-files 0 --nested-repository

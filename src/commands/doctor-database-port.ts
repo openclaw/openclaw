@@ -22,6 +22,7 @@ import {
   type DatabasePortInspection,
   DatabasePortError,
 } from "../infra/database-engine/port-command.worker.js";
+import { postgresStoreNamespace } from "../infra/database-engine/postgres-schema.js";
 import {
   resolveDatabaseFamilyEngines,
   type DatabaseEngineId,
@@ -233,6 +234,15 @@ async function captureOriginals(ctx: Context, facts: Awaited<ReturnType<typeof p
     ctx.assertCurrent();
     const directory = storeDirectory(ctx, index);
     fs.mkdirSync(directory, { mode: 0o700 });
+    if (info.notes?.length) {
+      const inspection = path.join(directory, "inspection.json");
+      writeDatabasePortArtifact(
+        inspection,
+        `${JSON.stringify({ notes: info.notes })}\n`,
+        ctx.assertCurrent,
+      );
+      artifacts.push(await captureDatabaseArtifact(inspection));
+    }
     const stat = fs.lstatSync(file, { bigint: true }),
       original = await captureDatabaseArtifact(file);
     let image = path.join(directory, "original.sqlite"),
@@ -284,7 +294,11 @@ async function captureOriginals(ctx: Context, facts: Awaited<ReturnType<typeof p
           : {
               engine: "postgres",
               anchorPath: file,
-              namespace: `port_${randomUUID().replaceAll("-", "")}`,
+              namespace: postgresStoreNamespace(
+                ctx.engineSelection.postgres!.schemaPrefix,
+                info.family,
+                storeId,
+              ),
             },
       originalCapture: await captureDatabaseArtifact(anchor),
       verification: null,
@@ -663,6 +677,9 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
           to: facts.to,
           stores: facts.stores,
           migrations: facts.migrations,
+          notes: [...facts.inspected].flatMap(([file, info]) =>
+            (info.notes ?? []).map((note) => `${file}: ${note}`),
+          ),
           remainingSqlite: facts.outOfScope
             .filter((store) => store.engine === "sqlite")
             .map((store) => store.path),

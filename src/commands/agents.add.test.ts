@@ -258,6 +258,18 @@ describe("agents add command", () => {
     expectUnused(runtime.error, runtime.exit, writeConfig);
   }
 
+  it("preserves the recovery owner's refusal for an existing held agent", async () => {
+    const message =
+      "Agent main has held databases. Restore its original agentDir and session.store configuration, then rerun agents add to restore the preserved store.";
+    createAgent.mockResolvedValueOnce({
+      status: "error",
+      reason: "already-exists",
+      agentId: "main",
+      message,
+    });
+    await expectRootFailure(add({ name: "main", workspace: "/tmp/main" }, true), message);
+  });
+
   it.each<[AddOptions, string]>([
     [
       { name: "Work" },
@@ -640,7 +652,7 @@ describe("agents add command", () => {
     });
     await expectRootFailure(
       add({ name: "Work", workspace: "/tmp/work" }, true),
-      'Agent "work" already exists.',
+      'agent "work" already exists',
     );
   });
 });

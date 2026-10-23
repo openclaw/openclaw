@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { shouldUseTransientCooldownProbeSlot } from "./failover-policy.js";
 import type { FailoverReason } from "./failover/signal.js";
@@ -29,12 +30,7 @@ function isProbeThrottleOpen(now: number, throttleKey: string): boolean {
 export function markProbeAttempt(now: number, throttleKey: string): void {
   lastProbeAttempt.delete(throttleKey);
   lastProbeAttempt.set(throttleKey, now);
-  if (lastProbeAttempt.size > MAX_PROBE_KEYS) {
-    for (const key of lastProbeAttempt.keys()) {
-      lastProbeAttempt.delete(key);
-      break;
-    }
-  }
+  pruneMapToMaxSize(lastProbeAttempt, MAX_PROBE_KEYS);
 }
 
 type CooldownDecision =

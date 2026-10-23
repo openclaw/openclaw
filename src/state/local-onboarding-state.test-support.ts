@@ -43,7 +43,7 @@ function onboarding(state: OpenClawTestState) {
       database,
     });
   const complete = (runId: string, nowMs?: number) =>
-    completeLocalOnboarding({ configPath: state.configPath, runId, nowMs, database });
+    completeLocalOnboarding({ configPath: state.configPath, runId, nowMs });
   const read = () => readLocalOnboardingState(state.configPath, database);
   const recover = (owner: Parameters<typeof completeLocalSetupRecovery>[0]["owner"]) =>
     completeLocalSetupRecovery({ owner, appliedConfigPath: state.configPath });

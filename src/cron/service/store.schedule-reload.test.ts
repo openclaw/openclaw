@@ -5,14 +5,13 @@ import {
   setupCronServiceSuite,
 } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { createReloadCronJob, STORE_TEST_NOW } from "../store.test-support.js";
 import type { CronJob, CronJobPatch } from "../types.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { ensureLoaded } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-store-schedule-reload" });
-
-const STORE_TEST_NOW = Date.parse("2026-03-23T12:00:00.000Z");
 
 async function writeSingleJobStore(storePath: string, job: CronJob) {
   await saveCronStore(storePath, { version: 1, jobs: [job] });
@@ -36,21 +35,6 @@ function createStoreTestService(storePath: string) {
   };
 }
 
-function createReloadCronJob(params?: Partial<CronJob>): CronJob {
-  return {
-    id: "reload-cron-expr-job",
-    name: "reload cron expr job",
-    enabled: true,
-    createdAtMs: STORE_TEST_NOW - 60_000,
-    updatedAtMs: STORE_TEST_NOW - 60_000,
-    schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
-    sessionTarget: "main",
-    wakeMode: "now",
-    payload: { kind: "systemEvent", text: "tick" },
-    state: {},
-    ...params,
-  };
-}
 const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
 const dueNextRunAtMs = STORE_TEST_NOW - 1_000;
 

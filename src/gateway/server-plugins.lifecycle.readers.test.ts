@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as cleanupTimeout from "../plugins/host-hook-cleanup-timeout.js";
@@ -71,6 +72,7 @@ it("reports plugin reload status and serves metadata throughout an admitted call
   let deadlineObservations = 0;
   try {
     await server.startupSettled;
+    await waitForGatewayStartup(claim.port);
     socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
     const connected = socket;
     // Complete catalog acquisition before holding a call: retained acquisition

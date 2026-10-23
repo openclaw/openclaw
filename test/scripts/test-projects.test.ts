@@ -2266,11 +2266,14 @@ export const single = {
     "keeps an existing nested ui directory and explicit e2es scoped (%s)",
     (spelling) => {
       const directory = "ui/src/pages/new-session";
-      const isolated = `${directory}/draft-persistence.test.ts`;
+      const isolated = [
+        `${directory}/draft-persistence.test.ts`,
+        `${directory}/new-session-attachment-lazy.test.ts`,
+      ];
       const unitFiles = [
         `${directory}/view.test.ts`,
         `${directory}/nested/child.test.ts`,
-        isolated,
+        ...isolated,
       ];
       const e2es = testFiles(
         "ui/src/e2e",
@@ -2299,7 +2302,7 @@ export const single = {
           const plans = planRuns([target, ...e2es], cwd);
           expect(plans).toEqual([
             runPlan("ui", [`${directory}/**/*.test.ts`]),
-            runPlan("ui-isolated", [isolated]),
+            runPlan("ui-isolated", isolated),
             runPlan("ui-e2e", e2es),
           ]);
           const includeFile = path.join(cwd, "include.json");
@@ -2308,7 +2311,7 @@ export const single = {
             return JSON.parse(fs.readFileSync(includeFile, "utf8"));
           });
           // Shared UI intersects these files with its ownership exclusions.
-          expect(filesByPlan).toEqual([unitFiles.toSorted(), [isolated], e2es]);
+          expect(filesByPlan).toEqual([unitFiles.toSorted(), isolated, e2es]);
         },
       );
     },
@@ -3137,6 +3140,7 @@ describe("test selector native source facts", () => {
           references: ["scripts/tool.mts"],
         };
         for (const file of [
+          "node-runtime-env.mjs",
           "scripts/lib/test-selector-source-facts.mts",
           "scripts/lib/test-source-term-matcher.mts",
           "src/infra/node-runtime-executable.ts",

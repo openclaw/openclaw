@@ -324,7 +324,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(record.request.wireInputs).not.toHaveProperty("publication_selection_json");
     expect(record.request.wireInputs).not.toHaveProperty("extension_test_exclude_patterns_json");
     expect(record.request.wireInputs).not.toHaveProperty("known_flaky_jobs_json");
-    expect(Object.keys(fixture.readPayload().body.inputs)).toHaveLength(25);
+    expect(Object.keys(fixture.readPayload().body.inputs)).toHaveLength(24);
     const before = readFileSync(fixture.requestPath());
     const callsBefore = fixture.readCalls(fixture.ghCallsPath).length;
     const reopened = fixture.run(

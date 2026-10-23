@@ -353,7 +353,9 @@ suite.define(() => {
       await details.getByRole("button", { name: /^Status:/u }).waitFor();
       await details.locator("button[popovertarget=workboard-detail-actions]").click();
       for (const name of ["Open session", "Edit card", "Archive card", "Delete card"]) {
-        expect(await details.getByRole("button", { name }).count()).toBe(1);
+        const action = details.getByRole("button", { name });
+        await action.waitFor();
+        expect(await action.count()).toBe(1);
       }
       expect(await details.getByRole("button", { name: "Stop session" }).count()).toBe(0);
       await proof.capture(

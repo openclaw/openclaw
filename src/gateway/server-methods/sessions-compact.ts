@@ -32,6 +32,7 @@ import {
 } from "../session-request-agent.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
+import { respondError } from "./response.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -105,13 +106,10 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         );
       };
       if (!sessionId) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `Session ${key} not found. Run openclaw sessions list --json to choose a valid key.`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `Session ${key} not found. Run openclaw sessions list --json to choose a valid key.`,
         );
         return;
       }

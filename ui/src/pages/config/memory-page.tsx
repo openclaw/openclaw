@@ -628,7 +628,8 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
         readAddonBusy={(id) => addonMutations.get(id)?.busy() ?? false}
         engineSelection={displayedEngineSelection()}
         enginePending={engineMutation.current() !== undefined}
-        engineBusy={engineMutation.busy() || props.mutationDisabled}
+        engineDisabled={props.mutationDisabled}
+        engineSaving={engineMutation.busy()}
         engineOutcome={engineOutcome()}
         onEngineChange={(nextEngineId) => void changeEngine(nextEngineId, engineSelection())}
         canToggleAddons={

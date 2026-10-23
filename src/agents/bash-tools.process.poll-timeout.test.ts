@@ -233,7 +233,7 @@ test("an already-aborted poll leaves buffered output unread", async () => {
   const controller = new AbortController();
   controller.abort();
   await expect(poll(30_000, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
-  expect(session.pendingOutput).toEqual([{ stream: "stdout", text: "interactive prompt\n" }]);
+  check(await poll(), { status: "running", sessionId: session.id }, ["interactive prompt"]);
 });
 
 test("a waiting poll cannot adopt a same-id successor after removal", async () => {

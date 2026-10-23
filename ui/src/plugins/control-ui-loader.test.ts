@@ -45,6 +45,7 @@ it.each(["load", "error", "abort"] as const)(
         actions: new Map(),
         accessories: new Map(),
         widgets: new Map(),
+        inlineViews: new Map(),
         replacements: new Map(),
       },
       selections: new Map(),

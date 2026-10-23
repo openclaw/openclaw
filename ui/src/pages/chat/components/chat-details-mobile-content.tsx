@@ -16,10 +16,7 @@ import {
 } from "./chat-automation-mobile.tsx";
 import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
 import { ChatDetailsContextContent, ChatDetailsContextSummary } from "./chat-details-context.tsx";
-import {
-  ChatDetailsEnvironmentMobile,
-  type ChatDetailsEnvironmentMobileProps,
-} from "./chat-details-environment-mobile.tsx";
+import { ChatDetailsEnvironmentMobile } from "./chat-details-environment-mobile.tsx";
 import { ChatDetailsGoal, type ChatDetailsGoalProps } from "./chat-details-goal.tsx";
 import {
   ChatDetailsMobileProcesses,
@@ -92,8 +89,6 @@ type ChatDetailsMobileRootContent = {
     | "taskProgressNotice"
     | "automations"
   >;
-  /** Review's Uncommitted snapshot and the host's actual navigation callbacks. */
-  environment?: Omit<ChatDetailsEnvironmentMobileProps, "details" | "presented">;
   /** Labels only; facts/actions/demand come from the native details.outputs binding. */
   outputs?: { label: string };
   /** The native Sharing adapter, constructed under the retained session host. */
@@ -289,7 +284,7 @@ function MobileRoot(
       automations={automations()}
       environment={
         <ChatDetailsEnvironmentMobile
-          {...(props.content.environment ?? props.details.environment)}
+          {...props.details.environment}
           details={props.details}
           presented={props.presented}
         />

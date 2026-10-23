@@ -238,101 +238,65 @@ it.each([
   },
 );
 
-it.for(["current", "revoked"] as const)(
-  "settles a rejected recovery handoff before releasing the parent turn (%s source)",
-  async (source, { signal }) => {
-    const fixture = setup("subagent_announce");
-    const gate = <T>(pending: Promise<T>, active: Promise<unknown>, message: string) =>
-      withinTest(awaitGateBeforeSettlement(pending, active, message), signal);
-    const { target } = fixture;
-    const recoveryEntered = createDeferredCore();
-    const releaseRecovery = createDeferredCore();
-    const retirementEntered = createDeferredCore();
-    const releaseRetirement = createDeferredCore();
-    const recovery = withSessionTurn(
-      { target, sessionKey, sessionId: fixture.state.entry.sessionId },
-      async (operation) => {
-        if (!operation) {
-          throw new Error("Timeout recovery requires its retained controller operation");
-        }
-        operation.setPhase("preflight_compacting");
-        recoveryEntered.resolve();
-        await releaseRecovery.promise;
-      },
+it("keeps the same completion input queued when timeout recovery cannot accept steering", async ({
+  signal,
+}) => {
+  const fixture = setup("subagent_announce");
+  const recoveryEntered = createDeferredCore();
+  const releaseRecovery = createDeferredCore();
+  const recovery = withSessionTurn(
+    { target: fixture.target, sessionKey, sessionId: fixture.state.entry.sessionId },
+    async (operation) => {
+      if (!operation) {
+        throw new Error("Timeout recovery requires its retained controller operation");
+      }
+      operation.setPhase("preflight_compacting");
+      recoveryEntered.resolve();
+      await releaseRecovery.promise;
+    },
+  );
+  const abandonment = vi
+    .spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment")
+    .mockReturnValue("recovering_timeout");
+  fixture.state.active = true;
+  fixture.readDone.resolve();
+  let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
+  let delivery: ReturnType<typeof fixture.startDelivery> | undefined;
+  try {
+    await withinTest(recoveryEntered.promise, signal);
+    input = reserveSessionControllerSource(sessionKey, {
+      target: fixture.target,
+      policy: { mode: "followup" },
+    });
+    const parentClaim = input.mailbox.claim;
+    fixture.params.controllerInput = input;
+    delivery = fixture.startDelivery();
+    await withinTest(
+      awaitGateBeforeSettlement(
+        fixture.dispatchEntered.promise,
+        delivery,
+        "Completion lost its controller input",
+      ),
+      signal,
     );
-    const abandonment = vi
-      .spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment")
-      .mockReturnValue("recovering_timeout");
-    fixture.state.active = true;
-    fixture.dispatch.mockRejectedValue(new Error("Unexpected completion during recovery"));
-    fixture.readDone.resolve();
-    let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
-    let delivery: ReturnType<typeof fixture.startDelivery> | undefined;
-    let handoffSettled = false;
-    try {
-      await gate(recoveryEntered.promise, recovery, "Recovery exited before admission");
-      input = reserveSessionControllerSource(sessionKey, {
-        target,
-        policy: { mode: "followup" },
-        adapter: {
-          onSettled: async () => {
-            retirementEntered.resolve();
-            await releaseRetirement.promise;
-          },
-        },
-      });
-      const parentClaim = input.mailbox.claim;
-      expect(parentClaim?.operation).toMatchObject({
-        phase: "preflight_compacting",
-        result: null,
-      });
-      fixture.params.controllerInput = input;
-      delivery = fixture.startDelivery().finally(() => {
-        handoffSettled = true;
-      });
-      await gate(retirementEntered.promise, delivery, "Completion skipped retirement");
-      expect(handoffSettled).toBe(false);
-      expect(input.mailbox.entries).toContain(input);
-      expect(input.mailbox.claim).toBe(parentClaim);
-      expect(parentClaim?.operation?.result).toBeNull();
-      if (source === "revoked") {
-        fixture.state.allowed = false;
-      }
-      releaseRetirement.resolve();
-      const result = await gate(delivery, recovery, "Recovery released before handoff");
-      await input.settlement.promise;
-      expect(result).toMatchObject(
-        source === "current"
-          ? { delivered: false, reason: "completion_handoff_pending", disposition: "retryable" }
-          : {
-              delivered: false,
-              reason: "source_owner_changed",
-              terminal: true,
-              disposition: "intentional_non_delivery",
-            },
-      );
-      expect(input.phase).toBe("consumed");
-      expect(input.mailbox.entries).not.toContain(input);
-      expect(input.mailbox.claim).toBe(parentClaim);
-      expect(parentClaim).toMatchObject({
-        released: false,
-        operation: { phase: "preflight_compacting", result: null },
-      });
-      expectNoReplay(fixture, 0);
-      releaseRecovery.resolve();
-      await recovery;
-      expectNoReplay(fixture, 0);
-    } finally {
-      releaseRetirement.resolve();
-      releaseRecovery.resolve();
-      if (input) {
-        retireSessionControllerInput(input);
-      }
-      await Promise.allSettled([recovery, delivery, input?.settlement.promise]);
-      abandonment.mockRestore();
+    expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
+    expect(input.mailbox.claim).toBe(parentClaim);
+    expect(input.phase).not.toBe("consumed");
+    releaseRecovery.resolve();
+    await recovery;
+    fixture.dispatchDone.resolve(response([{ text: "Recovered completion" }], sentDeliveryStatus));
+    await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
+    expectNoReplay(fixture);
+  } finally {
+    releaseRecovery.resolve();
+    fixture.dispatchDone.resolve(response());
+    if (input) {
+      retireSessionControllerInput(input);
     }
-  },
-);
+    await Promise.allSettled([recovery, delivery, input?.settlement.promise]);
+    abandonment.mockRestore();
+  }
+});
 
 it("reports no attempted completion phase when cancelled before dispatch", async () => {
   const fixture = setup();

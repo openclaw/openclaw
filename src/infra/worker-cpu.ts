@@ -391,10 +391,19 @@ function pruneExitedWorkers(): void {
 
 export function getTrackedWorkerCpuSources(): {
   revision: number;
+  currentRevision: () => number;
   workers: { cpuUsage: () => Promise<NodeJS.CpuUsage | undefined> }[];
 } {
+  return {
+    revision: getTrackedWorkerCpuRevision(),
+    currentRevision: getTrackedWorkerCpuRevision,
+    workers: [...trackedWorkers.workers.values()],
+  };
+}
+
+function getTrackedWorkerCpuRevision(): number {
   pruneExitedWorkers();
-  return { revision: trackedWorkers.revision, workers: [...trackedWorkers.workers.values()] };
+  return trackedWorkers.revision;
 }
 
 async function refreshWorkerHeap(worker: WorkerCpuHandle, source: WorkerSource): Promise<void> {

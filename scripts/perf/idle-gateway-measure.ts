@@ -1,14 +1,25 @@
 // One real connected client, no application traffic after connect.
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createWriteStream, mkdirSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { readProcessTreeCpuMs } from "../lib/gateway-bench-probes.ts";
+import {
+  controlGatewayProfile,
+  measureGatewayCpuUsage,
+  readGatewayCpuProfile,
+  readGatewayCpuUsage,
+  readGatewayGcTrace,
+  readGatewayHeapProfile,
+  startGatewayDiagnostics,
+} from "../lib/gateway-bench-profile.ts";
 import { BASE_GATEWAY_BENCH_CONFIG, createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -16,36 +27,59 @@ import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 const { values } = parseArgs({
   options: {
     output: { type: "string" },
+    "state-dir": { type: "string" },
     entry: { type: "string", default: "dist/entry.js" },
     minutes: { type: "string", default: "10" },
     "settle-seconds": { type: "string", default: "60" },
+    "start-at": { type: "string" },
     port: { type: "string", default: "41563" },
     timers: { type: "boolean", default: false },
     profile: { type: "boolean", default: false },
+    allocations: { type: "boolean", default: false },
   },
 });
 if (!values.output) {
-  throw new Error("--output is required (fresh synthetic directory)");
+  throw new Error("--output is required (fresh artifact directory)");
+}
+if (values.profile && values.allocations) {
+  throw new Error("Run CPU and allocation profiling separately to exclude profiler teardown");
 }
 const output = path.resolve(values.output);
-mkdirSync(output); // Refuse to reuse an existing fixture or live state.
 const integer = (raw: string, label: string, min: number) =>
   parseStrictIntegerOption({ raw, label, min, fallback: min });
 const minutes = integer(values.minutes, "--minutes", 1);
 const settleSeconds = integer(values["settle-seconds"], "--settle-seconds", 0);
-const port = integer(values.port, "--port", 1024);
+const port = integer(values.port, "--port", 40000);
+const startAt = values["start-at"] ? integer(values["start-at"], "--start-at", 1) : undefined;
 if (port > 65535) {
   throw new Error("Port exceeds 65535");
 }
 const channel = `idle-measure-${randomUUID()}`;
+const state = values["state-dir"] ? path.resolve(values["state-dir"]) : undefined;
+let fixture: Record<string, unknown> | undefined;
+if (state) {
+  const summary: unknown = JSON.parse(
+    readFileSync(path.join(state, "team-shape-summary.json"), "utf8"),
+  );
+  if (!isRecord(summary) || summary.format !== "openclaw-team-shape-v1") {
+    throw new Error("--state-dir must be an offline team-shape fixture; never use live state");
+  }
+  fixture = summary;
+}
+const config: OpenClawConfig = state
+  ? JSON.parse(readFileSync(path.join(state, "openclaw.json"), "utf8"))
+  : { ...BASE_GATEWAY_BENCH_CONFIG };
+mkdirSync(output); // Never overwrite artifacts from an earlier run.
+mkdirSync(path.join(output, "tmp"));
 const configPath = path.join(output, "openclaw.json");
 const origin = "https://idle-measure.example";
 writeFileSync(
   configPath,
   JSON.stringify({
-    ...BASE_GATEWAY_BENCH_CONFIG,
+    ...config,
+    logging: { ...config.logging, file: path.join(output, "gateway-file.log") },
     gateway: {
-      ...BASE_GATEWAY_BENCH_CONFIG.gateway,
+      ...config.gateway,
       controlUi: { enabled: false, allowedOrigins: [origin] },
       trustedProxies: ["127.0.0.1"],
       auth: {
@@ -60,10 +94,12 @@ writeFileSync(
     },
   }),
 );
-const env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
+const env = createGatewayBenchEnv(path.join(state ?? output, "home"), configPath, {
   startupTrace: false,
   caseEnv: {
     OPENCLAW_SKIP_CHANNELS: "1",
+    ...(state ? { OPENCLAW_STATE_DIR: state } : {}),
+    TMPDIR: path.join(output, "tmp"),
     OPENCLAW_PROFILE: `idle-measure-${port}`,
     OPENCLAW_SYSTEMD_UNIT: `openclaw-idle-measure-${port}`,
     OPENCLAW_IDLE_MEASURE_CHANNEL: channel,
@@ -72,12 +108,15 @@ const env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
   },
 });
 const args = [
-  ...(values.profile
-    ? ["--cpu-prof", `--cpu-prof-dir=${output}`, "--cpu-prof-interval=10000"]
-    : []),
+  "--trace-gc-nvp",
   "--import",
-  path.resolve("scripts/perf/idle-gateway-measure-preload.mjs"),
-  values.entry,
+  path.resolve("scripts/tsx.mjs"),
+  "--import",
+  path.resolve("scripts/lib/gateway-bench-profile-preload.ts"),
+  ...(values.timers
+    ? ["--import", path.resolve("scripts/perf/idle-gateway-measure-preload.mjs")]
+    : []),
+  path.resolve(values.entry),
   "gateway",
   "run",
   "--port",
@@ -125,14 +164,17 @@ async function sample() {
   return value;
 }
 try {
-  const log = createWriteStream(path.join(output, "gateway.log"));
-  child = spawn(process.execPath, args, {
-    env,
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
-  });
-  child.stdout?.pipe(log);
-  child.stderr?.pipe(log);
+  const logPath = path.join(output, "gateway.log");
+  const log = openSync(logPath, "wx");
+  try {
+    child = spawn(process.execPath, args, {
+      env,
+      detached: true,
+      stdio: ["ignore", log, log, "ipc"],
+    });
+  } finally {
+    closeSync(log);
+  }
   writeFileSync(path.join(output, "gateway.pid"), String(child.pid));
   const deadline = Date.now() + 180_000;
   while (
@@ -176,27 +218,97 @@ try {
     throw new Error(`Connect rejected: ${JSON.stringify(connect.error)}`);
   }
   await wait(settleSeconds * 1000);
-  child.send({ channel, action: "enable" });
+  if (startAt !== undefined) {
+    if (Date.now() >= startAt) {
+      throw new Error("--start-at passed before Gateway readiness and settling completed");
+    }
+    await wait(startAt - Date.now());
+  }
+  if (values.timers) {
+    child.send({ channel, action: "enable" });
+    await sample();
+  }
+  const cpuProfilePath = path.join(output, "idle.cpuprofile");
+  const heapProfilePath = path.join(output, "idle.heapprofile");
+  const diagnosticsId = path.join(output, "idle-diagnostics");
+  if (values.profile) {
+    await controlGatewayProfile(child, "cpu", "start", cpuProfilePath);
+  }
+  if (values.allocations) {
+    await controlGatewayProfile(child, "heap", "start", heapProfilePath, {
+      includeCollectedObjects: true,
+      includeWorkers: false,
+    });
+  }
+  const stopDiagnostics =
+    values.allocations || values.profile
+      ? undefined
+      : await startGatewayDiagnostics(child, diagnosticsId);
+  const cpuBefore = await readGatewayCpuUsage(child);
   const start = Date.now();
-  await sample();
   console.log(JSON.stringify({ ready: true, pid: child.pid, start, minutes, output }));
   for (let minute = 1; minute <= minutes; minute++) {
     await wait(Math.max(0, start + minute * 60_000 - Date.now()));
     if (failure) {
       throw failure;
     }
-    console.log(JSON.stringify({ minute, ...(await sample()) }));
+    console.log(
+      JSON.stringify({ minute, load: loadavg(), ...(values.timers ? await sample() : {}) }),
+    );
   }
+  const endedAt = Date.now();
+  const cpuAfter = await readGatewayCpuUsage(child);
+  if (values.allocations) {
+    await controlGatewayProfile(child, "heap", "stop", heapProfilePath);
+  }
+  const heap = values.allocations
+    ? readGatewayHeapProfile(heapProfilePath, { includeCollectedObjects: true })
+    : undefined;
+  if (values.profile) {
+    await controlGatewayProfile(child, "cpu", "stop", cpuProfilePath);
+  }
+  const profile = values.profile ? readGatewayCpuProfile(cpuProfilePath) : undefined;
+  const diagnostics = stopDiagnostics
+    ? await stopDiagnostics()
+    : (heap?.diagnostics ?? profile?.diagnostics);
+  if (!diagnostics || diagnostics.collectionErrors > 0) {
+    throw new Error("Idle measurement has incomplete diagnostic accounting");
+  }
+  const promotion = values.profile
+    ? undefined
+    : readGatewayGcTrace(
+        logPath,
+        values.allocations ? heapProfilePath : diagnosticsId,
+        values.allocations ? "heap" : "diagnostics",
+      );
   writeFileSync(
     path.join(output, "result.json"),
     JSON.stringify(
       {
+        scope: "main-isolate",
         runtime: process.version,
         entry: values.entry,
+        stateDir: state,
+        fixture,
         minutes,
         settleSeconds,
+        requestedStartAtEpochMs: startAt,
+        startedAtEpochMs: start,
+        endedAtEpochMs: endedAt,
+        durationMs: endedAt - start,
         timers: values.timers,
-        profile: values.profile,
+        cpu: { ...measureGatewayCpuUsage(cpuBefore, cpuAfter), before: cpuBefore, after: cpuAfter },
+        diagnostics,
+        promotion,
+        profile,
+        allocations: heap
+          ? {
+              ...heap,
+              estimatedBytesPerMinute:
+                (heap.sampledAllocatedBytes * 60_000) / diagnostics.durationMs,
+              estimatedBytesPerSecond: (heap.sampledAllocatedBytes * 1000) / diagnostics.durationMs,
+            }
+          : undefined,
         samples,
       },
       null,

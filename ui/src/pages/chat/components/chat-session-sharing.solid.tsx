@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createUniqueId, Errored, lazy, Loading, onSettled, Show } from "solid-js";
-import { StandalonePersonLink } from "../../../components/person-activity-link-solid.tsx";
+import { PersonAvatarLink } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
@@ -129,7 +129,8 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
           <Show when={visibility() === "draft"}>
             <Show when={props.showOwner && owner()}>
               {(person) => (
-                <StandalonePersonLink
+                <PersonAvatarLink
+                  standalone
                   link={personActivityLink(
                     person().identity?.type === "profile" ? person().identity?.id : undefined,
                     props.personActivity,
@@ -142,7 +143,7 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
                     attribution="owned"
                     viewingNow={props.ownerViewing}
                   />
-                </StandalonePersonLink>
+                </PersonAvatarLink>
               )}
             </Show>
             <span class="chat-pane__draft-indicator" title={t("chat.sessionSharing.draft")}>

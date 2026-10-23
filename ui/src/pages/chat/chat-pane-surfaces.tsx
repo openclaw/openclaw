@@ -9,7 +9,6 @@ registerEnglishCatalog(registerChatSessionEnglish);
 export function ChatBoardPanel(props: {
   controls?: Element;
   error: string | undefined;
-  elementReady: boolean;
   surface: BoardSessionSurfaceProps;
 }) {
   return (
@@ -33,7 +32,6 @@ export function ChatBoardPanel(props: {
         canGrant={props.surface.canGrant}
         callbacks={props.surface.callbacks}
         widgetFrameUrl={props.surface.widgetFrameUrl}
-        elementReady={props.elementReady}
       />
     </Show>
   );

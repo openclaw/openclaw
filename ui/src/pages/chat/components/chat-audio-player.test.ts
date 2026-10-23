@@ -311,6 +311,36 @@ describe("ChatAudioPlayer", () => {
     expect(status?.textContent).toBe("replacement.mp3: Preview unavailable");
   });
 
+  it.each([false, true])(
+    "hands departing player focus to Download without taking outside focus (voice note: %s)",
+    async (voiceNote) => {
+      const outside = document.createElement("button");
+      outside.textContent = "Outside player";
+      document.body.append(outside);
+      for (const target of ["toggle", "volume", "seek", "group", "outside", "moved"]) {
+        const player = await createPlayer("focus-" + target, { voiceNote });
+        const focused =
+          target === "outside"
+            ? outside
+            : target === "group"
+              ? player.querySelector<HTMLElement>(".chat-audio-player")!
+              : control(player, target === "moved" ? "toggle" : target);
+        focused.focus();
+        expect(document.activeElement).toBe(focused);
+        audio(player).dispatchEvent(new Event("error"));
+        if (target === "moved") {
+          outside.focus();
+        }
+        await player.updateComplete;
+        const download = player.querySelector<HTMLAnchorElement>("a[download]")!;
+        expect(download.getAttribute("download")).toBe("focus-" + target + ".mp3");
+        expect(document.activeElement).toBe(
+          target === "outside" || target === "moved" ? outside : download,
+        );
+      }
+    },
+  );
+
   it("shows preparing, retries a 202 rendition, and then plays", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
@@ -347,6 +377,56 @@ describe("ChatAudioPlayer", () => {
     expect(play).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps header Download focused when the parent Expand callback changes", async () => {
+    const player = await createPlayer("callback-focus", { onExpand: vi.fn() });
+    const download = player.querySelector<HTMLAnchorElement>(
+      ".chat-assistant-attachment-card__download",
+    )!;
+    download.focus();
+    expect(document.activeElement).toBe(download);
+
+    player.onExpand = vi.fn();
+    await player.updateComplete;
+
+    expect(document.activeElement).toBe(download);
+  });
+
+  it.each(["download", "expand", "outside"])(
+    "preserves %s focus when playback preparation fails",
+    async (target) => {
+      let respond!: (response: Response) => void;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          () =>
+            new Promise<Response>((resolve) => {
+              respond = resolve;
+            }),
+        ),
+      );
+      const outside = document.createElement("button");
+      outside.textContent = "Outside player";
+      document.body.append(outside);
+      const player = await createPlayer("preparing-focus", {
+        playback: "transcode",
+        onExpand: vi.fn(),
+      });
+      await waitForSolid(() => expect(player.textContent).toContain("Preparing playback…"));
+      const focused =
+        target === "outside"
+          ? outside
+          : player.querySelector<HTMLElement>(`.chat-assistant-attachment-card__${target}`)!;
+      focused.focus();
+      expect(document.activeElement).toBe(focused);
+
+      respond(new Response(null, { status: 500 }));
+      await waitForSolid(() => expect(card(player, "--compact")).not.toBeNull());
+      expect(document.activeElement).toBe(
+        target === "outside" ? outside : player.querySelector("a[download]"),
+      );
+    },
+  );
 
   it("falls back to a normal attachment card after rendition retries are exhausted", async () => {
     vi.useFakeTimers();

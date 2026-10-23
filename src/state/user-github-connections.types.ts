@@ -84,6 +84,22 @@ export type UserGitHubConnected = z.infer<typeof connected>;
 export type UserGitHubDevice = z.infer<typeof device>;
 export type UserGitHubTokenPair = z.infer<typeof tokenPair>;
 
+export function requirePendingUserGitHubConnection(
+  record: UserGitHubConnection | undefined,
+  generation: string,
+  requestId: string,
+): UserGitHubConnection & { pending: NonNullable<UserGitHubConnection["pending"]> } {
+  if (
+    !record?.pending ||
+    record.generation !== generation ||
+    record.pending.requestId !== requestId ||
+    record.pending.expiresAtMs <= Date.now()
+  ) {
+    throw new Error("My GitHub authorization changed or expired; start again.");
+  }
+  return { ...record, pending: record.pending };
+}
+
 export type UserGitHubConnectionAuthority = {
   generation: string;
   selection:

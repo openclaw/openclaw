@@ -494,6 +494,7 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoveryRequesterSenderId: undefined,
       restartRecoverySameChannelThreadRequired: undefined,
       restartRecoverySourceIngress: params.sourceIngress,
+      restartRecoverySourceMessageChannel: "webchat",
       restartRecoveryOperatorSource: params.admission.retryExpectedState
         ? params.admission.retryExpectedState.restartRecoveryOperatorSource
         : params.operatorSource,

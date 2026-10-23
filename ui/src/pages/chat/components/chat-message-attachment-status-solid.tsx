@@ -1,11 +1,14 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { omittedMediaReason } from "./chat-message-media.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 type OmittedMediaItem = Extract<MessageContentItem, { type: "omitted_media" }>;
 

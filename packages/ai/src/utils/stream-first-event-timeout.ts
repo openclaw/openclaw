@@ -1,13 +1,11 @@
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
-type StreamStage = "responses" | "completions";
-
 export type FirstStreamEventTimeoutContext = {
   provider?: string;
   api?: string;
   model?: string;
   timeoutMs: number;
-  stage?: StreamStage;
+  stage?: "responses" | "completions";
   hint?: string;
   abort?: (reason: Error) => void;
   onTimeout?: (reason: Error) => void;

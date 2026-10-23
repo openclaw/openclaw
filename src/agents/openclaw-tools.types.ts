@@ -27,6 +27,8 @@ import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factor
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
+  /** Creator policy retained by the scheduled session owner. */
+  scheduledToolPolicy?: import("./scheduled-tool-policy.js").ScheduledToolPolicyContext;
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   skillsSnapshot?: SkillSnapshot;
@@ -146,6 +148,8 @@ export type OpenClawToolsOptions = {
   gatewayCallerLocal?: boolean;
   /** True only for a validated scheduled tool policy. */
   gatewayCallerScheduled?: boolean;
+  /** Sessions a scheduled run's board, widget and media tools act on, from its execution context. */
+  scheduledToolTargets?: import("../cron/execution-context-registry.js").ScheduledToolTargets;
   /** Delivery target for topic/thread routing. */
   agentTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */

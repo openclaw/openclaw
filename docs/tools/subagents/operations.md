@@ -86,7 +86,10 @@ report an error and remain fenced until recovery reads the stored state.
 
 After a Gateway restart, unfinished sub-agents with a recorded restart interruption
 resume in their retained session once the original operator's current authority
-is restored. They check uncertain tool outcomes before continuing. The registry
+is restored. This includes visible dashboard children and interruptions saved in
+the session before the registry's shutdown listener finished. Automatic recovery
+uses the same owner as `sessions.recover`; it does not notify the parent that work
+settled while the child can still resume. They check uncertain tool outcomes before continuing. The registry
 keeps the original task and parent completion ownership, including late delivery
 when the parent's own turn already finished. Explicit Stop and cancellation remain
 terminal. Children without verifiable ownership or restorable authority report their

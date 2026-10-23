@@ -99,19 +99,23 @@ export async function assertPageNavigationCompletedSafely(
     page: Page;
     response: Response | null;
     targetId?: string;
+    signal?: AbortSignal;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
   });
+  const policySignal = opts.signal ? { signal: opts.signal } : {};
   try {
     await assertBrowserNavigationRedirectChainAllowed({
       request: opts.response?.request(),
       ...navigationPolicy,
+      ...policySignal,
     });
     await assertBrowserNavigationResultAllowed({
       url: opts.page.url(),
       ...navigationPolicy,
+      ...policySignal,
     });
   } catch (err) {
     if (isPolicyDenyNavigationError(err)) {
@@ -170,6 +174,7 @@ export async function withPageNavigationRequestGuard<T>(
         | { state: "handled"; error: unknown; sourcePreserved: boolean },
     ) => void;
     page: Page;
+    signal?: AbortSignal;
   } & BrowserNavigationPolicyOptions,
 ): Promise<T> {
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
@@ -276,6 +281,7 @@ export async function withPageNavigationRequestGuard<T>(
       const policyCheck = assertBrowserNavigationAllowed({
         url: request.url(),
         ...navigationPolicy,
+        ...(opts.signal ? { signal: opts.signal } : {}),
       });
       try {
         opts.onPolicyCheckStarted?.(policyCheck);
@@ -322,12 +328,20 @@ export async function withPageNavigationRequestGuard<T>(
   let actionError: unknown;
   try {
     let baselineUrl = opts.page.url();
-    await assertBrowserNavigationResultAllowed({ url: baselineUrl, ...navigationPolicy });
+    await assertBrowserNavigationResultAllowed({
+      url: baselineUrl,
+      ...navigationPolicy,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
     const latestUrl = opts.page.url();
     if (latestUrl !== baselineUrl) {
       // The route is already installed, so any later document request remains
       // intercepted. Revalidate the one URL that could commit during preflight.
-      await assertBrowserNavigationResultAllowed({ url: latestUrl, ...navigationPolicy });
+      await assertBrowserNavigationResultAllowed({
+        url: latestUrl,
+        ...navigationPolicy,
+        ...(opts.signal ? { signal: opts.signal } : {}),
+      });
       baselineUrl = latestUrl;
     }
     result = await opts.action(baselineUrl);
@@ -375,6 +389,7 @@ export async function gotoPageWithNavigationGuard(
     url: string;
     timeoutMs: number;
     targetId?: string;
+    signal?: AbortSignal;
     assertPageCurrent?: () => void | Promise<void>;
   } & BrowserNavigationPolicyOptions,
 ): Promise<Response | null> {
@@ -397,8 +412,13 @@ export async function gotoPageWithNavigationGuard(
       await assertBrowserNavigationAllowed({
         url: request.url(),
         ...navigationPolicy,
+        ...(opts.signal ? { signal: opts.signal } : {}),
       });
     } catch (err) {
+      if (opts.signal?.aborted) {
+        await route.abort().catch(() => {});
+        return;
+      }
       if (isPolicyDenyNavigationError(err)) {
         if (requestKind === "top-level") {
           blockedError = err;

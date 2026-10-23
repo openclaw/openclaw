@@ -230,6 +230,8 @@ export {
   SessionMemberRemoveParamsSchema,
   SessionMemberSchema,
   SessionMemberEvidenceSchema,
+  SessionMemberPermissionLevelSchema,
+  SessionMemberPermissionSchema,
   SessionMembersListParamsSchema,
   SessionMembersListEvidenceResultSchema,
   SessionMembersListResultSchema,

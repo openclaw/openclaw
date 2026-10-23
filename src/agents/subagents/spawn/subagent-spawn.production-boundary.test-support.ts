@@ -72,7 +72,7 @@ export function createSpawnOperatorSource(
   scopes = ["operator.read", "operator.write"],
   policy?: Pick<
     AdmittedRunOperatorAuthority,
-    "modelPolicy" | "rolePolicy" | "readCurrentRoleAssignment"
+    "modelPolicy" | "rolePolicy" | "readCurrentRoleFacts"
   >,
 ) {
   const revocation = new AbortController();
@@ -265,6 +265,8 @@ export async function createBoundWorker(
 export function createBoundSpawnInvocation(
   bound: Awaited<ReturnType<typeof createSpawnBoundaryParent>>,
   request?: {
+    task?: string;
+    runTimeoutSeconds?: number;
     collect?: true;
     groupId?: string;
     context?: "isolated" | "fork";

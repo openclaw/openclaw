@@ -57,7 +57,8 @@ it.each(["ordinary", "consumer"] as const)(
       expect(scope?.pluginId).toBe(instance.pluginId);
       expect(scope).not.toBe(outer);
     });
-    expect(frames).toHaveBeenCalledTimes(2);
+    // Each independent view installs invocation and recovery in one async resource.
+    expect(frames).toHaveBeenCalledTimes(4);
     frames.mockRestore();
     expect(getScope()).toBeUndefined();
     if (consumer) {

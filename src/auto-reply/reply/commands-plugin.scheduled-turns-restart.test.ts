@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
@@ -23,6 +24,32 @@ vi.mock("../../cron/plugin-command-schedule.js", async (importOriginal) => {
       gatewayProcess.id ?? actual.currentPluginCommandHostProcessId(),
   };
 });
+// The build a Gateway process loaded is read once at its startup; a restarted process may have
+// loaded another build. Outside the bundled cases the real provenance applies.
+const loadedBuild = vi.hoisted(() => ({
+  active: false,
+  buildId: null as string | null,
+  builtAt: "2026-10-22T00:00:00.000Z",
+  buildInfoPath: "",
+}));
+vi.mock("../../version.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../version.js")>();
+  return {
+    ...actual,
+    resolveRuntimeServiceBuildProvenance: () => {
+      if (!loadedBuild.active) {
+        return actual.resolveRuntimeServiceBuildProvenance();
+      }
+      return loadedBuild.buildId
+        ? {
+            buildId: loadedBuild.buildId,
+            builtAt: loadedBuild.builtAt,
+            buildInfoPath: loadedBuild.buildInfoPath,
+          }
+        : null;
+    },
+  };
+});
 vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/embedded-agent.js")>()),
   runEmbeddedAgent: async () => {
@@ -36,6 +63,10 @@ afterEach(() => {
   guards.embeddedRuns = 0;
   gatewayProcess.id = undefined;
   gatewayProcess.restarts = 0;
+  loadedBuild.active = false;
+  loadedBuild.buildId = null;
+  loadedBuild.builtAt = "2026-10-22T00:00:00.000Z";
+  loadedBuild.buildInfoPath = "";
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
 });
@@ -49,6 +80,26 @@ async function restartGateway(fixture: Fixture, change?: RestartChange) {
     gatewayProcess.id = `restarted-gateway-${gatewayProcess.restarts}`;
     await change?.(cfg, pluginDir);
   });
+}
+
+/** A core-bundled fixture plugin served by a Gateway process that loaded `buildId`. */
+async function withBundledCommandPlugin(
+  run: (fixture: Fixture) => Promise<void>,
+  buildId: string | null = "2026.10.22-0123456789ab-2026-10-22T00-00-00.000Z",
+) {
+  await withCommandPlugin(
+    async (fixture) => {
+      loadedBuild.active = true;
+      loadedBuild.buildId = buildId;
+      loadedBuild.buildInfoPath = expectDefined(fixture.bundledBuildInfoPath, "package build");
+      expect(fixture.registry.plugins.find((plugin) => plugin.id === pluginId)).toMatchObject({
+        origin: "bundled",
+        status: "loaded",
+      });
+      await run(fixture);
+    },
+    { bundled: true },
+  );
 }
 
 /** One occurrence before the restart spends the first of the two allowed attempts. */
@@ -177,4 +228,97 @@ describe("requester-admitted scheduled commands across a Gateway restart", () =>
       });
     },
   );
+
+  describe("core-bundled plugins", () => {
+    it("re-arms a schedule onto the same build after the restart", async () => {
+      await withBundledCommandPlugin(async (fixture) => {
+        const id = await acceptAndRunOnce(fixture);
+        // The loaded build is the code identity of host-owned bundled modules.
+        const [accepted] = await fixture.readJobs();
+        expect(accepted?.state.pluginCommandBinding?.sourceDigest).toMatch(/^bundled-build:/u);
+        const original = fixture.pluginIncarnation();
+        await restartGateway(fixture);
+        expect(fixture.pluginIncarnation()).toBeDefined();
+        expect(fixture.pluginIncarnation()).not.toBe(original);
+        fixture.handler.mockImplementation(() => ({ text: "after restart" }));
+        await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ok: true, ran: true });
+        expect(fixture.handler).toHaveBeenCalledTimes(1);
+        expect(fixture.scheduledResults).toMatchObject([
+          { status: "ok", outputText: "before restart" },
+          { status: "ok", outputText: "after restart" },
+        ]);
+        expect((await fixture.readJobs())[0]).toMatchObject({
+          enabled: false,
+          state: {
+            pluginCommandRuns: 2,
+            pluginCommandBinding: { hostProcessId: "restarted-gateway-1" },
+          },
+        });
+      });
+    });
+
+    it.each([
+      [
+        "upgraded or downgraded to another build",
+        () => {
+          loadedBuild.buildId = "2026.10.23-fedcba987654-2026-10-23T00-00-00.000Z";
+          loadedBuild.builtAt = "2026-10-23T00:00:00.000Z";
+        },
+      ],
+      [
+        // An explicit UI build ID repeats across builds; the build time does not.
+        "rebuilt under the same explicit build ID",
+        () => {
+          loadedBuild.builtAt = "2026-10-22T00:05:00.000Z";
+        },
+      ],
+      [
+        "disabled",
+        (cfg: Parameters<RestartChange>[0]) => {
+          cfg.plugins = { ...cfg.plugins, entries: { [pluginId]: { enabled: false } } };
+        },
+      ],
+    ] satisfies Array<[string, RestartChange]>)(
+      "never fires once the plugin is %s across the restart",
+      async (_label, change) => {
+        await withBundledCommandPlugin(async (fixture) => {
+          const acceptedBuild = { ...loadedBuild };
+          const id = await createContinuation(fixture);
+          fixture.handler.mockClear();
+          await restartGateway(fixture, change);
+          await fixture.cron.run(id, "force");
+          expect(fixture.handler).not.toHaveBeenCalled();
+          expect(fixture.scheduledResults).toEqual([]);
+          // The claim retired it without spending an attempt.
+          expect((await fixture.readJobs())[0]).toMatchObject({
+            enabled: false,
+            state: { pluginCommandRuns: 0 },
+          });
+          // Returning to the accepting build and plugin later does not revive it.
+          await restartGateway(fixture, (cfg) => {
+            loadedBuild.buildId = acceptedBuild.buildId;
+            loadedBuild.builtAt = acceptedBuild.builtAt;
+            cfg.plugins = { ...cfg.plugins, entries: { [pluginId]: { enabled: true } } };
+          });
+          expect(fixture.pluginIncarnation()).toBeDefined();
+          await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ran: false });
+          expect(fixture.handler).not.toHaveBeenCalled();
+        });
+      },
+    );
+
+    it("keeps a schedule process-lifetime when the process loaded no build record", async () => {
+      // A source run has no build ID, so bundled code there has no sound identity.
+      await withBundledCommandPlugin(async (fixture) => {
+        const id = await createContinuation(fixture);
+        fixture.handler.mockClear();
+        expect((await fixture.readJobs())[0]?.state.pluginCommandBinding).toBeUndefined();
+        await restartGateway(fixture);
+        await fixture.cron.run(id, "force");
+        expect(fixture.handler).not.toHaveBeenCalled();
+        expect(fixture.scheduledResults).toEqual([]);
+        expect((await fixture.readJobs())[0]).toMatchObject({ enabled: false });
+      }, null);
+    });
+  });
 });

@@ -18,13 +18,9 @@ function resolveDurationParts(ms: number, unitCount: number, showYears = false):
   return selected.length ? selected : [{ value: 0, unit: "millisecond" }];
 }
 
-export function formatDurationParts(parts: DurationPart[], verbose = false): string {
+export function formatDurationParts(parts: DurationPart[]): string {
   return parts
-    .map(({ value, unit }) =>
-      verbose
-        ? `${value} ${unit}${value === 1 || value === 1n ? "" : "s"}`
-        : `${value}${unit === "millisecond" ? "ms" : unit[0]}`,
-    )
+    .map(({ value, unit }) => `${value}${unit === "millisecond" ? "ms" : unit[0]}`)
     .join(" ");
 }
 

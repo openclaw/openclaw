@@ -1,8 +1,13 @@
 // Whatsapp tests cover inbound plugin behavior.
 import type { proto } from "baileys";
 import { describe, expect, it } from "vitest";
-import { extractContactContext, extractLocationData, extractText } from "./inbound.js";
-import { extractExternalAdReplyContext, extractMediaKind } from "./inbound/extract.js";
+import {
+  extractContactContext,
+  extractExternalAdReplyContext,
+  extractLocationData,
+  extractMediaKind,
+  extractText,
+} from "./inbound/extract.js";
 
 const message = (value: proto.IMessage) => value;
 const vcard = (name: string, phones: string[] = []) =>

@@ -94,6 +94,10 @@ export async function runPublicSettleRecoveryCase(
   };
   const batchRunIds = [child.runId, sibling.runId].toSorted();
   for (const entry of [child, sibling]) {
+    // Missing-answer recovery still owes a reply while a child result is undelivered.
+    if (reply === "progress only") {
+      entry.delivery = { status: "pending" };
+    }
     entry.cleanupCompletedAt = Date.now();
     entry.requesterSettleWake = {
       ...child.requesterSettleWake!,
@@ -336,7 +340,7 @@ export async function runPublicSettleRecoveryCase(
       await import("../agents/subagents/registry/subagent-registry.js");
     await activateSubagentRegistry(
       expectDefined(kernel.gatewayRequestContext.resolveGatewayContext, "Gateway resolver"),
-    );
+    ).settled;
     child = context.installChild(subagentRuns.get(child.runId)!);
     sibling = subagentRuns.get(sibling.runId)!;
     expect(kernel.gatewayRequestContext.dedupe).not.toBe(priorDedupe);

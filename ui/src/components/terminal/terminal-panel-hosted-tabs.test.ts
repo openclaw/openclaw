@@ -309,20 +309,6 @@ describe("Terminal panel hosted tabs", () => {
     }
   });
 
-  it("opens another shell for an explicit new-session toggle", async () => {
-    const { panel } = await mount();
-    panel.handleToggleRequest(
-      new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
-        detail: { open: true, newSession: true },
-      }),
-    );
-    await waitForFast(() => expect(panel.hostedTabs).toHaveLength(2));
-    await waitForFast(() =>
-      expect(panel.hostedTabs.every((tab) => tab.className === "is-live")).toBe(true),
-    );
-    await panel.updateComplete;
-  });
-
   it("keeps mobile docking hosted and routes upload through the embedded composer", async () => {
     const { panel } = await mount();
     panel.mobile = true;

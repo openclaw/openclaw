@@ -22,6 +22,7 @@ import {
 import {
   getSessionCatalogListOperations,
   listSessionCatalogWithinBudget,
+  retainSessionCatalogHostStatus,
   resolvePublishedSessionCatalogs,
   sessionCatalogListKey,
   type CatalogListEnumeration,
@@ -280,13 +281,16 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
             const shareRoute = catalogRegistrations.shareRoutes.get(provider);
             const resolution = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
             const createTarget = resolution.ok ? resolution.target : undefined;
+            const providerKey = JSON.stringify([listKey, provider.id]);
             const page = await listSessionCatalogWithinBudget(
               operations,
-              JSON.stringify([listKey, provider.id]),
+              providerKey,
               progress,
               subscribe,
               catalogResult(provider, shareRoute, [], undefined, createTarget),
               async () => {
+                const cached = operations.pages.get(providerKey)?.page;
+                const cachedCatalog = cached && resolvePublishedSessionCatalogs(cached)[0];
                 const providerInstances: SessionCatalogInstances = new Map();
                 const onHost = (host: SessionCatalog["hosts"][number]) => {
                   if (publishedHosts) {
@@ -294,12 +298,16 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
                     hosts.set(host.hostId, host);
                     publishedHosts.set(provider.id, hosts);
                   }
+                  const previousHost = cachedCatalog?.hosts.find(
+                    (candidate) => candidate.hostId === host.hostId,
+                  );
+                  const currentHost = retainSessionCatalogHostStatus(host, previousHost);
                   requestEntries?.captureHostInstances(host, providerInstances);
                   const catalog = catalogResult(
                     provider,
                     shareRoute,
-                    [host],
-                    undefined,
+                    [currentHost],
+                    operations.pages.get(providerKey)?.error,
                     createTarget,
                   );
                   // The final response also reconciles these snapshots if a slow client drops a frame.

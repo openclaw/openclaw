@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
   AgentHarnessPreflightError,
+  toolPolicy,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -672,13 +673,27 @@ export function assertScheduledCodexAppAuthorityRuntime(
 export function buildLegacyScheduledCodexAppRecoveryPrompt(
   params: Pick<
     EmbeddedRunAttemptParams,
-    "trigger" | "scheduledRuntimeAuthority" | "scheduledRuntimeAuthorityRecoveryRequired"
+    | "trigger"
+    | "scheduledRuntimeAuthority"
+    | "scheduledRuntimeAuthorityRecoveryRequired"
+    | "toolsAllow"
+    | "disableTools"
   >,
 ): string | undefined {
+  const matches = toolPolicy.createToolPolicyMatcher({ allow: params.toolsAllow });
   if (
     params.trigger !== "cron" ||
     !params.scheduledRuntimeAuthorityRecoveryRequired ||
-    params.scheduledRuntimeAuthority
+    params.scheduledRuntimeAuthority ||
+    params.disableTools ||
+    params.toolsAllow?.every((name) => {
+      const normalized = name.trim().toLowerCase();
+      // Complete each namespace with the cap's suffix so suffix globs also use runtime matching.
+      const suffix = normalized.slice(normalized.indexOf("*") + 1).replaceAll("*", "");
+      return ["codex_apps.", "codex_apps__", "mcp__codex_apps.", "mcp__codex_apps__"].every(
+        (prefix) => !matches(normalized.startsWith(prefix) ? normalized : prefix + suffix),
+      );
+    })
   ) {
     return undefined;
   }

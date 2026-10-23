@@ -1,6 +1,8 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { listSwarmRunReservationIds } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import {
   listSessionChildEntriesReadOnly,
   loadSessionEntry,
@@ -14,6 +16,7 @@ import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import type { PluginCommandScheduledTurns } from "../../plugins/runtime/types-scheduled-turns.js";
 import type { PluginCommandContext } from "../../plugins/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { holdScheduledChildCapacity } from "./commands-plugin.scheduled-capacity.test-support.js";
 import {
   commandInvocation,
@@ -315,8 +318,13 @@ describe("native scheduled command execution", () => {
       });
     });
   });
-  /** Queues one native child from a scheduled occurrence, then releases it after settlement. */
-  async function releaseQueuedScheduledChild(demoteFirst: boolean) {
+  /**
+   * Queues one native child from a scheduled occurrence. A published revocation settles the
+   * child while its lane is still full; otherwise it is released and meets its launch check.
+   */
+  async function releaseQueuedScheduledChild(
+    change: "none" | "demotion" | "identity removal" | "unannounced narrowing",
+  ) {
     guards.stubModelChoice = true;
     let outcome: unknown;
     await withCommandPlugin(async (fixture) => {
@@ -335,6 +343,10 @@ describe("native scheduled command execution", () => {
         childRunId = child.runId;
         return { text: "child queued" };
       });
+      const terminal = (runId: string) =>
+        vi.waitFor(() => expect(subagentRuns.get(runId)?.execution.status).toBe("terminal"), {
+          timeout: 15_000,
+        });
       try {
         await fixture.cron.run(id, "force");
         expect(fixture.scheduledResults[0]).toMatchObject({
@@ -344,16 +356,27 @@ describe("native scheduled command execution", () => {
         const runId = expectDefined(childRunId, "queued child run");
         expect(subagentRuns.get(runId)?.execution).toMatchObject({ status: "queued" });
         capacity.expectWaiting(runId);
-        if (demoteFirst) {
+        if (change === "demotion") {
           fixture.demoteOwner();
+        } else if (change === "identity removal") {
+          fixture.removeOwner();
+        } else if (change === "unannounced narrowing") {
+          // A committed role change that no policy notification announced.
+          const admin = expectDefined(fixture.cfg.gateway?.roles?.definitions.admin, "admin role");
+          admin.scopes = ["operator.read"];
+          await delay(50);
+          capacity.expectWaiting(runId);
+        }
+        if (change === "demotion" || change === "identity removal") {
+          // The revocation, not a freed slot, settles the waiting child.
+          await terminal(runId);
+          expect(listSwarmRunReservationIds()).not.toContain(runId);
         }
       } finally {
         capacity.release();
       }
       const runId = expectDefined(childRunId, "queued child run");
-      await vi.waitFor(() => expect(subagentRuns.get(runId)?.execution.status).toBe("terminal"), {
-        timeout: 15_000,
-      });
+      await terminal(runId);
       outcome = subagentRuns.get(runId)?.execution.outcome;
     });
     return outcome;
@@ -362,15 +385,57 @@ describe("native scheduled command execution", () => {
     // After its occurrence settled, the child passed the real agent turn's admission
     // revalidation. This harness publishes no reply runtime, so the turn stops at that next
     // seam, still before the model runner (the fixture's no-embedded-run guard).
-    await expect(releaseQueuedScheduledChild(false)).resolves.toMatchObject({
+    await expect(releaseQueuedScheduledChild("none")).resolves.toMatchObject({
       status: "error",
       error: "published reply runtime missing for main",
     });
   });
-  it("refuses a queued scheduled child's agent turn after its requester is demoted", async () => {
-    await expect(releaseQueuedScheduledChild(true)).resolves.toMatchObject({
+  it.each(["demotion", "identity removal"] as const)(
+    "fails a queued scheduled child on its requester's %s without waiting for capacity",
+    async (change) => {
+      await expect(releaseQueuedScheduledChild(change)).resolves.toMatchObject({
+        status: "error",
+        error: "Queued channel operator authority changed; submit a new request.",
+      });
+    },
+  );
+  it("refuses a queued scheduled child at launch after an unannounced role change", async () => {
+    await expect(releaseQueuedScheduledChild("unannounced narrowing")).resolves.toMatchObject({
       status: "error",
       error: "Queued channel operator authority changed; submit a new request.",
+    });
+  });
+  it("ends a running scheduled occurrence when its channel requester is demoted", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const id = await createContinuation(fixture);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      fixture.handler.mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+        return { text: "late occurrence output" };
+      });
+      const before = await fixture.assistantOutputs();
+      let settled = false;
+      const run = fixture.cron.run(id, "force").finally(() => {
+        settled = true;
+      });
+      try {
+        await entered.promise;
+        fixture.demoteOwner();
+        // The occurrence settles while its handler is still awaiting, not when it returns.
+        await vi.waitFor(() => expect(settled).toBe(true), { timeout: 10_000 });
+        expect(fixture.scheduledResults[0]).toMatchObject({
+          status: "error",
+          error: expect.stringContaining("Queued channel operator authority changed"),
+          errorClassification: { kind: "aborted" },
+          delivered: false,
+        });
+      } finally {
+        release.resolve();
+        await run;
+      }
+      expect(await fixture.assistantOutputs()).toEqual(before);
     });
   });
   it("refuses a same-metadata plugin reload before command or input acceptance", async () => {

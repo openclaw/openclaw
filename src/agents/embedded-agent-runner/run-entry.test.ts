@@ -498,6 +498,66 @@ describe("runEmbeddedAgentEntry", () => {
   );
 
   it.each([
+    { model: "openai/gpt-6-astra", responseModel: "gpt-6-astra", routeChange: undefined },
+    {
+      model: "openai/gpt-6-astra",
+      responseModel: "gpt-6.1-sol",
+      routeChange: "Model route changed: clawrouter/openai/gpt-6-astra → clawrouter/gpt-6.1-sol.",
+    },
+    {
+      model: "openai/gpt-6-astra",
+      responseModel: "anthropic/gpt-6-astra",
+      routeChange:
+        "Model route changed: clawrouter/openai/gpt-6-astra → clawrouter/anthropic/gpt-6-astra.",
+    },
+    {
+      model: "openai/gpt-6.1-sol",
+      responseModel: "gpt-6.1-sol",
+      routeChange: "Model route changed: clawrouter/openai/gpt-6-astra → clawrouter/gpt-6.1-sol.",
+    },
+  ])(
+    "reports a ClawRouter $model response $responseModel only when it is a real reroute",
+    async ({ model: effectiveModel, responseModel, routeChange }) => {
+      const runId = `clawrouter-${effectiveModel}-${responseModel}`;
+      const route = { provider: "clawrouter", model: "openai/gpt-6-astra" };
+      usePrimaryFallback();
+      const result = await runEntry({
+        selection: { cfg: {}, ...route },
+        runId,
+        runCandidate: async (provider, model) => {
+          const candidate = makeResult({
+            provider,
+            model,
+            meta: {
+              finalAssistantVisibleText: "done",
+              finalAssistantRawText: "done",
+              terminalReply: { disposition: "visible", text: "done" },
+            },
+          });
+          candidate.meta.agentMeta!.terminalReceipt = receiptFor(
+            runId,
+            provider,
+            effectiveModel,
+            responseModel,
+          );
+          return candidate;
+        },
+      });
+
+      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+        requested: route,
+        effective: { provider: route.provider, model: effectiveModel, responseModel },
+        rerouted: routeChange !== undefined,
+      });
+      expect(result.terminal.metadata.terminalReply).toEqual({
+        disposition: "visible",
+        text: "done",
+        ...(routeChange ? { modelRouteChange: routeChange } : {}),
+      });
+    },
+  );
+
+  it.each([
     {
       name: "CLI delivered source reply",
       meta: { finalAssistantRawText: "NO_REPLY" },

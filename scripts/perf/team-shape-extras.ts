@@ -34,6 +34,7 @@ export type TeamShapeExtrasOptions = {
   stateDir: string;
   sessions: FixtureSession[];
   retainedRuns: number;
+  settledRuns?: boolean;
   approvals: number;
   cronJobs: number;
   projects: number;
@@ -55,8 +56,9 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
   const startedAt = endedAt - 30_000 - (index % 100) * 1_000;
   const slot = index % 20;
   const failed = slot >= 12 && slot < 15;
-  const pending = slot >= 15 && slot < 18 && index + childCount >= options.retainedRuns;
-  const interrupted = slot >= 18;
+  const pending =
+    !options.settledRuns && slot >= 15 && slot < 18 && index + childCount >= options.retainedRuns;
+  const interrupted = !options.settledRuns && slot >= 18;
   const outcome = failed
     ? { status: "error" as const, error: "Synthetic tool exited with status 1" }
     : { status: "ok" as const };
@@ -383,6 +385,7 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
   }
   return {
     retainedRuns: runs.length,
+    settledRuns: options.settledRuns ?? false,
     retainedRunStates,
     approvals: options.approvals,
     cronJobs: jobs.length,

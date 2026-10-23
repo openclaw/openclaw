@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   decodePostgresError,
   decodePostgresRows,
+  isPostgresConnectionError,
   preparePostgresQuery,
   validatePostgresBindings,
 } from "./protocol.js";
@@ -106,6 +107,15 @@ describe("PostgreSQL SQL boundary", () => {
       errcode: 275,
       cause,
     });
+  });
+
+  it.each([
+    ["operator cancellation", "canceling statement due to user request"],
+    ["statement timeout", "canceling statement due to statement timeout"],
+  ])("identifies %s independently of connection loss", (_scenario, message) => {
+    const error = decodePostgresError({ name: "error", message, code: "57014" });
+    expect(error).toMatchObject({ name: "PostgresQueryCanceledError", code: "57014" });
+    expect(isPostgresConnectionError("57014")).toBe(false);
   });
 
   it("retains unrelated PostgreSQL errors and their SQLSTATE", () => {

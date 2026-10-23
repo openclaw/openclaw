@@ -124,10 +124,7 @@ function resolveEventWebPushNotification(
 }
 
 /** Routes attention events to offline browsers without expanding live session visibility. */
-export function createEventWebPushDelivery(params: {
-  getRuntimeConfig: () => OpenClawConfig;
-  stateDir?: string;
-}) {
+export function createEventWebPushDelivery(getRuntimeConfig: () => OpenClawConfig) {
   const deliver = (
     notification: EventNotification,
     event: string,
@@ -137,11 +134,11 @@ export function createEventWebPushDelivery(params: {
   ): void => {
     let stage = "subscriptions";
     void (async () => {
-      if (!(await hasBoundWebPushSubscriptions(params.stateDir))) {
+      if (!(await hasBoundWebPushSubscriptions())) {
         return;
       }
       stage = "sender";
-      const sender = await prepareWebPushNotificationSender(params.stateDir);
+      const sender = await prepareWebPushNotificationSender();
       stage = "authority";
       const agentId = normalizeOptionalString(
         opts?.agentId ?? (isRecord(payload) ? payload.agentId : undefined),
@@ -149,9 +146,9 @@ export function createEventWebPushDelivery(params: {
       const sessionKeys = opts?.sessionKeys ?? [];
       const preparedIcon = mention
         ? undefined
-        : await prepareWebPushAgentIcon(params.getRuntimeConfig(), agentId);
+        : await prepareWebPushAgentIcon(getRuntimeConfig(), agentId);
       const groupedResults = await withCurrentWebPushAuthority(
-        { ...params, sessionKeys, agentId, preparePublication: mention?.prepare },
+        { getRuntimeConfig, sessionKeys, agentId, preparePublication: mention?.prepare },
         (authority) => {
           const { cfg } = authority;
           const recipientProfileId =

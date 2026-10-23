@@ -59,7 +59,7 @@ it.each(["exact", "stale"] as const)(
     onTestFinished(registerGatewayRecoveryRuntime(active.runtime));
     const exact = createRecoveryRuntime("exact");
     const params = { message: "completion", idempotencyKey: "completion-1" };
-    const result = dispatchGatewayLifecycleMethod("agent", params, {
+    const result = dispatchGatewayLifecycleMethod(params, {
       expectFinal: true,
       timeoutMs: 1_000,
       resolveGatewayContext: () =>

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { isReportableUpdateRun } from "../shared/update-outcome.js";
+import { isReportableUpdateRun } from "../shared/update-outcome-classification.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import * as reportHealth from "./update-run-report-health.js";

@@ -84,8 +84,9 @@
   overflow-y: auto;
   overflow-x: hidden;
   overflow-anchor: none;
-  /* The transcript is document content, unlike the surrounding app chrome. */
-  user-select: text;
+  /* Only message text opts in; selecting across turns must not paint layout or media. */
+  -webkit-user-select: none;
+  user-select: none;
   scrollbar-gutter: stable both-edges;
   /* The pane header owns the titlebar and native drag surface. No horizontal
      padding: macOS overlay scrollbars render inside the
@@ -188,6 +189,12 @@
 
 .creation-composer > .callout {
   margin-inline: var(--chat-composer-side-inset, 16px);
+}
+
+.chat-text,
+.chat-thinking {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .chat-text {

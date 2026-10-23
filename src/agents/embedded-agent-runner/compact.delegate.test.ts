@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { observeTranscriptHydrations } from "../../../test/helpers/transcript-hydration-observer.js";
 import type * as ConfigRuntime from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
@@ -25,6 +26,7 @@ import {
   triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
 import type * as CompactionHooks from "./compaction-hooks.js";
+import type { PreparedCompactionSession } from "./run/compaction-accounting-bridge.js";
 
 const { requestPreparedCompaction } = vi.hoisted(() => ({
   requestPreparedCompaction:
@@ -120,7 +122,11 @@ beforeEach(async () => {
   );
 });
 
-async function createFixture(operation: "summary" | "endpoint", globalAlias = false) {
+async function createFixture(
+  operation: "summary" | "endpoint",
+  globalAlias = false,
+  options: { archivedTurns?: number; previousSummary?: string; liveOutputChars?: number } = {},
+) {
   const target = {
     agentId: globalAlias ? "marketing" : "main",
     sessionId: "compaction-session",
@@ -138,14 +144,39 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
   const sessionManager = sessions.SessionManager.open(target, workspaceDir);
   await sessionManager.appendModelChange(model.provider, model.id);
   await sessionManager.appendThinkingLevelChange("off");
+  // A long-lived session keeps its id across resets, so the archive behind the
+  // latest reset stays in the same transcript and must not be hydrated to compact.
+  for (let index = 0; index < (options.archivedTurns ?? 0); index += 1) {
+    await sessionManager.appendMessageAsync({
+      role: "user",
+      content: `Archived request ${index}`,
+      timestamp: 1,
+    });
+    await sessionManager.appendMessageAsync(
+      createAssistant(model, [{ type: "text", text: `Archived output ${index} `.repeat(6_000) }]),
+    );
+  }
+  if (options.archivedTurns) {
+    await sessionManager.appendResetBoundaryAsync("new");
+  }
+  if (options.previousSummary) {
+    await sessionManager.appendMessageAsync({
+      role: "user",
+      content: "Earlier request",
+      timestamp: 1,
+    });
+    const firstKeptEntryId = sessionManager.getEntries().at(-1)!.id;
+    await sessionManager.appendCompactionAsync(options.previousSummary, firstKeptEntryId, 100);
+  }
   for (const content of [
     "Review the deployment checklist.",
     "Compare the remaining options.",
     "Keep the rollout notes.",
   ]) {
     sessionManager.appendMessage({ role: "user", content, timestamp: 1 });
+    const repeat = Math.max(1, Math.ceil((options.liveOutputChars ?? 0) / (content.length + 11)));
     sessionManager.appendMessage(
-      createAssistant(model, [{ type: "text", text: `Recorded: ${content}` }]),
+      createAssistant(model, [{ type: "text", text: `Recorded: ${content} `.repeat(repeat) }]),
     );
   }
   sessionManager.flushPendingPersistence();
@@ -729,6 +760,74 @@ describe("direct compactor through the context-engine delegate", () => {
         release.resolve();
         read.mockRestore();
         await pending.catch(() => undefined);
+      }
+    },
+  );
+
+  it.each(["manual", "budget"] as const)(
+    "compacts complete current context through %s without hydrating obsolete history",
+    async (trigger) => {
+      const marker = "Earlier work: the first rollout plan was approved and shipped.";
+      // The prior summary alone exceeds a 32k foreground model's 256 KB replay
+      // cap, but fits this fixture's 128k summarizer. Keep it and every live turn.
+      const previousSummary = `${marker} ${"Detail. ".repeat(40_000)}`;
+      const fixture = await createFixture("summary", false, {
+        archivedTurns: 40,
+        previousSummary,
+        liveOutputChars: 500_000,
+      });
+      await accessor.upsertSessionEntryCore(fixture.target, { contextTokens: 32_000 });
+      resolveContextEngineMock.mockResolvedValueOnce({
+        info: { ownsCompaction: false },
+        compact: vi.fn<ContextEngine["compact"]>(delegate),
+      });
+      const observed = await observeTranscriptHydrations();
+      try {
+        let preparedSession: PreparedCompactionSession | undefined;
+        if (trigger === "manual") {
+          const { prepareGatewaySessionCompaction } =
+            await import("../../gateway/server-methods/sessions-compaction-runner.js");
+          const entry = accessor.loadSessionEntry(fixture.target);
+          if (!entry) {
+            throw new Error("expected the compaction fixture session");
+          }
+          const prepared = await prepareGatewaySessionCompaction({
+            agentId: fixture.target.agentId,
+            cfg: fixture.runtimeContext.config,
+            entry,
+            sessionId: fixture.target.sessionId,
+            sessionKey: fixture.target.sessionKey,
+            sessionStoreKey: fixture.target.sessionKey,
+            storePath: fixture.target.storePath,
+          });
+          preparedSession = prepared.preparedSession;
+          expect(preparedSession?.sessionManager.getBranch()).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ type: "compaction", summary: previousSummary }),
+            ]),
+          );
+          expect(
+            preparedSession?.sessionManager.getBranch().filter((event) => event.type === "message"),
+          ).toHaveLength(7);
+        }
+        const result = await compactQueued(
+          { ...fixture.queuedParams, trigger, contextTokenBudget: 32_000 },
+          preparedSession ? { preparedSession } : undefined,
+        );
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+      } finally {
+        observed.restore();
+      }
+      // Header, retained request, full summary, and all six current message entries.
+      expect(observed.hydrations[0]).toMatchObject({ kind: "bounded", events: 9 });
+      expect(observed.hydrations[0]?.totalEvents).toBeGreaterThan(80);
+      const requests = fixture.stream.mock.calls.map((call) => JSON.stringify(call[1]));
+      expect(requests.some((request) => request.includes(marker))).toBe(true);
+      expect(requests.join("\n")).not.toContain("Archived request");
+      const manager = sessions.SessionManager.open(fixture.target);
+      expect(manager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(2);
+      for (const entry of fixture.originalEntries) {
+        expect(manager.getEntries()).toContainEqual(entry);
       }
     },
   );

@@ -4,7 +4,12 @@ import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { parseSidebarEntry, serializeSidebarEntry, SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
+import {
+  parseSidebarEntry,
+  serializeSidebarEntry,
+  SIDEBAR_NAV_ROUTES,
+  type SidebarZoneEntry,
+} from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
@@ -37,7 +42,6 @@ import {
   resolveUiSessionRowAgentId,
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
-import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { pluginTabKey } from "../pages/plugin/route.tsx";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.tsx";
@@ -364,14 +368,40 @@ export function buildReconciledSidebarZone(input: {
       .map((tab) => [pluginTabKey(tab), tab]),
   );
   const availableRows = input.rows;
-  const reconciled = reconcileSidebarZone(
-    input.sidebarEntries,
-    availableRows,
-    SIDEBAR_NAV_ROUTES,
-    new Set([...pluginTabs.keys(), ...navigation.map((entry) => entry.key)]),
-  );
+  const sidebarEntries = input.sidebarEntries;
+  const pluginNavigationKeys = new Set([
+    ...pluginTabs.keys(),
+    ...navigation.map((entry) => entry.key),
+  ]);
+  // Personal references are the only pin authority. Catalogs resolve display, never membership.
+  const sessionKeys = new Set(availableRows.map(({ key }) => key));
+  const routes = new Set(SIDEBAR_NAV_ROUTES);
+  const canonical = new Set<string>();
+  const entries: SidebarZoneEntry[] = [];
+  for (const serialized of sidebarEntries) {
+    const entry = parseSidebarEntry(serialized);
+    if (!entry) {
+      continue;
+    }
+    const key = serializeSidebarEntry(entry);
+    if (canonical.has(key)) {
+      continue;
+    }
+    canonical.add(key);
+    // Preserve unresolved references without persisting private labels or treating
+    // a missing paginated row, offline person, or unloaded plugin as an unpin.
+    if (
+      entry.type === "person" ||
+      (entry.type === "route" && routes.has(entry.route)) ||
+      (entry.type === "session" && sessionKeys.has(entry.key)) ||
+      (entry.type === "plugin" && pluginNavigationKeys.has(entry.key))
+    ) {
+      entries.push(entry);
+    }
+  }
   const live = {
-    ...reconciled,
+    entries,
+    sidebarEntries: [...canonical],
     sessionRows: new Map(availableRows.map((row) => [row.key, row])),
     pluginTabs,
   };

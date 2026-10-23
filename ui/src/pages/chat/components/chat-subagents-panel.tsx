@@ -5,6 +5,7 @@ import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -26,10 +27,12 @@ import {
 import { ChatSubagentsMobileList, type ChatSubagentMobileItem } from "./chat-subagents-mobile.tsx";
 import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
+import { ChatSubagentsNative } from "./chat-subagents-native.tsx";
 import { ChatSubagentsPanelDesktop } from "./chat-subagents-panel-desktop.tsx";
 import { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Props = SessionPanelProps & {
   paneId: string;
@@ -121,18 +124,20 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
       </Errored>
     );
     const Empty = () => (
-      <Show
-        when={isPending(readiness.read)}
-        fallback={
-          data().hasResult &&
-          !data().stopError && (
-            <div class="chat-subagents__empty" role="status">
-              {t("chat.subagentsPanel.empty")}
-            </div>
-          )
-        }
-      >
-        <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+      <Show when={!data().nativeSnapshot && !data().nativeError}>
+        <Show
+          when={isPending(readiness.read)}
+          fallback={
+            data().hasResult &&
+            !data().stopError && (
+              <div class="chat-subagents__empty" role="status">
+                {t("chat.subagentsPanel.empty")}
+              </div>
+            )
+          }
+        >
+          <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+        </Show>
       </Show>
     );
     // An applied request must not reopen detail after the user returns to the list.
@@ -319,21 +324,27 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
                   setSelected({ key, agentId: subagentAgentId(key) });
                 }}
                 notice={
-                  data().stopError && (
-                    <div class="chat-subagents__error" role="alert">
-                      <span>{data().stopError}</span>
-                      <button
-                        ref={(button) => {
-                          mobileRetry = button;
-                        }}
-                        class="btn btn--sm"
-                        type="button"
-                        onClick={() => void data().refresh()}
-                      >
-                        {t("common.retry")}
-                      </button>
-                    </div>
-                  )
+                  <>
+                    {data().stopError && (
+                      <div class="chat-subagents__error" role="alert">
+                        <span>{data().stopError}</span>
+                        <button
+                          ref={(button) => {
+                            mobileRetry = button;
+                          }}
+                          class="btn btn--sm"
+                          type="button"
+                          onClick={() => void data().refresh()}
+                        >
+                          {t("common.retry")}
+                        </button>
+                      </div>
+                    )}
+                    <ChatSubagentsNative
+                      snapshot={data().nativeSnapshot}
+                      error={data().nativeError}
+                    />
+                  </>
                 }
                 empty={<Empty />}
               />
@@ -349,6 +360,8 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
               loading={isPending(readiness.read)}
               error={data().stopError}
               hasResult={data().hasResult}
+              nativeSnapshot={data().nativeSnapshot}
+              nativeError={data().nativeError}
               active={!selected() && props.presented}
               doneExpanded={props.doneExpanded}
               onDoneExpandedChange={props.onDoneExpandedChange}
@@ -383,6 +396,10 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
                       </button>
                     </div>
                   )}
+                  <ChatSubagentsNative
+                    snapshot={data().nativeSnapshot}
+                    error={data().nativeError}
+                  />
                   <Show when={data().rows.length} fallback={<Empty />}>
                     <SessionPanelGroups
                       kind="subagents"

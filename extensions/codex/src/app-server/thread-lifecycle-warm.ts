@@ -212,7 +212,9 @@ export async function releaseCodexBoundLiveThread(
       isCodexAppServerLiveThreadClaimed(client, options.threadId) ||
       isCodexAppServerLiveThreadProtected(client, options.threadId)
     ) {
-      throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
+      throw new AgentHarnessPreflightError(
+        `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
+      );
     }
     return await releaseCodexRetainedLiveThread({
       ...options,

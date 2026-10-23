@@ -191,7 +191,7 @@ describe("unit-fast vitest lane", () => {
       unselectedFileReads: 0,
     });
     const boundedReads = expect.toSatisfy((count: number) => count >= 0 && count < 20);
-    expect(readProbe("UNIT_FAST_IO_PROBE")).toEqual([1, boundedReads, 1, 0, 0]);
+    expect(readProbe("UNIT_FAST_IO_PROBE")).toEqual([0, boundedReads, 1, 0, 0]);
     const selectedFastIncludes = [
       ["src/agents/agent-tools.deferred-followup-guidance.test.ts"],
       ["src/test-utils/temp-home.test.ts"],
@@ -207,7 +207,7 @@ describe("unit-fast vitest lane", () => {
       { include, excluded },
       { include, excluded },
     ]);
-    expect(configProbeResult.stdout).toContain("UNIT_FULL_EXCLUSION_PROBE true 1");
+    expect(configProbeResult.stdout).toContain("UNIT_FULL_EXCLUSION_PROBE true 0");
   });
 
   it("keeps lifecycle drains in their reset-capable owner without dropping test coverage", () => {
@@ -234,10 +234,11 @@ describe("unit-fast vitest lane", () => {
     const stateful = "src/hooks/stateful.test.ts";
     const quoted = "src/hooks/quoted-[é].test.ts";
     const ignored = "src/hooks/ignored.test.ts";
+    const otherRoots = ["packages/memory-host-sdk/src/pure.test.ts", "test/pure.test.ts"];
     const moduleUrl = (file: string) => JSON.stringify(pathToFileURL(path.resolve(file)).href);
-    fs.mkdirSync(path.join(cwd, "src/hooks"), { recursive: true });
     fs.writeFileSync(path.join(cwd, ".gitignore"), `${ignored}\n`);
-    for (const file of [pure, quoted, ignored]) {
+    for (const file of [pure, quoted, ignored, ...otherRoots]) {
+      fs.mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
       fs.writeFileSync(path.join(cwd, file), pureTest);
     }
     for (const [file, helper, name] of [
@@ -297,7 +298,7 @@ describe("unit-fast vitest lane", () => {
     );
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
-      inventory: [harness, mockHelper, pure, quoted, stateful],
+      inventory: [...otherRoots, harness, mockHelper, pure, quoted, stateful].toSorted(),
       isolated: [harness, mockHelper, stateful],
       runs: [
         { config: "test/vitest/vitest.unit-fast.config.ts", include: [pure] },
@@ -354,11 +355,13 @@ describe("unit-fast vitest lane", () => {
           return readdir.apply(this, args);
         };
         const paths = await import(${JSON.stringify(moduleUrl)});
-        console.log(JSON.stringify({ files: paths.getUnitFastTestFiles(), walks }));
+        const scoped = paths.getUnitFastTestFilesForIncludePatterns(["src/hooks/**/*.test.ts"]);
+        console.log(JSON.stringify({ files: paths.getUnitFastTestFiles(), scoped, walks }));
       `);
       expect(result.status, result.stderr).toBe(0);
       const inventory = JSON.parse(result.stdout);
       expect(inventory.files).toEqual(files);
+      expect(inventory.scoped).toEqual(files);
       if (mode === "large") {
         expect(inventory.walks).toBe(0);
       } else {

@@ -4,7 +4,6 @@ import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   createPageOpener,
   bounds,
@@ -282,7 +281,7 @@ suite.define(() => {
       .locator(".chat-controls__model-picker[open] [data-chat-model-option]")
       .first();
     if (captureUiProofEnabled) {
-      await revealChatModelOption(capturedModelOption);
+      await capturedModelOption.waitFor({ state: "visible" });
     }
     await captureProjectUiProof(suite, page, "mobile-new-session-model-open.png", {
       surface: page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),

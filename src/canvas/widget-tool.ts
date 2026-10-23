@@ -53,6 +53,8 @@ type ShowWidgetToolOptions = {
   sessionId?: string;
   agentId?: string;
   agentSessionKey?: string;
+  /** Fails once the board's owner no longer authorizes this run, checked again inside the pin write. */
+  assertTargetCurrent?: () => void;
   inlineHostEnabled?: boolean;
   inlineClientAvailable?: boolean;
   /** Admitted callers without a rendering client may author only durable dashboard widgets. */
@@ -448,7 +450,9 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
             inputName: "widget document after wrapping",
           });
         }
-        const snapshot = await callInProcessGatewayTool<BoardWidgetPutResult>("board.widget.put", {
+        const assertTargetCurrent = options.assertTargetCurrent;
+        assertTargetCurrent?.();
+        const putParams = {
           sessionKey: pinSessionKey,
           agentId: options.agentId,
           name,
@@ -472,7 +476,12 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
                 },
               }
             : {}),
-        });
+        };
+        const snapshot = await (assertTargetCurrent
+          ? callInProcessGatewayTool<BoardWidgetPutResult>("board.widget.put", putParams, {
+              sessionMutationCommitGuard: assertTargetCurrent,
+            })
+          : callInProcessGatewayTool<BoardWidgetPutResult>("board.widget.put", putParams));
         pinnedWidgetName = snapshot.resolvedWidgetName;
         const widget = snapshot.widgets.find(
           (candidate) => candidate.name === snapshot.resolvedWidgetName,

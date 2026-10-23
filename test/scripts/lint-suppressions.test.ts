@@ -164,6 +164,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
+        // The registry-copy probe forwards Map.set with the original map receiver.
+        "scripts/perf/subagent-maintenance-capture-measure.ts|typescript/unbound-method|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/auth-profiles/oauth-refresh-fence.ts|preserve-caught-error|1",
@@ -255,6 +257,8 @@ describe("production lint suppressions", () => {
         "ui/src/app/native-gateway-auth.ts|unicorn/prefer-add-event-listener|1",
         "ui/src/app/native-gateway-auth.ts|unicorn/require-post-message-target-origin|2",
         "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
+        // A bridge renderer keeps the same native host for its complete lifetime.
+        "ui/src/components/session-background.tsx|solid/reactivity|1",
         "ui/src/components/session-progress-card.test-support.tsx|no-underscore-dangle|2",
         // These Solid sinks consume HTML sanitized or escaped by their content owners.
         "ui/src/components/solid/markdown-html.tsx|solid/no-innerhtml|1",

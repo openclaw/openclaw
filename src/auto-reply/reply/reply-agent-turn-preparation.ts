@@ -216,6 +216,15 @@ export async function prepareReplyAgentTurn<TConfigured>(
                 : undefined,
               hasSessionModelOverride: selected.hasSessionModelOverride,
               modelOverrideSource: selected.modelOverrideSource,
+              // Scheduled fallback policy is derived from the selection; its authority stays bound.
+              ...(run.scheduledAutomation
+                ? {
+                    scheduledAutomation: {
+                      ...run.scheduledAutomation,
+                      modelFallbackPolicy: selected.scheduledAutomation?.modelFallbackPolicy,
+                    },
+                  }
+                : {}),
               authProfileId: selected.authProfileId,
               authProfileIdSource: selected.authProfileIdSource,
               thinkLevel: selected.thinkLevel,

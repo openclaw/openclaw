@@ -1,15 +1,16 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { sendDiscordComponentMessage } from "../send.components.js";
 import { createDiscordSendResult } from "../send.receipt.js";
-import { createDiscordWidgetPresenter } from "./presenter.js";
+import { setDiscordActivitiesRuntime } from "./runtime.js";
 import {
   createActivityTestConfig,
-  createActivityTestRuntime,
+  createRegisteredActivityFixture,
 } from "./test-helpers.test-support.js";
 
 vi.mock("../send.components.js", () => ({ sendDiscordComponentMessage: vi.fn() }));
 
-type WidgetPresenter = ReturnType<typeof createDiscordWidgetPresenter>;
+type WidgetPresenter = Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[0];
 type WidgetPresenterContext = Parameters<WidgetPresenter["availability"]>[0];
 
 const context: WidgetPresenterContext = {
@@ -29,18 +30,24 @@ const delivery = createDiscordSendResult({
   kind: "card",
 });
 
-let store: ReturnType<typeof createActivityTestRuntime>["store"];
+let store: ReturnType<typeof createRegisteredActivityFixture>["runtime"]["store"];
 let presenter: WidgetPresenter;
 const latestWidget = () => store.latestPostedWidgetForChannel("default", "987654321");
 const present = (route = context, title = "Status") =>
   presenter.present({ context: route, document, title });
 beforeEach(() => {
-  const runtime = createActivityTestRuntime();
+  vi.stubEnv("DISCORD_CLIENT_SECRET", "");
+  const fixture = createRegisteredActivityFixture();
+  const { runtime } = fixture;
   store = runtime.store;
-  presenter = createDiscordWidgetPresenter(runtime);
+  presenter = fixture.presenter;
   vi.mocked(sendDiscordComponentMessage).mockReset().mockResolvedValue(delivery);
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  setDiscordActivitiesRuntime(undefined);
+});
 
 it("matches only configured Discord channel routes", async () => {
   expect(presenter.target).toBe("current_channel");
@@ -53,9 +60,9 @@ it("matches only configured Discord channel routes", async () => {
     }),
   ).toBe(false);
 
-  const unconfigured = createDiscordWidgetPresenter(
-    createActivityTestRuntime(createActivityTestConfig({ clientSecret: "" })),
-  );
+  const unconfigured = createRegisteredActivityFixture(
+    createActivityTestConfig({ clientSecret: "" }),
+  ).presenter;
   expect(unconfigured.target).toBe("current_channel");
   expect(matches(unconfigured)).toBe(false);
   await expect(unconfigured.availability(context)).resolves.toMatchObject({

@@ -648,10 +648,10 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         this.managerIdleWaiters.add(resolve);
       });
     }
-    // CLI request teardown must not wait after a published search result is ready;
-    // its detached task owns a separate maintenance manager. Persistent managers
-    // still drain maintenance before closing shared resources.
-    while (this.purpose !== "cli" && this.activeBackgroundSearchSyncs.size > 0) {
+    // Search-time maintenance writes through this manager's published connection,
+    // so every manager, including a transient CLI request, drains it before closing.
+    // The search result is already returned; only teardown waits.
+    while (this.activeBackgroundSearchSyncs.size > 0) {
       await Promise.all(Array.from(this.activeBackgroundSearchSyncs));
     }
   }

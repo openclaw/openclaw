@@ -31,6 +31,7 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import {
   createTestProjection,
   holdForeground,
+  holdSubagentExecution,
   watchRowFacts as observeRowFacts,
 } from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -296,6 +297,7 @@ it.each([
         completion: { required: false },
         delivery: { status: "not_required" },
       };
+      using _ = holdSubagentExecution(run.runId, child);
       subagentRuns.set(run.runId, run);
       if (archived) {
         persistRegistryFixture(subagentRuns);
@@ -323,7 +325,8 @@ it.each([
             swarmRequesterSessionKey: nextParent,
           };
           subagentRuns.set(run.runId, replacement);
-          expect(snapshot()?.controlOwnerSessionKey).toBe(archived ? undefined : parent);
+          // Control reflects the current executor immediately; navigation waits for publication.
+          expect(snapshot()?.controlOwnerSessionKey).toBe(archived ? undefined : nextParent);
           if (publication === "broad-ownership") {
             publishSubagentRunChanges();
           } else {

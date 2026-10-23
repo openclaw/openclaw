@@ -125,7 +125,8 @@ it.each([
     ...opts,
     sessionStore,
   });
-  const result = await agent.newSession({ ...createNewSessionRequest(cwd), _meta: metadata });
+  const { newSession } = agent;
+  const result = await newSession({ ...createNewSessionRequest(cwd), _meta: metadata });
   const selectedKey = expected ?? `acp-bridge:${result.sessionId}`;
   expect(sessionStore.getSession(result.sessionId)?.sessionKey).toBe(selectedKey);
   expect(request.mock.calls).toEqual([

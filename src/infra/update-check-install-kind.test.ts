@@ -64,7 +64,7 @@ it.each([
         : observed;
     });
     vi.useFakeTimers();
-    const options = { timeoutMs, signal: undefined };
+    const options = { timeoutMs };
     const pending =
       scope === "kind"
         ? resolveKind(root, options)

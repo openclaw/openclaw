@@ -710,6 +710,32 @@ describe("doctor-contract-registry selection", () => {
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
   });
 
+  it("selects a mixed-case manifest Doctor owner from its canonical config entry", () => {
+    mockContract(
+      {
+        normalizeCompatibilityConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
+          config: { ...cfg, repairedBy: "MiXeD-upgrade-proof" },
+          changes: ["mixed-case owner repaired config"],
+        }),
+      },
+      {
+        id: "MiXeD-upgrade-proof",
+        channels: [],
+        providers: [],
+        doctorContract: { configRepair: true },
+      },
+    );
+    const config = { plugins: { entries: { "mixed-upgrade-proof": { enabled: true } } } };
+    const result = doctor.applyPluginDoctorCompatibilityMigrations(config, {
+      config,
+      env: {},
+      pluginIds: doctor.collectRelevantDoctorPluginIds(config),
+    });
+    expect(result.changes).toEqual(["mixed-case owner repaired config"]);
+    expect(result.config).toHaveProperty("repairedBy", "MiXeD-upgrade-proof");
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
+
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {
     expect(
       doctor.collectDoctorConfigRepairPluginIds(

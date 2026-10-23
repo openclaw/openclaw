@@ -10,7 +10,7 @@ import {
   RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS,
   resolveLauncherStopTimeoutMs,
 } from "./gateway-shutdown-budget.mjs";
-import { withNodeRuntimePath } from "./node-runtime-env.mjs";
+import { nodeRuntimePathEntries, withNodeRuntimePath } from "./node-runtime-env.mjs";
 import {
   detectCurrentSqliteCapabilities,
   nodeRuntimeFailure,
@@ -589,7 +589,7 @@ function* availableNodeCandidates(homeDir, env) {
       ? Object.keys(env).find((key) => key.toUpperCase() === "PATH") || "PATH"
       : "PATH";
   const binary = process.platform === "win32" ? "node.exe" : "node";
-  for (const directory of (env[pathKey] || "").split(path.delimiter)) {
+  for (const directory of nodeRuntimePathEntries(env[pathKey])) {
     if (path.isAbsolute(directory)) {
       yield [path.join(directory, binary), "PATH"];
     }

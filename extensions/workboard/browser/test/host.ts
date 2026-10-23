@@ -124,6 +124,7 @@ export function createWorkboardTestHost() {
       registerAction: register("action"),
       registerAccessory: register("accessory"),
       registerWidget: register("widget"),
+      registerInlineView: register("inline"),
       registerReplacement: register("replacement"),
       selectReplacement: vi.fn(),
     },

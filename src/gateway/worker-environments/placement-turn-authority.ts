@@ -629,13 +629,12 @@ export function publishPlacementTurnClaimCleared(
   db: EngineConnection,
   sessionId: string,
   previousState?: WorkerSessionTurnClaimFacts["state"] | null,
-  retired?: true,
 ): void {
   stageChange(db, {
     kind: "claim",
     sessionId,
     localOnly: previousState === null || previousState === "local",
-    retired,
+    retired: true,
   });
 }
 

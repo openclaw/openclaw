@@ -1,6 +1,7 @@
 import { toErrorObject } from "@openclaw/normalization-core";
 import { fetchControlUiResource } from "../../../app/browser-http.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { safeMediaAttachmentHref, safePlainTextAttachmentHref } from "./chat-attachment-href.ts";
 import {
@@ -29,6 +30,8 @@ import {
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
+
+registerChatComposerEnglish();
 
 type ManagedAttachmentAvailability =
   | { status: "checking"; refreshAfter?: number; refreshAttempts?: number }

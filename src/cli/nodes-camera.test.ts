@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as base64 from "@openclaw/media-core/base64";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stubFetchResponse } from "../test-utils/camera-url-test-helpers.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -7,6 +8,8 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 type PublishOutputFileAtomically =
   typeof import("./output-file.runtime.js").publishOutputFileAtomically;
 type FsOpen = typeof import("node:fs/promises").open;
+
+vi.mock("@openclaw/media-core/base64", { spy: true });
 
 const fsMocks = vi.hoisted(() => ({
   actualOpen: undefined as FsOpen | undefined,
@@ -226,9 +229,8 @@ describe("nodes camera helpers", () => {
   it("rejects oversized base64 payloads before writing", async () => {
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
-      await expect(camera.writeBase64ToFile(out, "aGk=", { maxBytes: 1 })).rejects.toThrow(
-        /exceeds max/i,
-      );
+      vi.mocked(base64.estimateBase64DecodedBytes).mockReturnValueOnce(250 * 1024 * 1024 + 1);
+      await expect(camera.writeBase64ToFile(out, "aGk=")).rejects.toThrow(/exceeds max/i);
       await expect(fs.stat(out)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
