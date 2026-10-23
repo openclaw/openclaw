@@ -391,7 +391,9 @@ See [Video generation](/tools/video-generation) for shared tool parameters, prov
 
     A normal `models.providers.qwen.baseUrl` pointing at either the Coding Plan
     or Standard Qwen hosts still routes video generation to the matching
-    regional DashScope video endpoint.
+    regional DashScope video endpoint. An omitted or blank URL uses the
+    Global/Intl host; an invalid nonempty URL fails before the video job is
+    submitted instead of falling back to it.
 
   </Accordion>
 

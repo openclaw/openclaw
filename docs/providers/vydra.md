@@ -28,6 +28,8 @@ OpenClaw uses the same `VYDRA_API_KEY` for all three capabilities.
 Use `https://www.vydra.ai/api/v1` as the base URL. Vydra's apex host (`https://vydra.ai/api/v1`) currently redirects to `www`. Some HTTP clients drop `Authorization` on that cross-host redirect, which turns a valid API key into a misleading auth failure. The bundled plugin normalizes any configured `vydra.ai` base URL to `www.vydra.ai` to avoid that.
 </Warning>
 
+An invalid custom base URL (from config, or `VYDRA_BASE_URL` for speech) fails before a request is sent; only an omitted or blank URL uses hosted Vydra.
+
 ## Setup
 
 <Steps>

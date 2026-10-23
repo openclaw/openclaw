@@ -178,6 +178,9 @@ The bundled `fal` video-generation provider defaults to
 | Runtime    | Queue-backed submit/status/result flow for long-running jobs       |
 | Timeout    | 20 minutes per job by default; status polled every 5 seconds       |
 
+A `models.providers.fal.baseUrl` that is not a valid URL fails before the job is
+submitted instead of falling back to `https://queue.fal.run`.
+
 <AccordionGroup>
   <Accordion title="Available video models">
     **MiniMax (default):**
