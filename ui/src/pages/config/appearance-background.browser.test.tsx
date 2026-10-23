@@ -17,7 +17,7 @@ import {
   resetProfileAppearancePrefs,
 } from "../../app/server-prefs-profile.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import type { SessionBackground } from "../../components/session-background.tsx";
+import type { SessionBackground } from "../../components/session-background-host.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -723,10 +723,12 @@ describe("Appearance backgrounds", () => {
     expect(source("none").getAttribute("aria-pressed")).toBe("true");
     const switches = [...host.querySelectorAll<HTMLInputElement>(".settings-toggle__input")];
     expect(switches).toHaveLength(2);
-    expect(switches.every((input) => input.disabled)).toBe(true);
+    expect(switches.every((input) => input.getAttribute("aria-disabled") === "true")).toBe(true);
     expect(backgroundRange().disabled).toBe(true);
     expect(
-      buttons('[data-test-id^="background-presentation-"]').every((control) => control.disabled),
+      buttons('[data-test-id^="background-presentation-"]').every(
+        (control) => control.getAttribute("aria-disabled") === "true",
+      ),
     ).toBe(true);
     expect(mode("full-bleed").getAttribute("aria-pressed")).toBe("true");
     expect(host.textContent).toContain("without removing your saved image or choices");
@@ -764,6 +766,8 @@ describe("Appearance backgrounds", () => {
     });
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Image <failed>");
     expect(host.querySelector("failed")).toBeNull();
-    expect(buttons("button").every((control) => control.disabled)).toBe(true);
+    expect(
+      buttons("button").every((control) => control.matches(':disabled, [aria-disabled="true"]')),
+    ).toBe(true);
   });
 });

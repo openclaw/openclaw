@@ -80,6 +80,12 @@ persisted user turn changes or the session reader is no longer current, OpenClaw
 preserves the session-state error for the session's retry owner or reports it to
 the caller. These errors do not produce an `unknown` provider-failure notice.
 
+Losing the canonical user turn during prompt projection also stops unchanged
+retries and model fallback. If MCP cleanup cannot confirm closure, OpenClaw
+preserves that cleanup failure instead of starting another model. Session and
+cleanup recovery remain with their respective owners; changing providers cannot
+repair these local faults.
+
 Thinking-level recovery applies only when the provider identifies a reasoning or
 thinking parameter. Model/account restrictions and unrelated unsupported options
 keep their original failure classification and follow the configured fallback

@@ -95,6 +95,7 @@ const RERUN_GROUPS = new Set([
   "plugin-prerelease",
   "install-smoke",
   "cross-os",
+  "windows-node",
   "live-e2e",
   "package",
   "qa-parity",
@@ -208,8 +209,8 @@ always performs read-only reconciliation. --reconcile-request refuses a missing 
 mutation; after a qualification POST it is observation-only, never a redispatch.
 Retain the artifact until operator cleanup; its loss never proves non-execution.
 Frozen tooling must declare FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1 before a new request.
-Prints the frozen candidate/tooling, effective profile, group, soak and redacted
-waiver selection before dispatch and when reconciling the retained request.
+Prints the frozen candidate/tooling, effective profile, group, and soak selection
+before dispatch and when reconciling the retained request.
 
 Preflights the Validation SHA with a bare-SHA fetch into a fresh temporary repository.
 Creates one immutable release-ci/* workflow ref pinned to the exact Tooling SHA,
@@ -821,6 +822,73 @@ function resolveTrustedWorkflowSha(requestedSha: string, trustedWorkflowRef: str
   const workflowSha = resolveSha(requestedSha || "origin/main");
   verifyTrustedWorkflowRef(workflowSha, trustedWorkflowRef);
   return workflowSha;
+}
+
+export function formatCandidateToolingLagWarning(
+  candidateSha: string,
+  mainSha: string,
+  commitCount: number,
+  changedPathCount: number,
+  changedAreas: string[],
+) {
+  return [
+    `WARNING: candidate-owned Q=C tooling ${candidateSha} is ${commitCount} non-merge commit(s) behind main ${mainSha}, with ${changedPathCount} net changed path(s). Main cannot repair this candidate harness; review and port applicable release fixes before dispatch.`,
+    ...(changedAreas.length > 0
+      ? ["Largest changed areas (share of net changed paths):", ...changedAreas]
+      : []),
+    `Inspect every exact path: git diff --name-status ${candidateSha} ${mainSha}`,
+  ].join("\n");
+}
+
+function warnCandidateToolingLag(candidateSha: string) {
+  const fetch = runStatus(
+    "git",
+    ["fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
+  if (fetch.status !== 0) {
+    console.warn(
+      "WARNING: candidate tooling lag is unavailable because origin/main could not be refreshed; continuing with the existing qualification checks.",
+    );
+    return;
+  }
+  const mainSha = resolveSha("origin/main");
+  if (candidateSha === mainSha) {
+    return;
+  }
+  const commitCount = Number(
+    run("git", [
+      "rev-list",
+      "--count",
+      "--right-only",
+      "--no-merges",
+      `${candidateSha}...${mainSha}`,
+    ]),
+  );
+  const changedPaths = run("git", ["diff", "--no-renames", "--name-only", candidateSha, mainSha])
+    .split(/\r?\n/u)
+    .filter(Boolean);
+  if (commitCount > 0 && changedPaths.length > 0) {
+    const changedAreas = run("git", [
+      "diff",
+      "--no-renames",
+      "--dirstat=files,1",
+      candidateSha,
+      mainSha,
+    ])
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    console.warn(
+      formatCandidateToolingLagWarning(
+        candidateSha,
+        mainSha,
+        commitCount,
+        changedPaths.length,
+        changedAreas,
+      ),
+    );
+  }
 }
 
 function assertAdmissionContract(admissionWorkflowSha: string) {
@@ -1928,6 +1996,7 @@ async function main() {
     assertAdmissionContract(admissionWorkflowSha);
   }
   if (candidateOwned) {
+    warnCandidateToolingLag(workflowSha);
     const baselinePolicy: unknown = JSON.parse(
       run("git", ["show", `${workflowSha}:scripts/lib/upgrade-survivor-scenarios.json`]),
     );

@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { PersistedUiSettings } from "../app/settings-storage-types.ts";
+import type { readSettingsForGateway } from "../app/settings.ts";
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -17,6 +17,8 @@ import {
   pollValue,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
+
+type PersistedUiSettings = NonNullable<ReturnType<typeof readSettingsForGateway>>["parsed"];
 
 const suite = createNewSessionPageE2eSuite();
 const leftKey = "agent:main:saved-left";

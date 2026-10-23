@@ -181,6 +181,7 @@ function createFilteredSessionController(
 
   return {
     notify,
+    client,
     context,
     host,
     disconnectHost: () => {
@@ -477,12 +478,60 @@ describe("filtered sidebar session event refresh", () => {
       }
     },
   );
-  it.each(["archived", "all"] as const)(
+  it("does not replay a hidden primary list failure after its filter retires", async () => {
+    const { controller, context, list, selectStatusFilter } = createFilteredSessionController(
+      "archived",
+      1,
+      true,
+    );
+    controller.connect();
+    await controller.refreshSidebarSessions();
+    await context.sessions.refresh({ agentId: "main", force: true });
+    list.mockRejectedValueOnce(new Error("Hidden primary list failed"));
+    await context.sessions.refresh({ agentId: "main", force: true });
+    expect(context.sessions.state.error).toBe("Hidden primary list failed");
+    expect(controller.sessionMutationError).toBeNull();
+
+    selectStatusFilter("active");
+    context.sessions.patchRowLocal("agent:main:remote-change", { label: "Current title" });
+
+    expect(controller.sessionMutationError).toBeNull();
+    controller.disconnect();
+  });
+
+  it("keeps a failed session mutation with its caller instead of the sidebar list", async () => {
+    const { controller, client, context } = createFilteredSessionController("active", 1, true);
+    controller.connect();
+    await controller.refreshSidebarSessions();
+    const request = client.request.bind(client);
+    vi.spyOn(client, "request").mockImplementation(
+      <T>(method: string, params?: unknown): Promise<T> => {
+        if (method === "sessions.patch") {
+          return Promise.reject(new Error("Duplicate session name"));
+        }
+        return request<T>(method, params);
+      },
+    );
+
+    await expect(
+      context.sessions.patch("agent:main:remote-change", { label: "Duplicate" }),
+    ).rejects.toThrow("Duplicate session name");
+
+    expect(context.sessions.state.error).toBe("Duplicate session name");
+    expect(controller.sessionMutationError).toBeNull();
+    controller.disconnect();
+  });
+
+  it.each(["active", "archived", "all"] as const)(
     "clears a recovered %s list failure without erasing a same-text action failure",
     async (statusFilter) => {
-      const { controller, list, selectStatusFilter } =
-        createFilteredSessionController(statusFilter);
+      const { controller, list, selectStatusFilter } = createFilteredSessionController(
+        statusFilter,
+        1,
+        true,
+      );
       controller.connect();
+      await controller.refreshSidebarSessions();
       list.mockRejectedValueOnce(new Error("Session request failed"));
 
       await controller.refreshSidebarSessions();
@@ -527,7 +576,7 @@ describe("filtered sidebar session event refresh", () => {
       await controller.refreshSidebarSessions();
       expect(controller.sessionMutationError).toBe("Retired session list failed");
 
-      selectStatusFilter(statusFilter === "archived" ? "all" : "archived");
+      selectStatusFilter("active");
 
       expect(controller.sessionMutationError).toBeNull();
       controller.disconnect();

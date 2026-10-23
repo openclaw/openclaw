@@ -970,16 +970,6 @@ openclaw-pending-session-create {
   gap: 20px;
 }
 
-.context-usage__title,
-.context-usage__section-label {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 1.2;
-  text-transform: uppercase;
-}
-
 .context-usage__context-value {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
@@ -2074,13 +2064,6 @@ openclaw-chat-video-player {
 
 .chat-swarm__task-icon--failed {
   color: var(--danger);
-}
-
-.chat-swarm__task-name {
-  overflow: hidden;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .chat-swarm__task-duration {

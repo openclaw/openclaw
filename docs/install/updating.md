@@ -657,6 +657,10 @@ service pins a Node executable, update that service definition too; changing
 the shell's Node alone does not change the service. The updater keeps the
 requested OpenClaw target and does not select another release automatically.
 Later runtime capability checks can still produce `node-runtime-preflight`.
+If the managed helper exits before acknowledging startup, the update report includes
+a bounded, redacted tail of its startup errors. The Gateway keeps serving. This
+diagnostic capture must be present in the installed updater; a newer candidate
+cannot repair an older updater's missing startup diagnostics.
 npm directory permission failures produce `global-install-permission-denied`,
 naming the directory, its owner when available, and the next action. Dry-run JSON
 includes these outcomes in `failures`; the update report and Doctor's update
