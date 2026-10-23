@@ -87,7 +87,7 @@
   border: 1.5px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
-  animation: details-subagents-spin 1.5s linear infinite;
+  animation: btn-spinner-spin 1.5s linear infinite;
 }
 
 .chat-details-subagents__check {
@@ -176,6 +176,15 @@
 
 .chat-details-subagents__count {
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chat-details-subagents__count[data-status="running"] {
+  color: var(--text);
+}
+
+.chat-details-subagents__count[data-status="done"]:not(:first-child) {
+  margin-inline-start: auto;
 }
 
 .chat-details-subagents__chevron {
@@ -253,12 +262,6 @@
 @media (prefers-reduced-motion: reduce) {
   .chat-details-subagents__spinner {
     animation: none;
-  }
-}
-
-@keyframes details-subagents-spin {
-  to {
-    transform: rotate(360deg);
   }
 }
 

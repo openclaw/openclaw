@@ -32,15 +32,12 @@ export function pickBestEffortPrimaryLanIPv4(): string | undefined {
   }
 }
 
-/** Return a tailnet IPv4 plus an optional warning suitable for user output. */
-export function inspectBestEffortPrimaryTailnetIPv4(params?: { warningPrefix?: string }): {
-  tailnetIPv4: string | undefined;
-  warning?: string;
-} {
+/** Return a tailnet IPv4 for display, or undefined when interface discovery fails. */
+export function pickBestEffortPrimaryTailnetIPv4(): string | undefined {
   try {
-    return { tailnetIPv4: pickPrimaryTailnetIPv4() };
-  } catch (error) {
-    return { tailnetIPv4: undefined, ...displayNetworkWarning(error, params?.warningPrefix) };
+    return pickPrimaryTailnetIPv4();
+  } catch {
+    return undefined;
   }
 }
 

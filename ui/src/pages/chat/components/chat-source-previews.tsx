@@ -98,6 +98,7 @@ export function ChatSourcePreviews(props: SourcePreviewsProps) {
   const [revision, setRevision] = createSignal(0);
   const [failedFavicons, setFailedFavicons] = createStore<Record<string, boolean>>({});
   let active = true;
+  // Favicon callbacks register during render, so disposal can precede the first settlement.
   onCleanup(() => {
     active = false;
   });

@@ -131,28 +131,58 @@ it("locks every global dreaming control when config mutation is unavailable", ()
   const container = renderInto(null, vi.fn(), true);
 
   expect(
-    [...container.querySelectorAll<HTMLInputElement>("input")].every((input) => input.disabled),
+    [...container.querySelectorAll<HTMLInputElement>("input")].every((input) =>
+      input.matches(':disabled, [aria-disabled="true"]'),
+    ),
   ).toBe(true);
 });
 
-it("keeps the edited field mounted when the owner publishes updated config", () => {
-  const [dreaming, setDreaming] = createSignal<Record<string, unknown>>({ frequency: "0 3 * * *" });
+it("preserves uncommitted numeric and text drafts across unrelated config refreshes", () => {
+  const onPatch = vi.fn();
+  const [config, setConfig] = createSignal(
+    dreamingConfig({
+      frequency: "0 3 * * *",
+      phases: { light: { lookbackDays: 7 } },
+    }),
+  );
   const view = mountSolid(() => (
     <CuratedSettingsPanel
       {...panelDefaults}
-      config={dreamingConfig(dreaming())}
-      onPatch={(_, _path, value) => setDreaming({ frequency: value })}
+      config={config()}
+      onPatch={(_, path, value) => onPatch(path, value)}
     />
   ));
   flush();
-  const input = numberInput(view.container, "Dreaming frequency");
-  editNumber(input, "0 4 * * *");
+  const frequency = numberInput(view.container, "Dreaming frequency");
+  const lookback = numberInput(view.container, "Lookback days");
+  frequency.value = "0 4 * * *";
+  lookback.value = "14";
+  setConfig(
+    dreamingConfig({
+      frequency: "0 3 * * *",
+      verboseLogging: true,
+      phases: { light: { lookbackDays: 7 } },
+    }),
+  );
   flush();
-
-  expect(numberInput(view.container, "Dreaming frequency")).toBe(input);
-  expect(input.value).toBe("0 4 * * *");
+  expect(numberInput(view.container, "Dreaming frequency")).toBe(frequency);
+  expect(frequency.value).toBe("0 4 * * *");
+  expect(lookback.value).toBe("14");
+  expect(onPatch).not.toHaveBeenCalled();
+  frequency.dispatchEvent(new Event("change", { bubbles: true }));
+  lookback.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(onPatch).toHaveBeenNthCalledWith(1, ["frequency"], "0 4 * * *");
+  expect(onPatch).toHaveBeenNthCalledWith(2, ["phases", "light", "lookbackDays"], 14);
+  setConfig(
+    dreamingConfig({
+      frequency: "0 5 * * *",
+      phases: { light: { lookbackDays: 21 } },
+    }),
+  );
+  flush();
+  expect(frequency.value).toBe("0 5 * * *");
+  expect(lookback.value).toBe("21");
 });
-
 it("rejects invalid numbers, accepts valid edits, and clears emptied values", () => {
   const onPatch = vi.fn();
   const container = renderInto({ enabled: true, phases: { light: { lookbackDays: 7 } } }, onPatch);
@@ -220,7 +250,11 @@ it("submits edited values and removals through the shared config owner without m
     );
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true }));
-    editNumber(numberInput(view.container, "Dreaming frequency"), "");
+    const frequency = numberInput(view.container, "Dreaming frequency");
+    editNumber(frequency, "");
+    flush();
+    expect(numberInput(view.container, "Dreaming frequency")).toBe(frequency);
+    expect(frequency.value).toBe("");
     runtimeConfig.patchForm(["agents", "defaults", "userTimezone"], "Etc/UTC");
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
     await runtimeConfig.waitForPendingWrites();

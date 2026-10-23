@@ -36,6 +36,7 @@ export type SidebarFileMobileRailProps = {
   identity: string;
   back?: MobileFileBack;
   menuActions?: readonly MobileFileMenuAction[];
+  attachment?: import("./chat-file-session-attachment.ts").FileSessionAttachment;
   /** Native Download, attachment Copy, MCP or external-editor controls, as eligible. */
   actions?: JSX.Element;
 };
@@ -46,14 +47,13 @@ function MobileFileButton(props: {
   onClick: () => void;
   disabled?: boolean;
   tooltip?: boolean;
-  class?: string;
   ref?: (element: HTMLButtonElement) => void;
 }) {
   return (
     <openclaw-tooltip prop:content={props.tooltip === false ? "" : props.label}>
       <button
         type="button"
-        class={["sidebar-file-mobile__button", props.class]}
+        class="sidebar-file-mobile__button"
         aria-label={props.label}
         disabled={props.disabled}
         ref={(element) => props.ref?.(element)}
@@ -68,6 +68,20 @@ function MobileFileButton(props: {
 /** Mount separately from the document so changing chrome never replaces its editor/player. */
 export function SidebarFileMobileRail(props: SidebarFileMobileRailProps) {
   const id = createUniqueId();
+  const actions = (): readonly MobileFileMenuAction[] => [
+    ...(props.attachment
+      ? [
+          {
+            id: "attach-session",
+            label: t("chat.detailPanel.attachToSession"),
+            icon: "paperclip" as const,
+            disabled: props.attachment.disabled,
+            onSelect: props.attachment.attach,
+          },
+        ]
+      : []),
+    ...(props.menuActions ?? []),
+  ];
   return (
     <div class="sidebar-file-mobile__rail">
       <Show when={props.back}>
@@ -84,14 +98,14 @@ export function SidebarFileMobileRail(props: SidebarFileMobileRailProps) {
       </span>
       <div class="sidebar-file-mobile__rail-actions">
         {props.actions}
-        <Show when={props.menuActions?.length}>
+        <Show when={actions().length}>
           <Menu
             id={`mobile-file-${id}`}
             label={t("chat.workspaceFiles.actions")}
             placement="bottom-end"
             triggerClass="sidebar-file-mobile__button"
             trigger={<Icon name="moreHorizontal" />}
-            items={(props.menuActions ?? []).map((action) => ({
+            items={actions().map((action) => ({
               id: action.id,
               label: action.label,
               icon: <Icon name={action.icon} />,
@@ -100,7 +114,9 @@ export function SidebarFileMobileRail(props: SidebarFileMobileRailProps) {
               checked: action.checked,
             }))}
             onSelect={(item) =>
-              props.menuActions?.find((action) => action.id === item.id)?.onSelect()
+              actions()
+                .find((action) => action.id === item.id)
+                ?.onSelect()
             }
           />
         </Show>
@@ -130,7 +146,20 @@ export function mobileFileTextMenuActions(options: {
     icon: controls.copyFeedback[action] === "copied" ? "check" : "copy",
     onSelect: () => controls.onCopy(action),
   });
-  const actions = [copy("contents")];
+  const actions: MobileFileMenuAction[] = [
+    ...(controls.fileAttachment
+      ? [
+          {
+            id: "attach-session",
+            label: t("chat.detailPanel.attachToSession"),
+            icon: "paperclip" as const,
+            disabled: controls.fileAttachment.disabled,
+            onSelect: controls.fileAttachment.attach,
+          },
+        ]
+      : []),
+    copy("contents"),
+  ];
   if (path) {
     actions.push(copy("path"));
     if (controls.onReveal) {

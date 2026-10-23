@@ -213,13 +213,10 @@ type TrackedMirrorSession = {
 export function createBeamMirrorRunner(params: {
   runtime: { config: Pick<PluginRuntime["config"], "current"> };
   logger: { warn: (message: string) => void; info: (message: string) => void };
-  fetchFn?: typeof fetch;
   now?: () => number;
-  listCatalogs?: () => ActiveSessionCatalog[];
   signal: AbortSignal;
 }) {
   const now = params.now ?? Date.now;
-  const listCatalogs = params.listCatalogs ?? listActiveSessionCatalogs;
   const tracked = new Map<string, TrackedMirrorSession>();
   const { signal } = params;
   let lastWarnAt = 0;
@@ -279,7 +276,6 @@ export function createBeamMirrorRunner(params: {
     try {
       guarded = await fetchWithSsrFGuard({
         url: endpoint,
-        fetchImpl: params.fetchFn,
         timeoutMs: MIRROR_UPLOAD_TIMEOUT_MS,
         signal,
         policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(endpoint),
@@ -394,7 +390,7 @@ export function createBeamMirrorRunner(params: {
         return;
       }
       const activeSinceMs = now() - mirror.activeWindowMinutes * 60_000;
-      const catalogs = listCatalogs().filter(
+      const catalogs = listActiveSessionCatalogs().filter(
         (catalog) =>
           // Never mirror the local beam receiver back out: a two-gateway pair
           // would otherwise re-mirror each other's rows forever.

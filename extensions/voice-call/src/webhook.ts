@@ -123,7 +123,6 @@ export class VoiceCallWebhookServer {
     private readonly manager: CallManager,
     private readonly provider: VoiceCallProvider,
     private readonly coreConfig?: OpenClawConfig,
-    private readonly fullConfig?: OpenClawConfig,
     private readonly agentRuntime?: OpenClawPluginApi["runtime"]["agent"],
     logger?: PluginLogger,
   ) {
@@ -250,7 +249,7 @@ export class VoiceCallWebhookServer {
 
   private async initializeMediaStreaming(): Promise<void> {
     const streaming = this.config.streaming;
-    const pluginConfig = this.fullConfig ?? this.coreConfig ?? undefined;
+    const pluginConfig = this.coreConfig;
     const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
       await loadRealtimeTranscriptionRuntime();
     const resolution = await resolveConfiguredCapabilityProviderAsync({
@@ -805,23 +804,19 @@ export class VoiceCallWebhookServer {
   }
 
   private isRealtimeWebSocketUpgrade(pathname: string | null): boolean {
-    try {
-      const pattern = this.realtimeHandler?.getStreamPathPattern();
-      if (pathname === null || !pattern) {
-        return false;
-      }
-      const normalizedPattern = normalizeWebhookPath(pattern);
-      const normalizedPathname = normalizeWebhookPath(pathname);
-      if (normalizedPattern === "/") {
-        return true;
-      }
-      return (
-        normalizedPathname === normalizedPattern ||
-        normalizedPathname.startsWith(`${normalizedPattern}/`)
-      );
-    } catch {
+    const pattern = this.realtimeHandler?.getStreamPathPattern();
+    if (pathname === null || !pattern) {
       return false;
     }
+    const normalizedPattern = normalizeWebhookPath(pattern);
+    const normalizedPathname = normalizeWebhookPath(pathname);
+    if (normalizedPattern === "/") {
+      return true;
+    }
+    return (
+      normalizedPathname === normalizedPattern ||
+      normalizedPathname.startsWith(`${normalizedPattern}/`)
+    );
   }
 
   private getRealtimeTwimlParams(ctx: WebhookContext): URLSearchParams | null {

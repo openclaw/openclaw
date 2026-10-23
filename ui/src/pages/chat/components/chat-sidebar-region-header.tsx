@@ -14,6 +14,7 @@ import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { KeyboardShortcut } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import "../../../components/tooltip.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
@@ -91,7 +92,13 @@ export function PanelTypeOption(props: { type: SidebarPanelDefinition }) {
       <span class="side-panel-type-option__icon" aria-hidden="true">
         <Icon name={props.type.icon} />
       </span>
-      <span class="side-panel-type-option__label">{props.type.label}</span>{" "}
+      <span
+        ref={createTextOverflow(() => props.type.label)}
+        class="side-panel-type-option__label"
+        title={props.type.label}
+      >
+        {props.type.label}
+      </span>{" "}
       <Show when={props.type.shortcut}>
         {(shortcut) => (
           <KeyboardShortcut combo={shortcut()} class="side-panel-type-option__shortcut" />
@@ -208,6 +215,15 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
           class: "side-panel-type-menu__item session-menu__item",
           icon: <Icon name={current().icon} class="side-panel-type-option__icon" />,
           labelClass: "side-panel-type-option__label",
+          content: (
+            <span
+              ref={createTextOverflow(() => current().label)}
+              style="display:block;overflow:hidden"
+              title={current().label}
+            >
+              {current().label}
+            </span>
+          ),
           details: (
             <Show when={current().shortcut}>
               {(shortcut) => (
@@ -272,7 +288,23 @@ function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {
 
 export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
   const desktop = () => props.presentation === "desktop";
-  const [closing, setClosing] = createSignal(false);
+  const panelScope = createMemo(() => props.panelIdPrefix);
+  const mobileHostScope = createMemo(() => props.mobileHost?.scopeKey);
+  const closeScope = createMemo(() => {
+    const initialScope = panelScope();
+    const initialMobileScope = mobileHostScope();
+    const [closing, setClosing] = createSignal(false);
+    return {
+      closing,
+      setClosing,
+      current: () =>
+        props.host.isConnected &&
+        props.host.panelIdPrefix === initialScope &&
+        props.host.mobileHost?.scopeKey === initialMobileScope,
+    };
+  });
+  const closing = () => closeScope().closing();
+  let activeClose: ReturnType<typeof closeScope> | undefined;
   const state = createMemo(() => {
     props.hostedRevision();
     const column = props.layout.columns[0];
@@ -409,8 +441,8 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     const mobileScope = props.mobileHost?.scopeKey;
     const current = () =>
       props.host.isConnected &&
-      props.panelIdPrefix === scope &&
-      props.mobileHost?.scopeKey === mobileScope;
+      props.host.panelIdPrefix === scope &&
+      props.host.mobileHost?.scopeKey === mobileScope;
     if (!current()) {
       return false;
     }
@@ -468,16 +500,15 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     return !hasPanel(panel.id);
   }
   async function closeAll() {
-    if (closing() || !props.callbacks?.newTab) {
+    const view = closeScope();
+    if (activeClose?.current() || !view.current() || !props.callbacks?.newTab) {
       return;
     }
-    setClosing(true);
-    const scope = props.panelIdPrefix;
-    const mobileScope = props.mobileHost?.scopeKey;
-    const current = () =>
-      props.host.isConnected &&
-      props.panelIdPrefix === scope &&
-      props.mobileHost?.scopeKey === mobileScope;
+    activeClose = view;
+    // This owner must publish and settle every close before admitting the next one.
+    // Keeping its busy state outside an action lets those intermediate commits finish.
+    view.setClosing(true);
+    const current = view.current;
     try {
       const panels = sidebarSidePanels(props.layout).filter(
         (panel) => panel.slot !== "conversation",
@@ -513,7 +544,12 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     } catch (error) {
       showToast({ message: formatUiError(error) });
     } finally {
-      setClosing(false);
+      if (activeClose === view) {
+        activeClose = undefined;
+      }
+      if (view.current()) {
+        view.setClosing(false);
+      }
     }
   }
   const hostedActions = () =>

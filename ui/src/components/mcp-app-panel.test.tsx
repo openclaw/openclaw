@@ -20,7 +20,7 @@ const viewLoad = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Exercise panel retirement without registering the real iframe protocol view.
-vi.mock("./mcp-app-view-registration.ts", async () => {
+vi.mock("./mcp-app-view.tsx", async () => {
   viewLoad.started();
   await viewLoad.promise;
   const fields = ["sessionKey", "agentId", "viewId", "title", "deepLink"] as const;
@@ -61,9 +61,12 @@ it("retains the old app and its launch target until teardown finishes", async ()
   const target = { sessionKey: "agent:a:session", agentId: "a", viewId: "a-view" };
   const updated = { deepLink: "/second", title: "Updated app" };
   const [launch, setLaunch] = createSignal(firstLaunch);
-  const { container } = mountSolid(() => <McpAppPanel launch={launch()} />, {
-    wrapper: createSolidApplicationContextProvider(context).wrapper,
-  });
+  const { container } = mountSolid(
+    () => <McpAppPanel launch={launch()} observeRetirement={() => () => {}} />,
+    {
+      wrapper: createSolidApplicationContextProvider(context).wrapper,
+    },
+  );
   await waitForSolid(() => expect(viewLoad.started).toHaveBeenCalledOnce());
   expect(request).not.toHaveBeenCalled();
   setLaunch({ ...firstLaunch, deepLink: "/initial" });

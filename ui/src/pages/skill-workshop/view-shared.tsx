@@ -114,16 +114,21 @@ export function lastActivityMs(skill: SkillWorkshopSkillSummary, change?: SkillW
 
 export type WorkshopViewerTarget = { name: string; filePath: string; versionId?: string };
 
-export type WorkshopViewer =
-  | { target: WorkshopViewerTarget; status: "loading" }
-  | {
-      target: WorkshopViewerTarget;
-      status: "ready";
-      result: SkillsWorkshopReadResult;
-      /** Live SKILL.md, loaded when a past version of a live skill is open, for the diff. */
-      current?: string;
-    }
-  | { target: WorkshopViewerTarget; status: "error"; error: string };
+export type WorkshopViewerResult = {
+  target: WorkshopViewerTarget;
+  result: SkillsWorkshopReadResult;
+  /** Live SKILL.md, loaded when a past version of a live skill is open, for the diff. */
+  current?: string;
+};
+
+export type WorkshopViewer = { target: WorkshopViewerTarget } & Partial<WorkshopViewerResult>;
+
+export type WorkshopReads = {
+  listRequest: () => { result: Promise<unknown> } | null;
+  list: () => WorkshopSnapshot | null;
+  viewerRequest: () => { result: Promise<unknown> } | null;
+  viewer: () => WorkshopViewerResult | null;
+};
 
 export type WorkshopFilter = "active" | "archived";
 export type WorkshopSort = "uses" | "recent" | "name";
@@ -134,7 +139,6 @@ type SkillWorkshopViewProps = {
   agentId: string | null;
   access: SkillWorkshopAccess;
   snapshot: WorkshopSnapshot | null;
-  loading: boolean;
   error: string | null;
   viewer: WorkshopViewer | null;
   filter: WorkshopFilter;

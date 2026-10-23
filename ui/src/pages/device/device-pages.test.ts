@@ -16,7 +16,7 @@ import {
   createTauriDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DevicePage } from "./device-page.tsx";
 import { DevicePermissionsPage } from "./permissions-page.tsx";
 
@@ -29,6 +29,7 @@ function createCapability(
   const listeners = new Set<(value: NativeDeviceSettingsSnapshot) => void>();
   const capability = {
     snapshot,
+    initialSnapshot: Promise.resolve(snapshot),
     subscribe(listener: (value: NativeDeviceSettingsSnapshot) => void) {
       listeners.add(listener);
       return () => {
@@ -261,30 +262,58 @@ it("switches Gateway hosting only when available and follows the native owner's 
   expect(toggleInput(hosting).checked).toBe(false);
   toggle(page, title, true);
   expect(set).toHaveBeenCalledExactlyOnceWith("app.keepGatewayRunning", true, expect.any(Function));
-  flush();
-  expect(toggleInput(hosting).disabled).toBe(true);
+  await waitForSolid(() => expect(toggleInput(hosting).hasAttribute("aria-disabled")).toBe(true));
   const saved = createNativeDeviceSettingsSnapshot();
   saved.app.keepGatewayRunning = true;
   settle(0, saved);
-  flush();
+  await waitForSolid(() => expect(toggleInput(hosting).hasAttribute("aria-disabled")).toBe(false));
   expect(toggleInput(hosting).checked).toBe(true);
   toggle(page, title, false);
   expect(set).toHaveBeenLastCalledWith("app.keepGatewayRunning", false, expect.any(Function));
   settle(1, saved, new Error("Gateway did not become ready."));
-  flush();
+  await waitForSolid(() => expect(toggleInput(hosting).hasAttribute("aria-disabled")).toBe(false));
   expect(toggleInput(hosting).checked).toBe(true);
-  expect(hosting.querySelector('[role="alert"]')?.textContent).toContain(
-    "Could not change Gateway hosting. Gateway did not become ready.",
+  await waitForSolid(() =>
+    expect(hosting.querySelector('[role="alert"]')?.textContent).toContain(
+      "Could not change Gateway hosting. Gateway did not become ready.",
+    ),
   );
+  toggle(page, title, false);
+  flush();
+  expect(hosting.querySelector('[role="alert"]')).toBeNull();
+  await waitForSolid(() => expect(toggleInput(hosting).hasAttribute("aria-disabled")).toBe(true));
+  expect(row(page, title)).toBe(hosting);
+  // Native Cancel returns the accepted snapshot unchanged.
+  settle(2, saved);
+  await waitForSolid(() => expect(toggleInput(hosting).hasAttribute("aria-disabled")).toBe(false));
+  expect(toggleInput(hosting).checked).toBe(true);
+  expect(row(page, title)).toBe(hosting);
   saved.app.keepGatewayRunningAvailable = false;
   render(saved);
-  expect(toggleInput(hosting).disabled).toBe(true);
+  expect(toggleInput(hosting).hasAttribute("aria-disabled")).toBe(true);
   set.mockClear();
   hosting.click();
   expect(set).not.toHaveBeenCalled();
   delete saved.app.keepGatewayRunning;
   render(saved);
   expect(page.textContent).not.toContain(title);
+});
+
+it("leaves a held Gateway confirmation without delaying profile cleanup or leaking its error", async () => {
+  const { capability, page, settle } = await setup();
+  const title = "Keep OpenClaw running when the app is closed";
+  toggle(page, title, true);
+  flush();
+  typeInput(profileInput(page), "pending-profile");
+  unmountPage(page);
+  expectCookieWrite(capability, "targetProfile", "pending-profile");
+
+  const next = await mount("openclaw-device-page", capability);
+  settle(0, createNativeDeviceSettingsSnapshot(), new Error("Retired confirmation"));
+  await waitForSolid(() =>
+    expect(toggleInput(row(next, title)).hasAttribute("aria-disabled")).toBe(false),
+  );
+  expect(row(next, title).querySelector('[role="alert"]')).toBeNull();
 });
 
 it("shows native desktop state and reconciles Keep computer awake with the native owner", async () => {
@@ -368,7 +397,7 @@ it("renders local settings and delegates native toggles and panels without Gatew
   iconStyles.value = "origami";
   iconStyles.dispatchEvent(new Event("change", { bubbles: true }));
   expect(set).toHaveBeenCalledWith("app.iconStyle", "origami");
-  expect(toggleInput(row(page, "Launch at login")).disabled).toBe(true);
+  expect(toggleInput(row(page, "Launch at login")).hasAttribute("aria-disabled")).toBe(true);
   expect(row(page, "Launch at login").textContent).toContain("requires a bundled app");
   expect(
     row(page, "Computer Control provider").querySelector<HTMLOptionElement>('option[value="cua"]')!
@@ -409,7 +438,7 @@ it("renders new native snapshots and removes controls whose native capabilities 
   render(next);
   expect(row(page, "Quick Chat shortcut").textContent).toContain("⌘K");
   expect(toggleInput(row(page, "Show Dock icon")).checked).toBe(false);
-  expect(toggleInput(row(page, "Enable Peekaboo Bridge")).disabled).toBe(true);
+  expect(toggleInput(row(page, "Enable Peekaboo Bridge")).hasAttribute("aria-disabled")).toBe(true);
   expect(page.querySelector('[aria-label="Computer Control provider"]')).toBeNull();
   expect(page.querySelector('[aria-label="Dock icon"]')).toBeNull();
   expect(page.textContent).not.toContain("Import browser logins…");
@@ -703,7 +732,7 @@ it.each([false, undefined])(
 
 it("enables precision with location access and changes local location and activity preferences", async () => {
   const { page, set, render } = await setup(undefined, "openclaw-device-permissions-page");
-  expect(toggleInput(row(page, "Precise location")).disabled).toBe(true);
+  expect(toggleInput(row(page, "Precise location")).hasAttribute("aria-disabled")).toBe(true);
   row(page, "Location access")
     .querySelector<HTMLInputElement>('input.settings-segmented__input[value="whileUsing"]')!
     .click();
@@ -711,7 +740,7 @@ it("enables precision with location access and changes local location and activi
   const next = createNativeDeviceSettingsSnapshot();
   next.permissions.location.mode = "whileUsing";
   render(next);
-  expect(toggleInput(row(page, "Precise location")).disabled).toBe(false);
+  expect(toggleInput(row(page, "Precise location")).hasAttribute("aria-disabled")).toBe(false);
   toggle(page, "Precise location", true);
   expect(set).toHaveBeenCalledWith("permissions.location.precise", true);
   toggle(page, "System-wide presence detection", true);

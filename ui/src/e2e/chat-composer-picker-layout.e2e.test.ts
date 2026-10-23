@@ -1,5 +1,7 @@
+import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { thinkingLevels } from "./chat-flow.test-support.ts";
@@ -10,6 +12,52 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI composer picker layout" });
 
 suite.define(() => {
+  it("centers the composer plus and close icons on mobile and desktop", async () => {
+    const offsets: number[] = [];
+    for (const width of [393, 1280]) {
+      await suite.withPage({ viewport: { width, height: 852 } }, async ({ page }) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await installMockGateway(page);
+        for (const route of ["new?agent=main", "chat"]) {
+          await page.goto(suite.server.baseUrl + route);
+          const composer = page.locator(".agent-chat__input");
+          const trigger = composer.locator(".agent-chat__input-btn--attach");
+          await trigger.waitFor();
+          for (const open of [false, true]) {
+            if (open) {
+              await trigger.click();
+              await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+              await page.locator(".agent-chat__capability-menu-panel").waitFor();
+            }
+            if (width === 393 && route.startsWith("new")) {
+              const frame = await takeControlUiScreenshotFrame(page, composer, [trigger], {
+                animations: "disabled",
+              });
+              await writeFile(
+                `${suite.artifactDir}/plus-${open ? "open" : "closed"}.png`,
+                frame.png,
+              );
+            }
+            const offset = await trigger.evaluate((button) => {
+              const target = button.getBoundingClientRect();
+              const icon = button.querySelector("svg")!.getBoundingClientRect();
+              return Math.max(
+                Math.abs(icon.x + icon.width / 2 - target.x - target.width / 2),
+                Math.abs(icon.y + icon.height / 2 - target.y - target.height / 2),
+              );
+            });
+            offsets.push(offset);
+            if (open) {
+              await page.keyboard.press("Escape");
+              await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+            }
+          }
+        }
+      });
+    }
+    expect(Math.max(...offsets), JSON.stringify(offsets)).toBeLessThanOrEqual(0.5);
+  });
+
   it("fits a tall model catalog above the mobile new-session composer", async () => {
     await suite.withPage(
       { viewport: { width: 393, height: 500 }, isMobile: true, hasTouch: true },

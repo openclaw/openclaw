@@ -31,6 +31,13 @@ registration/loading, not replicas of any private plugin implementation.
 `--latency-ms` sets the inbound message delay (default 35 ms). `--frame-gap-ms`
 sets the minimum separation between Gateway message deliveries (default 4 ms).
 Concurrent requests remain concurrent; replies share one serialized wire.
+`--sidebar-query-latency-ms ownerFirst=400` (also `involvingMe`, `ownerCounts`, and
+`children`) overrides method latency for that sidebar query shape. Use
+`--omit-hello-self-presence --method-latency-ms users.self=900` to exercise identity
+resolution after hello. `--sidebar-avatars` supplies synthetic avatar resources;
+`--sidebar-expanded` saves a Show more selection before replay. Warm-reload output
+includes per-frame sidebar row keys/order hashes, section headers, avatar sources,
+and retained cached row elements. These are DOM observations, not pixel paint times.
 `--sidebar-view` selects `sessions` (default, with Involving me selected) or `online`.
 Run both because current UI presents these inventories in separate sidebar views.
 Default reloads use one agent chip; explicit churn scenarios use the all-agent roster.
@@ -41,6 +48,21 @@ Online measurements.
 `--bundle-dir` serves an already built production bundle instead of rebuilding it;
 keep its build identity equal to the checkout head. This preserves a baseline
 bundle while production sources are edited.
+
+For a boot-weight comparison, use `--bundle-dir <base> --compare-bundle-dir <head>
+--runs 20 --untraced --cold-http-cache`. The runs alternate builds and restore
+each build's own warm state. Every run records `presentation.firstNonemptyTranscriptMs`
+and `presentation.firstEnabledComposerMs` from visible DOM observed on animation
+frames; these are readiness observations, not compositor paint timestamps.
+Keep profiling and the optional warm-reload probes out of this timing run.
+Console progress contains readiness and host load; full RPC and resource records
+are serialized to `summary.json` after all runs, outside the preview-server workload.
+
+`pnpm ui:check-performance --module-attribution --dist <build>` ranks the top
+30 emitted JavaScript modules in each route's preload graph. Add `--json` for all
+modules and mapping coverage. It gzips source-mapped generated ranges independently,
+so those scores identify expensive modules but are not additive transfer costs;
+the existing shipped gzip sidecars remain the route budget authority.
 
 Every reload replays the warm visit's persisted sidebar and trimmed v8 transcript
 (after unloading the app), local storage and session storage; the HTTP cache stays warm.

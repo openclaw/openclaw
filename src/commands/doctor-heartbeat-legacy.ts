@@ -23,38 +23,18 @@ import {
 
 export type HeartbeatConfig = LegacyHeartbeatConfig;
 
-/** Resolved heartbeat presentation toggles after defaults/channel/account precedence. */
-export type ResolvedHeartbeatVisibility = {
-  /** Whether successful heartbeat content should be sent as visible chat text. */
-  showOk: boolean;
-  /** Whether warning/error heartbeat content should be sent as visible chat text. */
-  showAlerts: boolean;
-  /** Whether heartbeat status should emit indicator events for UI surfaces. */
-  useIndicator: boolean;
-};
-
-const DEFAULT_VISIBILITY: ResolvedHeartbeatVisibility = {
-  showOk: false, // Silent by default
-  showAlerts: true, // Show content messages
-  useIndicator: true, // Emit indicator events
-};
-
-/** Resolves heartbeat visibility for a channel, applying account > channel > defaults precedence. */
-export function resolveLegacyHeartbeatVisibility(params: {
+/** Resolves heartbeat alert delivery, applying account > channel > defaults precedence. */
+export function resolveLegacyHeartbeatAlertsEnabled(params: {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string;
-}): ResolvedHeartbeatVisibility {
+}): boolean {
   const { cfg, channel, accountId } = params;
 
   // Webchat has no channel/account config branch, so only shared channel defaults apply.
   if (channel === "webchat") {
     const channelDefaults = cfg.channels?.defaults?.heartbeatVisibility;
-    return {
-      showOk: channelDefaults?.showOk ?? DEFAULT_VISIBILITY.showOk,
-      showAlerts: channelDefaults?.showAlerts ?? DEFAULT_VISIBILITY.showAlerts,
-      useIndicator: channelDefaults?.useIndicator ?? DEFAULT_VISIBILITY.useIndicator,
-    };
+    return channelDefaults?.showAlerts ?? true;
   }
 
   // Layer 1: Global channel defaults
@@ -75,23 +55,7 @@ export function resolveLegacyHeartbeatVisibility(params: {
     selectLegacyHeartbeatVisibility(channel, accountCfg)?.value,
   );
 
-  return {
-    showOk:
-      perAccount?.showOk ??
-      perChannel?.showOk ??
-      channelDefaults?.showOk ??
-      DEFAULT_VISIBILITY.showOk,
-    showAlerts:
-      perAccount?.showAlerts ??
-      perChannel?.showAlerts ??
-      channelDefaults?.showAlerts ??
-      DEFAULT_VISIBILITY.showAlerts,
-    useIndicator:
-      perAccount?.useIndicator ??
-      perChannel?.useIndicator ??
-      channelDefaults?.useIndicator ??
-      DEFAULT_VISIBILITY.useIndicator,
-  };
+  return perAccount?.showAlerts ?? perChannel?.showAlerts ?? channelDefaults?.showAlerts ?? true;
 }
 
 type HeartbeatAgent = {

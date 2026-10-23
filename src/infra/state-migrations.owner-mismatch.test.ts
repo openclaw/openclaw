@@ -28,12 +28,8 @@ import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.
 afterEach(() => vi.restoreAllMocks());
 
 function mutateDatabase(target: string, sql: string, ...values: SQLInputValue[]) {
-  const database = new DatabaseSync(target);
-  try {
-    database.prepare(sql).run(...values);
-  } finally {
-    database.close();
-  }
+  using database = new DatabaseSync(target);
+  database.prepare(sql).run(...values);
 }
 
 async function copiedOwnerFixture(

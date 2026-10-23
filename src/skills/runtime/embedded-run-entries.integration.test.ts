@@ -1,11 +1,13 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  prepareRuntimeSkillEntries,
+  resolveRuntimeSkillsPrompt,
+} from "../../agents/embedded-agent-runner/skills-prompt.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSkillsPrompt } from "../loading/workspace-skill-prompt.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
-import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 
 const tempDirs = createTempDirTracker();
@@ -20,7 +22,10 @@ async function resolveBundledDiffsSkillEntries(config?: OpenClawConfig) {
   });
 
   vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledPluginsDir);
-  return await resolveEmbeddedRunSkillEntries({ workspaceDir, ...(config ? { config } : {}) });
+  return await prepareRuntimeSkillEntries({
+    skillsAnchorWorkspace: workspaceDir,
+    ...(config ? { config } : {}),
+  });
 }
 
 afterEach(() => {
@@ -58,7 +63,11 @@ it("matches snapshot skill roots when a snapshot-less run uses a different execu
   }
   const skillNames = ["fallback-agent", "fallback-shared", "fallback-execution"];
   const saved = await snapshot({ ...roots, config: {}, skillFilter: skillNames });
-  const fallback = await resolveEmbeddedRunSkillEntries({ ...roots, config: {} });
+  const fallback = await prepareRuntimeSkillEntries({
+    skillsAnchorWorkspace: agentWorkspaceDir,
+    executionWorkspaceDir,
+    config: {},
+  });
   const fallbackSkills = fallback.skillEntries.filter((entry) =>
     skillNames.includes(entry.skill.name),
   );
@@ -93,16 +102,11 @@ it("keeps agent skills ahead of execution skills in a constrained fallback promp
     config,
     skillFilter: [agentSkillName, executionSkillName],
   });
-  const fallback = await resolveEmbeddedRunSkillEntries({
-    ...roots,
+  const { prompt: fallbackPrompt } = await resolveRuntimeSkillsPrompt({
+    skillsAnchorWorkspace: roots.workspaceDir,
+    executionWorkspaceDir: roots.executionWorkspaceDir,
     config,
     agentId: "main",
-  });
-  const fallbackPrompt = await resolveSkillsPrompt({
-    entries: fallback.skillEntries,
-    workspaceDir: roots.workspaceDir,
-    config,
-    preserveEntryOrder: fallback.preserveEntryOrder,
   });
 
   expect(fallbackPrompt).toBe(saved.prompt);

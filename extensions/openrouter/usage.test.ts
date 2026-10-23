@@ -281,10 +281,7 @@ describe("OpenRouter usage", () => {
     const fetchFn = vi.fn<typeof fetch>(async () => createResponse());
     const { release } = mockGuardedFetch();
 
-    const snapshot = await fetchUsage(fetchFn, {
-      baseUrl: proxyBaseUrl,
-      timeoutMs: 1000,
-    });
+    const snapshot = await fetchUsage(fetchFn, { baseUrl: proxyBaseUrl, timeoutMs: 1000 });
 
     expect(snapshot.error).toContain(error);
     expect(release).toHaveBeenCalledTimes(2);

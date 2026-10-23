@@ -13,7 +13,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
+import type { ChatHistoryPageParams } from "../config/sessions/session-history-types.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -22,7 +22,12 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-session-history.js";
-import { cliMeta, withClaudeProjectsDir } from "./cli-session-history.test-support.js";
+import {
+  claudeUser,
+  cliMeta,
+  LEGACY_EXEC_COMPLETION_PROMPT,
+  withClaudeProjectsDir,
+} from "./cli-session-history.test-support.js";
 import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
@@ -101,7 +106,7 @@ function historyParams(
   { scope, entry }: Pick<HistoryFixture, "scope" | "entry">,
   homeDir: string,
   max = 10,
-) {
+): ChatHistoryPageParams {
   return {
     entry,
     provider: "claude-cli",
@@ -148,6 +153,60 @@ function readPreparedPage(
     deferProfileDisplay: true,
   });
 }
+
+it("pages past native interrupts without consuming an identical canonical human turn", async () => {
+  await withPagingHistory("cli-interrupts", async (fixture) => {
+    const { scope, entry, readers, filePath, homeDir } = fixture;
+    const text = "[Request interrupted by user]";
+    await fixture.setEvents([local("human", null, text, 2_000, "user")]);
+    const userRow = (uuid: string, content: unknown, timestamp: number, promptSource?: string) =>
+      JSON.stringify(
+        claudeUser(content, {
+          uuid,
+          timestamp: new Date(timestamp).toISOString(),
+          ...(promptSource ? { promptSource } : {}),
+        }),
+      );
+    await fs.writeFile(
+      filePath,
+      [
+        native("before", "Earlier reply", 1_000),
+        userRow("interrupt", [{ type: "text", text }], 1_500),
+        userRow("native-human", text, 2_001, "sdk"),
+        native("after", "Later reply", 3_000),
+        userRow(
+          "tool-interrupt",
+          [{ type: "text", text: "[Request interrupted by user for tool use]" }],
+          3_500,
+        ),
+        userRow("latest", text, 4_000),
+      ].join("\n"),
+    );
+    await fixture.owner.run(fixture.target.database, async () => {
+      const params = historyParams({ scope, entry }, homeDir, 2);
+      await withCliReader(params, readers, async (cli) => {
+        const latest = await readPreparedPage(params, cli);
+        const older = await readPreparedPage({ ...params, offset: 2 }, cli);
+        expect(latest.messages.map(readChatHistoryMessageId)).toEqual(["after", "latest"]);
+        expect(older.messages).toMatchObject([
+          { content: "Earlier reply", __openclaw: { id: "before" } },
+          { content: text, __openclaw: { id: "human", externalId: "native-human" } },
+        ]);
+        expect([...older.messages, ...latest.messages].map(cli.sequence)).toEqual([1, 2, 3, 4]);
+        const raw = await cli.readers.readRecentSessionMessagesWithStatsAsync(scope, {
+          maxMessages: 10,
+        });
+        expect(raw.totalMessages).toBe(4);
+        expect(raw.messages.map(readChatHistoryMessageId)).toEqual([
+          "before",
+          "human",
+          "after",
+          "latest",
+        ]);
+      });
+    });
+  });
+});
 
 it("serves a captured history prefix while both transcripts append and observes the next revision", async () => {
   await withPagingHistory("cli-prefix", async (fixture) => {
@@ -223,10 +282,26 @@ it("applies native history eligibility to actual empty, message, and marker-only
       tokensBefore: 100,
       firstKeptEntryId: null,
     };
+    const cronInput = {
+      ...message,
+      message: {
+        role: "user",
+        content: "[cron:job-cli native CLI override] Run the bounded task.",
+        provenance: {
+          kind: "internal_system",
+          sourceSessionKey: "agent:main:cron:job-cli:run:cli-eligibility",
+          sourceTool: "cron",
+          sourcePromptPrefix: "[cron:job-cli native CLI override]",
+          jobId: "job-cli",
+          runId: "cli-eligibility",
+        },
+      },
+    };
     for (const cell of [
       { provider: "claude-cli", events: [message], imported: true },
       { provider: "anthropic", events: [message], imported: true },
       { provider: "openai", events: [message], imported: false },
+      { provider: "openai", events: [cronInput], imported: false },
       { provider: "openai", events: [marker], imported: false },
       { provider: "openai", events: [], imported: true },
     ]) {
@@ -362,11 +437,7 @@ it.each([
         ),
         nativeUser("native-question", `${prefix}${events}real question`, 3_001),
         nativeUser("native-unmatched", `${prefix}${events}only in the native file`, 4_000),
-        nativeUser(
-          "native-exec",
-          `${events}${buildExecEventPrompt(["Exec completed (example, code 0) :: done"])}`,
-          5_000,
-        ),
+        nativeUser("native-exec", `${events}${LEGACY_EXEC_COMPLETION_PROMPT}`, 5_000),
       ].join("\n"),
     );
     await fixture.owner.run(fixture.target.database, async () => {

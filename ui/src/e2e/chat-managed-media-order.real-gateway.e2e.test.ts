@@ -371,14 +371,29 @@ async function runManagedMediaScenario() {
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       // The recap belongs to a run the pane observed, not a terminal history row.
       await page.waitForFunction((expectedSessionKey) => {
-        const state = document.querySelector<HTMLElement & { state?: ChatState }>(
+        const pane = document.querySelector<HTMLElement & { state?: ChatState }>(
           'openclaw-chat-pane[aria-hidden="false"]',
-        )?.state;
-        return state?.sessionKey === expectedSessionKey && Boolean(state.chatRunId);
+        );
+        const state = pane?.state;
+        if (!pane || state?.sessionKey !== expectedSessionKey || !state.chatRunId) {
+          return false;
+        }
+        // An existing indicator can precede projection of the acknowledged run.
+        return Array.from(pane.querySelectorAll(".chat-working-indicator")).some((indicator) => {
+          const runKey = indicator
+            .closest('[data-chat-row-key^="agent-run:"]')
+            ?.getAttribute("data-chat-row-key");
+          const streamKey = indicator
+            .closest('[data-chat-row-key^="stream-working:"]')
+            ?.getAttribute("data-chat-row-key");
+          return (
+            indicator.checkVisibility({ visibilityProperty: true }) &&
+            ((runKey && JSON.parse(runKey.slice("agent-run:".length))[0] === state.chatRunId) ||
+              streamKey ===
+                `stream-working:${JSON.stringify([expectedSessionKey, state.chatRunId])}`)
+          );
+        });
       }, sessionKey);
-      await page
-        .locator('openclaw-chat-pane[aria-hidden="false"] .chat-working-indicator')
-        .waitFor({ state: "visible" });
       provider.releaseEcho();
       const bubble = page.locator(".chat-group.assistant .chat-bubble").filter({ hasText: intro });
       const renderedImages = bubble.locator("img.chat-message-image");
@@ -582,6 +597,14 @@ async function runManagedMediaScenario() {
                 recapPanePresent: Boolean(pane),
                 recapSessionMatches: state?.sessionKey === expectedSessionKey,
                 recapRunCleared: state?.chatRunId === null,
+                recapWorkingIndicatorCount:
+                  pane?.querySelectorAll(".chat-working-indicator").length ?? null,
+                recapPendingSendCount:
+                  state?.chatQueue.filter(
+                    (item) => item.sendState === "submitting" || item.sendState === "sending",
+                  ).length ?? null,
+                recapPendingSendMatchesAssistant:
+                  state?.chatQueue.some((item) => item.sendRunId === assistantRunId) ?? null,
                 recapCount: recaps.length,
                 recapVisibleCount: recaps.filter((element) =>
                   element.checkVisibility({ visibilityProperty: true }),

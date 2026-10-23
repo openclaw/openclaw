@@ -6,6 +6,19 @@ fi
 
 set -euo pipefail
 
+# Install creator cleanup before even the Git preflight or argument validation.
+# Physical paths keep helper argv aligned with Node's canonical module URLs.
+script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+script_parent_dir="$(dirname "$script_self")"
+if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ] &&
+  [ "${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}" = "$$" ] && [ "${OPENCLAW_PR_ANCHOR_FD:-}" = 9 ]; then
+  trap 'node "$script_parent_dir/pr-lib/materialized-anchor.mjs" retire "$script_self" || true' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 131' QUIT
+  trap 'exit 143' TERM
+fi
+
 # This bootstrap stays inline: no local helper is trusted before code selection.
 pr_git() { "${OPENCLAW_PR_GIT:-${GIT_EXEC:-git}}" "$@"; }
 pr_run_bounded() (
@@ -37,8 +50,8 @@ export GIT_EXEC
 export OPENCLAW_PR_GIT="$GIT_EXEC"
 
 # Older trusted wrappers use bare Git before reaching a newer supervisor.
-# Keep this Git-only adapter across exec; OS temp reaping owns its lifetime,
-# as with materialized anchor copies. Matching inodes let reentry reuse it.
+# Keep this Git-only adapter across exec; OS temp reaping owns its lifetime.
+# Matching inodes let reentry reuse it.
 pr_path_git=$(type -P git 2>/dev/null || true)
 case "$pr_path_git" in /*|"") ;; *) pr_path_git="$PWD/$pr_path_git" ;; esac
 if [ -z "$pr_path_git" ] || [ ! "$pr_path_git" -ef "$GIT_EXEC" ]; then
@@ -615,9 +628,6 @@ EOF_TOOLING
 
 # Select trusted wrapper code independently from the canonical repository root;
 # a linked wrapper may be removed by merge-run or gc before supervision ends.
-# Physical paths keep helper argv aligned with Node's canonical module URLs.
-script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
-script_parent_dir="$(dirname "$script_self")"
 canonical_repo_root="$script_parent_dir/.."
 # Bootstrap paths stay fixed so an edited inventory cannot exclude itself from
 # the working-tree and anchor checks. The inventory owns the remaining closure.
@@ -742,9 +752,14 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
         # paths intact in the materialized tree.
         anchor_git_root=$(pr_git -C "$script_parent_dir" rev-parse --show-toplevel 2>/dev/null || true)
         if [ -n "$anchor_wrapper_revision" ] && [ -n "$anchor_git_root" ] &&
-          anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor.XXXXXX" 2>/dev/null); then
+          anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor.$$.XXXXXX" 2>/dev/null); then
           # Hold the directory we created across exec, not an environment pathname.
           # FD 9 is reserved for the supervisor; bootstrap children are awaited.
+          trap 'rm -rf "$anchor_exec_dir"' EXIT
+          trap 'exit 129' HUP
+          trap 'exit 130' INT
+          trap 'exit 131' QUIT
+          trap 'exit 143' TERM
           exec 9< "$anchor_exec_dir"
           anchor_extraction_valid=0
           # BSD tar can stop at the end marker before Git finishes writing padding,
@@ -775,19 +790,26 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
             fi
             if ! pr_materialize_dependencies "$anchor_dependency_owner" "$anchor_exec_dir/node_modules"
             then
-              rm -rf "$anchor_exec_dir"
               exit 1
             fi
-            # Bash re-reads this copy during execution. Only the same-process
-            # supervisor may retire it after the entire operation has drained.
-            # Older anchors without that handoff retain OS temp-reaping behavior.
+            # Bash re-reads this copy: successful exec hands cleanup to the
+            # same creator PID, in anchored bash or its drained supervisor.
+            # Older anchors without that handoff are reclaimed by the stale sweep.
             hold_pr_workflow_selection "$anchor_commit" "$anchor_exec_dir" || exit 1
             echo "scripts/pr wrapper in this worktree $wrapper_route_reason; running wrapper code materialized from the $anchor_reference trust anchor at revision $(pr_git -C "$script_parent_dir" rev-parse --short "$anchor_commit")." >&2
+            # Bash 3.2 clears traps even when exec fails; errexit must be off
+            # until we reinstall cleanup on the failure-only continuation.
+            shopt -s execfail
+            set +e
             OPENCLAW_PR_ANCHOR_REPO_ROOT="$canonical_repo_root" \
               OPENCLAW_PR_ANCHOR_CREATOR_PID="$$" OPENCLAW_PR_ANCHOR_FD=9 \
               exec "$anchor_exec_dir/scripts/pr" "$@"
+            trap 'rm -rf "$anchor_exec_dir"' EXIT
+            echo "Unable to execute the materialized scripts/pr wrapper." >&2
+            exit 1
           fi
           rm -rf "$anchor_exec_dir"
+          trap - EXIT HUP INT QUIT TERM
           exec 9<&-
         fi
         # HEAD blobs are authoritative here: the uncommitted-wrapper guard above
@@ -873,7 +895,14 @@ if [ "${1-}" = "gc" ] || is_locked_pr_command "${1-}"; then
     unset OPENCLAW_PR_LOCK_NOTIFY_FD
     unset OPENCLAW_PR_LOCK_SUPERVISOR_PID
     command -v node >/dev/null 2>&1 || { echo "Missing required command: node" >&2; exit 1; }
+    shopt -s execfail
+    set +e
     exec node "$script_parent_dir/pr-lib/process-group-runner.mjs" "$canonical_repo_root" "$script_self" "$@"
+    if [ "${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}" = "$$" ] && [ "${OPENCLAW_PR_ANCHOR_FD:-}" = 9 ]; then
+      trap 'node "$script_parent_dir/pr-lib/materialized-anchor.mjs" retire "$script_self" || true' EXIT
+    fi
+    echo "Unable to execute the scripts/pr supervisor." >&2
+    exit 1
   fi
 fi
 

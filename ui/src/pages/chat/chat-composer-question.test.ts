@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerQuestionPrompt as questionPrompt,
@@ -46,6 +47,10 @@ describe("composer question takeover", () => {
       const draw = () => renderComposerInto(container, composerProps);
 
       draw();
+      await vi.dynamicImportSettled();
+      await waitForSolid(() =>
+        expect(container.querySelector(".session-progress-card--composer")).not.toBeNull(),
+      );
       const progress = container.querySelector<HTMLDetailsElement>(
         ".session-progress-card--composer",
       )!;

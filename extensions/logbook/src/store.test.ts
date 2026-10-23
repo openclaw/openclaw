@@ -10,7 +10,6 @@ import {
   batchInput,
   cardDraft,
   execSql,
-  frameInput,
   readRows,
   useLogbookFixture,
   withDatabase,
@@ -38,18 +37,12 @@ describe("LogbookStore", () => {
   const cardTitles = async () => (await store.cardsForDay(DAY)).map(({ title }) => title);
   const insertFrame = async (capturedAtMs: number) => {
     const day = dayKeyFor(capturedAtMs);
-    const filePath = store.frameFilePath(day, capturedAtMs);
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, "jpeg-bytes");
-    return await store.insertFrame(
-      frameInput({
-        capturedAtMs,
-        day,
-        path: filePath,
-        byteSize: 9,
-        contentHash: `hash-${capturedAtMs}`,
-      }),
-    );
+    return await store.captureFrame({
+      capturedAtMs,
+      day,
+      screenIndex: 0,
+      buffer: Buffer.from(`jpeg-bytes-${capturedAtMs}`),
+    });
   };
 
   it("refuses a hardlinked database with another frame root before bootstrapping that root", async () => {
@@ -62,11 +55,20 @@ describe("LogbookStore", () => {
       "SQLite database already belongs to another worker backend",
     );
     expect(fs.existsSync(path.join(otherRoot, "frames"))).toBe(false);
-    expect(await store.frameById(frameId)).toMatchObject({
-      id: frameId,
+    expect(await store.framesInRange(capturedAtMs, capturedAtMs + 1)).toMatchObject([
+      {
+        id: frameId,
+        capturedAtMs,
+      },
+    ]);
+    expect(await store.framePayload(frameId)).toMatchObject({
+      frameId,
       capturedAtMs,
-      path: store.frameFilePath(dayKeyFor(capturedAtMs), capturedAtMs),
+      base64: Buffer.from(`jpeg-bytes-${capturedAtMs}`).toString("base64"),
     });
+    expect(
+      fs.readFileSync(store.frameFilePath(dayKeyFor(capturedAtMs), capturedAtMs), "utf8"),
+    ).toBe(`jpeg-bytes-${capturedAtMs}`);
     expect(await store.countUnbatchedActiveFrames()).toBe(1);
   });
 
@@ -164,18 +166,21 @@ describe("LogbookStore", () => {
     const now = Date.now();
     const firstId = await insertFrame(now - 21 * 24 * 60 * 60_000);
     const blockedId = await insertFrame(now - 20 * 24 * 60 * 60_000);
-    const blockedPath = expectDefined(await store.frameById(blockedId), "blocked frame").path;
+    const blockedPath = store.frameFilePath(
+      dayKeyFor(now - 20 * 24 * 60 * 60_000),
+      now - 20 * 24 * 60 * 60_000,
+    );
     fs.rmSync(blockedPath);
     fs.mkdirSync(blockedPath);
 
     await expect(store.pruneFrames(now - 14 * 24 * 60 * 60_000)).rejects.toThrow();
-    expect(await store.frameById(firstId)).not.toBeNull();
-    expect(await store.frameById(blockedId)).not.toBeNull();
+    expect(
+      (await store.framesInRange(now - 21 * 24 * 60 * 60_000, now)).map((frame) => frame.id),
+    ).toEqual([firstId, blockedId]);
 
     fs.rmSync(blockedPath, { recursive: true });
     expect(await store.pruneFrames(now - 14 * 24 * 60 * 60_000)).toBe(2);
-    expect(await store.frameById(firstId)).toBeNull();
-    expect(await store.frameById(blockedId)).toBeNull();
+    expect(await store.framesInRange(now - 21 * 24 * 60 * 60_000, now)).toEqual([]);
   });
 
   it("rejects observations for a missing batch", async () => {

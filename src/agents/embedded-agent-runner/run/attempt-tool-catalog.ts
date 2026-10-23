@@ -242,7 +242,9 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         return null;
       }
       const toolsIntentionallyDisabled =
-        attempt.disableTools === true || preparedToolBase.effectiveToolsAllow?.length === 0;
+        attempt.disableTools === true ||
+        preparedToolBase.effectiveToolsAllow?.length === 0 ||
+        runtimeCapabilityProfile.policy.explicitToolDenylist.includes("*");
       const sources = toolsIntentionallyDisabled
         ? explicitToolAllowlistSources.filter((source) => source.enforceWhenToolsDisabled === true)
         : explicitToolAllowlistSources;

@@ -149,6 +149,7 @@ const enChatSession = {
       createdBy: "Created by",
       owner: "Owner",
       participants: "{count} participants",
+      peopleCount: "People: {count}.",
       moreParticipants: "{count} more participants",
       workspaceUnavailable: "Workspace unavailable",
       allChanges: "All changes",
@@ -223,6 +224,17 @@ const enChatSession = {
       installingBody: "Installing the new worker runtime on this device.",
     },
     subagentsPanel: {
+      nativeTitle: "Live native agents",
+      nativeCoverage: "Current native agent activity. Saved agent history is not included.",
+      nativeEmpty: "No native agents are currently observed.",
+      nativeTruncated: "Only part of the live native roster is shown.",
+      nativeRetry: "Updates retry automatically while this panel is visible.",
+      nativeStatus: {
+        running: "Running",
+        completed: "Completed",
+        failed: "Failed",
+        interrupted: "Interrupted",
+      },
       title: "Subagents",
       desktopFilter: { all: "All", active: "Active", waiting: "Waiting", done: "Done" },
       desktopFilterLabel: "Filter subagents",
@@ -265,11 +277,10 @@ const enChatSession = {
       publicLinkDescription: "Anyone can read without signing in.",
       publicDraftDescription: "The public link stays readable in Draft.",
       linkUnavailable: "Link unavailable",
-      messagePermissions: "Message permissions",
+      sessionMembers: "Session members",
       creator: "Creator",
-      permissionUnavailable: "Unavailable",
-      permissionUnavailableDescription:
-        "Effective permission is not provided by the Gateway. The check only indicates membership.",
+      member: "Member",
+      visitor: "Visitor",
       searchPeople: "Search people…",
       closeSearch: "Close search",
       noPeopleFound: "No people found",
@@ -507,8 +518,6 @@ const enChatSession = {
       askImageQuestion: "What does this image show?",
       selectionTooLong:
         "These comments are too long for Side chat. Use a shorter selection or comment.",
-      selectionQuoteOnly:
-        "The selection is too long to attach. A short quote is ready in Side chat.",
       askSubmit: "Ask",
       askBusy: "Side chat is already answering a question.",
       askHistoryUnavailable: "Couldn't load this session's history.",
@@ -519,7 +528,6 @@ const enChatSession = {
       askRateLimited: "Side chat reached its question limit. Try again shortly.",
       askUnavailable: "Side chat cannot answer right now.",
       askRetry: "Retry",
-      asOf: "as of {time}",
       health: {
         "on-track": "On track",
         grinding: "Working",

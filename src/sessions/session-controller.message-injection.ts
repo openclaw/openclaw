@@ -1,5 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
+import {
+  bindReplyQueueInputAdapter,
+  bindWorkerToolPreparation,
+  readReplyQueueInputAdapter,
+} from "../agents/harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../agents/harness/tool-authority-preparation.js";
 import {
   captureRequesterOrigin,
@@ -35,6 +39,9 @@ import {
   readSessionControllerOperationState,
 } from "./session-controller.state.js";
 import { messageAdmissionsByAttachment } from "./session-controller.storage.js";
+import { bindCapturedReplyToolAuthorityCallerRead } from "./session-controller.tool-authority.js";
+
+export { canInjectReplyMessageTarget } from "./session-controller.message-injection-backend.js";
 
 /** Capture the exact physical owner; aliases and protocol IDs are not injection authority. */
 export function captureReplyMessageInjectionTarget(
@@ -61,7 +68,23 @@ export function captureReplyMessageInjectionTarget(
   // Direct command delivery has no reply-dispatch trace output surface.
   const projectOverlay = (overlay: ReplyToolAuthorityOverlay) =>
     operationState?.turnKind === "direct" ? { ...overlay, traceAuthorized: false } : overlay;
-  return {
+  const projectAsync = async (overlay: ReplyToolAuthorityOverlay) => {
+    try {
+      return toolAuthority
+        ? await toolAuthority.projectAsync(projectOverlay(overlay))
+        : await operation.projectToolAuthorityFingerprintAsync(projectOverlay(overlay));
+    } catch {
+      toolAuthority?.assertActive();
+      return undefined;
+    }
+  };
+  bindCapturedReplyToolAuthorityCallerRead({
+    projector: projectAsync,
+    operation,
+    backendAttachment,
+    toolAuthority,
+  });
+  const target: ReplyMessageInjectionTarget = {
     [replyMessageInjectionTargetOwner]: {
       backendIdentity: backend,
       admissionIdentity: backendAttachment,
@@ -86,17 +109,7 @@ export function captureReplyMessageInjectionTarget(
           return undefined;
         }
       },
-      projectToolAuthorityFingerprintAsync: async (overlay) => {
-        try {
-          return toolAuthority
-            ? await toolAuthority.projectAsync(projectOverlay(overlay))
-            : await operation.projectToolAuthorityFingerprintAsync(projectOverlay(overlay));
-        } catch {
-          // A policy mismatch is a rejection; a retired publisher still fails closed.
-          toolAuthority?.assertActive();
-          return undefined;
-        }
-      },
+      projectToolAuthorityFingerprintAsync: projectAsync,
       projectRequesterToolAuthorityFingerprint: (requester) => {
         try {
           return toolAuthority?.projectRequester?.(requester);
@@ -126,6 +139,11 @@ export function captureReplyMessageInjectionTarget(
     ...(backend.runId ? { runId: backend.runId } : {}),
     ...(sourceTurnId ? { sourceTurnId } : {}),
   };
+  bindReplyQueueInputAdapter(
+    target[replyMessageInjectionTargetOwner],
+    readReplyQueueInputAdapter(toolAuthority),
+  );
+  return target;
 }
 
 function resolveReplyMessageInjectionRejection(params: {
@@ -220,7 +238,7 @@ function resolveReplyMessageInjectionRejection(params: {
             terminalReplyExpectation:
               backend?.terminalReplyExpectation === "result-required"
                 ? "result-required"
-                : "required",
+                : (params.options.terminalReplyExpectation ?? "required"),
           }
         : params.options,
     sessionId: operation.sessionId,
@@ -244,56 +262,6 @@ export function beginReplyMessageInjectionTarget(
   );
 }
 
-/** Advisory only; injection still prepares and checks the captured owner at its effect. */
-export function canInjectReplyMessageTarget(
-  target: ReplyMessageInjectionTarget,
-  options?: ReplyMessageInjectionOptions,
-): boolean {
-  try {
-    if (options?.canAdmit?.() === false) {
-      return false;
-    }
-    const owner = target[replyMessageInjectionTargetOwner];
-    const {
-      toolAuthorityOverlay,
-      requesterToolAuthority,
-      toolAuthorityPreparation,
-      personalToolParticipant,
-      assertCurrent,
-      allowPendingUserInputAnswer,
-      inboundAudio,
-      canAdmit: _canAdmit,
-      allowCollaborativeSteering: _allowCollaborativeSteering,
-      ...backendOptions
-    } = options ?? {};
-    toolAuthorityPreparation?.compatAssertCurrent();
-    assertCurrent?.();
-    return (
-      "injection" in
-      owner.resolve({
-        options: {
-          ...backendOptions,
-          ...(requesterToolAuthority || toolAuthorityOverlay
-            ? {
-                toolAuthorityFingerprint: requesterToolAuthority
-                  ? owner.projectRequesterToolAuthorityFingerprint(requesterToolAuthority)
-                  : toolAuthorityOverlay &&
-                    owner.projectToolAuthorityFingerprint(toolAuthorityOverlay),
-              }
-            : {}),
-        },
-        requesterToolAuthority,
-        personalToolParticipant: toolAuthorityOverlay ?? personalToolParticipant,
-        inboundAudio,
-        allowPendingUserInputAnswer,
-        assertCurrent,
-      })
-    );
-  } catch {
-    return false;
-  }
-}
-
 async function beginPreparedReplyMessageInjectionTarget(
   target: ReplyMessageInjectionTarget,
   text: string,
@@ -307,9 +275,11 @@ async function beginPreparedReplyMessageInjectionTarget(
           options?.assertCurrent?.();
         }
       : undefined;
+  // Losing the captured target cannot revoke a live source's separate-turn fallback.
+  const assertFailureSourceCurrent = options?.assertCurrent ?? assertSourceCurrent;
   const resolvePreAcceptanceFailure = (error: unknown): ReplyMessageInjectionOutcome => {
     const failure = resolveReplyMessageInjectionFailure(error, {
-      assertCurrent: assertSourceCurrent,
+      assertCurrent: assertFailureSourceCurrent,
       accepted: false,
     });
     if (failure) {
@@ -323,8 +293,7 @@ async function beginPreparedReplyMessageInjectionTarget(
         current.reason === "not_running" ||
         current.reason === "stale_run")
     ) {
-      // Projection can reject after the captured target retires. Only a still-current
-      // source may fall back, and only before this target has accepted any input.
+      // Only a live source rejected before acceptance may fall back after target retirement.
       return { status: "rejected", reason: current.reason };
     }
     throw error;
@@ -549,8 +518,7 @@ async function beginPreparedReplyMessageInjectionTarget(
   }
   const existing = idempotencyKey && admissions?.get(idempotencyKey);
   if (existing) {
-    // This caller owns no second queue item. Sharing the receipt leaves FIFO free
-    // while the original delivery settles, but never shares caller authority.
+    // Receipt sharing frees FIFO during settlement without sharing caller authority.
     const acceptance = existing.acceptance.then((accepted) => {
       assertSourceCurrent?.();
       queueOptions?.onQueueAccepted?.(accepted);
@@ -563,19 +531,14 @@ async function beginPreparedReplyMessageInjectionTarget(
       }
       return result;
     });
-    // Callers may observe only one receipt; preserve rejection for awaiters
-    // without leaking the independently settling projection as unhandled.
+    // Preserve both receipts' rejections without leaking an unobserved projection.
     void acceptance.catch(() => {});
     void outcome.catch(() => {});
     return { targetRunId: existing.targetRunId, acceptance, outcome };
   }
-  // The backend selected at the final admission check owns steering identity.
-  // Durable provenance is confirmed only after this exact queue operation proves
-  // transcript commitment; acceptance alone is insufficient.
-  // Injection is user input, not run evidence: stamping activity here would let
-  // sub-10-minute user messages re-arm a wedged run's staleness window forever.
-  // Legacy preflight keeps this FIFO reservation; the capability owns the final
-  // synchronous admission check, matching Codex's active-turn lock boundary.
+  // This exact backend queue operation owns steering identity; acceptance is not transcript commitment.
+  // Input must not re-arm a wedged run's staleness window by stamping run activity.
+  // Legacy preflight holds FIFO until synchronous admission, matching Codex's active-turn lock.
   const acceptance = createDeferredCore<boolean>();
   let acceptanceSettled = false;
   let queueAccepted = false;
@@ -609,14 +572,20 @@ async function beginPreparedReplyMessageInjectionTarget(
   };
   const runtimeQueueOptions: ReplyBackendQueueMessageOptions = {
     ...queueOptions,
-    // Admission above checks the human principal; the runtime must not interpret
-    // an authorized status control as an answer to ask_user.
+    // Preserve the admitted human reply even when it cannot answer the incumbent's question.
+    isInboundUserReply: queueOptions?.isInboundUserMessage === true,
+    // Current bundled sinks keep human custody separate from question permission.
+    // Released external sinks used the category itself to gate question answers.
     ...(allowPendingUserInputAnswer === false
-      ? { isInboundUserMessage: false, allowPendingUserInputAnswer }
+      ? {
+          allowPendingUserInputAnswer,
+          ...(readReplyQueueInputAdapter(owner) === "legacy-question-category"
+            ? { isInboundUserMessage: false }
+            : {}),
+        }
       : {}),
     onQueueAccepted: (accepted) => {
-      // Rejection is provisional until the outcome rules out an uncertain question
-      // dispatch. Forwarding false early would release the parked input for replay.
+      // Refuse only after ruling out uncertain question dispatch, which retains replay custody.
       if (accepted) {
         queueAccepted = true;
         recordParticipant();
@@ -626,7 +595,7 @@ async function beginPreparedReplyMessageInjectionTarget(
   };
   const failed = (error: unknown): ReplyMessageInjectionOutcome => {
     const outcome: ReplyMessageInjectionOutcome = resolveReplyMessageInjectionFailure(error, {
-      assertCurrent: assertSourceCurrent,
+      assertCurrent: assertFailureSourceCurrent,
       accepted: queueAccepted,
     }) ?? { status: "rejected", reason: "runtime_rejected", errorMessage: String(error) };
     settleAcceptance(outcome.status === "indeterminate");
@@ -643,8 +612,7 @@ async function beginPreparedReplyMessageInjectionTarget(
         queueAccepted = true;
         recordParticipant();
         settleAcceptance(true);
-        // Receipt uncertainty retains this input, but cannot authorize canceling
-        // the active run or replaying input the runtime may already have consumed.
+        // Receipt uncertainty retains input; it cannot authorize run cancellation or replay.
         if (result?.transcriptCommit === "unconfirmed") {
           return { status: "indeterminate", errorMessage: result.errorMessage };
         }

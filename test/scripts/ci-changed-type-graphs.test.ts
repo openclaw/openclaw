@@ -32,20 +32,17 @@ function workspace(files = [source]) {
   return cwd;
 }
 const fullPlan = { mode: "full", graphs: TSGO_CI_GRAPHS };
-const graphs = (files: (name: string) => string[] = () => []) =>
-  expandTsgoExecutionGraphs(TSGO_CI_GRAPHS).map(({ name, config }) => ({
+const graphs = (
+  files: (name: string) => string[] = () => [],
+  scope: Parameters<typeof expandTsgoExecutionGraphs>[0] = TSGO_CI_GRAPHS,
+) =>
+  expandTsgoExecutionGraphs(scope).map(({ name, config }) => ({
     name,
     config,
     roots: [],
     files: files(name),
   }));
-const additionalInventory = (files: string[]) =>
-  expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS).map(({ name, config }) => ({
-    name,
-    config,
-    roots: [],
-    files,
-  }));
+const additionalInventory = (files: string[]) => graphs(() => files, TSGO_CI_ADDITIONAL_GRAPHS);
 const noncoreInventory = additionalInventory([extension]);
 type PlanOptions = Parameters<typeof createChangedCiTypeCheckPlan>[1];
 async function expectFull(paths: string[], options: PlanOptions = {}, discovers = false) {

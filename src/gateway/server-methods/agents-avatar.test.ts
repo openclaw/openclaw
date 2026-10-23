@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { BlobsterUnsupportedRuntimeError } from "../../agents/blobster-generation-errors.js";
 import { createLlmOperatorAuthorizationError } from "../../plugins/runtime/runtime-llm-error.js";
 import { agentAvatarGenerateHandler } from "./agents-avatar.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const generation = vi.hoisted(() => vi.fn());
@@ -21,20 +22,11 @@ const operator = { profileId: "owner" };
 const release = vi.fn();
 let current = true;
 
-async function generate(
-  params: Record<string, unknown> = { agentId: "garden", prompt: "A gardener" },
-) {
-  const respond = vi.fn();
-  await agentAvatarGenerateHandler({
-    req: { type: "req", id: "avatar-preview", method: "agents.avatar.generate" },
-    params,
-    respond,
+function generate(params: Record<string, unknown> = { agentId: "garden", prompt: "A gardener" }) {
+  return callAgentHandler(agentAvatarGenerateHandler, "agents.avatar.generate", params, {
     context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-    client: null,
-    isWebchatConnect: () => false,
     hasCurrentClientAuthority: () => current,
   });
-  return respond;
 }
 
 function expectError(

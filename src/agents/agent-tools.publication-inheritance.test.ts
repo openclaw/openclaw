@@ -10,6 +10,7 @@ import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+import type { SandboxContext } from "./sandbox/types.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -212,10 +213,27 @@ describe("publication policy inherited by a managed child", () => {
         agents: config.agents,
         tools: { allow: allowed, gatewayPolicy: tools.gatewayPolicy },
       };
+      // PR preparation is offered only to a writable managed sandbox.
+      const childSandbox: SandboxContext = {
+        ...sandbox,
+        workspaceSource: "managed-worktree",
+        backend: {
+          id: "docker",
+          runtimeId: sandbox.runtimeId,
+          runtimeLabel: sandbox.runtimeLabel,
+          workdir: sandbox.containerWorkdir,
+          buildExecSpec: async () => {
+            throw new Error("Inheritance fixture does not execute commands");
+          },
+          runShellCommand: async () => {
+            throw new Error("Inheritance fixture does not execute commands");
+          },
+        },
+      };
       const child = createOpenClawCodingToolsInternal({
         config: childConfig,
         sessionKey: childKey,
-        sandbox,
+        sandbox: childSandbox,
         githubPublicationAvailable: true,
         toolConstructionPlan: plan,
         wrapBeforeToolCallHook: false,

@@ -46,6 +46,7 @@ import {
   selectedFiles,
   expectCanonicalGroupedConcurrency,
   expectProtectedOwnerExpansion,
+  expectProjectedNodeTestResources,
 } from "./ci-changed-node-test-plan.test-support.js";
 
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -103,6 +104,7 @@ const gitToolingTargets = [
   "release-workflow-git-lifecycle",
   "ci-workflow-guards",
 ].map((name) => `test/scripts/${name}.test.ts`);
+const lintSuppressionInventoryTest = "test/scripts/lint-suppressions.test.ts";
 
 it("keeps activity unit changes narrow alongside root package metadata", () => {
   expect(hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts"])).toBe(false);
@@ -151,7 +153,7 @@ it.each(
   [
     [],
     ["ui/src/pages/activity/deleted.test.ts"],
-    ["ui/src/pages/activity/activity-page.test.ts", "ui/src/pages/activity/activity-page.ts"],
+    ["ui/src/pages/activity/activity-page.test.ts", "ui/src/pages/activity/activity-page.tsx"],
     ["ui/src/test-helpers/control-ui-e2e.test.ts"],
     ["ui/src/app/gateway-store.test-support.ts"],
     ["ui/src/styles/cursor-policy.browser.test.ts"],
@@ -465,7 +467,12 @@ describe("CI changed Node test plan", () => {
       const envScratch = argvTempDirs.make("changed-runtime-owner-env-");
       expect(selectedFiles(selected).toSorted()).toEqual(
         [
-          ...new Set([...targets, ...gitToolingTargets, "test/scripts/test-projects.test.ts"]),
+          ...new Set([
+            ...targets,
+            ...gitToolingTargets,
+            "test/scripts/test-projects.test.ts",
+            lintSuppressionInventoryTest,
+          ]),
         ].toSorted(),
       );
       for (const target of targets) {
@@ -1017,6 +1024,7 @@ describe("CI changed Node test plan", () => {
   it.each(["blacksmith", "github", "hybrid"])(
     "retains precise process ownership and independent timing keys (%s)",
     (runnerBackend) => {
+      const envScratch = argvTempDirs.make("changed-owner-env-");
       const targets = [
         "src/agents/embedded-agent-runner/model-resolution-consistency.test.ts",
         "src/agents/embedded-agent-runner/run/attempt-transcript-helpers.presence.test.ts",
@@ -1036,9 +1044,15 @@ describe("CI changed Node test plan", () => {
         createChangedNodeTestShards(targets, { runnerBackend }),
         "selected embedded plan",
       );
-      expect(selectedFiles(selected).toSorted()).toEqual(targets.toSorted());
+      expect(selectedFiles(selected).toSorted()).toEqual(
+        [...targets, lintSuppressionInventoryTest].toSorted(),
+      );
       for (const job of selected.filter((candidate) => candidate.groups)) {
-        for (const group of job.groups ?? []) {
+        const embeddedGroups =
+          job.groups?.filter(
+            (group) => !group.includePatterns?.includes(lintSuppressionInventoryTest),
+          ) ?? [];
+        for (const group of embeddedGroups) {
           const { job: ownerJob, group: owner } = canonicalOwner(full, group.shard_name);
           expect(group.env).toEqual(owner.env);
           expect(group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("660000");
@@ -1046,11 +1060,7 @@ describe("CI changed Node test plan", () => {
             expect(group.configs).toEqual([buildVitestRunPlans([target])[0]?.config]);
           }
           expect(group.runner).toBe(owner.runner);
-          expect(job.planConcurrency).toBe(
-            job.groups?.length === 1 && ownerJob.planConcurrency === 2
-              ? 1
-              : ownerJob.planConcurrency,
-          );
+          expectProjectedNodeTestResources(job, group, ownerJob, owner, envScratch);
           for (const key of ["pretestBuildMode", "timeoutMinutes"] as const) {
             expect(job[key], key).toEqual(ownerJob[key]);
           }
@@ -1137,13 +1147,7 @@ describe("CI changed Node test plan", () => {
               "minTotalMemoryBytes",
               "pretestBuildMode",
             ]);
-            const singleton = job.groups.length === 1 && ownerJob.planConcurrency === 2;
-            expect(job.planConcurrency).toBe(singleton ? 1 : ownerJob.planConcurrency);
-            expect(job.env).toEqual(
-              singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
-                ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
-                : ownerJob.env,
-            );
+            expectProjectedNodeTestResources(job, group, ownerJob, owner, envScratch);
             expectSameFields(job, ownerJob, ["runner", "timeoutMinutes"]);
           }
         }
@@ -1345,7 +1349,11 @@ describe("CI changed Node test plan", () => {
     expect(cronTests?.length).toBe(97);
     const e2eTarget = "src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts";
     const changedTests = [...(cronTests ?? []), "src/plugins/tools.optional.test.ts", e2eTarget];
-    const expectedTargets = [...changedTests, "test/scripts/tsgo-core-test-shards.test.ts"];
+    const expectedTargets = [
+      ...changedTests,
+      "test/scripts/tsgo-core-test-shards.test.ts",
+      lintSuppressionInventoryTest,
+    ];
     const shards = createChangedNodeTestShards(changedTests);
     expect(shards).not.toBeNull();
     const targets = selectedFiles(shards);
@@ -1369,6 +1377,7 @@ describe("CI changed Node test plan", () => {
     });
     const selectedJobs = shards?.filter((shard) => shard.groups?.length) ?? [];
     expect(selectedJobs.length).toBeGreaterThan(0);
+    const envScratch = argvTempDirs.make("changed-wide-owner-env-");
     for (const job of selectedJobs) {
       for (const group of job.groups ?? []) {
         const ownerJob = expectDefined(
@@ -1385,14 +1394,8 @@ describe("CI changed Node test plan", () => {
         expect(group.env).toEqual(owner.env);
         expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
         expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
-        const singleton = job.groups?.length === 1 && ownerJob.planConcurrency === 2;
-        expect(job.env).toEqual(
-          singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
-            ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
-            : ownerJob.env,
-        );
-        expect(job.runner).toBe(ownerJob.runner);
-        expect(job.planConcurrency).toBe(singleton ? 1 : ownerJob.planConcurrency);
+        const childEnv = expectProjectedNodeTestResources(job, group, ownerJob, owner, envScratch);
+        expect(childEnv.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
       }
     }
     const cheapFiles = vi
@@ -1604,7 +1607,11 @@ describe("CI changed Node test plan", () => {
     const shards = createChangedNodeTestShards([target]);
     expect(shards).not.toBeNull();
     const qaShards = shards?.filter((shard) => shard.pretestBuildMode === "private-qa") ?? [];
+    const lintInventoryShards =
+      shards?.filter((shard) => selectedFiles([shard]).includes(lintSuppressionInventoryTest)) ??
+      [];
     expect(qaShards).toHaveLength(1);
+    expect(lintInventoryShards).toHaveLength(1);
     for (const shard of qaShards) {
       expect(shard).toMatchObject({
         configs: ["test/vitest/vitest.extension-qa.config.ts"],
@@ -1612,8 +1619,8 @@ describe("CI changed Node test plan", () => {
         pretestBuildMode: "private-qa",
       });
     }
-    expect(shards?.filter((shard) => !qaShards.includes(shard))).toEqual([
-      expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
-    ]);
+    expect(
+      shards?.filter((shard) => !qaShards.includes(shard) && !lintInventoryShards.includes(shard)),
+    ).toEqual([expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] })]);
   });
 });

@@ -211,10 +211,12 @@ export function buildCliMcpGrantContext(params: {
       ? { conversationToolPolicy: structuredClone(params.run.conversationToolPolicy) }
       : {}),
     ...(params.run.trustedInternalHandoff
-      ? {
-          trustedInternalHandoff: params.run.trustedInternalHandoff,
-          inputProvenance: params.run.inputProvenance,
-        }
+      ? { trustedInternalHandoff: params.run.trustedInternalHandoff }
+      : {}),
+    // Loopback requester policy reads only external-user provenance and verified handoffs,
+    // so internal-system facts (an exec wake's starting run) reach plugin tools unchanged.
+    ...(params.run.trustedInternalHandoff || params.run.inputProvenance?.kind === "internal_system"
+      ? { inputProvenance: params.run.inputProvenance }
       : {}),
     runtimePolicySessionKey,
     ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),
@@ -274,7 +276,6 @@ export function buildCliMcpGrantContext(params: {
     ...(execOverrides ? { execOverrides } : {}),
     ...(bashElevated ? { bashElevated } : {}),
     ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
-    ...(params.run.continuesConversation ? { continuesConversation: true } : {}),
     ...(normalizeOptionalString(params.run.approvalReviewerDeviceId)
       ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
       : {}),

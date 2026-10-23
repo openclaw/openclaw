@@ -16,6 +16,19 @@ type EvidenceParams = Pick<
   "evidenceAnchors" | "evidenceContinuation" | "channelId" | "transportId"
 >;
 
+export function makeQaSuiteTestLaunch(): Parameters<
+  typeof createQaEvidenceInvocation
+>[0]["launch"] {
+  return {
+    source: { ref: null, integrity: null },
+    runtime: { id: null, version: null },
+    package: null,
+    protocol: null,
+    accountRef: null,
+    proofClass: null,
+  };
+}
+
 export function makeQaSuiteTestScenario(id: string, params: ScenarioOptions = {}): Scenario {
   return {
     id,
@@ -53,14 +66,7 @@ export function recordQaSuiteTestResults(
     channel: anchor?.parentCell
       ? anchor.parentCell.channel
       : (params?.channelId ?? params?.transportId ?? "qa-channel"),
-    launch: anchor?.launch ?? {
-      source: { ref: null, integrity: null },
-      runtime: { id: null, version: null },
-      package: null,
-      protocol: null,
-      accountRef: null,
-      proofClass: null,
-    },
+    launch: anchor?.launch ?? makeQaSuiteTestLaunch(),
     anchors: params?.evidenceAnchors,
     continuation: params?.evidenceContinuation,
   });

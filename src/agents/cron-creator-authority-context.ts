@@ -1,11 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import {
   CRON_MANAGEMENT_METHODS,
   createCronCreatorAuthorityRunScope,
   hasCronChannelRequester,
+  isCronModelManagementAllowed,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
   type CronCreatorAuthorityRunScope,
@@ -231,7 +233,10 @@ export function bindRequesterOwnerIdentity(params: {
 }
 
 /** Bind at tool construction, never rediscover authority from model arguments or routes. */
-export function bindCronManagementGrant(runId: string | undefined) {
+export function bindCronManagementGrant(runId: string | undefined, config?: OpenClawConfig) {
+  if (!isCronModelManagementAllowed(config)) {
+    return undefined;
+  }
   const scope = activeCronCreatorAuthority.getStore();
   const authority = getGatewayToolCallerIdentity()?.approvalAuthority;
   if (
@@ -316,7 +321,7 @@ export function bindCronRequesterGrant(runId: string | undefined) {
 export function isFreshChannelCronAuthorityTurn(params: {
   messageProvider?: string;
   senderId?: string;
-  isHeartbeat: boolean;
+  scheduledAutomation?: boolean;
   isRoomEvent: boolean;
   inputProvenance?: unknown;
   spawnedBy?: string;
@@ -325,7 +330,7 @@ export function isFreshChannelCronAuthorityTurn(params: {
   return (
     Boolean(params.messageProvider) &&
     Boolean(normalizeOptionalString(params.senderId)) &&
-    !params.isHeartbeat &&
+    !params.scheduledAutomation &&
     !params.isRoomEvent &&
     params.inputProvenance === undefined &&
     params.spawnedBy === undefined &&

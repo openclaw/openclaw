@@ -127,16 +127,37 @@ it.each(["profile", "direct"] as const)(
       responseTier: "priority",
     };
     record(observation);
+    const priority = { ...observation, requestedTier: "priority", responseTier: "fast" };
+    record(priority);
     for (const projection of [first, await preparePublic(context)]) {
       expect(projection.read().models.find((row) => row.id === model.id)).toMatchObject({
         serviceTiers: advertisedTiers,
         supportsServiceTierRecovery: true,
-        serviceTierObservation: { requestedTier: "ultrafast", responseTier: "priority" },
+        serviceTierObservation: { requestedTier: "priority", responseTier: "fast" },
+        serviceTierObservations: [
+          { requestedTier: "priority", responseTier: "fast" },
+          { requestedTier: "ultrafast", responseTier: "priority" },
+        ],
       });
     }
+    record(observation);
+    expect(first.read().models.find((row) => row.id === model.id)).toMatchObject({
+      serviceTierObservation: { requestedTier: "ultrafast", responseTier: "priority" },
+      serviceTierObservations: [
+        { requestedTier: "priority", responseTier: "fast" },
+        { requestedTier: "ultrafast", responseTier: "priority" },
+      ],
+    });
     record({ ...observation, responseTier: "ultrafast" });
+    expect(first.read().models.find((row) => row.id === model.id)).toMatchObject({
+      serviceTierObservations: [{ requestedTier: "priority", responseTier: "fast" }],
+    });
+    record({ ...priority, responseTier: "priority" });
     expect(first.read().models.find((row) => row.id === model.id)).not.toHaveProperty(
       "serviceTierObservation",
+    );
+    expect(first.read().models.find((row) => row.id === model.id)).not.toHaveProperty(
+      "serviceTierObservations",
     );
   },
 );

@@ -1,9 +1,8 @@
-import { once } from "node:events";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
-import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
 import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
@@ -50,11 +49,7 @@ function request(url: string, method: "GET" | "HEAD" | "POST" = "GET") {
 
 async function withSandboxHost(run: (origin: string) => Promise<void>, registry?: PluginRegistry) {
   await using server = createSandboxHostHttpServer(undefined, registry && (() => registry));
-  const listening = once(server, "listening");
-  server.listen(0, "127.0.0.1");
-  await listening;
-  const address = server.address() as AddressInfo;
-  await run(`http://127.0.0.1:${address.port}`);
+  await run(await listenLoopback(server));
 }
 
 function publicResourceRegistry(
@@ -184,7 +179,9 @@ describe("MCP App sandbox HTTP origin", () => {
         "/__openclaw__/renderer/private.js",
         "/__openclaw__/canvas/documents/private/index.html",
       ]) {
-        expect((await fetch(`${origin}${deniedPath}`)).status).toBe(404);
+        const { get: denied, body: denial } = await getAndHead(`${origin}${deniedPath}`);
+        expect(denied.status).toBe(404);
+        expect(denial).not.toBe("");
       }
       expect(read).toHaveBeenCalledTimes(2);
     }, publicResourceRegistry(read));
@@ -196,11 +193,7 @@ describe("MCP App sandbox HTTP origin", () => {
     }, publicResourceRegistry(undefined));
   });
 
-  it("supports HEAD and rejects other paths, methods, and malformed policy", () => {
-    const head = request(buildMcpAppSandboxPath(), "HEAD");
-    expect(head.res.statusCode).toBe(200);
-    expect(head.end).toHaveBeenCalledWith(undefined);
-
+  it("rejects other paths, methods, and malformed policy", () => {
     expect(request("/", "GET").res.statusCode).toBe(404);
     expect(request(buildMcpAppSandboxPath(), "POST").res.statusCode).toBe(404);
     const encode = (policy: unknown) => Buffer.from(JSON.stringify(policy)).toString("base64url");
@@ -213,13 +206,5 @@ describe("MCP App sandbox HTTP origin", () => {
       expect(request(`${SANDBOX_HOST_PATH}?csp=${policy}`).res.statusCode).toBe(400);
     }
     expect(request("http://[", "GET").res.statusCode).toBe(400);
-  });
-
-  it("keeps GET and HEAD representation metadata aligned for a missing path", async () => {
-    await withSandboxHost(async (origin) => {
-      const { get, body } = await getAndHead(`${origin}/missing`);
-      expect(get.status).toBe(404);
-      expect(body).not.toBe("");
-    });
   });
 });

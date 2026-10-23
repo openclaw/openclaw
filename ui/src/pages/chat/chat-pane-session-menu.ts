@@ -22,7 +22,7 @@ import {
 } from "../../components/session-mutation-scope.ts";
 import type * as SessionOperations from "../../components/session-organizer-operations.runtime.ts";
 import { sessionPlacementAction } from "../../components/session-placement-action.ts";
-import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
+import { isCloudWorkerPlacementState } from "../../components/session-row-badge-presentation.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
@@ -244,26 +244,31 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (action.kind === "new-group") {
       const signal = this.headerSessionDraftAbortController.signal;
       const gateway = this.context.gateway;
-      const { showInputDialog } = await import("../../components/input-dialog.ts");
-      await showInputDialog({
-        signal,
-        gateway,
-        title: t("sessionsView.newGroupTitle"),
-        label: t("sessionsView.newGroupPrompt"),
-        submitLabel: t("sessionsView.newGroupCreate"),
-        requireValue: true,
-        submit: async (name) => {
-          const result = await this.handleHeaderSessionAction(
-            { kind: "move-to-group", category: name },
-            row,
-          );
-          return result === "completed"
-            ? null
-            : result === "stale"
-              ? t("sessionsView.newGroupStale")
-              : (this.state?.chatError ?? t("sessionsView.newGroupFailed"));
-        },
-      });
+      const owner = this.headerOutcomeOwner;
+      try {
+        const { showInputDialog } = await import("../../components/input-dialog.tsx");
+        await showInputDialog({
+          signal,
+          gateway,
+          title: t("sessionsView.newGroupTitle"),
+          label: t("sessionsView.newGroupPrompt"),
+          submitLabel: t("sessionsView.newGroupCreate"),
+          requireValue: true,
+          submit: async (name) => {
+            const result = await this.handleHeaderSessionAction(
+              { kind: "move-to-group", category: name },
+              row,
+            );
+            return result === "completed"
+              ? null
+              : result === "stale"
+                ? t("sessionsView.newGroupStale")
+                : (this.state?.chatError ?? t("sessionsView.newGroupFailed"));
+          },
+        });
+      } catch (error) {
+        this.publishHeaderError(error, owner);
+      }
       return;
     }
     const scope = this.captureHeaderSessionActionScope(

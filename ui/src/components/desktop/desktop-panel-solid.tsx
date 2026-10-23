@@ -1,5 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, merge, onSettled } from "solid-js";
+import { createMemo, Errored, merge, onSettled, Show } from "solid-js";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -47,7 +48,7 @@ const ownerFor = (host: DesktopPanelElement) => {
   }
   return owner;
 };
-defineSolidBridge<DesktopPanelInputs, Methods>(
+export const DesktopPanel = defineSolidBridge<DesktopPanelInputs, Methods>(
   "openclaw-desktop-panel",
   (inputs, host) => {
     const retained = owners.has(host);
@@ -159,6 +160,31 @@ function PictureInPictureButton(props: {
   );
 }
 
+/** Only the notice is replaced on failure; the live desktop and controls stay mounted. */
+function DesktopActionNotice(props: {
+  outcome?: { result: Promise<void> };
+  pending?: boolean;
+  children: SolidJSX.Element;
+}) {
+  return (
+    <Show when={!props.pending && props.outcome} keyed fallback={props.children}>
+      {(attempt) => {
+        const settled = createMemo(() => attempt.result.then(() => null), { loadingValue: null });
+        return (
+          <Errored
+            fallback={(error) => (
+              <DesktopNotice errorText={formatUiError(error())} noticeText={null} />
+            )}
+          >
+            {settled()}
+            {props.children}
+          </Errored>
+        );
+      }}
+    </Show>
+  );
+}
+
 /** Compose the document and dock views without owning connection state. */
 function DesktopPresentation(props: {
   view: DesktopPanelOwner["view"];
@@ -180,15 +206,29 @@ function DesktopPresentation(props: {
     notice(): SolidJSX.Element {
       return (
         <>
+          <DesktopActionNotice
+            outcome={props.view.pictureInPicture.outcome()}
+            pending={props.view.pictureInPicture.feedback().pending}
+          >
+            <DesktopActionNotice outcome={props.view.fullscreenMode.outcome()}>
+              <DesktopActionNotice
+                outcome={props.view.launcher.outcome()}
+                pending={props.view.launcher.launchingApp() !== null}
+              >
+                <DesktopNotice
+                  errorText={props.view.content.errorText}
+                  noticeText={
+                    desktop() && props.view.content.takeoverText
+                      ? null
+                      : props.view.content.noticeText
+                  }
+                />
+              </DesktopActionNotice>
+            </DesktopActionNotice>
+          </DesktopActionNotice>
           <DesktopNotice
-            errorText={
-              props.view.pictureInPicture.feedback().errorText ??
-              props.view.fullscreenMode.errorText() ??
-              props.view.content.errorText
-            }
-            noticeText={
-              desktop() && props.view.content.takeoverText ? null : props.view.content.noticeText
-            }
+            errorText={null}
+            noticeText={null}
             availability={props.view.content.availability}
           />
           <DesktopAudioNotice state={props.view.audio.state()} />
@@ -339,6 +379,9 @@ function DesktopPresentation(props: {
       ),
   };
   const connection = merge(() => props.view, {
+    get launchingApp() {
+      return props.view.launcher.launchingApp();
+    },
     get rail() {
       return platform() ? rail : undefined;
     },

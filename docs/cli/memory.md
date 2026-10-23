@@ -129,6 +129,8 @@ extra-path details before showing indexing progress. The completion message
 reports the indexed file count. An empty corpus is a successful no-op: the
 command reports the resolved workspace path and that nothing was indexed, and
 leaves the missing `memory/` directory for the first memory write to create.
+An index request that joins an active pass also processes newly observed
+memory-file changes before reporting completion.
 Internal Active Memory recall, dreaming-narrative, cron, and heartbeat session transcripts are
 excluded from indexing, including retained compressed narrative archives whose
 original sessions are no longer active. Sessions previously selected by
@@ -247,6 +249,10 @@ openclaw memory search [query] [--query <text>] [--agent <id>] [--max-results <n
 - `--min-score <n>`: filter out matches below this score.
 
 Routine indexing can continue after search returns and does not add a warning.
+Standalone searches print results from the available index, then finish pending
+indexing before exiting so the next search can see file edits. When routed through
+the Gateway, results arrive before that indexing finishes; the Gateway keeps the
+request's resources alive until it settles.
 If automatic indexing failed, or the index identity is incompatible, human
 output warns that matches may be incomplete. With `--json`, the response adds
 `stale: true`, plus `warning` and `action` fields. Treat an empty `results`

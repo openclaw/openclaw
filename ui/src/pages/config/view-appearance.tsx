@@ -269,14 +269,38 @@ export function AppearanceSection(props: ConfigProps) {
             })}
           </p>
         ) : undefined}
-        {props.themeCatalog?.error ? (
-          <p class="settings-status settings-status--error" role="alert">
-            {props.themeCatalog.error}{" "}
-            <button type="button" class="btn btn--sm" onClick={() => props.onRetryThemeCatalog?.()}>
-              {t("common.retry")}
-            </button>
-          </p>
-        ) : undefined}
+        <Show when={props.themeCatalog?.read ?? props.themeCatalog} keyed>
+          {(initialCatalog) => {
+            const catalog = createMemo(() =>
+              "result" in initialCatalog ? initialCatalog.result : initialCatalog,
+            );
+            const status = () => {
+              const error = catalog()?.error;
+              if (error) {
+                throw new Error(error);
+              }
+              return undefined;
+            };
+            return (
+              <Errored
+                fallback={(error) => (
+                  <p class="settings-status settings-status--error" role="alert">
+                    {formatUiError(error())}{" "}
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      onClick={() => props.onRetryThemeCatalog?.()}
+                    >
+                      {t("common.retry")}
+                    </button>
+                  </p>
+                )}
+              >
+                <Loading fallback={undefined}>{status()}</Loading>
+              </Errored>
+            );
+          }}
+        </Show>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
             <div class="settings-theme-grid">

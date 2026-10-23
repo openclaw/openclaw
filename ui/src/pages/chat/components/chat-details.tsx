@@ -1,6 +1,5 @@
 import { Portal } from "@solidjs/web";
 import {
-  Loading,
   Show,
   createEffect,
   createMemo,
@@ -21,11 +20,15 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
-import { ChatDetailsProgress } from "./chat-details-progress.tsx";
-import "../../../styles/chat/details.css";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+import "../../../styles/chat/details.css";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+const ChatDetailsProgress = lazy(() => import("./chat-details-progress.tsx"), {
+  export: "ChatDetailsProgress",
+});
 
 const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
   export: "ChatDetailsSession",
@@ -530,13 +533,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   function SessionContent(content: { children: Element }) {
     return (
       <Show when={sessionOpened()}>
-        <Loading
+        <ChatLazyBoundary
           fallback={
             <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
           }
         >
           {content.children}
-        </Loading>
+        </ChatLazyBoundary>
       </Show>
     );
   }
@@ -613,19 +616,21 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                         <Show
                           when={props.chat?.progressCard || props.chat?.progressCardInitialLoading}
                         >
-                          <ChatDetailsProgress
-                            onHideProgress={() => {
-                              // The top-layer inspector must not cover the Undo toast.
-                              if (!docked()) {
-                                close(true);
-                              }
-                            }}
-                            menuRef={(menu) => {
-                              progressMenu = menu;
-                            }}
-                            props={props.chat}
-                            presented={isPresented() && opened()}
-                          />
+                          <ChatLazyBoundary>
+                            <ChatDetailsProgress
+                              onHideProgress={() => {
+                                // The top-layer inspector must not cover the Undo toast.
+                                if (!docked()) {
+                                  close(true);
+                                }
+                              }}
+                              menuRef={(menu) => {
+                                progressMenu = menu;
+                              }}
+                              props={props.chat}
+                              presented={isPresented() && opened()}
+                            />
+                          </ChatLazyBoundary>
                         </Show>
                       </>
                     }

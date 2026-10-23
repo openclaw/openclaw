@@ -13,9 +13,11 @@ import {
 import { createBackgroundLayoutRef } from "../../components/session-background-layout-context.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/browser-platform.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { refreshSlashCommands } from "../../lib/chat/slash-command-catalog.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
@@ -25,7 +27,6 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
-import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import { createChatAttachmentInputHandle } from "../chat/components/chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.tsx";
@@ -85,7 +86,7 @@ export type NewSessionComposerOptions = {
   requiresModifier: boolean;
   onChange: () => void;
   submitDisabledReason?: string;
-  blockedSubmitNotice?: string;
+  onBlockedSubmit?: () => void;
   dictationActive?: boolean;
   dictationPreview?: string;
   dictationStatus?: JSX.Element;
@@ -160,6 +161,7 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
   };
   const handleComposerKeydown = (event: KeyboardEvent) => {
     if (
+      keepMobileReturnNative(event) ||
       options.dictationActive ||
       options.submitting ||
       options.messageLocked ||
@@ -189,8 +191,7 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
       event.preventDefault();
       return;
     }
-    // A reasoned gate still consumes the press: the submission flow records the
-    // attempt and surfaces the reason instead of silently inserting a newline.
+    // A reasoned gate consumes the press and reveals its explanation.
     // Only silent gates (busy button, empty draft) keep Enter native.
     if (options.canSubmit || options.submitDisabledReason !== undefined) {
       event.preventDefault();
@@ -335,22 +336,26 @@ function StartControl(props: { options: NewSessionComposerOptions }) {
     props.options.submitting
       ? t("newSession.starting")
       : t(props.options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
-  const reasonedBlock = () =>
-    !props.options.canSubmit && props.options.submitDisabledReason !== undefined;
   const busy = () =>
     props.options.submitting || props.options.attachmentDraft.reads.pendingReads > 0;
   return (
-    <openclaw-tooltip content={props.options.submitDisabledReason ?? label()}>
+    <openclaw-tooltip
+      content={props.options.submitDisabledReason ?? label()}
+      onPointerDown={(event) => {
+        if (event.button === 0 && !props.options.canSubmit) {
+          props.options.onBlockedSubmit?.();
+        }
+      }}
+    >
       <button
         type="button"
         class={[
           "chat-send-btn new-session-page__start-submit",
           {
-            "new-session-page__start-submit--blocked": reasonedBlock(),
             "new-session-page__start-submit--busy": busy(),
           },
         ]}
-        disabled={!props.options.canSubmit && !reasonedBlock()}
+        disabled={!props.options.canSubmit}
         aria-disabled={props.options.canSubmit ? "false" : "true"}
         aria-busy={busy() ? "true" : "false"}
         aria-label={label()}
@@ -532,7 +537,8 @@ export function NewSessionComposer(props: {
               readonly={options().dictationActive}
               placeholder={placeholder()}
               aria-label={frame().messagePlaceholder}
-              aria-keyshortcuts={frame().keyShortcuts}
+              enterkeyhint="enter"
+              aria-keyshortcuts={isMobileBrowserPlatform() ? undefined : frame().keyShortcuts}
               aria-autocomplete="list"
               aria-controls={frame().menuVisible ? frame().menuListboxId : undefined}
               aria-haspopup={frame().menuVisible ? "listbox" : undefined}
@@ -689,20 +695,6 @@ export function NewSessionComposer(props: {
           </div>
         </div>
       </div>
-      <Show when={options().blockedSubmitNotice}>
-        <div
-          class="new-session-page__blocked-submit agent-chat__composer-status"
-          data-tone="info"
-          role="status"
-        >
-          <div class="agent-chat__composer-status-band">
-            <span class="agent-chat__composer-status-icon" aria-hidden="true">
-              <Icon name="info" />
-            </span>
-            <span class="agent-chat__composer-status-text">{options().blockedSubmitNotice}</span>
-          </div>
-        </div>
-      </Show>
     </div>
   );
 }

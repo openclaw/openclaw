@@ -4,16 +4,18 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as doctorLegacy from "../commands/doctor/shared/legacy-config-issues.js";
 import * as channelPresence from "../plugins/channel-presence-policy.js";
+import * as pluginIndexState from "../plugins/installed-plugin-index-record-state.js";
 import * as manifestRegistry from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createConfigIoContext } from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import { createConfigReadError } from "./io.invalid-config.js";
+import { readBestEffortConfigSnapshot } from "./io.runtime.js";
 import {
   readConfigFileSnapshotFromContext as readSnapshot,
   readConfigFileSnapshotWithPluginMetadataFromContext as readWithMetadata,
-  readBestEffortConfigSnapshotFromContext as readBestEffort,
 } from "./io.snapshot.js";
 import {
   cloneConfigWithResolutionFacts as cloneWithFacts,
@@ -196,6 +198,7 @@ it.each([
   async ({ config, mode, issue, legacy, spy }) => {
     const context = fixture(config, { pluginValidation: mode });
     const repair = spy();
+    const prepare = vi.spyOn(pluginIndexState, "preparePluginMetadataMachineStateAsync");
     const snapshot = await readSnapshot(context);
     expect(snapshot.valid).toBe(false);
     expect(snapshot.issues).toContainEqual(expect.objectContaining(issue));
@@ -205,6 +208,7 @@ it.each([
       expect(snapshot.sourceConfig.agents).toEqual(legacyAgents);
     }
     expect(repair).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
   },
 );
 
@@ -215,7 +219,10 @@ it("keeps best-effort core-only materialization independent of plugin metadata",
     { pluginValidation: "core-only" },
   );
   const discovery = vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore");
-  const result = await readBestEffort(context);
+  const readOptions = { observe: false, pluginValidation: context.options.pluginValidation };
+  const result = await withEnvAsync(context.deps.env, () =>
+    readBestEffortConfigSnapshot(readOptions),
+  );
   expect(result).toMatchObject({
     configDiagnostics: null,
     config: {
@@ -223,7 +230,7 @@ it("keeps best-effort core-only materialization independent of plugin metadata",
       agents: { defaults: { compaction: { mode: "safeguard" } } },
     },
   });
-  expect(discovery).not.toHaveBeenCalled();
+  expect(discovery.mock.calls.length).toBe(0);
 });
 it("records only genuinely missing substitutions as private facts", async () => {
   const context = fixture({

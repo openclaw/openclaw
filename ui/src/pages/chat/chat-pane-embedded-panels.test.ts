@@ -137,9 +137,11 @@ it("renders and updates the workspace rail inside the Files panel", async () => 
   expect(query(".chat-workspace-rail")).toBe(rail);
   expect(rail.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("notes");
   element(rail, 'button[aria-label="notes.txt"]').click();
-  expect(sessions.getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "notes.txt", {
-    agentId: "main",
-  });
+  await vi.waitFor(() =>
+    expect(sessions.getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "notes.txt", {
+      agentId: "main",
+    }),
+  );
 });
 
 it("navigates an existing file tab to an explicit line without resetting its editor or draft", async () => {
@@ -337,7 +339,15 @@ it.each(["ready", "unavailable", "error"] as const)(
     const video = await vi.waitFor(() => expectDefined(panel.querySelector("video"), "video"));
     expect(video.hasAttribute("src")).toBe(false);
     expect(video.preload).toBe("auto");
-    const presentation = panel.querySelector('[role="status"]');
+    const presentation = expectDefined(
+      panel.querySelector(".chat-video-skeleton"),
+      "Video loading skeleton",
+    );
+    const failureStatus = expectDefined(
+      panel.querySelector('.sr-only[role="status"]'),
+      "Video failure status",
+    );
+    expect(failureStatus.textContent).toBe("");
     const header = panel.querySelector(".chat-assistant-attachment-card__header");
     expect(secondResolver).toHaveBeenCalledOnce();
     if (outcome === "error") {
@@ -352,13 +362,15 @@ it.each(["ready", "unavailable", "error"] as const)(
         expect(video.getAttribute("src")).toBe(`${source}?mediaTicket=renewed`),
       );
       expect(panel.querySelector("video")).toBe(video);
-      expect(panel.querySelector('[role="status"]')).toBe(presentation);
+      expect(panel.querySelector(".chat-video-skeleton")).toBe(presentation);
       expect(panel.querySelector(".chat-assistant-attachment-card__header")).toBe(header);
       expect(panel.querySelector('[aria-busy="true"]')).not.toBeNull();
       Object.defineProperty(video, "readyState", { configurable: true, value: 2 });
       video.dispatchEvent(new Event("loadeddata"));
       await player?.updateComplete;
-      expect(panel.querySelector('[role="status"]')).toBeNull();
+      expect(panel.querySelector(".chat-video-skeleton")).toBeNull();
+      expect(panel.querySelector('.sr-only[role="status"]')).toBe(failureStatus);
+      expect(failureStatus.textContent).toBe("");
       expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
       expect(panel.textContent).not.toContain("Preview unavailable");
     } else {
@@ -606,10 +618,12 @@ it("retires a preview across reconnect without refocusing Review over Files", as
 
 it("shows a current preview request failure without leaving Review loading", async () => {
   const { file, mount, preview, renderPanels, state, query } = createReviewFixture();
-  void openSessionWorkspaceFile(state, { path: preview.file.path });
+  const opening = openSessionWorkspaceFile(state, { path: preview.file.path });
   await renderPanels();
+  await vi.waitFor(() => expect(state.sessions.getFile).toHaveBeenCalledOnce());
   file.reject(new Error("Preview unavailable"));
   await expect(file.promise).rejects.toThrow("Preview unavailable");
+  await opening;
   state.updateSidebarLayout(openSlot(state.sidebarLayout, "workspace"));
   await renderPanels();
   expect(mount.textContent).toContain("Preview unavailable");

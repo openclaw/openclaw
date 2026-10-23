@@ -31,13 +31,15 @@ import {
   saveAuthProfileStoreIfPersistenceSnapshotMatches as saveIfUnchanged,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
-import { createAuthOwnerTestFixtures } from "./store-state-owner.test-support.js";
+import {
+  createAuthOwnerTestFixtures,
+  persistOwnerProfile as persistProfile,
+} from "./store-state-owner.test-support.js";
 import {
   captureAuthProfileStorePersistenceSnapshot as capturePersistence,
   restoreAuthProfileStorePersistenceSnapshot as restorePersistence,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
-import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 const { tempDirs, saveOptions, apiKey, store, snapshotAt, unreadableOuter, seedRoot } =
   createAuthOwnerTestFixtures();
@@ -191,11 +193,7 @@ describe("explicit auth state ownership", () => {
       const agentDir = tempDirs.make("openclaw-auth-owner-rebound-agent-");
       const agentPath = resolveAuthProfileDatabasePath(agentDir);
       if (mode === "rollback") {
-        await persistAuthProfileBatch({
-          stateDir: first.stateDir,
-          agentDir,
-          profiles: [{ profileId: "local", credential: apiKey("stable-local") }],
-        });
+        await persistProfile(first, "local", apiKey("stable-local"), agentDir);
         for (const [root, lastUsed] of [
           [first, 10],
           [second, 20],
@@ -366,12 +364,7 @@ describe("explicit auth state ownership", () => {
     const roots = await Promise.all([seedRoot("first"), seedRoot("second")]);
     const assertOuterUnchanged = unreadableOuter("future");
     const receipts = await Promise.all(
-      roots.map(({ stateDir }) =>
-        persistAuthProfileBatch({
-          stateDir,
-          profiles: [{ profileId: "attempt", credential: apiKey(stateDir) }],
-        }),
-      ),
+      roots.map((root) => persistProfile(root, "attempt", apiKey(root.stateDir))),
     );
     const [firstReceipt, secondReceipt] = receipts;
     if (!firstReceipt || !secondReceipt) {
@@ -400,21 +393,11 @@ describe("explicit auth state ownership", () => {
       refresh: "test-refresh",
       expires: Date.now() + 600_000,
     };
-    await persistAuthProfileBatch({
-      stateDir: second.stateDir,
-      profiles: [{ profileId: "oauth", credential: oauth }],
-    });
+    await persistProfile(second, "oauth", oauth);
     vi.stubEnv("OPENCLAW_STATE_DIR", second.stateDir);
-    await persistAuthProfileBatch({
-      stateDir: first.stateDir,
-      agentDir: first.agentDir,
-      profiles: [{ profileId: "oauth", credential: oauth }],
-    });
+    await persistProfile(first, "oauth", oauth, first.agentDir);
     expect(readPersistedStore(first.agentDir)?.profiles.oauth).toEqual(oauth);
-    await persistAuthProfileBatch({
-      stateDir: first.stateDir,
-      profiles: [{ profileId: "oauth", credential: oauth }],
-    });
+    await persistProfile(first, "oauth", oauth);
     const freshAgentDir = tempDirs.make("openclaw-auth-owner-fresh-agent-");
     await update(first, freshAgentDir, { profiles: { oauth } });
     expect(readPersistedStore(freshAgentDir)?.profiles.oauth).toBeUndefined();

@@ -177,6 +177,22 @@ describe("hover marquee measurement budget", () => {
     expect(clock.observesSize(labels[1]!)).toBe(true);
   });
 
+  it("measures an explicitly stationary title without an interaction host", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { clock, label, show } = denseTitles(1, {
+      host: () => undefined,
+      stationaryWithoutHost: true,
+    });
+    reveal(clock);
+    expect(overflows(label)).toBe(true);
+    expect(scrolls(label)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    show("Short");
+    clock.resize(label);
+    expect(overflows(label)).toBe(false);
+    expect(label.textContent).toBe("Short");
+  });
+
   it("reads a dense title batch before writing overflow styles", () => {
     const { clock, labels, operations } = denseTitles(100);
     reveal(clock);

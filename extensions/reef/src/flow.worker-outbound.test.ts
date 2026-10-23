@@ -63,6 +63,21 @@ describe("Reef worker outbound composition", () => {
   afterEach(() => vi.restoreAllMocks());
   afterAll(resetFlowStoresForTests);
 
+  const send = (id: string) => flow.send("alice", "private coordination", { messageId: id });
+  async function requestReview() {
+    const id = prepareReefMessageId();
+    classify.classify.mockResolvedValueOnce({ ...allow, decision: "review" });
+    await expect(send(id)).rejects.toMatchObject({ reviewOutcome: "pending" });
+    const [review] = await stores.reviews.list();
+    expect(review?.id).toBe(id);
+    return { id, digest: review!.approvalDigest };
+  }
+  async function events(id: string) {
+    return (await audit.entries())
+      .filter((entry) => isRecord(entry.event.payload) && entry.event.payload.id === id)
+      .map((entry) => entry.event.type);
+  }
+
   function recordDispatches() {
     const dispatched: unknown[] = [];
     // oxlint-disable-next-line typescript/unbound-method -- call supplies the intercepted worker receiver.
@@ -90,7 +105,7 @@ describe("Reef worker outbound composition", () => {
     const hostSql = observeHostDataSql();
     const firstSecond = Math.floor(Date.now() / 1000);
     try {
-      expect(await flow.send("alice", "private coordination", { messageId: id })).toBe(id);
+      expect(await send(id)).toBe(id);
       expect(commands()).toEqual(["pluginState.executeOperation", "pluginState.executeOperation"]);
       for (const call of hostSql.calls) {
         expect(call).not.toHaveBeenCalled();
@@ -153,9 +168,20 @@ describe("Reef worker outbound composition", () => {
       const adapter = { ...guard(allow), pinnedModel: model };
       adapter.classify.mockResolvedValue(verdict as Verdict);
       const id = prepareReefMessageId();
+      const onPlatformSendDispatch = vi.fn(async () => {});
       await expect(
-        makeFlow(stores.reviews, adapter).send("alice", "private coordination", { messageId: id }),
-      ).rejects.toMatchObject({ stage: "guard", verdict: { decision: "deny", category } });
+        makeFlow(stores.reviews, adapter).send("alice", "private coordination", {
+          messageId: id,
+          onPlatformSendDispatch,
+        }),
+      ).rejects.toMatchObject({
+        stage: "guard",
+        verdict: { decision: "deny", category },
+        ...(category === "confidential"
+          ? { message: expect.stringContaining("Do not retry or rephrase it automatically") }
+          : {}),
+      });
+      expect(onPlatformSendDispatch).not.toHaveBeenCalled();
       expect(fetcher).not.toHaveBeenCalled();
       expect(await trusted.readOutboundDelivery("alice", id)).toBeUndefined();
     },
@@ -188,64 +214,39 @@ describe("Reef worker outbound composition", () => {
     ["wrong model", { ...allow, model: "wrong-2026-07-12" }, "guard_failure"],
     ["content denial", { ...allow, decision: "deny", category: "confidential" }, "confidential"],
   ] as const)("admits the post-approval verdict again: %s", async (_name, verdict, category) => {
-    const id = prepareReefMessageId();
-    classify.classify.mockResolvedValueOnce({ ...allow, decision: "review" });
-    await expect(
-      flow.send("alice", "private coordination", { messageId: id }),
-    ).rejects.toMatchObject({ reviewOutcome: "pending" });
-    const [review] = await stores.reviews.list();
-    await stores.reviews.decide(review!.approvalDigest, true);
+    const { id, digest } = await requestReview();
+    await stores.reviews.decide(digest, true);
     classify.classify.mockResolvedValue(verdict);
-    await expect(
-      flow.send("alice", "private coordination", { messageId: id }),
-    ).rejects.toMatchObject({ stage: "guard", verdict: { decision: "deny", category } });
+    await expect(send(id)).rejects.toMatchObject({
+      stage: "guard",
+      verdict: { decision: "deny", category },
+    });
     expect(fetcher).not.toHaveBeenCalled();
     expect(await trusted.readOutboundDelivery("alice", id)).toBeUndefined();
   });
 
-  it.each(["denied"] as const)(
-    "settles an existing %s review in one command without classifying again",
-    async (decision) => {
-      const id = prepareReefMessageId();
-      classify.classify.mockResolvedValue({ ...allow, decision: "review" });
-      await expect(
-        flow.send("alice", "private coordination", { messageId: id }),
-      ).rejects.toMatchObject({ reviewOutcome: "pending" });
-      const [review] = await stores.reviews.list();
-      expect(review?.id).toBe(id);
-      if (decision === "denied") {
-        await stores.reviews.decide(review!.approvalDigest, false);
-      }
-      classify.classify.mockClear();
-      const commands = recordDispatches();
-      await expect(
-        flow.send("alice", "private coordination", { messageId: id }),
-      ).rejects.toMatchObject({ reviewOutcome: decision });
-      expect(commands()).toEqual(["pluginState.executeOperation"]);
-      expect(classify.classify).not.toHaveBeenCalled();
-      expect(fetcher).not.toHaveBeenCalled();
-    },
-  );
-
-  it("reclassifies an approved review once and commits its approved send in two commands", async () => {
-    const id = prepareReefMessageId();
-    classify.classify.mockResolvedValue({ ...allow, decision: "review" });
-    await expect(
-      flow.send("alice", "private coordination", { messageId: id }),
-    ).rejects.toMatchObject({ reviewOutcome: "pending" });
-    const [review] = await stores.reviews.list();
-    await stores.reviews.decide(review!.approvalDigest, true);
+  it("settles a denied review in one command without classifying again", async () => {
+    const { id, digest } = await requestReview();
+    await stores.reviews.decide(digest, false);
     classify.classify.mockClear();
     const commands = recordDispatches();
-    expect(await flow.send("alice", "private coordination", { messageId: id })).toBe(id);
+    await expect(send(id)).rejects.toMatchObject({ reviewOutcome: "denied" });
+    expect(commands()).toEqual(["pluginState.executeOperation"]);
+    expect(classify.classify).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("reclassifies an approved review once and commits its approved send in two commands", async () => {
+    const { id, digest } = await requestReview();
+    classify.classify.mockResolvedValue({ ...allow, decision: "review" });
+    await stores.reviews.decide(digest, true);
+    classify.classify.mockClear();
+    const commands = recordDispatches();
+    expect(await send(id)).toBe(id);
     expect(commands()).toHaveLength(2);
     expect(classify.classify).toHaveBeenCalledOnce();
     expect(fetcher).toHaveBeenCalledOnce();
-    expect(
-      (await audit.entries())
-        .filter((entry) => isRecord(entry.event.payload) && entry.event.payload.id === id)
-        .map((entry) => entry.event.type),
-    ).toEqual([
+    expect(await events(id)).toEqual([
       "proposal",
       "guard_verdict",
       "proposal",
@@ -299,11 +300,7 @@ describe("Reef worker outbound composition", () => {
     ).rejects.toThrow("pending review capacity");
     expect(commands()).toHaveLength(2);
     expect(fetcher).not.toHaveBeenCalled();
-    expect(
-      (await audit.entries())
-        .filter((entry) => isRecord(entry.event.payload) && entry.event.payload.id === id)
-        .map((entry) => entry.event.type),
-    ).toEqual(["proposal", "guard_verdict"]);
+    expect(await events(id)).toEqual(["proposal", "guard_verdict"]);
     expect(await trusted.readOutboundDelivery("alice", id)).toBeUndefined();
   });
 
@@ -316,12 +313,10 @@ describe("Reef worker outbound composition", () => {
     });
     const id = prepareReefMessageId();
     const commands = recordDispatches();
-    const first = flow.send("alice", "private coordination", { messageId: id });
+    const first = send(id);
     try {
       await started.promise;
-      await expect(flow.send("alice", "private coordination", { messageId: id })).rejects.toThrow(
-        "Duplicate outbound",
-      );
+      await expect(send(id)).rejects.toThrow("Duplicate outbound");
       expect(commands()).toHaveLength(1);
     } finally {
       verdict.resolve(allow);

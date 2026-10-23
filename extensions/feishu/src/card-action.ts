@@ -15,7 +15,7 @@ import {
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
-import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
+import { resolveFeishuChatType } from "./chat-type.js";
 import { createFeishuClient } from "./client.js";
 import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 
@@ -54,12 +54,7 @@ function pruneExpiredCardEntries(cache: Map<string, { expiresAt: number }>, now:
   }
 }
 
-function refreshFeishuCardActionToken(actionId: string, accountId: string, now = Date.now()): void {
-  const normalizedActionId = actionId.trim();
-  if (!normalizedActionId) {
-    return;
-  }
-  const key = `${accountId}:${normalizedActionId}`;
+function refreshFeishuCardActionToken(key: string, now = Date.now()): void {
   const expiresAt = resolveExpiresAtMsFromDurationMs(FEISHU_CARD_ACTION_TOKEN_TTL_MS, {
     nowMs: now,
   });
@@ -105,25 +100,9 @@ export async function handleFeishuCardAction(params: {
   const { cfg, event, runtime, accountId } = params;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const log = runtime?.log ?? console.log;
-  function beginFeishuCardActionToken(): boolean {
-    const now = Date.now();
-    pruneExpiredCardEntries(processedCardActions, now);
-    const normalizedToken = event.token.trim();
-    if (!normalizedToken) {
-      return false;
-    }
-    const key = `${account.accountId}:${normalizedToken}`;
-    if (processedCardActions.has(key)) {
-      return false;
-    }
-    refreshFeishuCardActionToken(normalizedToken, account.accountId, now);
-    return true;
-  }
-
   async function resolveCardActionChatType(chatType?: "p2p" | "group"): Promise<"p2p" | "group"> {
-    const explicitChatType = normalizeFeishuChatType(chatType);
-    if (explicitChatType) {
-      return explicitChatType;
+    if (chatType) {
+      return chatType;
     }
 
     const chatId = event.context.chat_id?.trim();
@@ -238,18 +217,22 @@ export async function handleFeishuCardAction(params: {
       accountId,
     });
   };
-  if (!event.token.trim()) {
+  const normalizedToken = event.token.trim();
+  if (!normalizedToken) {
     log(
       `feishu[${account.accountId}]: rejected card action from ${event.operator.open_id}: missing token`,
     );
     return;
   }
-  const decoded = decodeFeishuCardAction({ event });
-  const claimedToken = beginFeishuCardActionToken();
-  if (!claimedToken) {
+  const decoded = decodeFeishuCardAction(event);
+  const now = Date.now();
+  pruneExpiredCardEntries(processedCardActions, now);
+  const tokenKey = `${account.accountId}:${normalizedToken}`;
+  if (processedCardActions.has(tokenKey)) {
     log(`feishu[${account.accountId}]: skipping duplicate card action token`);
     return;
   }
+  refreshFeishuCardActionToken(tokenKey, now);
 
   try {
     if (decoded.kind === "invalid") {
@@ -325,6 +308,6 @@ export async function handleFeishuCardAction(params: {
 
     await dispatchSyntheticCommand(decoded.text);
   } finally {
-    refreshFeishuCardActionToken(event.token, account.accountId);
+    refreshFeishuCardActionToken(tokenKey);
   }
 }

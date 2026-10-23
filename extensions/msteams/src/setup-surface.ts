@@ -126,48 +126,6 @@ function shouldScopeMSTeamsDefaultToAccounts(cfg: OpenClawConfig, accountId: str
   return Object.keys(cfg.channels?.msteams?.accounts ?? {}).length > 0;
 }
 
-function setMSTeamsTeamsAllowlist(
-  cfg: OpenClawConfig,
-  accountId: string,
-  entries: Array<{ teamKey: string; channelKey?: string }>,
-): OpenClawConfig {
-  const baseTeams = resolveMSTeamsAccountConfig(cfg, accountId).teams ?? {};
-  const teams: Record<string, MSTeamsTeamConfig> = { ...baseTeams };
-  for (const entry of entries) {
-    const teamKey = entry.teamKey;
-    if (!teamKey) {
-      continue;
-    }
-    const existing = teams[teamKey] ?? {};
-    if (entry.channelKey) {
-      const channels = { ...existing.channels };
-      channels[entry.channelKey] = channels[entry.channelKey] ?? {};
-      teams[teamKey] = { ...existing, channels };
-    } else {
-      teams[teamKey] = existing;
-    }
-  }
-  return patchMSTeamsAccountConfig({
-    cfg,
-    accountId,
-    patch: { teams },
-    scopeDefaultToAccounts: shouldScopeMSTeamsDefaultToAccounts(cfg, accountId),
-  });
-}
-
-function listMSTeamsGroupEntries(cfg: OpenClawConfig, accountId: string): string[] {
-  return Object.entries(resolveMSTeamsAccountConfig(cfg, accountId).teams ?? {}).flatMap(
-    ([teamKey, value]) => {
-      const channels = value?.channels ?? {};
-      const channelKeys = Object.keys(channels);
-      if (channelKeys.length === 0) {
-        return [teamKey];
-      }
-      return channelKeys.map((channelKey) => `${teamKey}/${channelKey}`);
-    },
-  );
-}
-
 async function resolveMSTeamsGroupAllowlist(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -243,14 +201,43 @@ const msteamsGroupAccessBase = createAccountScopedGroupAccessSection({
   placeholder: "Team Name/Channel Name, teamId/conversationId",
   currentPolicy: ({ cfg, accountId }) =>
     resolveMSTeamsAccountConfig(cfg, accountId).groupPolicy ?? "allowlist",
-  currentEntries: ({ cfg, accountId }) => listMSTeamsGroupEntries(cfg, accountId),
+  currentEntries: ({ cfg, accountId }) =>
+    Object.entries(resolveMSTeamsAccountConfig(cfg, accountId).teams ?? {}).flatMap(
+      ([teamKey, value]) => {
+        const channels = value?.channels ?? {};
+        const channelKeys = Object.keys(channels);
+        if (channelKeys.length === 0) {
+          return [teamKey];
+        }
+        return channelKeys.map((channelKey) => `${teamKey}/${channelKey}`);
+      },
+    ),
   updatePrompt: ({ cfg, accountId }) => Boolean(resolveMSTeamsAccountConfig(cfg, accountId).teams),
   resolveAllowlist: ({ cfg, accountId, entries, prompter }) =>
     resolveMSTeamsGroupAllowlist({ cfg, accountId, entries, prompter }),
   fallbackResolved: (entries) =>
     entries.map((entry) => parseMSTeamsTeamEntry(entry)).filter((entry) => entry !== null),
-  applyAllowlist: ({ cfg, accountId, resolved }) =>
-    setMSTeamsTeamsAllowlist(cfg, accountId, resolved),
+  applyAllowlist: ({ cfg, accountId, resolved: entries }) => {
+    const baseTeams = resolveMSTeamsAccountConfig(cfg, accountId).teams ?? {};
+    const teams: Record<string, MSTeamsTeamConfig> = { ...baseTeams };
+    for (const entry of entries) {
+      const teamKey = entry.teamKey;
+      const existing = teams[teamKey] ?? {};
+      if (entry.channelKey) {
+        const channels = { ...existing.channels };
+        channels[entry.channelKey] = channels[entry.channelKey] ?? {};
+        teams[teamKey] = { ...existing, channels };
+      } else {
+        teams[teamKey] = existing;
+      }
+    }
+    return patchMSTeamsAccountConfig({
+      cfg,
+      accountId,
+      patch: { teams },
+      scopeDefaultToAccounts: shouldScopeMSTeamsDefaultToAccounts(cfg, accountId),
+    });
+  },
 });
 
 const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {

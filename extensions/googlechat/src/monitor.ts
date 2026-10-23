@@ -28,7 +28,6 @@ import {
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
 import { formatGoogleChatTextChunks } from "./format.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
-import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
 import {
   createGoogleChatIngressMonitor,
   type GoogleChatIngressLifecycle,
@@ -332,197 +331,226 @@ async function processGoogleChatEvent(
     }
   }
 
-  await core.channel.inbound.run({
-    channel: "googlechat",
-    accountId: route.accountId,
-    raw: message,
-    ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
-    adapter: {
-      ingest: () => ({
-        id: message.name ?? spaceId,
-        timestamp: timestampMs,
-        rawText: rawBody,
-        textForAgent: rawBody,
-        textForCommands: rawBody,
-        raw: message,
-      }),
-      resolveTurn: () => ({
-        cfg: config,
-        channel: "googlechat",
-        accountId: route.accountId,
-        route: { agentId: route.agentId, sessionKey: route.sessionKey },
-        ctxPayload,
-        delivery: {
-          durable: (payload, info) =>
-            resolveGoogleChatDurableReplyOptions({
-              payload: normalizeGoogleChatReplyTarget({
+  const cleanupTypingMessage = async () => {
+    const placeholder = typingMessage;
+    typingMessage = undefined;
+    if (!placeholder) {
+      return;
+    }
+    try {
+      await deleteGoogleChatMessage({ account, messageName: placeholder.name });
+    } catch (error) {
+      runtime.error?.(`Google Chat typing cleanup failed: ${String(error)}`);
+    }
+  };
+  let deferred = false;
+  const typingTurnLifecycle: Parameters<
+    GoogleChatCoreRuntime["channel"]["inbound"]["run"]
+  >[0]["turnAdoptionLifecycle"] = typingMessage
+    ? {
+        ...turnAdoptionLifecycle,
+        onAdopted: () => turnAdoptionLifecycle?.onAdopted(),
+        onDeferred: () => {
+          turnAdoptionLifecycle?.onDeferred();
+          deferred = true;
+        },
+        // Immediate agent settlement precedes buffered final delivery.
+        onSettled: () => (deferred ? cleanupTypingMessage() : undefined),
+      }
+    : turnAdoptionLifecycle;
+
+  try {
+    await core.channel.inbound.run({
+      channel: "googlechat",
+      accountId: route.accountId,
+      raw: message,
+      ...(typingTurnLifecycle ? { turnAdoptionLifecycle: typingTurnLifecycle } : {}),
+      adapter: {
+        ingest: () => ({
+          id: message.name ?? spaceId,
+          timestamp: timestampMs,
+          rawText: rawBody,
+          textForAgent: rawBody,
+          textForCommands: rawBody,
+          raw: message,
+        }),
+        resolveTurn: () => ({
+          cfg: config,
+          channel: "googlechat",
+          accountId: route.accountId,
+          route: { agentId: route.agentId, sessionKey: route.sessionKey },
+          ctxPayload,
+          delivery: {
+            durable: (payload, info) => {
+              const normalizedPayload = normalizeGoogleChatReplyTarget({
                 payload,
                 sourceMessageName: message.name,
                 replyThreadName: effectiveReplyThreadName,
-              }),
-              infoKind: info.kind,
-              spaceId,
-              hasTypingMessage: Boolean(typingMessage),
-            }),
-          deliver: async (payload) => {
-            const normalizedPayload = normalizeGoogleChatReplyTarget({
-              payload,
-              sourceMessageName: message.name,
-              replyThreadName: effectiveReplyThreadName,
-            });
-            // Clear this whenever the typing message is deleted or unavailable; otherwise
-            // text delivery can keep retrying a dead message and drop content.
-            let deliveryTypingMessage = typingMessage;
-            const targetThreadName = normalizedPayload.replyToId?.trim() || undefined;
-            const reply = resolveSendableOutboundReplyParts(normalizedPayload);
-            let deliveryThreadName = targetThreadName;
-            const acceptedText: Array<{ id?: string; text: string }> = [];
-            const runTextOperation = async <T>(operation: Promise<T>): Promise<T> =>
-              await operation.catch((error: unknown) => {
-                if (acceptedText.length === 0) {
-                  throw error;
-                }
-                throw createChannelPartialDeliveryError(error, {
-                  messageIds: acceptedText.flatMap(({ id }) => (id ? [id] : [])),
-                  content: acceptedText.map(({ text }) => text).join("\n"),
-                  visibleReplySent: true,
-                });
               });
-
-            const typingMatchesReply =
-              deliveryTypingMessage?.placement === "thread"
-                ? deliveryTypingMessage.requestedThreadName === targetThreadName
-                : deliveryTypingMessage?.placement === "top-level"
-                  ? targetThreadName === undefined
-                  : false;
-            if (deliveryTypingMessage && !typingMatchesReply) {
-              // Typing starts before reply directives are resolved. Never edit a placeholder
-              // from one thread into a final reply targeted at another conversation surface.
-              try {
-                await deleteGoogleChatMessage({ account, messageName: deliveryTypingMessage.name });
-              } catch (err) {
-                runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
+              if (info.kind !== "final" || Boolean(typingMessage)) {
+                return false;
               }
-              deliveryTypingMessage = undefined;
-            } else if (deliveryTypingMessage?.placement === "thread") {
-              // The requested thread decides whether the placeholder still belongs to this reply;
-              // the provider-returned thread owns every later physical send after fallback.
-              deliveryThreadName = deliveryTypingMessage.deliveredThreadName;
-            }
-
-            if (reply.hasMedia) {
-              runtime.error?.(
-                "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel; sending text fallback only.",
-              );
-            }
-
-            const chunkLimit = account.config.textChunkLimit ?? 4000;
-            const chunkMode = core.channel.text.resolveChunkMode(
-              config,
-              "googlechat",
-              account.accountId,
-            );
-            const chunks = formatGoogleChatTextChunks(reply.text, chunkLimit).flatMap((chunk) =>
-              core.channel.text.chunkMarkdownTextWithMode(chunk, chunkLimit, chunkMode),
-            );
-            const rejection =
-              reply.hasMedia && !reply.hasText
-                ? "Google Chat outbound attachments require user OAuth and no text fallback is available."
-                : reply.hasText && !chunks.some((chunk) => chunk)
-                  ? "Google Chat reply has no visible text after formatting."
-                  : undefined;
-            if (rejection) {
-              try {
-                if (deliveryTypingMessage) {
-                  await deleteGoogleChatMessage({
-                    account,
-                    messageName: deliveryTypingMessage.name,
-                  });
-                }
-              } catch (err) {
-                runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
+              const threadId = normalizedPayload.replyToId?.trim() || undefined;
+              if (!threadId) {
+                return { to: spaceId, replyToId: null };
               }
-              // Permanent policy rejection before any recipient-visible send; the typed
-              // contract keeps delivery custody from recording a false ambiguous attempt.
-              throw new PlatformMessageNotDispatchedError(rejection, {
-                cause: undefined,
-                retryable: false,
+              return {
+                to: spaceId,
+                replyToId: threadId,
+                threadId,
+              };
+            },
+            deliver: async (payload) => {
+              const normalizedPayload = normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName: effectiveReplyThreadName,
               });
-            }
-
-            const recordOutboundStatus = () => {
-              try {
-                statusSink?.({ lastOutboundAt: Date.now() });
-              } catch (err) {
-                runtime.error?.(`Google Chat outbound status update failed: ${String(err)}`);
-              }
-            };
-            const sendTextMessage = async (chunk: string) => {
-              const sent = await runTextOperation(
-                sendGoogleChatMessage({
-                  account,
-                  space: spaceId,
-                  text: chunk,
-                  thread: deliveryThreadName,
-                }),
-              );
-              if (sent) {
-                acceptedText.push({ id: sent.messageName?.trim() || undefined, text: chunk });
-              }
-              if (targetThreadName) {
-                deliveryThreadName = sent?.threadName?.trim() || deliveryThreadName;
-              }
-            };
-            for (const chunk of chunks) {
-              if (!chunk) {
-                continue;
-              }
-              if (deliveryTypingMessage) {
-                try {
-                  const updated = await updateGoogleChatMessage({
-                    account,
-                    messageName: deliveryTypingMessage.name,
-                    text: chunk,
-                  });
-                  acceptedText.push({
-                    id: updated.messageName?.trim() || deliveryTypingMessage.name,
-                    text: chunk,
-                  });
-                } catch (error) {
-                  if (!(error instanceof GoogleChatApiError) || error.status !== 404) {
+              // Clear this whenever the typing message is deleted or unavailable; otherwise
+              // text delivery can keep retrying a dead message and drop content.
+              let deliveryTypingMessage = typingMessage;
+              const targetThreadName = normalizedPayload.replyToId?.trim() || undefined;
+              const reply = resolveSendableOutboundReplyParts(normalizedPayload);
+              let deliveryThreadName = targetThreadName;
+              const acceptedText: Array<{ id?: string; text: string }> = [];
+              const runTextOperation = async <T>(operation: Promise<T>): Promise<T> =>
+                await operation.catch((error: unknown) => {
+                  if (acceptedText.length === 0) {
                     throw error;
                   }
-                  runtime.error?.(`Google Chat typing update failed: ${String(error)}`);
-                  await sendTextMessage(chunk);
-                }
+                  throw createChannelPartialDeliveryError(error, {
+                    messageIds: acceptedText.flatMap(({ id }) => (id ? [id] : [])),
+                    content: acceptedText.map(({ text }) => text).join("\n"),
+                    visibleReplySent: true,
+                  });
+                });
+
+              const typingMatchesReply =
+                deliveryTypingMessage?.placement === "thread"
+                  ? deliveryTypingMessage.requestedThreadName === targetThreadName
+                  : deliveryTypingMessage?.placement === "top-level"
+                    ? targetThreadName === undefined
+                    : false;
+              if (deliveryTypingMessage && !typingMatchesReply) {
+                // Typing starts before reply directives are resolved. Never edit a placeholder
+                // from one thread into a final reply targeted at another conversation surface.
+                await cleanupTypingMessage();
                 deliveryTypingMessage = undefined;
-                recordOutboundStatus();
-                continue;
+              } else if (deliveryTypingMessage?.placement === "thread") {
+                // The requested thread decides whether the placeholder still belongs to this reply;
+                // the provider-returned thread owns every later physical send after fallback.
+                deliveryThreadName = deliveryTypingMessage.deliveredThreadName;
               }
-              await sendTextMessage(chunk);
-              recordOutboundStatus();
-            }
-            // Only use typing message for first delivery
-            typingMessage = undefined;
+
+              if (reply.hasMedia) {
+                runtime.error?.(
+                  "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel; sending text fallback only.",
+                );
+              }
+
+              const chunkLimit = account.config.textChunkLimit ?? 4000;
+              const chunkMode = core.channel.text.resolveChunkMode(
+                config,
+                "googlechat",
+                account.accountId,
+              );
+              const chunks = formatGoogleChatTextChunks(reply.text, chunkLimit).flatMap((chunk) =>
+                core.channel.text.chunkMarkdownTextWithMode(chunk, chunkLimit, chunkMode),
+              );
+              const rejection =
+                reply.hasMedia && !reply.hasText
+                  ? "Google Chat outbound attachments require user OAuth and no text fallback is available."
+                  : reply.hasText && !chunks.some((chunk) => chunk)
+                    ? "Google Chat reply has no visible text after formatting."
+                    : undefined;
+              if (rejection) {
+                await cleanupTypingMessage();
+                // Permanent policy rejection before any recipient-visible send; the typed
+                // contract keeps delivery custody from recording a false ambiguous attempt.
+                throw new PlatformMessageNotDispatchedError(rejection, {
+                  cause: undefined,
+                  retryable: false,
+                });
+              }
+
+              const recordOutboundStatus = () => {
+                try {
+                  statusSink?.({ lastOutboundAt: Date.now() });
+                } catch (err) {
+                  runtime.error?.(`Google Chat outbound status update failed: ${String(err)}`);
+                }
+              };
+              const sendTextMessage = async (chunk: string) => {
+                const sent = await runTextOperation(
+                  sendGoogleChatMessage({
+                    account,
+                    space: spaceId,
+                    text: chunk,
+                    thread: deliveryThreadName,
+                  }),
+                );
+                if (sent) {
+                  acceptedText.push({ id: sent.messageName?.trim() || undefined, text: chunk });
+                }
+                if (targetThreadName) {
+                  deliveryThreadName = sent?.threadName?.trim() || deliveryThreadName;
+                }
+              };
+              for (const chunk of chunks) {
+                if (!chunk) {
+                  continue;
+                }
+                if (deliveryTypingMessage) {
+                  // PATCH can apply before its response fails. Cleanup must never delete a possible answer.
+                  typingMessage = undefined;
+                  try {
+                    const updated = await updateGoogleChatMessage({
+                      account,
+                      messageName: deliveryTypingMessage.name,
+                      text: chunk,
+                    });
+                    acceptedText.push({
+                      id: updated.messageName?.trim() || deliveryTypingMessage.name,
+                      text: chunk,
+                    });
+                  } catch (error) {
+                    if (!(error instanceof GoogleChatApiError) || error.status !== 404) {
+                      throw error;
+                    }
+                    runtime.error?.(`Google Chat typing update failed: ${String(error)}`);
+                    await sendTextMessage(chunk);
+                  }
+                  deliveryTypingMessage = undefined;
+                  recordOutboundStatus();
+                  continue;
+                }
+                await sendTextMessage(chunk);
+                recordOutboundStatus();
+              }
+            },
+            onDelivered: () => {
+              statusSink?.({ lastOutboundAt: Date.now() });
+            },
+            onError: (err, info) => {
+              runtime.error?.(
+                `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
+              );
+            },
           },
-          onDelivered: () => {
-            statusSink?.({ lastOutboundAt: Date.now() });
+          replyPipeline: {},
+          record: {
+            onRecordError: (err) => {
+              runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
+            },
           },
-          onError: (err, info) => {
-            runtime.error?.(
-              `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
-            );
-          },
-        },
-        replyPipeline: {},
-        record: {
-          onRecordError: (err) => {
-            runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
-          },
-        },
-      }),
-    },
-  });
+        }),
+      },
+    });
+  } finally {
+    if (!deferred) {
+      await cleanupTypingMessage();
+    }
+  }
 }
 
 async function downloadAttachment(

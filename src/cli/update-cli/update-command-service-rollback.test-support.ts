@@ -27,7 +27,7 @@ import type {
   UpdateServiceDefinitionRecovery,
 } from "./update-command-service-context-types.js";
 import { maintenanceDefaults } from "./update-command-service-fixtures.test-support.js";
-import type { InstallRootTransitionFixture } from "./update-command-service-transition.test-support.js";
+import type { InstallRootTransitionFixture } from "./update-command-service-fixtures.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service.js";
 
 const readText = (file: string) => fs.readFile(file, "utf8");

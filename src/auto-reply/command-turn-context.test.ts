@@ -26,6 +26,8 @@ function normalTurn(body: string, visible = body): CommandTurnContextInput {
 function targetSession(turn: CommandTurnContext, key: string) {
   return resolveCommandTurnTargetSessionKey({ CommandTurn: turn, CommandTargetSessionKey: key });
 }
+const textTurn = (commandName: string, authorized = true, body = `/${commandName}`) =>
+  createCommandTurnContext("text", { authorized, commandName, body });
 
 describe("resolveCommandTurnContext", () => {
   it("keeps normal message turns non-explicit even when command auth is true elsewhere", () => {
@@ -76,15 +78,16 @@ describe("resolveCommandTurnContext", () => {
   });
 
   it("lets structured command turns override legacy command fields", () => {
+    const turn = {
+      kind: "text-slash",
+      source: "text",
+      authorized: false,
+      commandName: "status",
+      body: "/status",
+    } as const;
     expect(
       resolveCommandTurnContext({
-        CommandTurn: {
-          kind: "text-slash",
-          source: "text",
-          authorized: false,
-          commandName: "status",
-          body: "/status",
-        },
+        CommandTurn: turn,
         CommandSource: "native",
         CommandAuthorized: true,
       }),
@@ -121,13 +124,10 @@ describe("resolveCommandTurnContext", () => {
       authorized: true,
       body: "/stop",
     });
-    const textTurn = createCommandTurnContext("text", {
-      authorized: true,
-      body: "/status",
-    });
+    const statusTurn = textTurn("status");
 
     expect(isNativeCommandTurn(nativeTurn)).toBe(true);
-    expect(isAuthorizedTextSlashCommandTurn(textTurn)).toBe(true);
+    expect(isAuthorizedTextSlashCommandTurn(statusTurn)).toBe(true);
     expect(targetSession(nativeTurn, " target-session ")).toBe("target-session");
     expect(
       resolveCommandTurnTargetSessionKey({
@@ -138,41 +138,21 @@ describe("resolveCommandTurnContext", () => {
     ).toBe("legacy-target");
     expect(
       targetSession(
-        createCommandTurnContext("text", {
-          authorized: true,
-          body: "/steer finish with a table",
-          commandName: "steer",
-        }),
+        textTurn("steer", true, "/steer finish with a table"),
         " active-direct-session ",
       ),
     ).toBe("active-direct-session");
-    expect(targetSession(textTurn, "must-not-retarget-status")).toBeUndefined();
+    expect(targetSession(statusTurn, "must-not-retarget-status")).toBeUndefined();
     expect(
-      targetSession(
-        createCommandTurnContext("text", {
-          authorized: false,
-          body: "/steer denied",
-          commandName: "steer",
-        }),
-        "must-not-retarget-unauthorized",
-      ),
+      targetSession(textTurn("steer", false, "/steer denied"), "must-not-retarget-unauthorized"),
     ).toBeUndefined();
-    const followup = createCommandTurnContext("text", {
-      authorized: true,
-      commandName: "followup",
-      body: "/followup next task",
-    });
+    const followup = textTurn("followup", true, "/followup next task");
     expect(isExplicitFollowupCommandTurn({ CommandTurn: followup, Body: "next task" })).toBe(true);
     expect(isExplicitFollowupCommandTurn({ CommandTurn: { ...followup, authorized: false } })).toBe(
       false,
     );
     expect(isExplicitFollowupCommandTurn({ Body: "/followup untrusted text" })).toBe(false);
-    expect(
-      resolveCommandTurnTargetSessionKey({
-        CommandTurn: followup,
-        CommandTargetSessionKey: " active-direct-session ",
-      }),
-    ).toBe("active-direct-session");
+    expect(targetSession(followup, " active-direct-session ")).toBe("active-direct-session");
     expect(isExplicitCommandTurn(undefined)).toBe(false);
   });
 });

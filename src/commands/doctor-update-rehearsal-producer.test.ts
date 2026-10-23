@@ -51,6 +51,7 @@ it("admits real producer plugin host, dependency and basename links without trav
       env: source.env,
     });
     try {
+      await rehearsal.prepareRuntime(() => {});
       const params = {
         ...rehearsal,
         env: { ...rehearsal.env, OPENCLAW_UPDATE_IN_PROGRESS: "0" },

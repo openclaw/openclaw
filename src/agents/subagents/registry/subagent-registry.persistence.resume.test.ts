@@ -835,11 +835,7 @@ describe("subagent registry persistence resume", () => {
 
     await withRegistryState(async (stateDir) => {
       const endedAt = Date.now();
-      const restoredRuns = createRestoredRequesterWakeRuns({
-        activationSettlement: true,
-        requesterYielded: true,
-        endedAt,
-      });
+      const restoredRuns = createRestoredRequesterWakeRuns(endedAt);
       saveRuns(...restoredRuns);
 
       await Promise.all(

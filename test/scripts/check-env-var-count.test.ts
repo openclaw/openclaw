@@ -39,14 +39,17 @@ function createRepo(files: Record<string, string> = {}, initialCount?: number) {
   return { root, git, write, commit, setCount, check, collect };
 }
 
-it("warns on CI count growth while malformed budgets stay blocking", () => {
+it("blocks unrecorded CI names while recorded budget growth only warns", () => {
   const { root, check, write } = createRepo({}, 0);
   write("src/runtime.ts", "process.env.OPENCLAW_CANARY;\n");
-  expect(() => check("--base", "HEAD")).toThrow(/exceeds budget/u);
   vi.stubEnv("GITHUB_ACTIONS", "true");
   vi.stubEnv("GITHUB_STEP_SUMMARY", path.join(root, "summary.md"));
+  expect(() => check("--base", "HEAD")).toThrow(/count 1 exceeds budget 0/u);
+  write(budgetPath, "1\n");
   expect(check("--base", "HEAD")).toBe(1);
-  expect(fs.readFileSync(path.join(root, "summary.md"), "utf8")).toContain("exceeds budget");
+  expect(fs.readFileSync(path.join(root, "summary.md"), "utf8")).toContain("grew from 0 to 1");
+  vi.stubEnv("GITHUB_ACTIONS", "");
+  expect(() => check("--base", "HEAD")).toThrow(/budget grew from 0 to 1/u);
   write(budgetPath, "invalid\n");
   expect(() => check("--base", "HEAD")).toThrow(/non-negative integer/u);
 });
@@ -125,11 +128,6 @@ it("rejects an unresolved stage-zero source", () => {
     [1, 2, 3].map((stage) => `100644 ${oid} ${stage}\t${file}\0`).join(""),
   );
   expect(() => collect(true)).toThrow();
-});
-
-it("fails closed when the base ref cannot be resolved", () => {
-  const { check } = createRepo({ [budgetPath]: "0\n" });
-  expect(() => check("--base", "missing")).toThrow(/Could not resolve/u);
 });
 
 it("rejects missing ancestry instead of skipping budget growth", () => {

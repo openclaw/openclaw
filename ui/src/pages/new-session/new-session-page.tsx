@@ -5,6 +5,7 @@ import { reloadAfterRenderErrorOnce } from "../../app/stale-chunk-reload.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { SessionBackgroundLayoutScope } from "../../components/session-background-layout-context.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
@@ -40,6 +41,7 @@ import {
 import { restoredInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { NewSessionPageOwner, type PageHost } from "./new-session-page-owner.ts";
+import { createSubmissionAction } from "./submission-action.ts";
 import { AgentSelect, NewSessionPlaceControls } from "./target-controls-view.tsx";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
@@ -103,6 +105,7 @@ function DraftBlock(props: {
   page: () => NewSessionPageOwner;
   revision: () => object;
   options: () => ReturnType<NewSessionPageOwner["composerOptions"]>;
+  submitting: boolean;
 }) {
   const submission = () => props.page().submission;
   const place = () => props.page().place;
@@ -166,7 +169,7 @@ function DraftBlock(props: {
       ref={(element) => {
         root = element;
       }}
-      aria-busy={submission().submitting ? "true" : "false"}
+      aria-busy={props.submitting ? "true" : "false"}
       onCompositionStart={() => props.page().titlePreparation?.setComposing(true)}
       onCompositionEnd={() => props.page().titlePreparation?.setComposing(false)}
       onFocusOut={() => props.page().titlePreparation?.setComposing(false)}
@@ -186,6 +189,7 @@ function DraftBlock(props: {
             props.page().data?.group && props.page().context?.sessions.groupsStatus() === "loading",
           )
         }
+        retryRead={props.page().gateway.catalogRetryRead}
         onRetry={() => props.page().gateway.handleCatalogRetry()}
         agentSelect={
           <Show when={Boolean(props.page().submission.completedSubmission)}>
@@ -243,6 +247,22 @@ function DraftBlock(props: {
           voiceControl,
         })}
       />
+      <Show when={submission().blockedSubmitNotice()}>
+        <div
+          class="new-session-page__blocked-submit agent-chat__composer-status"
+          data-tone="info"
+          role="status"
+        >
+          <div class="agent-chat__composer-status-band">
+            <span class="agent-chat__composer-status-icon" aria-hidden="true">
+              <Icon name="info" />
+            </span>
+            <span class="agent-chat__composer-status-text">
+              {submission().blockedSubmitNotice()}
+            </span>
+          </div>
+        </div>
+      </Show>
       <Show when={!catalog.isTarget(props.page().data)}>
         <NewSessionIncognitoNotice
           active={submission().visibility === "incognito"}
@@ -296,21 +316,44 @@ function renderPageContent(host: PageHost) {
   const pageState = projectOwner(owner, (value) => value);
   const page = pageState.read;
   const revision = createMemo(() => ({ value: pageState.revision() }));
-  owner.titlePreparation = createNewSessionTitle(() => ({
-    context: owner.context,
-    data: owner.data,
-    place: owner.place,
-    submission: owner.submission,
-    dictating: owner.dictation.active,
-  }));
+  const submissionError = createMemo(() => page().submission.error);
+  const saving = createSubmissionAction(
+    () => owner,
+    pageState.revision,
+    submissionError,
+    (failure) =>
+      owner.submission.setError(failure instanceof Error ? failure.message : String(failure)),
+  );
+  onSettled(() => {
+    const preparation = createNewSessionTitle(() => ({
+      context: owner.context,
+      data: owner.data,
+      place: owner.place,
+      submission: owner.submission,
+      dictating: owner.dictation.active,
+    }));
+    owner.titlePreparation = preparation;
+    preparation.synchronize();
+    return () => {
+      preparation.dispose();
+      if (owner.titlePreparation === preparation) {
+        owner.titlePreparation = undefined;
+      }
+    };
+  });
   // Both draft presentations share one preparation per revision, not one per binding.
   const options = createMemo(() => page().composerOptions());
   const Draft = () => (
     <NewSessionComposerTextareaContext value={owner.submission.composerTextarea}>
-      <DraftBlock page={page} revision={revision} options={options} />
+      <DraftBlock
+        page={page}
+        revision={revision}
+        options={options}
+        submitting={saving() || page().submission.submitting}
+      />
     </NewSessionComposerTextareaContext>
   );
-  // Bind gateway facts before publishing the first reconciled draft snapshot.
+  // Bind gateway facts before the first child read; teardown must also cover pre-settle disposal.
   owner.connect();
   onCleanup(() => owner.disconnect());
   onSettled(() => {
@@ -407,10 +450,10 @@ function renderPageContent(host: PageHost) {
           />
         </Show>
         <NewSessionBody
-          error={page().submission.error}
+          error={submissionError()}
           pendingMessage={page().submission.pendingMessage}
           userId={userId()}
-          submitting={page().submission.submitting}
+          submitting={saving() || page().submission.submitting}
           statusLabel={
             page().context?.gateway.snapshot.phase === "connected"
               ? undefined
@@ -510,7 +553,17 @@ defineSolidBridge<
   }
 >("openclaw-new-session-page", PageContent, {
   properties: { data: { default: undefined, attribute: false } },
-  propertyChanged: (host) => pageOwners.get(host)?.changed(),
+  propertyChanged: (host) => {
+    const owner = pageOwners.get(host);
+    owner?.retireSubmissionPresentation();
+    owner?.browser.close();
+    owner?.changed();
+  },
+  disconnected: (host) => {
+    const owner = pageOwners.get(host);
+    owner?.retireSubmissionPresentation();
+    owner?.browser.close();
+  },
   methods: {
     focusComposer: (host) => pageOwners.get(host)?.focusComposer(),
   },

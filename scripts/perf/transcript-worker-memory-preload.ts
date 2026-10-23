@@ -22,6 +22,8 @@ if (baselineOwners) {
     "session-accessor.sqlite-history-query",
     "session-memory-entry.worker",
     "session-accessor.sqlite-active-context",
+    "session-actor-replica",
+    "session-actor-receipt",
   ];
   const loadedOwners = new Set<string>();
   registerHooks({
@@ -54,7 +56,11 @@ workerThreads.Worker = class extends NativeWorker {
   ) {
     super(filename, {
       ...options,
-      execArgv: [...(options.execArgv ?? process.execArgv), "--import", import.meta.url],
+      // Native inheritance includes this preload and permits V8 flags rejected in explicit argv.
+      execArgv:
+        options.execArgv === undefined
+          ? undefined
+          : [...options.execArgv, "--import", import.meta.url],
       env:
         options.env === workerThreads.SHARE_ENV
           ? options.env
@@ -88,6 +94,7 @@ if (
   const kinds = new Set([
     "prewarm",
     "transcript-hydration",
+    "transcript-maintenance",
     "history-page",
     "session-entry-list",
     "session-store-projection",

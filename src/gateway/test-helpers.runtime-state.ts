@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import type { AgentCommandOpts } from "../agents/command/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
@@ -22,7 +23,10 @@ type CronIsolatedRunFn = (...args: unknown[]) => Promise<RunCronAgentTurnResult>
 type AgentCommandResult = Awaited<
   ReturnType<(typeof import("../agents/agent-command.js"))["agentCommand"]>
 >;
-type AgentCommandFn = (...args: unknown[]) => Promise<AgentCommandResult | void>;
+type AgentCommandFn = (
+  opts: AgentCommandOpts,
+  ...args: unknown[]
+) => Promise<AgentCommandResult | void>;
 type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 export type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
 type DispatchInboundMessageFn = (
@@ -36,6 +40,29 @@ const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("openclaw.gatewayTestHelpers.con
 const initial = <T>(value: T): T => value;
 
 const mutableValue = <T>(value: T) => ({ value });
+
+export function createGatewayTestState() {
+  return {
+    agentConfig: initial<Record<string, unknown> | undefined>(undefined),
+    agentsConfig: initial<Record<string, unknown> | undefined>(undefined),
+    bindingsConfig: initial<AgentBinding[] | undefined>(undefined),
+    channelsConfig: initial<Record<string, unknown> | undefined>(undefined),
+    sessionStorePath: initial<string | undefined>(undefined),
+    sessionConfig: initial<Record<string, unknown> | undefined>(undefined),
+    allowFrom: initial<string[] | undefined>(undefined),
+    cronStorePath: initial<string | undefined>(undefined),
+    cronEnabled: initial<boolean | undefined>(false),
+    cronTriggersEnabled: initial<boolean | undefined>(undefined),
+    gatewayBind: initial<"auto" | "lan" | "tailnet" | "loopback" | undefined>(undefined),
+    gatewayAuth: initial<Record<string, unknown> | undefined>(undefined),
+    gatewayControlUi: initial<Record<string, unknown> | undefined>(undefined),
+    hooksConfig: initial<HooksConfig | undefined>(undefined),
+    legacyIssues: new Array<{ path: string; message: string }>(),
+    legacyParsed: initial<Record<string, unknown>>({}),
+    migrationConfig: initial<Record<string, unknown> | null>(null),
+    migrationChanges: new Array<string>(),
+  };
+}
 
 const gatewayTestHoisted = resolveGatewayTestFileFixture(
   Symbol.for("openclaw.gatewayTestHelpers.hoisted"),
@@ -81,26 +108,7 @@ const gatewayTestHoisted = resolveGatewayTestFileFixture(
     sendWhatsAppMock: vi
       .fn<SendWhatsAppFn>()
       .mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
-    testState: {
-      agentConfig: initial<Record<string, unknown> | undefined>(undefined),
-      agentsConfig: initial<Record<string, unknown> | undefined>(undefined),
-      bindingsConfig: initial<AgentBinding[] | undefined>(undefined),
-      channelsConfig: initial<Record<string, unknown> | undefined>(undefined),
-      sessionStorePath: initial<string | undefined>(undefined),
-      sessionConfig: initial<Record<string, unknown> | undefined>(undefined),
-      allowFrom: initial<string[] | undefined>(undefined),
-      cronStorePath: initial<string | undefined>(undefined),
-      cronEnabled: initial<boolean | undefined>(false),
-      cronTriggersEnabled: initial<boolean | undefined>(undefined),
-      gatewayBind: initial<"auto" | "lan" | "tailnet" | "loopback" | undefined>(undefined),
-      gatewayAuth: initial<Record<string, unknown> | undefined>(undefined),
-      gatewayControlUi: initial<Record<string, unknown> | undefined>(undefined),
-      hooksConfig: initial<HooksConfig | undefined>(undefined),
-      legacyIssues: new Array<{ path: string; message: string }>(),
-      legacyParsed: initial<Record<string, unknown>>({}),
-      migrationConfig: initial<Record<string, unknown> | null>(null),
-      migrationChanges: new Array<string>(),
-    },
+    testState: createGatewayTestState(),
   }),
 );
 

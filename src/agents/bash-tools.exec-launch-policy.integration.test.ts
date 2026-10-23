@@ -7,7 +7,7 @@ import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { runExecFixture } from "./bash-tools.exec-fixture.test-support.js";
 
 const boundary = vi.hoisted(() => ({
   supervisor: undefined as ProcessSupervisor | undefined,
@@ -46,16 +46,12 @@ describe.runIf(process.platform !== "win32")("launch policy and construction aut
   let root: string;
   let supervisor: ReturnType<typeof createProcessSupervisor>;
   const exec = (command: string, usePty: boolean, assertCurrent?: () => void) =>
-    runExecProcess({
+    runExecFixture({
       command,
       execCommand: command,
       workdir: root,
       env: { PATH: "/usr/bin:/bin", HOME: root },
       usePty,
-      warnings: [],
-      maxOutput: 1_000,
-      pendingMaxOutput: 1_000,
-      notifyOnExit: false,
       timeoutSec: 10,
       assertCurrent,
     });

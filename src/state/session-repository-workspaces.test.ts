@@ -343,12 +343,9 @@ it("publishes committed workspace revisions, rejects stale checkpoints, and reti
   expect(() => prepared.current()).toThrow();
   expect(await store.get(initial.workspaceId)).toEqual(accepted);
   await store.delete({ workspaceId: initial.workspaceId, assertCurrent });
-  expect(changed).toHaveBeenCalledTimes(4);
-  expect(
-    changed.mock.calls.every(
-      ([change]) => change.agentId === source.agentId && change.sessionKey === source.sessionKey,
-    ),
-  ).toBe(true);
+  expect(changed.mock.calls).toEqual(
+    Array.from({ length: 4 }, () => [expect.objectContaining(owner)]),
+  );
 });
 
 it("reopens an owner and finishes only its artifact cleanup while database close waits", async () => {

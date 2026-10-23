@@ -777,7 +777,7 @@ openclaw-pending-session-create {
   text-transform: uppercase;
 }
 
-.chat-history-boundary__action:not(:disabled):hover {
+.chat-history-boundary__action:not([aria-disabled="true"]):hover {
   color: var(--text);
 }
 
@@ -882,17 +882,6 @@ openclaw-pending-session-create {
 .chat-scroll-to-bottom:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--text) 28%, transparent);
   outline-offset: 2px;
-}
-
-.chat-scroll-to-bottom svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex-shrink: 0;
 }
 
 .context-usage {

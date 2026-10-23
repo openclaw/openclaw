@@ -245,11 +245,13 @@ export function createClickClackClient(options: ClientOptions) {
     path: string,
     body: string,
     opts?: MessageCreateOptions,
+    activity?: { kind: "agent_commentary" | "agent_tool"; turnId?: string },
   ): Promise<ClickClackMessage> {
     return requestObject("message", path, {
       method: "POST",
       body: JSON.stringify({
         body,
+        ...(activity ? { kind: activity.kind, turn_id: activity.turnId } : {}),
         ...(opts?.quotedMessageId ? { quoted_message_id: opts.quotedMessageId } : {}),
         ...(opts?.nonce ? { nonce: opts.nonce } : {}),
         ...provenanceFields(opts?.provenance),
@@ -490,15 +492,7 @@ export function createClickClackClient(options: ClientOptions) {
       const path = params.channelId
         ? `/api/channels/${encodeURIComponent(params.channelId)}/messages`
         : `/api/dms/${encodeURIComponent(params.conversationId ?? "")}/messages`;
-      return requestObject("message", path, {
-        method: "POST",
-        body: JSON.stringify({
-          body: params.body,
-          kind: params.kind,
-          turn_id: params.turnId,
-          ...provenanceFields(params.provenance),
-        }),
-      });
+      return createMessage(path, params.body, { provenance: params.provenance }, params);
     },
     updateMessageBody: async (messageId: string, body: string): Promise<ClickClackMessage> =>
       requestObject("message", `/api/messages/${encodeURIComponent(messageId)}`, {

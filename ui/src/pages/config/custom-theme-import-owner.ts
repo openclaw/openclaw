@@ -1,5 +1,4 @@
 import type { ImportedCustomTheme } from "../../app/custom-theme.ts";
-import type { UiSettings } from "../../app/settings.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import type { RuntimeConfigState } from "../../lib/config/config-state-model.ts";
 
@@ -19,6 +18,7 @@ type ImportMessages = {
 export class CustomThemeImportOwner {
   private currentImport: { resolve: () => void } | null = null;
   private gatewayScope = "";
+  private importedAt: string | undefined;
   private state: CustomThemeImportViewState = {
     url: "",
     message: null,
@@ -35,22 +35,14 @@ export class CustomThemeImportOwner {
     return this.currentImport ? undefined : this.state.completion;
   }
 
-  connect(scope: string): void {
+  synchronize(scope: string, importedAt: string | undefined): void {
+    const changed =
+      (this.gatewayScope && scope !== this.gatewayScope) || importedAt !== this.importedAt;
     this.gatewayScope = scope;
-  }
-
-  synchronizeScope(scope: string): void {
-    if (this.gatewayScope && scope !== this.gatewayScope) {
+    this.importedAt = importedAt;
+    if (changed) {
       this.retireImport();
     }
-    this.connect(scope);
-  }
-
-  adoptSettings(previous: UiSettings, next: UiSettings): UiSettings {
-    if (next.customTheme?.importedAt !== previous.customTheme?.importedAt) {
-      this.retireImport();
-    }
-    return next;
   }
 
   open(): void {

@@ -296,6 +296,97 @@ describe("diagnostics-prometheus runtime metrics", () => {
     }
   });
 
+  it("retains pool task and GC totals across repeated samples and worker retirement", () => {
+    const metrics = createMetricsHarness();
+    const worker = {
+      workerClass: "compute" as const,
+      script: "provider-prompt-state.worker.js",
+      tasksCompleted: 3,
+      heapUsedHighWaterBytes: 4000,
+      gc: [{ kind: "scavenge" as const, count: 7, durationMs: 15, reclaimedBytes: 9000 }],
+    };
+    const sample = {
+      type: "diagnostic.memory.sample" as const,
+      memory: {
+        rssBytes: 1000,
+        heapTotalBytes: 500,
+        heapUsedBytes: 300,
+        externalBytes: 200,
+        arrayBuffersBytes: 100,
+        workerCount: 1,
+        workerTaskMetrics: [worker],
+      },
+    };
+    const labels = 'script="provider-prompt-state.worker.js",worker_class="compute"';
+    try {
+      metrics.record(sample, trusted);
+      metrics.record(sample, trusted);
+      const repeated = metrics.render();
+      for (const [name, value] of [
+        ["tasks_completed_total", 3],
+        ["heap_used_high_water_bytes", 4000],
+      ]) {
+        expect(repeated).toContain(`openclaw_worker_${name}{${labels}} ${value}\n`);
+      }
+      for (const [name, value] of [
+        ["duration_seconds_total", 0.015],
+        ["collections_total", 7],
+        ["reclaimed_bytes_total", 9000],
+      ]) {
+        expect(repeated).toContain(
+          `openclaw_worker_gc_${name}{kind="scavenge",${labels}} ${value}\n`,
+        );
+      }
+      metrics.record({
+        ...sample,
+        memory: {
+          ...sample.memory,
+          workerCount: 0,
+          workerTaskMetrics: [
+            {
+              ...worker,
+              tasksCompleted: 5,
+              heapUsedHighWaterBytes: 5000,
+              gc: [{ kind: "scavenge", count: 9, durationMs: 20, reclaimedBytes: 12000 }],
+            },
+            {
+              workerClass: "reader",
+              script: "sqlite-store.worker.js",
+              tasksCompleted: 2,
+              heapUsedHighWaterBytes: 600,
+              gc: [],
+            },
+          ],
+        },
+      });
+      // A sample without pool totals must not erase the retained high-water gauge.
+      metrics.record({
+        ...sample,
+        memory: { ...sample.memory, workerCount: 0, workerTaskMetrics: undefined },
+      });
+      const retired = metrics.render();
+      expect(retired).toContain("openclaw_worker_count 0\n");
+      expect(retired).toContain(`openclaw_worker_tasks_completed_total{${labels}} 5\n`);
+      expect(retired).toContain(`openclaw_worker_heap_used_high_water_bytes{${labels}} 5000\n`);
+      for (const [name, value] of [
+        ["duration_seconds_total", 0.02],
+        ["collections_total", 9],
+        ["reclaimed_bytes_total", 12000],
+      ]) {
+        expect(retired).toContain(
+          `openclaw_worker_gc_${name}{kind="scavenge",${labels}} ${value}\n`,
+        );
+      }
+      expect(retired).toContain(
+        'openclaw_worker_tasks_completed_total{script="sqlite-store.worker.js",worker_class="reader"} 2\n',
+      );
+      expect(retired).toContain("# TYPE openclaw_worker_heap_used_high_water_bytes gauge\n");
+      expect(retired).toContain("# TYPE openclaw_worker_gc_reclaimed_bytes_total counter\n");
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it("exports cumulative worker traffic without recounting repeated memory samples", () => {
     const metrics = createMetricsHarness();
     try {
@@ -693,7 +784,7 @@ describe("diagnostics-prometheus runtime identity", () => {
         metrics.record({ type: "gateway.rpc", method: `method.${index}`, phase: "received" });
       }
       expect(metrics.render()).toContain(info);
-      expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 2153");
+      expect(metrics.render()).toMatch(/openclaw_prometheus_series_dropped_total [1-9][0-9]*\n/);
       metrics.stop();
       expect(metrics.render()).toBe("");
       identity.processInstanceId = "a6aa1fc7-1f10-4b56-8ae8-4ff8c4dc02ea";

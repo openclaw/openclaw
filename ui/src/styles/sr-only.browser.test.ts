@@ -23,13 +23,23 @@ afterAll(async () => {
 });
 
 describeSrOnly("screen-reader-only utility", () => {
-  it("visually hides content while preserving its accessible status", async () => {
+  it.each([
+    ["sr-only", "inset(50%)"],
+    ["settings-control__sr-label", "none"],
+    ["cron-required-sr", "none"],
+  ])("visually hides %s while preserving its accessible status", async (className, clipPath) => {
     const page = await browser.newPage();
     try {
       await page.setContent(`<!doctype html>
         <html>
-          <head><style>${readStyleSheet("ui/src/styles/base.css")}</style></head>
-          <body><span class="sr-only" role="status">Background task active</span></body>
+          <head><style>${[
+            "ui/src/styles/base.css",
+            "ui/src/styles/settings-controls.css",
+            "ui/src/styles/cron.css",
+          ]
+            .map(readStyleSheet)
+            .join("\n")}</style></head>
+          <body><span class="${className}" role="status">Background task active</span></body>
         </html>`);
 
       const status = page.getByRole("status");
@@ -54,7 +64,7 @@ describeSrOnly("screen-reader-only utility", () => {
         .toEqual({
           borderWidth: "0px",
           clip: "rect(0px, 0px, 0px, 0px)",
-          clipPath: "inset(50%)",
+          clipPath,
           height: "1px",
           margin: "-1px",
           overflow: "hidden",

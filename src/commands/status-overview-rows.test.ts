@@ -313,7 +313,8 @@ it("builds status-all overview rows from the shared surface", () => {
     "Update restart": "restart pending health verification",
     Security: "Run: openclaw security audit --deep",
     "Secret egress proxy": "Check OpenSSL, then retry the request.",
-    "Degraded secrets": "1 degraded · capability:tts",
+    "Degraded secrets":
+      "1 degraded · cold capability:tts (tts.providers.elevenlabs.apiKey): secret reference was not found",
     "Degraded plugins": "1 configured-unavailable · discord",
     "Model reasoning": "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.",
     Secrets: "2 diagnostics",

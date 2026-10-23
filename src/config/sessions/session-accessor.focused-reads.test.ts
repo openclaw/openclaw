@@ -12,7 +12,8 @@ import { test } from "./session-entry-fixture.test-support.js";
 test("ignores unrelated corrupt blobs in focused reads", async ({ store }) => {
   const { database, scope, sessionKey } = store;
   const { storePath } = scope;
-  await upsertSessionEntryCore(scope, { sessionId: "focused-session", updatedAt: 42 });
+  const selected = { sessionId: "focused-session", model: "target" };
+  await upsertSessionEntryCore(scope, { ...selected, updatedAt: 42 });
   for (const [childSessionKey, lineage] of [
     ["agent:main:focused-both-child", { spawnedBy: sessionKey }],
     ["agent:main:focused-parent-child", { parentSessionKey: sessionKey }],
@@ -40,12 +41,25 @@ test("ignores unrelated corrupt blobs in focused reads", async ({ store }) => {
     .run("agent:main:unrelated-session", "unrelated-session", unrelatedEntryJson, 1);
 
   const parse = vi.spyOn(JSON, "parse");
-  const participantReads = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(database.db),
-    ["participants"],
-    (sql) => (sql.includes('from "session_participants"') ? "participants" : null),
-  );
+  let restoreParticipants = () => {};
   try {
+    for (const count of [1, 2]) {
+      expect(loadSessionEntry(scope)).toMatchObject(selected);
+      expect(
+        parse.mock.calls.filter(
+          ([json]) =>
+            typeof json === "string" &&
+            json.includes('"sessionId":"focused-session"') &&
+            json.includes('"model":"target"'),
+        ),
+      ).toHaveLength(count);
+    }
+    const participantReads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["participants"],
+      (sql) => (sql.includes('from "session_participants"') ? "participants" : null),
+    );
+    restoreParticipants = participantReads.restore;
     const children = await listSessionChildEntriesReadOnly(scope);
     expect(children.map((child) => child.sessionKey)).toEqual([
       "agent:main:focused-both-child",
@@ -81,7 +95,7 @@ test("ignores unrelated corrupt blobs in focused reads", async ({ store }) => {
     expect(transcript).toMatchObject({ agentId: "main", sessionId: "focused-session", sessionKey });
     expect(parse.mock.calls.filter(([value]) => value === unrelatedEntryJson)).toHaveLength(0);
   } finally {
-    participantReads.restore();
+    restoreParticipants();
     parse.mockRestore();
   }
 });

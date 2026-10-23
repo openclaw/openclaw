@@ -44,6 +44,8 @@ export type ChatSessionCompanionTurn = {
   | ({ status: "answered" } & SessionCompanionExchange)
   | {
       status: "failed";
+      /** Carried over from the pending turn; Object.assign keeps it on failure. */
+      startedAt: number;
       hint:
         | "busy"
         | "history-unavailable"

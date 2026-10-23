@@ -52,13 +52,11 @@ async function serve(onRequest: (request: Record<string, unknown>, socket: net.S
   return { baseUrl: pathToFileURL(socketPath).href.replace(/^file:/, "unix:"), dir };
 }
 
-function response(id: unknown, result: unknown) {
-  return `${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`;
-}
+const frame = (message: Record<string, unknown>) =>
+  `${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`;
+const response = (id: unknown, result: unknown) => frame({ id, result });
 function notify(socket: net.Socket, result: unknown, subscription = 7) {
-  socket.write(
-    `${JSON.stringify({ jsonrpc: "2.0", method: "receive", params: { subscription, result } })}\n`,
-  );
+  socket.write(frame({ method: "receive", params: { subscription, result } }));
 }
 const send = (
   baseUrl: string,
@@ -160,9 +158,7 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
     [-32000, "quote metadata was rejected after an ambiguous send +15550000001", "remote error"],
   ] as const)("redacts RPC %s: %s", async (code, message, classification) => {
     const { baseUrl } = await serve((request, socket) =>
-      socket.end(
-        `${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code, message } })}\n`,
-      ),
+      socket.end(frame({ id: request.id, error: { code, message } })),
     );
     await expect(send(baseUrl)).rejects.toMatchObject({
       message: `Signal RPC ${code}: ${classification}`,

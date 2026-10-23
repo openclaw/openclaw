@@ -117,6 +117,9 @@ This example qualifies a final version for beta-first publication. Select
 for the prepared button. A beta prerelease uses the beta profile and soak policy.
 Keep that intended selection on later notes-only parents. This admits committed
 publication source, not registry eligibility or publication authority.
+Publish-purpose dispatches first run the `pnpm release:candidate` release-notes
+and contribution-record gates at the Code SHA and refuse to dispatch on failure.
+A record target lost to a squash merge needs a corrected record and a new Code SHA.
 
 Record and reuse C/Q and independently trusted P. The helper defaults Q=C;
 `--workflow-sha`, if explicit here, must equal C. P performs lightweight admission
@@ -126,7 +129,8 @@ Beta-publish uses
 `release_profile=beta`, `run_release_soak=false` (`npm-beta-v1` for a qualifying
 canonical beta target). Stable-publish requires `release_profile=stable` or
 `full`, soak, and blocking performance. Beta-profile evidence cannot qualify
-stable. Every selected validation lane must pass.
+stable. FRV must conclude success under its pinned
+[release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
 See [shared release boundaries](../SKILL.md#shared-release-boundaries),
 [validation](validation.md), and
 [publication recovery](publication-recovery.md). Diagnose
@@ -240,7 +244,7 @@ completes package/install proof and prints the selected route's next command; do
 another equivalent validation. Its `npm-beta-v1` Telegram package result is
 `deferred-postpublish`, never passed. Stable `npm-stable-v1` and admitted stable/full
 coverage reuse authenticated mock-provider package Telegram proof for the exact
-FRV-qualified tarball, without a Telegram waiver. Separately packed historical
+FRV-qualified tarball. Separately packed historical
 tarballs and explicit live-provider checks require supplemental Telegram proof
 from the retained, verified `release-ci/*` ref at Q=C with `harness_ref` pinned
 to C; missing or moved transport refs require newly bound candidate evidence,
@@ -260,8 +264,11 @@ no run IDs and no retained `frv-request.json`. The P tooling pin is not part of
 that identity: a repaired P resumes the same `--output-dir` at any phase, keeps
 bound FRV/npm runs, and gets its own publication tag; the helper reuses a saved
 tag only for the same P SHA. Once qualification is bound, keep the original
-flags and request; do not delete dispatch state to force a retry. Use a separate
-`--output-dir` only for a deliberately new request.
+flags and request; do not delete dispatch state to force a retry. The default
+output directory includes the resolved candidate SHA, so changing C starts a
+separate state namespace automatically while another launch for the same C
+resumes its retained state. Supply `--output-dir` only to resume a legacy or
+explicitly named request, or to start another deliberate request for the same C.
 If FRV was admitted without Windows, omit `--windows-node-tag` when consuming it
 and attach Windows afterward with `windows-node-release.yml`, or obtain new FRV
 evidence with Windows selected. A fresh checklist launch already admits the
@@ -426,8 +433,8 @@ failure without republishing npm.
 Run [postpublish confidence](validation.md#postpublish-confidence) against the
 exact published package. For a beta-to-latest promotion, retain available
 deferred-lane results, including published-package Telegram, while enforcing
-the shared required publication proofs. All selected tests must pass before
-publication. Run safe
+the shared required publication proofs. The exact FRV must succeed, with any
+tooling-policy waivers already recorded there. Run safe
 independent rosters concurrently while controlling local Docker/VM load.
 Classify failures before admitting a fix to the next beta; do not scan moving
 main or automatically rerun all groups. An operator's beta-attempt cap counts

@@ -312,6 +312,7 @@ describe("curated meeting capture", () => {
   );
 
   it("retains requirements learned after opening an editor without metadata", async () => {
+    const warnings = vi.spyOn(console, "warn");
     const { page, runtimeConfig, request, original } = await mount({
       source: { providerId: "test-voice", title: "Original", providerOptions: { keep: true } },
       providers: [],
@@ -359,6 +360,11 @@ describe("curated meeting capture", () => {
     click(page, "Edit source 1");
     flush();
     expect([...page.querySelectorAll("input")].some((item) => item.required)).toBe(false);
+    expect(
+      warnings.mock.calls.filter(([message]) =>
+        String(message).includes("UNTRACKED_READ_AFTER_AWAIT"),
+      ),
+    ).toEqual([]);
   });
 
   it.each([
@@ -899,7 +905,7 @@ describe("curated meeting capture", () => {
         ),
       ].every((button) => button.disabled),
     ).toBe(true);
-    expect(page.querySelector<HTMLInputElement>('input[role="switch"]')?.disabled).toBe(true);
+    expect(page.querySelector('input[role="switch"]')?.hasAttribute("aria-disabled")).toBe(true);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
   });
 

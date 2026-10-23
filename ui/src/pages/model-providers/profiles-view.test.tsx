@@ -41,8 +41,6 @@ function rowFor(container: ParentNode, id: string) {
 function props(overrides: Partial<ProviderProfilesViewProps> = {}): ProviderProfilesViewProps {
   return {
     ...makeViewProps(),
-    onAddAccount: () => undefined,
-    addAccountDisabled: false,
     ...overrides,
   };
 }
@@ -307,6 +305,27 @@ it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "ot
   },
 );
 
+it("names hidden identities by credential kind, numbering only repeated kinds", () => {
+  const { container } = mount(
+    card({
+      profiles: [
+        { profileId: "openai:token-a", type: "token", status: "static", source: "saved" },
+        { profileId: "openai:oauth", type: "oauth", status: "ok", source: "saved" },
+        { profileId: "openai:token-b", type: "token", status: "static", source: "saved" },
+        { profileId: "openai:named", type: "token", status: "static", email: "ops@example.com" },
+      ],
+      profileOrders: {
+        openai: ["openai:token-a", "openai:oauth", "openai:token-b", "openai:named"],
+      },
+    }),
+  );
+  expect(
+    [...container.querySelectorAll(".model-providers__profile-copy strong")].map(
+      (identity) => identity.textContent,
+    ),
+  ).toEqual(["Access token 1", "Signed-in account", "Access token 2", "ops@example.com"]);
+});
+
 it("releases a removed row's drag without handling the next Escape", () => {
   const onProfileOrderChange = vi.fn();
   const { container, update, grip, row, rows, hitTest, providerCard } = pointerFixture(
@@ -363,8 +382,8 @@ it("keeps focus on the drag handle through repeated keyboard moves", async () =>
   const { container, update } = mount(providerCard, viewProps);
   const grip = container.querySelector<HTMLButtonElement>(gripSelector)!;
   grip.focus();
-  const details = grip.closest(rowSelector)!.querySelector("details")!;
-  details.open = true;
+  // The moved row keeps its element, so focus and row state survive reordering.
+  const movedRow = grip.closest(rowSelector)!;
   expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(0);
   expect(grip.getAttribute("aria-keyshortcuts")).toBe("ArrowUp ArrowDown");
 
@@ -380,8 +399,7 @@ it("keeps focus on the drag handle through repeated keyboard moves", async () =>
         ),
       ).toEqual(order);
       expect(document.activeElement).toBe(grip);
-      expect(grip.closest(rowSelector)!.querySelector("details")).toBe(details);
-      expect(details).toMatchObject({ open: true });
+      expect(grip.closest(rowSelector)).toBe(movedRow);
       expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(3);
     });
   }

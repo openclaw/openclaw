@@ -16,6 +16,7 @@ import {
   historicalId as sessionId,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -94,18 +95,16 @@ async function captureFixture(
     await provider.restoreFresh(snapshot.ref, targetPath);
   } else {
     const repositoryPath = path.join(root, "git-backups");
-    await createGitBackup({
-      repositoryPath,
-      stateDir,
-      databases: [{ path: sourcePath, identity }],
-      gitEnv: {
-        ...process.env,
+    await withEnvAsync(
+      {
         GIT_AUTHOR_NAME: "OpenClaw Backup Test",
         GIT_AUTHOR_EMAIL: "backup@example.invalid",
         GIT_COMMITTER_NAME: "OpenClaw Backup Test",
         GIT_COMMITTER_EMAIL: "backup@example.invalid",
       },
-    });
+      () =>
+        createGitBackup({ repositoryPath, stateDir, databases: [{ path: sourcePath, identity }] }),
+    );
     await restoreGitBackupDirectory({
       sourcePath: path.join(repositoryPath, "agents", "main"),
       targetPath,
@@ -127,21 +126,17 @@ it.each(backupKinds)("%s restores exact events without the source archive", asyn
   });
   await fs.unlink(fixture.archivePath);
   await restoreSessionColdTranscript({ ...fixture.scope, storePath: restoredPath });
-  const restored = new DatabaseSync(restoredPath, { readOnly: true });
-  try {
-    expect(fixture.snapshot(restored).events).toEqual(fixture.original.events);
-    expect(
-      restored
-        .prepare(
-          "SELECT message_id FROM session_transcript_fts WHERE session_transcript_fts MATCH 'Preserved'",
-        )
-        .all(),
-    ).toEqual([{ message_id: "history-assistant" }]);
-    expect(restored.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
-    expect(restored.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-  } finally {
-    restored.close();
-  }
+  using restored = new DatabaseSync(restoredPath, { readOnly: true });
+  expect(fixture.snapshot(restored).events).toEqual(fixture.original.events);
+  expect(
+    restored
+      .prepare(
+        "SELECT message_id FROM session_transcript_fts WHERE session_transcript_fts MATCH 'Preserved'",
+      )
+      .all(),
+  ).toEqual([{ message_id: "history-assistant" }]);
+  expect(restored.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+  expect(restored.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
 });
 
 it.each(["full archive capture", "SQLite snapshot"] as const)(

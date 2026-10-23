@@ -1,5 +1,6 @@
 export { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 export { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
+export { resolveLaunchableNodePath } from "../infra/stable-node-path.js";
 export { splitCommandArgs } from "../utils/shell-argv.js";
 export {
   type CommandOptions,

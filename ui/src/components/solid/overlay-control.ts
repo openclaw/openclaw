@@ -37,7 +37,6 @@ export function useOverlayControl(
       overlay.surface.replaceChildren();
     }
   };
-  onCleanup(clearBody);
   let mounted = false;
   const syncOpen = (open: boolean) => {
     if (open === overlay.open) {
@@ -95,17 +94,24 @@ export function useOverlayControl(
             }
           })
         : undefined;
-    onConnect();
-    if (props.open) {
-      syncOpen(true);
-    }
-    return () => {
+    const disconnect = () => {
       mounted = false;
       stopOpen();
       stopShow();
       stopHide();
       stopHidden?.();
+      clearBody();
     };
+    try {
+      onConnect();
+      if (props.open) {
+        syncOpen(true);
+      }
+    } catch (error) {
+      disconnect();
+      throw error;
+    }
+    return disconnect;
   };
-  return { connect, mountBody, bodyMounted: () => Boolean(disposeBody) };
+  return { connect, bodyMounted: () => Boolean(disposeBody) };
 }

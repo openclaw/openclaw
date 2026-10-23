@@ -1,3 +1,4 @@
+import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { mergeStoredChatSessionSnapshot } from "./chat-board-snapshot.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
@@ -54,7 +55,18 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
       sessionKey,
       connected: this.context.gateway.snapshot.phase === "connected",
       promise: reading
-        .then((storedSnapshot) => {
+        .then(async (storedSnapshot) => {
+          if (this.routeResolutionPending) {
+            if (this.context.gateway.snapshot.phase !== "connected") {
+              const wait = new AbortController();
+              this.chatState.addCleanup(() => wait.abort());
+              await waitForGatewayClient(this.context.gateway, wait.signal);
+            }
+            // Let hello and its subscribers finish before committing cached rows.
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, 0);
+            });
+          }
           if (!isCurrent()) {
             return hydration.complete?.();
           }

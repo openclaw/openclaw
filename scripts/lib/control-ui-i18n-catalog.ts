@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import { buildBaseHints } from "../../src/config/schema.hints.js";
 import { PUBLIC_SESSION_COPY } from "../../src/shared/public-session-copy.ts";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
+import { registerAboutEnglish } from "../../ui/src/i18n/locales/en-about.ts";
 import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
+import { registerAgentCreationEnglish } from "../../ui/src/i18n/locales/en-agent-creation.ts";
 import { registerAgentsHomeEnglish } from "../../ui/src/i18n/locales/en-agents-home.ts";
 import { registerApprovalsEnglish } from "../../ui/src/i18n/locales/en-approvals.ts";
 import { registerAppsEnglish } from "../../ui/src/i18n/locales/en-apps.ts";
@@ -19,9 +21,12 @@ import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goal
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
 import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-chat-provider-review.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
+import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
+import { registerClawsEnglish } from "../../ui/src/i18n/locales/en-claws.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
 import { registerCronEnglish } from "../../ui/src/i18n/locales/en-cron.ts";
+import { registerDashboardsEnglish } from "../../ui/src/i18n/locales/en-dashboards.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
 import { registerDesktopEnglish } from "../../ui/src/i18n/locales/en-desktop.ts";
 import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
@@ -79,6 +84,9 @@ const localesDir = path.resolve(
 const sourceFiles = [
   "en.ts",
   "en-agents.ts",
+  "en-about.ts",
+  "en-dashboards.ts",
+  "en-agent-creation.ts",
   "en-activity.ts",
   "en-agents-home.ts",
   "en-apps.ts",
@@ -97,6 +105,8 @@ const sourceFiles = [
   "en-chat-message-metadata.ts",
   "en-chat-provider-review.ts",
   "en-chat-session.ts",
+  "en-chat-tool-content.ts",
+  "en-claws.ts",
   "en-code-blocks.ts",
   "en-command-palette.ts",
   "en-cron.ts",
@@ -123,6 +133,7 @@ const sourceFiles = [
   "en-session-organization.ts",
   "en-session-people.ts",
   "en-session-placement.ts",
+  "en-new-session-runtime.ts",
   "en-new-session-setup.ts",
   "en-plugin-consent.ts",
   "en-plugin-management.ts",
@@ -146,6 +157,13 @@ export function loadControlUiStartupCatalog(): TranslationMap {
 }
 
 export function loadControlUiSourceCatalog(): TranslationMap {
+  const agentChip: TranslationMap = {};
+  for (const [key, value] of Object.entries(en.agentChip)) {
+    agentChip[key] = value;
+    if (key === "creatingAgent") {
+      Object.assign(agentChip, registerAgentCreationEnglish.catalog.agentChip);
+    }
+  }
   const newSession: TranslationMap = {};
   for (const [key, value] of Object.entries(registerNewSessionSetupEnglish.catalog.newSession)) {
     newSession[key] = value;
@@ -171,6 +189,34 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       Object.assign(sessionsView, registerSessionPeopleEnglish.catalog.sessionsView);
     }
   }
+  const toolCards: TranslationMap = {};
+  const toolContent = registerChatToolContentEnglish.catalog.chat.toolCards;
+  for (const [key, value] of Object.entries(en.chat.toolCards)) {
+    toolCards[key] = value;
+    const contentKeys: Array<keyof typeof toolContent> =
+      key === "toolOutput"
+        ? [
+            "providerResponse",
+            "executionOutput",
+            "showFullOutput",
+            "fullOutputUnavailable",
+            "copyOutput",
+            "downloadOutput",
+            "outputLoadFailed",
+            "outputDownloadFailed",
+            "toolError",
+          ]
+        : key === "hideRawDetails"
+          ? ["viewMode", "diff", "raw"]
+          : key === "openFile"
+            ? ["openDetails"]
+            : key === "failureCount"
+              ? ["noOutputFailed"]
+              : [];
+    for (const contentKey of contentKeys) {
+      toolCards[contentKey] = toolContent[contentKey];
+    }
+  }
   const boardWidget: TranslationMap = {};
   for (const [key, value] of Object.entries(en.board.widget)) {
     boardWidget[key] = value;
@@ -188,6 +234,9 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     // Preserve partial-fragment key order while keeping shared labels eager.
     {
       ...en,
+      aboutPage: registerAboutEnglish.catalog.aboutPage,
+      dashboardsPage: registerDashboardsEnglish.catalog.dashboardsPage,
+      agentChip,
       secretsStore: registerSecretsStoreEnglish.catalog.secretsStore,
       custodian: {
         ...registerPluginManagementEnglish.catalog.custodian,
@@ -200,6 +249,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         commands: registerCommandPaletteEnglish.catalog.chat.commands,
         welcome: registerCommandPaletteEnglish.catalog.chat.welcome,
         messages: registerChatMessageMetadataEnglish.catalog.chat.messages,
+        toolCards,
         pullRequests: registerGitHubEnglish.catalog.chat.pullRequests,
       },
       sessionHovercard: registerGitHubEnglish.catalog.sessionHovercard,
@@ -227,6 +277,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     },
     registerActivityEnglish.catalog,
     registerAgentsHomeEnglish.catalog,
+    registerClawsEnglish.catalog,
     registerAppsEnglish.catalog,
     registerLogbookEnglish.catalog,
     registerLogsEnglish.catalog,

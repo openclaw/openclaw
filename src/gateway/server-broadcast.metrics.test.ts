@@ -149,7 +149,7 @@ it("batches accepted presence frame counts and UTF-8 bytes by delivery mode", as
   await drain();
   const bytes = (peer: typeof capable, indices: number[]) =>
     indices.reduce(
-      (total, index) => total + Buffer.byteLength(peer.socket.send.mock.calls[index]![0]),
+      (total, index) => total + Buffer.byteLength(String(peer.socket.send.mock.calls[index]![0])),
       0,
     );
   expect(traffic(observations)).toEqual(

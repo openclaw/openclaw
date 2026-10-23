@@ -183,7 +183,7 @@ function ReviewWarning(props: { view: ClawsCatalogViewProps }) {
             type="button"
             class="btn primary"
             disabled={props.view.applying}
-            onClick={() => props.view.onConfirmReview()}
+            onClick={() => void props.view.onConfirmReview()}
           >
             {t("clawsCatalog.addAnyway")}
           </button>
@@ -214,8 +214,8 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
                 id="claw-catalog-detail"
                 name={detail()?.agentName ?? selected().displayName}
                 summary={detail()?.agentDescription ?? selected().summary}
-                backHref={pathForRoute("agents-home", view().basePath)}
-                backLabel="Agents"
+                backHref={pathForRoute("claws", view().basePath)}
+                backLabel={t("tabs.claws")}
                 onBack={view().onBack}
                 icon={<ClawArtwork src={detail() ? detail()?.iconUrl : selected().iconUrl} />}
                 identity={renderPublisherIdentity({
@@ -233,7 +233,7 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
                       busy={view().applying}
                       actionLabel={t("clawsCatalog.add")}
                       busyLabel={t("clawsCatalog.adding")}
-                      onInstall={view().onConfirm}
+                      onInstall={() => void view().onConfirm()}
                     />
                   </span>
                 }
@@ -283,7 +283,7 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
                           <button
                             type="button"
                             class="btn btn--sm"
-                            onClick={() => view().onRetryOpenChat()}
+                            onClick={() => void view().onRetryOpenChat()}
                           >
                             {t("clawsCatalog.openChat")}
                           </button>
@@ -308,7 +308,7 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
                             type="button"
                             class="btn primary"
                             disabled={view().applying}
-                            onClick={() => view().onConfirmConsent()}
+                            onClick={() => void view().onConfirmConsent()}
                           >
                             {t("clawsCatalog.addAnyway")}
                           </button>

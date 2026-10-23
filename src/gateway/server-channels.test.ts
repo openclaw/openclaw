@@ -1,6 +1,3 @@
-/**
- * Server channel lifecycle tests.
- */
 import { getEventListeners } from "node:events";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -209,6 +206,47 @@ function registerDiscordRoute(
     throwOnFailure: true,
     ...options,
   });
+}
+
+async function serveChannelRoutes(
+  registry: PluginRegistry,
+  getRuntimeConfig: () => OpenClawConfig = () => ({}),
+) {
+  const server = createTestGatewayServer({
+    resolvedAuth: AUTH_NONE,
+    overrides: {
+      getRuntimeConfig,
+      handlePluginRequest: createGatewayPluginRequestHandler({
+        registry,
+        log: createSubsystemLogger("gateway/channel-routes-test"),
+      }),
+    },
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected a TCP listener");
+  }
+  return {
+    async read(route: string, retryAfter = false) {
+      // Handoff tests use fresh sockets because fake timers hold Undici's idle validation.
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}${route}`,
+        retryAfter ? { headers: { Connection: "close" } } : undefined,
+      );
+      return {
+        status: response.status,
+        body: await response.text(),
+        ...(retryAfter ? { retryAfter: response.headers.get("retry-after") } : {}),
+      };
+    },
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
 }
 
 describe("server-channels auto restart", () => {
@@ -453,13 +491,13 @@ describe("server-channels auto restart", () => {
     expect(readAccount(manager)?.lifecycle).toBe("ready");
     await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
 
-    const snapshot = manager.getRuntimeSnapshot();
-    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(stopAccount).toHaveBeenCalledTimes(1);
-    expect(account?.running).toBe(false);
-    expect(account?.connected).toBe(false);
-    expect(account?.lifecycle).toBe("stopped");
-    expect(account?.lastError).toBeNull();
+    expect(readAccount(manager)).toMatchObject({
+      running: false,
+      connected: false,
+      lifecycle: "stopped",
+      lastError: null,
+    });
   });
 
   it("settles every account before surfacing a stop hook failure", async () => {
@@ -550,7 +588,7 @@ describe("server-channels auto restart", () => {
           }
           return account;
         },
-        startAccount: async ({ abortSignal }) => await waitForAbort(abortSignal),
+        startAccount: stayRunning,
         stopAccount,
       },
       { getRuntimeConfig: () => config },
@@ -703,11 +741,7 @@ describe("server-channels auto restart", () => {
     const releasePreparation = createDeferred();
     const stopping = createDeferred();
     const releaseStop = createDeferred();
-    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-      await new Promise<void>((resolve) => {
-        abortSignal.addEventListener("abort", () => resolve(), { once: true });
-      });
-    });
+    const startAccount = vi.fn(stayRunning);
     const stopAccount = vi
       .fn(async () => {})
       .mockImplementationOnce(async () => {
@@ -1045,10 +1079,7 @@ describe("server-channels auto restart", () => {
 
   it("does not retain an account that becomes unconfigured during host-thaw recovery", async () => {
     let configured = true;
-    const startAccount = vi.fn(
-      async (context: ChannelGatewayContext<TestAccount>) =>
-        await waitForAbort(context.abortSignal),
-    );
+    const startAccount = vi.fn(stayRunning);
     const manager = setupChannel({
       includeDescribeAccount: false,
       resolveAccount: () => ({
@@ -1635,34 +1666,8 @@ describe("server-channels auto restart", () => {
       },
     });
     const manager = createManager({ getPluginRegistry: () => registry });
-    const server = createTestGatewayServer({
-      resolvedAuth: AUTH_NONE,
-      overrides: {
-        getRuntimeConfig: () => ({}),
-        handlePluginRequest: createGatewayPluginRequestHandler({
-          registry,
-          log: createSubsystemLogger("gateway/webhook-reload-test"),
-        }),
-      },
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected a TCP listener");
-    }
-    const read = async () => {
-      // Fake timers hold Undici's idle-socket validation; route handoff does not require reuse.
-      const response = await fetch(`http://127.0.0.1:${address.port}${route.path}`, {
-        headers: { Connection: "close" },
-      });
-      return {
-        status: response.status,
-        retryAfter: response.headers.get("retry-after"),
-        body: await response.text(),
-      };
-    };
+    const server = await serveChannelRoutes(registry);
+    const read = () => server.read(route.path, true);
     try {
       await manager.startChannels();
       expect(await read()).toMatchObject({ status: 200, body: "1" });
@@ -1695,9 +1700,7 @@ describe("server-channels auto restart", () => {
     } finally {
       replacement.resolve();
       await manager.stopChannel("discord");
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server.close();
     }
   });
 
@@ -1768,7 +1771,7 @@ describe("server-channels auto restart", () => {
     const failure = new Error("stop failed");
     let unregister: (() => void) | undefined;
     const registry = installPlugin({
-      startAccount: async ({ abortSignal }) => await waitForAbort(abortSignal),
+      startAccount: stayRunning,
       stopAccount: async () => {
         unregister = registerPluginHttpRoute({
           path: "/plugins/stopping",
@@ -1884,27 +1887,8 @@ describe("server-channels auto restart", () => {
       const config: OpenClawConfig = {};
       const getRuntimeConfig = () => config;
       const manager = createManager({ getRuntimeConfig, getPluginRegistry: () => registry });
-      const server = createTestGatewayServer({
-        resolvedAuth: AUTH_NONE,
-        overrides: {
-          getRuntimeConfig,
-          handlePluginRequest: createGatewayPluginRequestHandler({
-            registry,
-            log: createSubsystemLogger("gateway/server-channels-route-test"),
-          }),
-        },
-      });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected Gateway HTTP server to listen on a TCP port");
-      }
-      const readIngress = async () => {
-        const response = await fetch(`http://127.0.0.1:${address.port}/plugins/discord`);
-        return { status: response.status, body: await response.text() };
-      };
+      const server = await serveChannelRoutes(registry, getRuntimeConfig);
+      const readIngress = () => server.read("/plugins/discord");
 
       try {
         await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
@@ -1949,9 +1933,7 @@ describe("server-channels auto restart", () => {
         await abandonedTask;
         unregisterLate?.();
         await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await server.close();
       }
       expect(registry.httpRoutes).toHaveLength(0);
     },
@@ -2243,11 +2225,7 @@ describe("server-channels auto restart", () => {
           await releaseCleanup.promise;
         });
       }
-      const originalStart = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-        await new Promise<void>((resolve) => {
-          abortSignal.addEventListener("abort", () => resolve(), { once: true });
-        });
-      });
+      const originalStart = vi.fn(stayRunning);
       const replacementStart = vi.fn(stayRunning);
       const originalPlugin = createTestPlugin({ startAccount: originalStart });
       let registry = installTestRegistry(
@@ -2497,9 +2475,7 @@ describe("server-channels auto restart", () => {
       resolveAccount: refuseSync,
       startAccount: async ({ abortSignal, setStatus }) => {
         setStatus(channelReadyPatch({ accountId: DEFAULT_ACCOUNT_ID }));
-        await new Promise<void>((resolve) => {
-          abortSignal.addEventListener("abort", () => resolve(), { once: true });
-        });
+        await waitForAbort(abortSignal);
       },
     });
     plugin.config.resolveAccountAsync = resolveAccountAsync;

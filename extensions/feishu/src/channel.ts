@@ -535,132 +535,6 @@ function normalizeFeishuAcpConversationId(conversationId: string) {
   };
 }
 
-function matchFeishuAcpConversation(params: {
-  bindingConversationId: string;
-  conversationId: string;
-  parentConversationId?: string;
-}) {
-  const binding = normalizeFeishuAcpConversationId(params.bindingConversationId);
-  if (!binding) {
-    return null;
-  }
-  const incoming = parseFeishuConversationId({
-    conversationId: params.conversationId,
-    parentConversationId: params.parentConversationId,
-  });
-  if (
-    !incoming ||
-    (incoming.scope !== "group_topic" &&
-      incoming.scope !== "group_topic_sender" &&
-      !isSupportedFeishuDirectConversationId(incoming.canonicalConversationId))
-  ) {
-    return null;
-  }
-  const matchesCanonicalConversation = binding.conversationId === incoming.canonicalConversationId;
-  const matchesParentTopicForSenderScopedConversation =
-    incoming.scope === "group_topic_sender" &&
-    binding.parentConversationId === incoming.chatId &&
-    binding.conversationId === `${incoming.chatId}:topic:${incoming.topicId}`;
-  if (!matchesCanonicalConversation && !matchesParentTopicForSenderScopedConversation) {
-    return null;
-  }
-  return {
-    conversationId: matchesParentTopicForSenderScopedConversation
-      ? binding.conversationId
-      : incoming.canonicalConversationId,
-    parentConversationId:
-      incoming.scope === "group_topic" || incoming.scope === "group_topic_sender"
-        ? incoming.chatId
-        : undefined,
-    matchPriority: matchesCanonicalConversation ? 2 : 1,
-  };
-}
-
-function resolveFeishuSenderScopedCommandConversation(params: {
-  accountId: string;
-  parentConversationId?: string;
-  threadId?: string;
-  senderId?: string;
-  sessionKey?: string;
-  parentSessionKey?: string;
-}): string | undefined {
-  const parentConversationId = params.parentConversationId?.trim();
-  const threadId = params.threadId?.trim();
-  const senderId = params.senderId?.trim();
-  if (!parentConversationId || !threadId || !senderId) {
-    return undefined;
-  }
-  const expectedScopePrefix = `feishu:group:${normalizeLowercaseStringOrEmpty(parentConversationId)}:topic:${normalizeLowercaseStringOrEmpty(threadId)}:sender:`;
-  const isSenderScopedSession = [params.sessionKey, params.parentSessionKey].some((candidate) => {
-    const normalized = normalizeLowercaseStringOrEmpty(candidate ?? "");
-    if (!normalized) {
-      return false;
-    }
-    const scopedRest = normalized.replace(/^agent:[^:]+:/, "");
-    return scopedRest.startsWith(expectedScopePrefix);
-  });
-  const senderScopedConversationId = buildFeishuConversationId({
-    chatId: parentConversationId,
-    scope: "group_topic_sender",
-    topicId: threadId,
-    senderOpenId: senderId,
-  });
-  if (isSenderScopedSession) {
-    return senderScopedConversationId;
-  }
-  if (!params.sessionKey?.trim()) {
-    return undefined;
-  }
-  const boundConversation = getFeishuThreadBindingManager(params.accountId)
-    ?.listBySessionKey(params.sessionKey)
-    .find((binding) => binding.conversationId === senderScopedConversationId);
-  return boundConversation?.conversationId;
-}
-
-function resolveFeishuCommandConversation(params: {
-  accountId: string;
-  threadId?: string;
-  senderId?: string;
-  sessionKey?: string;
-  parentSessionKey?: string;
-  originatingTo?: string;
-  commandTo?: string;
-  fallbackTo?: string;
-}) {
-  if (params.threadId) {
-    const parentConversationId =
-      parseFeishuTargetId(params.originatingTo) ??
-      parseFeishuTargetId(params.commandTo) ??
-      parseFeishuTargetId(params.fallbackTo);
-    if (!parentConversationId) {
-      return null;
-    }
-    const senderScopedConversationId = resolveFeishuSenderScopedCommandConversation({
-      accountId: params.accountId,
-      parentConversationId,
-      threadId: params.threadId,
-      senderId: params.senderId,
-      sessionKey: params.sessionKey,
-      parentSessionKey: params.parentSessionKey,
-    });
-    return {
-      conversationId:
-        senderScopedConversationId ??
-        buildFeishuConversationId({
-          chatId: parentConversationId,
-          scope: "group_topic",
-          topicId: params.threadId,
-        }),
-      parentConversationId,
-    };
-  }
-  const conversationId =
-    parseFeishuDirectConversationId(params.originatingTo) ??
-    parseFeishuDirectConversationId(params.commandTo) ??
-    parseFeishuDirectConversationId(params.fallbackTo);
-  return conversationId ? { conversationId } : null;
-}
-
 function jsonActionResult(details: Record<string, unknown>) {
   return textResult(JSON.stringify(details), details);
 }
@@ -1549,13 +1423,105 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       bindings: {
         compileConfiguredBinding: ({ conversationId }) =>
           normalizeFeishuAcpConversationId(conversationId),
-        matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
-          matchFeishuAcpConversation({
-            bindingConversationId: compiledBinding.conversationId,
+        matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
+          const binding = normalizeFeishuAcpConversationId(compiledBinding.conversationId);
+          if (!binding) {
+            return null;
+          }
+          const incoming = parseFeishuConversationId({
             conversationId,
             parentConversationId,
-          }),
-        resolveCommandConversation: resolveFeishuCommandConversation,
+          });
+          if (
+            !incoming ||
+            (incoming.scope !== "group_topic" &&
+              incoming.scope !== "group_topic_sender" &&
+              !isSupportedFeishuDirectConversationId(incoming.canonicalConversationId))
+          ) {
+            return null;
+          }
+          const matchesCanonicalConversation =
+            binding.conversationId === incoming.canonicalConversationId;
+          const matchesParentTopicForSenderScopedConversation =
+            incoming.scope === "group_topic_sender" &&
+            binding.parentConversationId === incoming.chatId &&
+            binding.conversationId === `${incoming.chatId}:topic:${incoming.topicId}`;
+          if (!matchesCanonicalConversation && !matchesParentTopicForSenderScopedConversation) {
+            return null;
+          }
+          return {
+            conversationId: matchesParentTopicForSenderScopedConversation
+              ? binding.conversationId
+              : incoming.canonicalConversationId,
+            parentConversationId:
+              incoming.scope === "group_topic" || incoming.scope === "group_topic_sender"
+                ? incoming.chatId
+                : undefined,
+            matchPriority: matchesCanonicalConversation ? 2 : 1,
+          };
+        },
+        resolveCommandConversation: (params) => {
+          if (params.threadId) {
+            const parentConversationId =
+              parseFeishuTargetId(params.originatingTo) ??
+              parseFeishuTargetId(params.commandTo) ??
+              parseFeishuTargetId(params.fallbackTo);
+            if (!parentConversationId) {
+              return null;
+            }
+            function resolveSenderScopedConversation(): string | undefined {
+              const normalizedParentConversationId = parentConversationId?.trim();
+              const threadId = params.threadId?.trim();
+              const senderId = params.senderId?.trim();
+              if (!normalizedParentConversationId || !threadId || !senderId) {
+                return undefined;
+              }
+              const expectedScopePrefix = `feishu:group:${normalizeLowercaseStringOrEmpty(normalizedParentConversationId)}:topic:${normalizeLowercaseStringOrEmpty(threadId)}:sender:`;
+              const isSenderScopedSession = [params.sessionKey, params.parentSessionKey].some(
+                (candidate) => {
+                  const normalized = normalizeLowercaseStringOrEmpty(candidate ?? "");
+                  if (!normalized) {
+                    return false;
+                  }
+                  const scopedRest = normalized.replace(/^agent:[^:]+:/, "");
+                  return scopedRest.startsWith(expectedScopePrefix);
+                },
+              );
+              const senderScopedConversationId = buildFeishuConversationId({
+                chatId: normalizedParentConversationId,
+                scope: "group_topic_sender",
+                topicId: threadId,
+                senderOpenId: senderId,
+              });
+              if (isSenderScopedSession) {
+                return senderScopedConversationId;
+              }
+              if (!params.sessionKey?.trim()) {
+                return undefined;
+              }
+              const boundConversation = getFeishuThreadBindingManager(params.accountId)
+                ?.listBySessionKey(params.sessionKey)
+                .find((binding) => binding.conversationId === senderScopedConversationId);
+              return boundConversation?.conversationId;
+            }
+            const senderScopedConversationId = resolveSenderScopedConversation();
+            return {
+              conversationId:
+                senderScopedConversationId ??
+                buildFeishuConversationId({
+                  chatId: parentConversationId,
+                  scope: "group_topic",
+                  topicId: params.threadId,
+                }),
+              parentConversationId,
+            };
+          }
+          const conversationId =
+            parseFeishuDirectConversationId(params.originatingTo) ??
+            parseFeishuDirectConversationId(params.commandTo) ??
+            parseFeishuDirectConversationId(params.fallbackTo);
+          return conversationId ? { conversationId } : null;
+        },
       },
       auth: {
         login: async ({ cfg }) => {

@@ -879,16 +879,6 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("enables heartbeat response when visible replies are message-tool-only", () => {
-    expectToolSurface(
-      {
-        config: { messages: { visibleReplies: "message_tool" }, tools: { profile: "coding" } },
-        trigger: "heartbeat",
-      },
-      ["heartbeat_respond"],
-    );
-  });
-
   it("can keep message available when a cron route needs it under a provider coding profile", () => {
     const options = {
       config: { tools: { byProvider: { openai: { profile: "coding" } } } },

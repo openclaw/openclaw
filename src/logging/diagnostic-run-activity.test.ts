@@ -148,7 +148,14 @@ describe("diagnostic run activity listener lifecycle", () => {
   it("releases embedded run-id indexes without diagnostic event tracking", () => {
     const ref = { sessionId: "reused-session", sessionKey: "agent:main:reused" };
 
+    markDiagnosticEmbeddedRunStarted({ sessionId: ref.sessionId, runId: "first-run" });
     markDiagnosticEmbeddedRunStarted({ ...ref, runId: "first-run" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, sessionId: "parallel-session" });
+    for (const alias of [{ sessionId: ref.sessionId }, { sessionKey: ref.sessionKey }]) {
+      expectActivity(alias, { activeWorkKind: "embedded_run" });
+    }
+    markDiagnosticEmbeddedRunEnded({ ...ref, sessionId: "parallel-session" });
+    expectActivity(ref, { activeWorkKind: "embedded_run" });
     markDiagnosticEmbeddedRunEnded(ref);
     markDiagnosticRunProgress({ runId: "first-run", reason: "stale-first-run" });
     expectActivity(ref, { activeWorkKind: undefined, lastProgressReason: "embedded_run:ended" });

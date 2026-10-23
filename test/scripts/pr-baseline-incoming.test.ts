@@ -1,9 +1,12 @@
-import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
+import {
+  createBaselineFixture,
+  failRestore,
+  signBaselineRequest,
+} from "./pr-baseline-native.test-support.js";
 import { reviewWithFinding } from "./pr-correction-preparation.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
@@ -43,8 +46,7 @@ function fixture() {
 
 function expectUnchanged(f: ReturnType<typeof fixture>) {
   expect(f.prepGit("rev-parse", "HEAD")).toBe(f.source);
-  expect(existsSync(f.local("prepare-baseline.json"))).toBe(false);
-  expect(existsSync(f.local("review-transition.json"))).toBe(false);
+  f.expectAbsent("prepare-baseline.json", "review-transition.json");
 }
 
 describePosix("first baseline integration from the reviewed incoming head", () => {
@@ -77,64 +79,22 @@ describePosix("first baseline integration from the reviewed incoming head", () =
     const f = fixture();
     const signer = f.prepGit("show", "-s", "--format=%GF", "HEAD");
     const requestArgs = [...f.manifest(f.baseline), "--signer", signer];
-    const pending = f.pass("prepare-baseline-signing-request", requestArgs);
-    const oid = /Awaiting signature: request=([a-f0-9]{40})/u.exec(pending.stdout)![1]!;
-    const request = JSON.parse(f.readLocal(`prepare-baseline-signing.${oid}.json`).toString());
+    const {
+      signed: { target },
+      args,
+    } = signBaselineRequest(f, requestArgs);
     expectUnchanged(f);
-    const unsigned = Buffer.from(request.unsignedCommit, "base64");
-    const separator = unsigned.indexOf("\n\n");
-    const headers = unsigned.subarray(0, separator).toString();
-    const tree = /^tree ([a-f0-9]{40})$/mu.exec(headers)![1]!;
-    const parents = [...headers.matchAll(/^parent ([a-f0-9]{40})$/gmu)].map((match) => match[1]!);
-    const identity: NodeJS.ProcessEnv = {};
-    for (const role of ["author", "committer"]) {
-      const [, name, email, date] = new RegExp(`^${role} (.*) <([^>]*)> (.*)$`, "mu").exec(
-        headers,
-      )!;
-      identity[`GIT_${role.toUpperCase()}_NAME`] = name;
-      identity[`GIT_${role.toUpperCase()}_EMAIL`] = email;
-      identity[`GIT_${role.toUpperCase()}_DATE`] = date;
-    }
-    const signed = execFileSync(
-      "git",
-      ["commit-tree", "-S", tree, ...parents.flatMap((parent) => ["-p", parent])],
-      {
-        cwd: f.worktree,
-        env: { ...f.env, ...identity },
-        input: unsigned.subarray(separator + 2),
-        encoding: "utf8",
-      },
-    );
-    const target = signed.trim();
-    const commit = execFileSync("git", ["cat-file", "commit", target], {
-      cwd: f.worktree,
-      env: f.env,
-    });
-    const response = f.local("signed-commit");
-    writeFileSync(response, commit);
-    const args = ["--request", oid, "--signed-commit", response];
     appendFileSync(f.local("review.json"), "\n");
     const changed = f.run("prepare-baseline-signing-continue", args);
     expect(changed.status, changed.stdout + changed.stderr).not.toBe(0);
     expect(changed.stderr).toContain("Incoming authority changed");
     expectUnchanged(f);
     f.writeLocal("review.json", f.incomingReview);
-    const failRestore = join(f.root, "fail-restore");
-    const realGit = execFileSync("sh", ["-c", "command -v git"], {
-      env: f.env,
-      encoding: "utf8",
-    }).trim();
-    writeFileSync(
-      failRestore,
-      `#!/bin/bash
-if [ "$1" = --literal-pathspecs ] && [ "$2" = restore ]; then exit 72; fi
-exec '${realGit}' "$@"
-`,
-      { mode: 0o755 },
+    const interrupted = f.run(
+      "prepare-baseline-signing-continue",
+      args,
+      failRestore(f.root, f.env),
     );
-    const interrupted = f.run("prepare-baseline-signing-continue", args, {
-      OPENCLAW_PR_GIT: failRestore,
-    });
     expect(interrupted.status, interrupted.stdout + interrupted.stderr).not.toBe(0);
     expect(JSON.parse(f.readLocal("review-transition.json").toString()).target).toBe(target);
     expect(f.prepGit("rev-parse", "HEAD")).toBe(f.source);

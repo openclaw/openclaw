@@ -1,8 +1,15 @@
 // Compare-and-swap session patches must reject reset replacements atomically.
-import { afterEach, expect, test, vi } from "vitest";
-import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createDeferred as createPluginDeferred } from "../../test/helpers/promise.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore as createDeferred } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -87,9 +94,19 @@ test.each([undefined, "session-a"])(
 );
 
 test.each([
-  { name: "session id", expected: { expectedSessionId: "sess-before-reset" } },
-  { name: "lifecycle revision", expected: { expectedLifecycleRevision: "revision-before-reset" } },
-])("sessions.patch rejects a replaced $name before archive side effects", async ({ expected }) => {
+  {
+    name: "session id before archive",
+    patch: { archived: true, expectedSessionId: "sess-before-reset" },
+  },
+  {
+    name: "lifecycle revision before archive",
+    patch: { archived: true, expectedLifecycleRevision: "revision-before-reset" },
+  },
+  {
+    name: "lifecycle revision for metadata",
+    patch: { label: "Stale agent request", expectedLifecycleRevision: "revision-before-reset" },
+  },
+])("sessions.patch rejects a replaced $name without side effects", async ({ patch }) => {
   const sessionKey = "agent:main:subagent:active-replacement";
   const replacementSessionId = "sess-active-after-reset";
   const { read } = await seedSession(
@@ -103,7 +120,7 @@ test.each([
 
   const result = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true, ...expected },
+    { key: sessionKey, ...patch },
     { context },
   );
 
@@ -181,26 +198,6 @@ test("sessions.patch rejects a session replaced before restore reaches the SQLit
   }
 });
 
-test("sessions.patch rejects stale lifecycle revisions for metadata mutations", async () => {
-  const sessionKey = "agent:main:subagent:metadata-identity";
-  const { read, patch } = await seedSession(
-    sessionKey,
-    { lifecycleRevision: "revision-after-reset" },
-    "sess-after-reset",
-  );
-  const before = read();
-  expect(
-    await patch({
-      label: "Stale agent request",
-      expectedLifecycleRevision: "revision-before-reset",
-    }),
-  ).toMatchObject({
-    ok: false,
-    error: { message: `Session ${sessionKey} changed before patch. Retry.` },
-  });
-  expect(read()).toEqual(before);
-});
-
 test("sessions.patch preserves concurrent tool restrictions from a stale replacement", async () => {
   const original = { webSearch: false };
   const restricted = { ...original, mcpToolsDeny: { docs: ["delete"] } };
@@ -224,19 +221,24 @@ test("sessions.patch preserves concurrent tool restrictions from a stale replace
   expect(read()?.toolOverrides).toEqual(replacement);
 });
 
-test("sessions.patch requires expected tool overrides to guard a replacement", async () => {
-  const { read, patch } = await seedSession("agent:main:tool-overrides-cas-envelope", {
-    toolOverrides: { webSearch: false },
-  });
-  const result = await patch({
-    expectedToolOverrides: { webSearch: false },
-    label: "unguarded replacement",
-  });
-
-  expect(result).toMatchObject(
-    invalid("expectedToolOverrides requires a toolOverrides replacement."),
-  );
-  expect(read()).not.toHaveProperty("label");
+test.each([
+  {
+    name: "expected tool overrides without a replacement",
+    entry: { toolOverrides: { webSearch: false } },
+    request: { expectedToolOverrides: { webSearch: false }, label: "unguarded replacement" },
+    message: "expectedToolOverrides requires a toolOverrides replacement.",
+  },
+  {
+    name: "automatic acknowledgement with another mutation",
+    entry: { markedUnreadAt: 10 },
+    request: { unread: false, expectedMarkedUnreadAt: 9, label: "Must not be discarded" },
+    message: "expectedMarkedUnreadAt requires unread=false as the only mutation.",
+  },
+])("sessions.patch rejects $name", async ({ entry, request, message }) => {
+  const { read, patch } = await seedSession("agent:main:invalid-patch-envelope", entry);
+  const before = read();
+  expect(await patch(request)).toMatchObject(invalid(message));
+  expect(read()).toEqual(before);
 });
 
 test("sessions.patch rejects stale permission replacement", async () => {
@@ -254,25 +256,6 @@ test("sessions.patch rejects stale permission replacement", async () => {
     error: { details: { reason: "session-changed" } },
   });
   expect(read()?.permissionMode).toBe("read-only");
-});
-
-test("sessions.patch rejects automatic acknowledgement with another mutation", async () => {
-  const { read, patch } = await seedSession("agent:main:conditional-unread-label", {
-    markedUnreadAt: 10,
-  });
-  const result = await patch({
-    unread: false,
-    expectedMarkedUnreadAt: 9,
-    label: "Must not be discarded",
-  });
-
-  expect(result).toMatchObject(
-    invalid("expectedMarkedUnreadAt requires unread=false as the only mutation."),
-  );
-  expect(read()).toMatchObject({
-    markedUnreadAt: 10,
-    sessionId: "conditional-unread-label",
-  });
 });
 
 test.each([
@@ -360,13 +343,136 @@ test("sessions.patch keeps explicit unread markers strictly advancing", async ()
   }
 });
 
-test("sessions.patch preserves legacy read semantics for manual markers", async () => {
-  const { read, patch } = await seedSession("agent:main:mixed-version-unread", {
-    markedUnreadAt: 10,
+describe("plugin session ownership", () => {
+  const sessionKey = "agent:main:dreaming-narrative-owned";
+  const sessionId = "plugin-session";
+  let storePath: string;
+  beforeEach(async () => {
+    ({ storePath } = await createSessionStoreDir());
   });
-  const legacyRead = await patch({ unread: false });
+  const readEntry = (key = sessionKey) => loadSessionEntry({ sessionKey: key, storePath });
+  const ownedEntry = (pluginOwnerId = "memory-core") =>
+    sessionStoreEntry(sessionId, { pluginOwnerId });
+  const pluginOptions = (scope: "operator.write" | "operator.admin") => ({
+    client: {
+      connect: { scopes: [scope] },
+      internal: { pluginRuntimeOwnerId: "memory-core" },
+    } as never,
+  });
+  const writeOptions = pluginOptions("operator.write");
+  const adminOptions = pluginOptions("operator.admin");
+  const patch = (key: string, label: string, options = adminOptions) =>
+    directSessionReq("sessions.patch", { key, label }, options);
+  function expectDenied(result: unknown, action: "reset" | "patch", key: string) {
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `Plugin "memory-core" cannot ${action} session "${key}" because it did not create it.`,
+      },
+    });
+  }
 
-  expect(legacyRead).toMatchObject({ ok: true });
-  expect(read()?.markedUnreadAt).toBeUndefined();
-  expect(read()?.lastReadAt).toEqual(expect.any(Number));
+  const seed = (pluginOwnerId = "memory-core") =>
+    writeSessionStore({ entries: { [sessionKey]: ownedEntry(pluginOwnerId) } });
+
+  test("sessions.reset prevents a plugin from resetting another plugin's session", async () => {
+    await seed("other-plugin");
+    const reset = await directSessionReq("sessions.reset", { key: sessionKey }, writeOptions);
+    expectDenied(reset, "reset", sessionKey);
+    expect(readEntry()).toMatchObject({
+      sessionId,
+      pluginOwnerId: "other-plugin",
+    });
+  });
+
+  test("sessions.reset stamps plugin ownership when it materializes a missing session", async () => {
+    const reset = await directSessionReq("sessions.reset", { key: sessionKey }, writeOptions);
+
+    expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
+    expect(readEntry()).toMatchObject({
+      pluginOwnerId: "memory-core",
+    });
+
+    const patched = await patch(sessionKey, "Reset-created plugin session", writeOptions);
+
+    expect(patched.ok, JSON.stringify(patched.error)).toBe(true);
+  });
+
+  test("sessions.reset rechecks plugin ownership inside lifecycle admission", async () => {
+    await seed();
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
+    let replaced = false;
+
+    const reset = await performGatewaySessionReset({
+      key: sessionKey,
+      reason: "reset",
+      commandSource: "gateway:sessions.reset",
+      workerPlacementContext: {},
+      authorizedPluginId: "memory-core",
+      assertCurrent: () => {
+        if (replaced) {
+          return;
+        }
+        replaced = true;
+        replaceSessionEntrySync({ sessionKey, storePath }, ownedEntry("other-plugin"));
+      },
+    });
+
+    expectDenied(reset, "reset", sessionKey);
+    expect(readEntry()).toMatchObject({
+      pluginOwnerId: "other-plugin",
+      sessionId,
+    });
+  });
+
+  test("sessions.patch limits plugin-runtime mutations to sessions owned by that plugin", async () => {
+    const foreignKey = "agent:main:dreaming-narrative-foreign";
+    const operatorKey = "agent:main:dashboard:operator-owned";
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: ownedEntry(),
+        [foreignKey]: sessionStoreEntry("sess-foreign", { pluginOwnerId: "other-plugin" }),
+        [operatorKey]: sessionStoreEntry("sess-operator"),
+      },
+    });
+    for (const key of [foreignKey, operatorKey]) {
+      const denied = await patch(key, "unauthorized mutation");
+      expectDenied(denied, "patch", key);
+      expect(readEntry(key)?.label).toBeUndefined();
+    }
+
+    const patched = await patch(sessionKey, "authorized mutation");
+
+    expect(patched.ok, JSON.stringify(patched.error)).toBe(true);
+    expect(readEntry()?.label).toBe("authorized mutation");
+  });
+
+  test("sessions.patch rechecks plugin ownership after waiting for lifecycle admission", async () => {
+    await seed();
+    const releaseMutation = createPluginDeferred();
+    const { promise: mutationStarted, resolve: markMutationStarted } = createPluginDeferred();
+    const mutation = runSessionMutation({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      run: async () => {
+        markMutationStarted();
+        await releaseMutation.promise;
+      },
+    });
+    await mutationStarted;
+    const pendingPatch = patch(sessionKey, "unauthorized raced mutation");
+    await Promise.resolve();
+    await replaceSessionEntry({ sessionKey, storePath }, ownedEntry("other-plugin"));
+    releaseMutation.resolve();
+
+    const [patched] = await Promise.all([pendingPatch, mutation]);
+
+    expect(patched.ok).toBe(false);
+    expect(patched.error?.message).toContain("did not create it");
+    expect(readEntry()).toMatchObject({
+      pluginOwnerId: "other-plugin",
+    });
+    expect(readEntry()?.label).toBeUndefined();
+  });
 });

@@ -2098,7 +2098,6 @@ describe("frozen admission workflow barriers", () => {
       rerun_group: "all",
       reuse_evidence: true,
       suite_profile: "full",
-      telegram_waiver: "",
       npm_telegram_package_spec: "",
       release_package_spec: "",
       include_live_suites: true,
@@ -2470,7 +2469,7 @@ describe("frozen admission workflow barriers", () => {
       const steps = job.steps ?? [];
       const setup = workflowStep(job, "Setup admission Node.js");
       expect(setup.if).toBeUndefined();
-      expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+      expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.22.1" });
       expect(setup.run).toContain(
         `source ${toolingRoot}/.github/actions/setup-pnpm-store-cache/ensure-node.sh`,
       );
@@ -2802,6 +2801,11 @@ function createReleasePublishFixture(
     "file",
   );
   symlinkSync(resolve("scripts/tsx.mjs"), join(helperDir, "../tsx.mjs"), "file");
+  symlinkSync(
+    resolve("scripts/lib/release-validation-waivers.mjs"),
+    join(helperDir, "release-validation-waivers.mjs"),
+    "file",
+  );
   writeFileSync(eventsPath, "");
   writeJson(githubEventPath, { inputs });
   writeFileSync(outputPath, "");
@@ -3020,23 +3024,14 @@ function runBash(script: string, options: Omit<SpawnSyncOptionsWithStringEncodin
   });
 }
 
-function runFullReleaseInputValidation(
-  releaseProfile: string,
-  skipTelegram: string,
-  options: {
-    telegramWaiver?: string;
-    version?: string;
-    rerunGroup?: string;
-    liveSuiteFilter?: string;
-  } = {},
-) {
+function runFullReleaseInputValidation(releaseProfile: string, skipTelegram: string) {
   const step = workflowStep(
     workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
     "Validate release inputs",
   );
   const workdir = tempDirs.make("full-release-input-validation-");
   mkdirSync(resolve(workdir, "target"));
-  writeJson(resolve(workdir, "target", "package.json"), { version: options.version ?? "2026.8.1" });
+  writeJson(resolve(workdir, "target", "package.json"), { version: "2026.8.1" });
   symlinkSync(process.cwd(), resolve(workdir, "workflow"), "dir");
   return runBash(step.run ?? "", {
     cwd: workdir,
@@ -3046,10 +3041,8 @@ function runFullReleaseInputValidation(
       GITHUB_REPOSITORY: "openclaw/openclaw",
       RELEASE_PROFILE: releaseProfile,
       SKIP_PACKAGE_TELEGRAM_E2E: skipTelegram,
-      TELEGRAM_WAIVER: options.telegramWaiver ?? "",
       LANE_WAIVER: "",
-      RERUN_GROUP: options.rerunGroup ?? "all",
-      LIVE_SUITE_FILTER: options.liveSuiteFilter ?? "",
+      RERUN_GROUP: "all",
       TARGET_CONTEXT_REF: "",
       TARGET_REF: "main",
     },
@@ -3177,8 +3170,6 @@ function runReleaseChecksInputValidation(
   liveSuiteFilter = "",
   options: {
     candidateArtifactJson?: string;
-    telegramWaiver?: string;
-    version?: string;
     packageAcceptancePackageSpec?: string;
     phase?: "all" | "candidate" | "independent";
     releasePackageSpec?: string;
@@ -3190,25 +3181,8 @@ function runReleaseChecksInputValidation(
     "Capture selected inputs",
   );
   const workdir = tempDirs.make("release-checks-input-validation-");
-  const fixture = frozenToolingFixture(workdir, [
-    "scripts/full-release-validation-policy.mjs",
-    "scripts/pr-lib/gh-api-preflight.mjs",
-    "scripts/lib/full-release-manifest.mjs",
-    "scripts/release-qualification-coverage.mjs",
-    ...PUBLICATION_CONTRACT_FILES,
-    "scripts/lib/release-changelog.mjs",
-    "scripts/full-release-candidate-contract.mjs",
-    "scripts/lib/full-release-candidate-reuse.mjs",
-    "scripts/lib/full-release-evidence.mjs",
-    "scripts/lib/cross-os-release-checks/suite-filter.mjs",
-    "scripts/lib/canonical-json.mjs",
-    "scripts/lib/record-shared.mjs",
-  ]);
+  const fixture = frozenToolingFixture(workdir, []);
   const outputPath = resolve(workdir, "github-output");
-  mkdirSync(resolve(workdir, "waiver-target"));
-  writeJson(resolve(workdir, "waiver-target", "package.json"), {
-    version: options.version ?? "2026.8.1",
-  });
   symlinkSync(fixture.tooling, resolve(workdir, "workflow"), "dir");
   const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
   const result = runBash(step.run ?? "", {
@@ -3237,7 +3211,6 @@ function runReleaseChecksInputValidation(
       RELEASE_RUN_MATURITY_SCORECARD_INPUT: options.runMaturityScorecard ?? "false",
       RELEASE_RUN_RELEASE_SOAK_INPUT: runReleaseSoak,
       RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: skipTelegram,
-      TELEGRAM_WAIVER: options.telegramWaiver ?? "",
       LANE_WAIVER: "",
     },
   });
@@ -3518,7 +3491,6 @@ function runFullReleaseChildDispatch(
     RUN_RELEASE_SOAK: "false",
     SCENARIO: "",
     SKIP_PACKAGE_TELEGRAM_E2E: "false",
-    TELEGRAM_WAIVER: "",
     LANE_WAIVER: "",
     TARGET_CONTEXT_REF: "",
     TARGET_REF: "main",
@@ -6256,7 +6228,6 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     writeJson(join(fixture.root, "release-postpublish-evidence.json"), {
       openclawNpmTarball: "https://example.invalid/openclaw.tgz",
       openclawNpmIntegrity: "sha512-fixture",
-      ...(mode.fullReleasePreflight ? { telegramWaiver: `${mode.version}-owner-approved` } : {}),
     });
     const resume = fixture.run(
       {
@@ -6302,11 +6273,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     expect(proof.status, proof.stderr).toBe(0);
     const proofText = readFileSync(join(fixture.root, "release-verification.md"), "utf8");
     expect(proofText).not.toContain("Stable soak waived by operator:");
-    expect(proofText).toContain(
-      mode.fullReleasePreflight
-        ? `Telegram integration checks: waived by the release owner for ${mode.version} (source QA, Package Acceptance, published-package E2E); not run.`
-        : "npm Telegram beta E2E: not supplied",
-    );
+    expect(proofText).toContain("npm Telegram beta E2E: not supplied");
     expect
       .soft(proofText)
       .toContain(
@@ -8014,7 +7981,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(hydrateNode.run).toContain(
       "source .github/actions/setup-pnpm-store-cache/ensure-node.sh",
     );
-    expect(hydrateNode.run).toContain('openclaw_ensure_node "24.x"');
+    expect(hydrateNode.run).toContain('openclaw_ensure_node "24.22.1"');
     const hydratePnpm = workflowStep(hydrate, "Setup pnpm and dependencies");
     expect(hydratePnpm.if).toBeUndefined();
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
@@ -8677,7 +8644,6 @@ test "$package_manager" = "pnpm@12.1.0"
       "codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}",
     );
     expectTextToIncludeAll(workflow, [
-      "full-release-validation-state.mjs verify",
       'gh_with_retry api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" --jq .sha',
       "Child workflow ref ${CHILD_WORKFLOW_REF} moved to ${current_workflow_sha}, expected ${PARENT_WORKFLOW_SHA}; refusing dispatch.",
       'if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then',
@@ -8726,7 +8692,7 @@ test "$package_manager" = "pnpm@12.1.0"
       "Release impact: selected execution failures are blocking",
     ]);
     expect(summaryStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
-    expect(summaryStep.run).toBe("node scripts/full-release-validation-state.mjs verify");
+    expect(summaryStep.run).toBe('node "$RELEASE_STATE_SCRIPT" verify');
     const manifestStep = workflowStep(
       workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"),
       "Write release validation manifest",
@@ -8734,7 +8700,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(manifestStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
     expect(manifestStep.env?.STABLE_SOAK_WAIVER).toBeUndefined();
     expect(manifestStep.env?.GH_TOKEN).toBe("${{ github.token }}");
-    expect(manifestStep.run).toBe("node scripts/full-release-validation-state.mjs write-manifest");
+    expect(manifestStep.run).toBe('node "$RELEASE_STATE_SCRIPT" write-manifest');
   });
 
   it("routes publication controls through the trusted shared gate", () => {
@@ -8992,7 +8958,7 @@ test "$package_manager" = "pnpm@12.1.0"
       FULL_RELEASE_STATE_MODE: "drain",
     });
     expectTextToIncludeAll(decisionStep.run, [
-      'node scripts/full-release-validation-state.mjs "$FULL_RELEASE_STATE_MODE"',
+      'node "$RELEASE_STATE_SCRIPT" "$FULL_RELEASE_STATE_MODE"',
     ]);
     expect(planInputsStep.run).toContain("FULL_RELEASE_PLAN_INPUTS_JSON");
     expect(planInputsStep.env).toMatchObject({
@@ -9058,7 +9024,7 @@ test "$package_manager" = "pnpm@12.1.0"
       path: "${{ runner.temp }}/full-release-diagnostic-attempts",
       pattern: "full-release-diagnostics-${{ github.run_id }}-*",
     });
-    expect(selectState.run).toBe("node scripts/full-release-validation-state.mjs select");
+    expect(selectState.run).toBe('node "$RELEASE_STATE_SCRIPT" select');
     expect(summary.needs).toEqual(expect.arrayContaining(["release_decision", "diagnostic_drain"]));
     for (const jobId of [
       "normal_ci",
@@ -10186,6 +10152,24 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("uploads native live reports and sanitized owned evidence after failures", () => {
+    const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
+    const run = workflowStep(job, "Run ${{ matrix.label }}");
+    expect(run.run).toContain('tee ".artifacts/live-shards/${{ matrix.suite_id }}.log"');
+    const upload = workflowStep(job, "Upload native live diagnostics");
+    expect(upload).toMatchObject({
+      if: "always() && steps.selection.outputs.run == 'true'",
+      uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      with: {
+        name: "native-live-${{ matrix.suite_id }}-${{ needs.validate_selected_ref.outputs.selected_sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+        "retention-days": 14,
+        "if-no-files-found": "warn",
+      },
+    });
+    expect(upload.with?.path).toContain(".artifacts/live-shards/");
+    expect(upload.with?.path).toContain(".artifacts/qa-e2e/");
+  });
+
   it("shards broad native live tests instead of one serial live-all job", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const nativeLiveJob = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
@@ -11129,48 +11113,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     },
   );
 
-  it.each(
-    ["2026.8.1", "2026.9.1", "2026.9.5"].flatMap((version) => [
-      ["stable", version],
-      ["full", version],
-    ]),
-  )("waives only reviewed integration lanes for approved %s %s", (profile, version) => {
-    const options = { telegramWaiver: `${version}-owner-approved`, version };
-    const direct = runReleaseChecksInputValidation(profile, "false", "all", "false", "", options);
-    const umbrella = runFullReleaseInputValidation(profile, "false", options);
-    expect(direct.result.status, direct.result.stderr).toBe(0);
-    expect(umbrella.status, umbrella.stderr).toBe(0);
-    const output = readFileSync(direct.outputPath, "utf8");
-    expect(output).toContain(`telegram_waiver=${version}-owner-approved`);
-    expect(output).toContain("qa_live_telegram_enabled=false");
-    expect(output).toContain(`qa_live_matrix_enabled=${version !== "2026.9.5"}`);
-    expect(output).toContain("qa_live_buzz_enabled=true");
-    expect(output).toContain("run_release_soak=true");
-    expect(output).toContain("skip_package_telegram_e2e=false");
-  });
-
-  it.each([
-    { version: "2026.8.2" },
-    { telegramWaiver: "2026.9.1-owner-approved" },
-    { rerunGroup: "npm-telegram" },
-    { liveSuiteFilter: "qa-telegram" },
-  ])("rejects a conflicting Telegram waiver request: %j", (override) => {
-    const options = { telegramWaiver: "2026.8.1-owner-approved", ...override };
-    const umbrella = runFullReleaseInputValidation("stable", "false", options);
-    const direct = runReleaseChecksInputValidation(
-      "stable",
-      "false",
-      options.rerunGroup ?? "all",
-      "false",
-      options.liveSuiteFilter ?? "",
-      options,
-    );
-    expect(umbrella.status).not.toBe(0);
-    expect(direct.result.status).not.toBe(0);
-    expect(umbrella.stderr).toContain("Telegram waiver");
-    expect(direct.result.stderr).toContain("Telegram waiver");
-  });
-
   it("allows Package Acceptance Telegram deferral only for beta validation", () => {
     const direct = runReleaseChecksInputValidation("beta", "true");
     const umbrella = runFullReleaseInputValidation("beta", "true");
@@ -11476,7 +11418,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       const umbrella = runFullReleaseInputValidation(releaseProfile, "false");
 
       expect(direct.result.status, direct.result.stderr).toBe(0);
-      expect(readFileSync(direct.outputPath, "utf8")).toContain("skip_package_telegram_e2e=false");
+      const output = readFileSync(direct.outputPath, "utf8");
+      expect(output).toContain("skip_package_telegram_e2e=false");
+      expect(output).toContain("qa_live_telegram_enabled=true");
+      expect(output).toContain("run_release_soak=true");
       expect(umbrella.status, umbrella.stderr).toBe(0);
     },
   );
@@ -12044,7 +11989,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
     expect(packageAcceptanceJob.with).toMatchObject({
       telegram_mode:
-        "${{ (needs.resolve_target.outputs.telegram_waiver != '' || needs.resolve_target.outputs.skip_package_telegram_e2e == 'true') && 'none' || 'mock-openai' }}",
+        "${{ needs.resolve_target.outputs.skip_package_telegram_e2e == 'true' && 'none' || 'mock-openai' }}",
     });
     expect(packageAcceptanceJob.with?.telegram_advisory).toBeUndefined();
     expect(workflow).not.toContain("telegram_scenarios:");
@@ -14305,6 +14250,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const root = tempDirs.make("release-validation-tooling-");
     for (const source of [
       "scripts/release-ci-summary.mjs",
+      "scripts/lib/release-validation-waivers.mjs",
       "scripts/lib/release-evidence-identity.mjs",
       "scripts/release-qualification-admission.mjs",
       "scripts/lib/qualification-admission-baselines.mjs",

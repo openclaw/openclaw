@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
+import type { MemorySyncParams } from "../../packages/memory-host-sdk/src/host/types.js";
 import type { MemoryWorkspaceFiles } from "../../packages/memory-host-sdk/src/host/workspace-files.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import {
@@ -159,6 +160,31 @@ function loadMemory(host: RegistryHost, config: OpenClawConfig) {
   return { record, instance, runtime };
 }
 
+// Watch notifications, startup catch-up and session deltas enter Memory Core's
+// background sync owner, not the public sync() used by search and CLI.
+function observeBackgroundSync(
+  prototype: RegisteredMemorySearchManager,
+  onSync: (
+    manager: RegisteredMemorySearchManager,
+    params: MemorySyncParams,
+    work: Promise<void>,
+  ) => void,
+) {
+  const owner = prototype as RegisteredMemorySearchManager & {
+    syncBackground(params: MemorySyncParams): Promise<void>;
+  };
+  // oxlint-disable-next-line typescript/unbound-method -- The spy forwards the manager receiver with call().
+  const syncBackground = owner.syncBackground;
+  return vi.spyOn(owner, "syncBackground").mockImplementation(function (
+    this: RegisteredMemorySearchManager,
+    params,
+  ) {
+    const work = syncBackground.call(this, params);
+    onSync(this, params, work);
+    return work;
+  });
+}
+
 function registerMemoryWorkspaceWatch(workspace: string, beforeRead?: () => Promise<void>) {
   const subscriptions: Array<{ notify: () => void; signal: AbortSignal }> = [];
   let nextSubscription = createDeferredCore();
@@ -220,18 +246,11 @@ it("retires live watchers and starts successor indexing without a search or turn
     closeInitial = async () => {
       await prototype.close?.call(raw);
     };
-    const sync = prototype.sync;
-    assert(sync);
     const indexedChunks = createDeferredCore<number | undefined>();
-    const observed = vi.spyOn(prototype, "sync").mockImplementation(function (
-      this: RegisteredMemorySearchManager,
-      params,
-    ) {
-      const work = sync.call(this, params);
-      if (params?.reason === "watch") {
-        indexedChunks.resolve(work.then(() => this.status().chunks));
+    const observed = observeBackgroundSync(prototype, (owner, params, work) => {
+      if (params.reason === "watch") {
+        indexedChunks.resolve(work.then(() => owner.status().chunks));
       }
-      return work;
     });
     expect(subscriptions).toHaveLength(1);
     await expect(memory.instance.dispose()).resolves.toEqual({ errors: [] });
@@ -308,8 +327,10 @@ it("restarts memory watchers after reload waits for active indexing past its sto
   try {
     const initiallyWatching = watch.nextSubscription();
     services = await startPluginServices({ registry: host.registry, config });
-    await withinTest(initiallyWatching, signal);
+    // A cold service start leaves untouched indexes closed. First use opens and
+    // watches this one, which makes the reload below responsible for restoring it.
     const { manager } = await openManager(memory, config);
+    await withinTest(initiallyWatching, signal);
     await manager.sync?.({ reason: "startup-settled" });
     await fs.mkdir(path.join(state.workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(
@@ -497,18 +518,11 @@ it.for([false, true])(
       const boot = await inTurn(() => openManager(memory, config("bootstrap"), "bootstrap", "cli"));
       managers.add(boot.manager);
       const { prototype } = boot;
-      const sync = prototype.sync;
-      assert(sync);
       const completions = new Map<string, ReturnType<typeof createDeferredCore<Promise<void>>>>();
-      vi.spyOn(prototype, "sync").mockImplementation(function (
-        this: RegisteredMemorySearchManager,
-        params,
-      ) {
-        const work = sync.call(this, params);
-        if (params?.reason) {
+      observeBackgroundSync(prototype, (_owner, params, work) => {
+        if (params.reason) {
           completions.get(params.reason)?.resolve(work);
         }
-        return work;
       });
       const startupCompletions = new WeakMap<object, Promise<string[]>>();
       const startupOwner = prototype as RegisteredMemorySearchManager & {

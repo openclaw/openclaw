@@ -26,6 +26,11 @@ its temporary loopback address. Upstream, authentication-profile, and creation-t
 policy changes still invalidate thread reuse; live requests continue through the
 current owned proxy.
 
+If active work still claims a native thread, OpenClaw rejects configuration
+changes that would release it without trying fallback models. Wait for that work
+to finish or stop it before retrying. The original thread and its configuration
+remain available.
+
 Provider-review acknowledgments must continue the reviewed native thread. If
 changed tools or runtime configuration would require a replacement thread, or
 native resume fails, OpenClaw refuses the acknowledgment before creating or saving
@@ -46,6 +51,13 @@ The Codex adapter retains native item identities, protocol parsing, approvals,
 hook handling, and transcript provenance. Constructed messages are persisted
 through the existing scoped transcript APIs; the shared projection helpers do
 not own storage.
+
+Run tool summaries retain explicit native-tool failures recorded before execution,
+including malformed patches and workspace refusals. A successful retry leaves the
+earlier failure in the count. Code Mode wrapper output does not add another count
+when a native execution item already accounts for it. A completed command result
+with a nonzero exit code also marks the run unsafe to replay, even if its native
+execution item is missing.
 
 During `initialize`, OpenClaw uses `capabilities.optOutNotificationMethods` to
 suppress unused app-server notifications before they reach the transport and JSON

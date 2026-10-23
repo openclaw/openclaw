@@ -11,6 +11,7 @@ import {
   getAgentEventLifecycleGeneration,
   assertAgentRunLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
+import { throwIfSettledRejected } from "../../infra/error-graph-internal.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
@@ -206,15 +207,7 @@ export function bindSessionPendingInputSources(
   });
   aggregate.settled = async () => {
     const results = await Promise.allSettled(receipts.map(async (receipt) => receipt.settled?.()));
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length) {
-      throw new AggregateError(failures, "Failed to settle collected input custody");
-    }
+    throwIfSettledRejected(results, "Failed to settle collected input custody");
   };
   return aggregate;
 }

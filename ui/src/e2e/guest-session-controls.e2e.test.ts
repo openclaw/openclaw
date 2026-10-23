@@ -7,6 +7,7 @@ import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fi
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  captureUiProof,
   createNewSessionPageE2eSuite,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
@@ -115,9 +116,35 @@ suite.define(() => {
         expect(request.key).toEqual(expect.any(String));
         const key = String(request.key);
         const sessionId = "guest-created-session";
+        const pendingThread = page.locator(
+          'openclaw-pending-session-create[aria-hidden="false"] .chat-thread',
+        );
         await expect
-          .poll(() => page.locator(".chat-thread").textContent())
-          .toContain("Help me plan my own work.");
+          .poll(() =>
+            page.locator('.chat-pane-cache__pane[aria-hidden="false"] .chat-thread').count(),
+          )
+          .toBe(1);
+        // Parked panes retain geometry; aria-hidden, inert, and opacity own their presentation.
+        await expect
+          .poll(() =>
+            page.locator('openclaw-chat-pane[aria-hidden="true"]').evaluateAll((panes) =>
+              panes.map((parkedPane) => ({
+                inert: parkedPane.hasAttribute("inert"),
+                opacity: getComputedStyle(parkedPane).opacity,
+              })),
+            ),
+          )
+          .toEqual(
+            Array.from({ length: initialRun === "started" ? 2 : 1 }, () => ({
+              inert: true,
+              opacity: "0",
+            })),
+          );
+        await expect.poll(() => pendingThread.textContent()).toContain("Help me plan my own work.");
+        await captureUiProof(suite, page, `guest-${initialRun}-retained-panes.png`, {
+          surface: page.locator("openclaw-chat-page"),
+          content: [pendingThread],
+        });
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         const listCount = (await gateway.getRequests("sessions.list")).length;
         await gateway.deferNext("sessions.list");
@@ -198,7 +225,7 @@ suite.define(() => {
         await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
         await model.click();
         await gateway.deferNext("sessions.patch", { key, model: "openai/model-b" });
-        await selectChatModelOption(pane.locator('[data-chat-model-option="openai/model-b"]'));
+        await selectChatModelOption(pane, "openai/model-b");
         await gateway.waitForRequest("sessions.patch", { match: { key, model: "openai/model-b" } });
         const effort = pane.locator("[data-chat-thinking-select]");
         await expect.poll(() => effort.getAttribute("aria-disabled")).toBe("true");

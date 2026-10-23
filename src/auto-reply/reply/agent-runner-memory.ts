@@ -122,7 +122,6 @@ export async function runSessionCompactionIfNeeded(params: {
   sessionKey?: string;
   runtimePolicySessionKey?: string;
   storePath?: string;
-  isHeartbeat: boolean;
   /** Completed commands carry the actual harness, not the originally requested runtime. */
   agentHarnessId?: string;
   abortSignal?: AbortSignal;
@@ -220,7 +219,7 @@ export async function runSessionCompactionIfNeeded(params: {
   const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
   const shouldCheckActiveTranscriptBytes = maxActiveTranscriptBytes !== undefined;
   const transcriptUsageTokens =
-    params.isHeartbeat || (freshPersistedTokens !== undefined && !freshNeedsOutputRead)
+    freshPersistedTokens !== undefined && !freshNeedsOutputRead
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
           ...compactionTarget,
@@ -284,13 +283,11 @@ export async function runSessionCompactionIfNeeded(params: {
   );
   const tokenCountForCompaction = asPositiveFiniteNumber(projectedTokenCount);
 
-  const shouldCompactByTokens =
-    !params.isHeartbeat &&
-    shouldRunPreflightCompaction({
-      entry,
-      tokenCount: tokenCountForCompaction,
-      threshold,
-    });
+  const shouldCompactByTokens = shouldRunPreflightCompaction({
+    entry,
+    tokenCount: tokenCountForCompaction,
+    threshold,
+  });
   if (!shouldCompactByTokens && !shouldCompactByTranscriptBytes) {
     return entry;
   }
@@ -420,7 +417,7 @@ export async function runSessionCompactionIfNeeded(params: {
         trigger: "budget",
         modelCallUrgency: resolveModelCallUrgency({
           ...params.followupRun.run,
-          trigger: params.isHeartbeat ? "heartbeat" : "user",
+          trigger: "user",
           currentInboundEventKind: params.followupRun.currentInboundEventKind,
         }),
         force: true,
@@ -578,10 +575,7 @@ export async function runMemoryFlushIfNeeded(
     followupOwnsNativeCompaction(runtimeParams, runtimeId);
   // Only a native provider's flush can persist without a writable workspace, so other
   // resolvers are never called for a session whose workspace cannot be written.
-  const canAttemptFlush =
-    (memoryFlushWritable || isMemoryFlushPlanNativeProviderOwned()) &&
-    !params.isHeartbeat &&
-    !isCli;
+  const canAttemptFlush = (memoryFlushWritable || isMemoryFlushPlanNativeProviderOwned()) && !isCli;
   if (!canAttemptFlush) {
     return { sessionEntry: entry, outcome: "skipped" };
   }

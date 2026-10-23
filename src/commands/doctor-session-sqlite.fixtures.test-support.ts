@@ -17,6 +17,8 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
+import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import type {
   DoctorSessionSqliteMode,
   DoctorSessionSqliteTargetReport,
@@ -103,6 +105,19 @@ export function sessionScope(store: TestStore, agentId = "main") {
 
 export function runStoreDoctor(store: TestStore, mode: DoctorSessionSqliteMode) {
   return runDoctorSessionSqlite({ env: store.env, store: store.storePath, mode });
+}
+
+export function retireRecovery(
+  store: Pick<TestStore, "env">,
+  confirm: Parameters<typeof retireSessionSqliteRecovery>[0]["confirm"] = async () => true,
+  preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
+) {
+  return retireSessionSqliteRecovery({
+    env: store.env,
+    preview,
+    readConfig: async () => ({}),
+    confirm,
+  });
 }
 
 export async function seedRetainedSource(

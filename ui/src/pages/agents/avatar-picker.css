@@ -170,14 +170,10 @@
   justify-items: center;
 }
 
-.avatar-picker__status,
 .avatar-picker__error {
   margin: 0;
   padding: 0 20px 16px;
   font-size: 13px;
-}
-
-.avatar-picker__error {
   color: var(--danger);
 }
 

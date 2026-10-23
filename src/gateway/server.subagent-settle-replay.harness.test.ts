@@ -133,7 +133,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
       },
       expectsCompletionMessage: true,
       completion: { required: true, resultText: "isolated child result", capturedAt: now - 10 },
-      // A prior delivery does not discharge a new yielded synthesis obligation.
+      // Already-delivered results still owe the explicit yield continuation.
       delivery: { status: "delivered" },
       requesterSettleWake: wakeState([`settle-replay-child-${sequence}`]),
     };

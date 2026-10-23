@@ -328,8 +328,8 @@ it.each([
   ["uninstalled harness", "openai", "codex", "gpt-5.4", false],
   ["unsupported harness", "openai", "codex", "gpt-5.4", false],
   ["CLI", "anthropic", "claude-cli", "claude-sonnet-4-6", true],
-  ["CLI", "google", "google-gemini-cli", "gemini-2.5-pro", true],
   ["CLI", "anthropic", "claude-cli", "claude-sonnet-4-6", false],
+  ["CLI", "google", "google-gemini-cli", "gemini-2.5-pro", true],
 ] as const)(
   "%s preserves model %s/%s (%s), runtime available=%s",
   async (kind, provider, runtime, model, available) => {

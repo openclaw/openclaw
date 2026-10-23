@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
+  clearWorkingProgress,
   resetWorkingProgress,
   resolveTurnRecap,
   resolveWorkingProgress,
@@ -11,7 +12,10 @@ const SESSION = "agent:main:main";
 
 describe("resolveWorkingProgress", () => {
   beforeEach(() => resetWorkingProgress());
-  afterEach(() => resetWorkingProgress());
+  afterEach(() => {
+    resetWorkingProgress();
+    vi.useRealTimers();
+  });
 
   it.each(["failed", "unconfirmed", "waiting-idle"] as const)(
     "does not let an older %s send identify an unknown active turn",
@@ -141,6 +145,26 @@ describe("resolveWorkingProgress", () => {
         [],
       ),
     ).toMatchObject({ runId: "active-run", startedAt: 1_000 });
+  });
+
+  it("infers a new run only from activity received after the pane was idle", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(30_000);
+    clearWorkingProgress(SESSION);
+    vi.setSystemTime(61_000);
+    expect(
+      resolveWorkingProgress(
+        SESSION,
+        null,
+        null,
+        [],
+        [{ ts: 800 }, { runId: "first-run", ts: 900 }],
+        [
+          { runId: "first-run", __openclawToolStreamReceivedAt: 1_100 },
+          { runId: "second-run", __openclawToolStreamReceivedAt: 60_300 },
+        ],
+      ),
+    ).toMatchObject({ runId: "second-run", startedAt: 60_300 });
   });
 });
 
@@ -294,7 +318,7 @@ describe("resolveTurnRecap", () => {
   it("clears the previous recap when a new queued turn has no run identity yet", () => {
     watch();
     expect(resolve({ row: doneRow, usageByRun: usage(695) })).not.toBeNull();
-    expect(resolve({ indicator: {}, row: doneRow })).toBeNull();
+    expect(resolve({ indicator: {}, startingNewTurn: true, row: doneRow })).toBeNull();
     expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
   });
 

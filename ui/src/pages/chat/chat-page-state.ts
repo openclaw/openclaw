@@ -159,6 +159,14 @@ export function createChatPageState(
     return pane && !retainedSessions.unboundPaneIds.has(pane.id) ? pane : undefined;
   }
 
+  function routeLayout(): ChatSplitLayout {
+    // Admission reveals the new chat before the post-render route binding saves
+    // its split position; never reveal the previous active transcript in between.
+    return state.splitLayout && props.data?.creation?.admitted && props.data !== processedRouteData
+      ? setPaneSession(state.splitLayout, state.splitLayout.activePaneId, paneData().sessionKey)
+      : (state.splitLayout ?? classicLayout());
+  }
+
   function updated(presentationChanged: boolean, renderedSnapshot: ChatPageSnapshot | null) {
     prefetch();
     // Cancelling retained previews republishes pane state; suspend only on a hiding edge.
@@ -172,7 +180,7 @@ export function createChatPageState(
       viewerPresence.clear();
       return;
     }
-    const layout = state.splitLayout ?? classicLayout();
+    const layout = routeLayout();
     resumeStagedPanes(chatPanesWithin(host), layout, state.narrow);
     viewerPresence.sync(context().gateway, layout, state.narrow, retainedSessions.unboundPaneIds);
     closeFocus.restore(state.splitLayout, mcpAppUnmountGate.retiring);
@@ -628,28 +636,18 @@ export function createChatPageState(
 
   // MCP teardown discovers retained native pane hosts across their component boundary.
   function render() {
-    if (pendingCreate(props.data)) {
-      return mcpAppUnmountGate.render(
-        "pending-create",
-        () => {
-          if (!conversationPresented(props.presented)) {
-            return null;
-          }
-          const layout = classicLayout(props.data?.sessionKey?.trim());
-          return createSnapshot(
-            layout,
-            false,
-            new Map([[layout.activePaneId, [props.data.sessionKey]]]),
-          );
-        },
-        () => chatPanesWithin(host),
-      );
-    }
-    const layout = state.splitLayout ?? classicLayout(props.data?.sessionKey?.trim());
-    const retained = retention.read().retain(panesOf(layout));
+    // Pending creation hides retained chats without remounting their startup owners on admission.
+    const layout = pendingCreate() ? classicLayout() : routeLayout();
+    const retained = pendingCreate()
+      ? retention.read().retainProvisional(panesOf(layout))
+      : retention.read().retain(panesOf(layout));
     const nextPaneKeys = chatPagePaneOwnerKeys(context(), layout, retained);
     const renderValue = () =>
-      createSnapshot(layout, Boolean(state.splitLayout && !singleBoundPane()), retained);
+      createSnapshot(
+        layout,
+        !pendingCreate() && Boolean(state.splitLayout && !singleBoundPane()),
+        retained,
+      );
     return mcpAppUnmountGate.render(JSON.stringify([...nextPaneKeys]), renderValue, () =>
       chatPanesWithin(host).filter((pane) => !nextPaneKeys.has(pane.dataset.mcpAppOwnerKey ?? "")),
     );
@@ -664,8 +662,6 @@ export function createChatPageState(
       state.splitLayout && retainedSessions.unboundPaneIds.has(state.splitLayout.activePaneId)
         ? paneData()
         : undefined;
-    onCleanup(listen(mediaQuery, "change", handleViewportChange));
-    onCleanup(listen(mobileNavMediaQuery, "change", handleViewportChange));
     onCleanup(listen(window, UI_COMMAND_EVENT, handleUiCommand));
     retainedSessions.connect();
     syncRouteToActivePane();
@@ -687,6 +683,13 @@ export function createChatPageState(
   // Direct Solid construction precedes attachment; shell ancestry is available after settlement.
   onSettled(() => {
     state.mounted = host.isConnected;
+    const stopViewport = listen(mediaQuery, "change", handleViewportChange);
+    const stopMobileNavigation = listen(mobileNavMediaQuery, "change", handleViewportChange);
+    handleViewportChange();
+    return () => {
+      stopViewport();
+      stopMobileNavigation();
+    };
   });
   // Compare against the last committed presentation, including superseded queued frames.
   let lastPresented = host.presented;
@@ -715,6 +718,7 @@ export function createChatPageState(
       };
     },
   );
+  // Boot resources must retire even when the page is disposed before its first settlement.
   onCleanup(() => {
     disposed = true;
     closeFocus.clear();

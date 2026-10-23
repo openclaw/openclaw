@@ -8,7 +8,6 @@ import {
 import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
-import type { AgentStepSession } from "./agent-step.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -21,6 +20,7 @@ import {
   startSessionsSendAgentRun,
   trySessionsSendActiveRunDelivery,
 } from "./sessions-send-tool.delivery.js";
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
 import { jsonResult } from "./tool-results.js";
 
 /** Reconcile only the original admission; an uncertain ACK never starts a replacement. */
@@ -81,6 +81,7 @@ export async function dispatchSessionsSendFollowup(
     message: string;
     ownChild: boolean;
     nativeChild: boolean;
+    claimRequesterTurnCompletion: boolean;
     watch: boolean;
     requesterSessionKey: string;
     requesterAgentId: string;
@@ -100,7 +101,7 @@ export async function dispatchSessionsSendFollowup(
     : undefined;
   const sameRequester = replyContext.requesterSessionKey === options.requesterSessionKey;
   const requesterTurn =
-    params.allowActiveRunQueueDelivery &&
+    options.claimRequesterTurnCompletion &&
     !params.expectedSessionId &&
     options.nativeChild &&
     !isCronRunSessionKey(options.requesterSessionKey) &&

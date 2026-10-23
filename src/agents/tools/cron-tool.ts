@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
@@ -12,7 +13,10 @@ import {
 import type { CronDelivery, CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
-import { CRON_MANAGEMENT_METHODS } from "../../gateway/cron-creator-authority-grant.js";
+import {
+  CRON_MANAGEMENT_METHODS,
+  isCronModelManagementAllowed,
+} from "../../gateway/cron-creator-authority-grant.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals-core.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -26,7 +30,7 @@ import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { withToolEffectBoundary } from "../tool-effect-receipt.js";
 import { bindAgentToolReplaySafety } from "../tool-replay-safety.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
-import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
+import { AUTOMATIONS_TOOL_NAME, CRON_SCOPED_READ_ACTIONS } from "./automations-tool-name.js";
 import {
   type AnyAgentTool,
   jsonResult,
@@ -54,14 +58,10 @@ import {
 import { buildCronToolDescription } from "./cron-tool-description.js";
 import { createCronToolGatewayCaller } from "./cron-tool-gateway.js";
 import { CronToolOutputSchema } from "./cron-tool-output-schema.js";
-import {
-  buildCronSelfDescription,
-  formatCronTerminalPresentation,
-} from "./cron-tool-presentation.js";
+import { formatCronTerminalPresentation } from "./cron-tool-presentation.js";
 import {
   assertCronPacingInput,
   createCronToolSchema,
-  CRON_SCOPED_READ_ACTIONS,
   CRON_TOOL_LIST_MAX_LIMIT,
 } from "./cron-tool-schema.js";
 import { listCronSelfJob } from "./cron-tool-self-list.js";
@@ -138,10 +138,12 @@ function isOlderGatewayRejectingParam(error: unknown, method: string, param: str
 }
 
 export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
+  const config = opts?.config ?? getRuntimeConfigSnapshot() ?? undefined;
   const readOnly = opts?.readOnly === true;
   const assertStreamConfigCurrent = captureCronStreamPolicyConfigCurrentness(opts);
-  const managementAuthority = bindCronManagementGrant(opts?.runId);
+  const managementAuthority = bindCronManagementGrant(opts?.runId, config);
   const requesterAuthority = bindCronRequesterGrant(opts?.runId);
+  const allowCommandJobs = config?.tools?.gatewayPolicy?.automations?.allowCommandJobs !== false;
   const automation = createCronAutomationActions(opts);
   const { activeRun, nextCheckEnabled, assertCurrent: assertCurrentRun } = automation;
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
@@ -151,28 +153,26 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
     label: "Automations",
     name: AUTOMATIONS_TOOL_NAME,
     displaySummary: readOnly ? "Inspect recorded automation state." : CRON_TOOL_DISPLAY_SUMMARY,
-    description: readOnly
-      ? `Inspect recorded automation state during recovery. Available actions: ${managementAuthority?.managementOnly ? "list, get" : "list, get, runs"}.${selfRemoveOnly ? " Only the current automation is accessible." : " Existing caller visibility restrictions apply."} Use get with a known jobId for saved state and streamStatus; list includes disabled jobs only with includeDisabled:true. A missing list entry does not establish deletion or source termination. If the recorded state cannot establish an interrupted action's outcome, report it as unknown. Mutations are unavailable in this recovery continuation; this does not mean the user needs to change permissions.`
-      : selfRemoveOnly
-        ? managementAuthority?.managementOnly
-          ? "Inspect or remove only the current automation. Actions: list [includeDisabled] (enabled only by default), get jobId (saved state), remove jobId. Use the current job ID; other jobs and management actions are unavailable."
-          : buildCronSelfDescription({ activeRun, nextCheckEnabled })
-        : managementAuthority?.managementOnly
-          ? 'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (enabled-only compact summaries by default; follow nextOffset); get jobId (full saved state, including streamStatus for a known watcher); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now; waits up to timeoutMs, default 60s; unfinished runs return runId); remove jobId (operator removal requests cancellation of an active run; the result reports activeRunCancellationRequested:true). To stop a saved watcher, use update with job:{enabled:false}, or open it on the Automations page and turn off its Active switch. This pauses the watcher without deleting its saved record. The enabled flag alone does not prove source termination; use get jobId to inspect state.streamStatus. Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.'
-          : buildCronToolDescription({ triggersEnabled }),
+    description: buildCronToolDescription({
+      triggersEnabled,
+      callerScoped: !isCronModelManagementAllowed(config),
+      readOnly,
+      selfRemoveOnly,
+      activeRun,
+      nextCheckEnabled,
+      managementOnly: managementAuthority?.managementOnly,
+      allowCommandJobs,
+    }),
     outputSchema: CronToolOutputSchema,
     parameters: createCronToolSchema({
       readOnly,
+      allowCommandJobs,
       agentSessionKey: opts?.agentSessionKey,
       triggersEnabled,
       selfRemoveOnly,
       activeRun,
       nextCheckEnabled,
-      management: managementAuthority
-        ? managementAuthority.managementOnly
-          ? "only"
-          : "also"
-        : undefined,
+      management: managementAuthority && (managementAuthority.managementOnly ? "only" : "also"),
     }),
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
@@ -556,7 +556,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 params,
                 "update",
               );
-              if (!managementAuthority) {
+              if (!managementAuthority || !allowCommandJobs) {
                 assertNoCronShellExecution(canonicalPatch);
               }
               assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
@@ -594,7 +594,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                     id,
                     expectedConfigRevision,
                     patch,
-                    adminManagement: Boolean(managementAuthority),
+                    adminManagement: Boolean(managementAuthority) && allowCommandJobs,
                     creatorToolAllowlist: creatorOptions?.creatorToolAllowlist,
                     creatorToolAllowlistCaptureRef: creatorOptions?.creatorToolAllowlistCaptureRef,
                     resolveCreatorToolAuthority: creatorOptions?.resolveCreatorToolAuthority,

@@ -36,6 +36,8 @@ RPC method families for gateway status and identity, models and usage, channels 
   Both usage methods accept `mode: "specific"` with an IANA `timeZone` for DST-aware calendar-day boundaries and buckets. `utcOffset` remains supported for older clients and as a fallback when the Gateway runtime does not recognize the requested zone.
 - `sessions.usage.timeseries` returns timeseries usage for one session.
 - `sessions.usage.logs` returns usage log entries for one session.
+  Its `limit` defaults to 200 entries and is capped at 1000. Non-positive or
+  fractional numeric limits return an empty log list.
   Both detail methods accept the selected row's `key` and optional `agentId`. Preserve both fields when opening details for an unqualified key such as `global`.
 
 ## Memory
@@ -93,7 +95,7 @@ because it prunes expired or excess pending requests.
 
 ## Plugin management
 
-- `plugins.list` (`operator.read`) returns the installed plugin inventory plus locally curated official picks, diagnostics, and whether the current install mode allows mutations. It includes the current runtime `generation` and each plugin's runtime state separately from configured enablement.
+- `plugins.list` (`operator.read`) returns the installed plugin inventory plus locally curated official picks, diagnostics, and whether the current install mode allows mutations. It includes the current runtime `generation`, each plugin's runtime state separately from configured enablement, and each plugin's `catalogId` discovery identity.
 - `plugins.inspect` (`operator.read`) accepts `{ pluginId }` for installed, staged, or official candidates; `{ source: "clawhub", packageName, version? }` for arbitrary ClawHub plugins; or `{ catalogId, version? }` using a discovery identity. Installed and staged inspections include a `reviewToken` for capability consent. Remote inspections expose the selected catalog detail, applicable grants, and release trust. Their `declaredSurfaceStatus` is `partial` or `unavailable`: registry summaries omit some capability groups and package siblings, so they cannot issue a consent token. Empty unsupported groups do not mean the package declares no such capabilities.
 - `plugins.search` (`operator.read`) searches installable ClawHub code-plugin and bundle-plugin families. Pass non-empty `query` and optional `limit` from 1 to 100.
 - `plugins.catalog.browse` (`operator.read`) returns ClawHub discovery results with Gateway-local installed and bundled state. The Control UI adds `searchSource: "openclaw-control-ui"` only after manual input of at least two characters settles for 250 ms. Initial browsing, refreshes, filter changes, and generic API searches omit it. The Gateway honors `CLAWHUB_DISABLE_TELEMETRY` and does not replay attributed HTTP searches after transient failures. ClawHub records the normalized query, source, and remote result counts; those counts exclude local-only matches added by the Gateway. Installed inventory and operator, device, and session identities are not included in the observation.
@@ -111,11 +113,11 @@ because it prunes expired or excess pending requests.
   | `npm-pack`    | `archivePath`                                                              |
   | `official`    | `pluginId`, optional `version: "latest"`, `pin`                            |
 
-  Each request can also include `mode: "install" | "update"`, `acknowledgeInstallPolicyWarning: true`, and `acknowledgeCapabilities: { reviewToken }`. Omitted `mode` means install. Local paths, npm-pack archives, marketplace sources, and local Git sources require a connection the Gateway identifies as local; paths refer to that Gateway host. Use an npm spec for a specific official package version.
+  Each request can also include `mode: "install" | "update"`, `acknowledgeInstallPolicyWarning: true`, and `acknowledgeCapabilities: { reviewToken }`. Omitted `mode` means install. Local paths, npm-pack archives, marketplace sources, and local Git sources require a connection the Gateway identifies as local; paths refer to that Gateway host. Use an npm spec for a specific official package version. A successful response includes the installed catalog entry with the same `catalogId` as `plugins.list`, so clients can update discovery cards without waiting for another catalog read.
 
   When install policy returns `warn`, the error `details` include `installPolicyCode: "install_policy_warning_acknowledgement_required"`, the target, reason, and optional findings. After review, retrying the same action with `acknowledgeInstallPolicyWarning: true` approves every warning in that install invocation; each warning is freshly evaluated before installation continues. `block` and policy failures remain terminal. ClawHub installs preserve Gateway trust and integrity checks.
 
-- `plugins.setEnabled` (`operator.admin`) changes one installed plugin's enabled policy with `{ pluginId, enabled, acknowledgeCapabilities? }`. The response includes the updated catalog entry and any slot-selection warnings.
+- `plugins.setEnabled` (`operator.admin`) changes one installed plugin's enabled policy with `{ pluginId, enabled, acknowledgeCapabilities? }`. The response includes the updated catalog entry, with its `catalogId`, and any slot-selection warnings.
 - `plugins.reload` (`operator.admin`) reloads one or more discovered plugins with `{ plugins: [{ pluginId, installHash?, sourceDigests? }], acknowledgeCapabilities? }`, preserving configured enablement. Send 1–64 targets; a one-plugin request uses the same array envelope. The response contains `pluginIds`, a boolean `restartRequired`, and a required `runtime` receipt. When compiled bundled code retains its loaded module after its files change, `restartRequired` is `true` and the result explains why.
 - `plugins.refresh` (`operator.admin`) refreshes plugin metadata and applies the resulting registry with `{}`.
 - `plugins.uninstall` (`operator.admin`) removes one externally installed plugin with `{ pluginId, keepFiles? }`: config references, the install record, and managed files. Bundled plugins cannot be uninstalled, only disabled. The response lists the removal actions.

@@ -4,6 +4,10 @@ import {
   skipHorizontalWhitespace,
   skipWhitespace,
 } from "../../../packages/tool-call-repair/src/grammar.js";
+import {
+  advanceProtectionScanState,
+  createProtectionScanState,
+} from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { findCodeRegions, isInsideCode, isInsideSettledBlockCode } from "./code-regions.js";
 import { isGlmArgPayload } from "./glm-arg-key-payload.js";
 import { createConditionalTextProjector, type TextFilter } from "./text-projection.js";
@@ -450,10 +454,15 @@ export function toolCallXmlTextFilter(
       let scannedThrough = 0;
       let active = false;
       let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
+      const protectionScan = createProtectionScanState();
+      let heldPrefix: number | undefined;
       return createConditionalTextProjector(
         (text) => {
           const regions = codeRegions;
           codeRegions = undefined;
+          if (heldPrefix !== undefined) {
+            return text.slice(0, heldPrefix);
+          }
           return stripToolCallXmlTagsInternal(
             text,
             options,
@@ -462,30 +471,57 @@ export function toolCallXmlTextFilter(
           );
         },
         ({ text, delta }) => {
+          heldPrefix = undefined;
           if (active) {
             return true;
           }
           const appended = delta ?? text;
+          advanceProtectionScanState(protectionScan, appended);
           if (scannedThrough === text.length - appended.length && !appended.includes("<")) {
             scannedThrough = text.length;
             return false;
           }
+          let deferredStart: number | undefined;
           for (let start = text.indexOf("<", scannedThrough); start !== -1;) {
-            codeRegions ??= findCodeRegions(text);
-            const protectedBlock = isInsideSettledBlockCode(start, text, codeRegions);
             const next = text.indexOf("<", start + 1);
             const candidate = text.slice(start, next === -1 ? text.length : next);
-            if (!protectedBlock && TOOL_CALL_QUICK_RE.test(candidate)) {
-              active = true;
-              return true;
-            }
-            if (!protectedBlock && isToolCallTagPrefix(candidate, 0)) {
-              scannedThrough = start;
-              return true;
+            // Markdown ownership can only matter for a candidate that could begin a
+            // tool-call tag; ordinary markup must not re-parse the whole reply.
+            const quickCandidate = TOOL_CALL_QUICK_RE.test(candidate);
+            const prefixCandidate = isToolCallTagPrefix(candidate, 0);
+            if (quickCandidate || prefixCandidate) {
+              const onCurrentLine = candidate.length <= protectionScan.partialLine.length;
+              if (next === -1 && onCurrentLine && prefixCandidate && !quickCandidate) {
+                // Only the unfinished candidate line can be classified from the carried tail.
+                const completed = { ...protectionScan };
+                advanceProtectionScanState(completed, "\n");
+                if (!completed.paragraphAmbiguous && !completed.structuralUnknown) {
+                  if (completed.fenceChar) {
+                    deferredStart = start;
+                    start = next;
+                    continue;
+                  }
+                  if (streaming) {
+                    heldPrefix = start;
+                    scannedThrough = start;
+                    return true;
+                  }
+                }
+              }
+              codeRegions ??= findCodeRegions(text);
+              const protectedBlock = isInsideSettledBlockCode(start, text, codeRegions);
+              if (!protectedBlock && quickCandidate) {
+                active = true;
+                return true;
+              }
+              if (!protectedBlock && prefixCandidate) {
+                scannedThrough = start;
+                return true;
+              }
             }
             start = next;
           }
-          scannedThrough = text.length;
+          scannedThrough = deferredStart ?? text.length;
           codeRegions = undefined;
           return false;
         },

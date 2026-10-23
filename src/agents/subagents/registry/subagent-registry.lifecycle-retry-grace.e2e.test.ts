@@ -394,10 +394,7 @@ it("delivers a yielded visible child exactly once", async () => {
     execution: { status: "running" },
     requesterTurnRunId: undefined,
     requesterTurnYielded: undefined,
-  });
-  expect(settled?.requesterSettleWake).toMatchObject({
-    batchRunIds: [runId],
-    requesterYieldBatch: true,
+    requesterSettleWake: { batchRunIds: [runId], requesterYieldBatch: true },
   });
   expect(settled?.delivery?.lastError).not.toBe("completion_handoff_pending");
   expect(getAgentCalls()).toHaveLength(0);
